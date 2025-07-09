@@ -2,21 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_to_all_combine_device_operation.hpp"
-#include "ttnn/operations/ccl/all_to_all_dispatch/device/all_to_all_dispatch_device_operation.hpp"
-
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "cpp/ttnn/operations/ccl/all_to_all_combine/device/all_to_all_combine_device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
 
@@ -76,10 +70,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t num_devices = mesh_view.num_devices();
     const uint32_t hidden_size = input_shape[-1];
     const uint32_t batch_size = metadata_shape[1];
+    const uint32_t seq_size = metadata_shape[2];
     const uint32_t selected_experts_k = metadata_shape[-1];
     const uint32_t experts = mapping_shape[-2];
 
-    TT_ASSERT(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
+    TT_FATAL(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
     const uint32_t experts_per_device = experts / num_devices;
 
     const auto& input_spec = input_tensor.get_tensor_spec();
@@ -181,6 +176,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         data_cb_id,
         experts_per_device,
         batch_size,
+        seq_size,
         experts,  // same as num_mapping_pages
         flat_mesh_idx,
         input_page_size_bytes,
@@ -213,6 +209,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         client_interface_cb_id,
         data_cb_id,
         batch_size,
+        seq_size,
         selected_experts_k,
         experts_per_device,
         num_devices,
@@ -233,12 +230,12 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }
-    const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
+    const auto [neighbors, directions] = common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
     std::map<std::string, std::string> writer_defines = {
-        {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
-        {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
-        {"DIRECTIONS", detail::stringify_array(directions)}};
+        {"DEST_CHIP_ID", common::stringify(dest_chip_id)},
+        {"DEST_MESH_ID", common::stringify(dest_mesh_id)},
+        {"DIRECTIONS", common::stringify(directions)}};
 
     if (axis.has_value()) {
         writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis.value());
@@ -268,7 +265,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     };
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
-        uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
+        uint32_t link_id = common::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
         const auto neighbor_fabric_id = get_fabric_node_id_from_physical_chip_id(neighbor->id());
         append_fabric_connection_rt_args(
             fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
