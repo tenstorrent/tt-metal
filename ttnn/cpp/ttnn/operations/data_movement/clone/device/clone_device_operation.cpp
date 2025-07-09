@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "clone_device_operation.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement::clone {
 void CloneOperation::validate_inputs(
@@ -67,13 +66,4 @@ std::tuple<CloneOperation::operation_attributes_t, CloneOperation::tensor_args_t
     };
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<CloneOperation::tensor_return_value_t>
-CloneOperation::create_op_performance_model(
-    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
-    const auto& input_tensor = inputs.input;
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
-        {input_tensor}, {output}, ideal_dev_clock_cycles);
-    return result;
-}
 }  // namespace ttnn::operations::data_movement::clone

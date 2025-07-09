@@ -7,7 +7,6 @@
 #include <tt-metalium/constants.hpp>
 
 #include "split_program_factory.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -49,19 +48,6 @@ std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
         Shape(output_shape_array),
         TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
     return std::vector<ttnn::TensorSpec>(this->num_splits, spec);
-}
-
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-SplitDeviceOperation::create_op_performance_model(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        input_tensors, output_tensors, ideal_dev_clock_cycles);
-    return result;
 }
 
 operation::ProgramWithCallbacks SplitDeviceOperation::create_program(

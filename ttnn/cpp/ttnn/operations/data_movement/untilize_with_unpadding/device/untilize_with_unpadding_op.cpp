@@ -7,7 +7,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/run_operation.hpp"
 #include "untilize_with_unpadding_program_factory.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -99,32 +98,6 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     }
 
     return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), output_mem_config))};
-}
-
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-UntilizeWithUnpadding::create_op_performance_model(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
-    int ideal_dev_clock_cycles_bw = common_tm_bw_model(input_tensor, output_tensor);
-    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
-    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
-    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
-    uint32_t num_tiles = input_tensor.physical_volume() / single_tile_size;
-    int compute_cycles = 0;
-    if (input_tensor.padded_shape()[-1] / tile_width <= 8) {
-        // If using pack_untilize_block
-        compute_cycles = num_tiles * 80;
-    } else {
-        // If using untilize_block
-        compute_cycles = num_tiles * 420;
-    }
-    int ideal_dev_clock_cycles = std::max(compute_cycles, ideal_dev_clock_cycles_bw);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        input_tensors, output_tensors, ideal_dev_clock_cycles);
-    return result;
 }
 
 operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(

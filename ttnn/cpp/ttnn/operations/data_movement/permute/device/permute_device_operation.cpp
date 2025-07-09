@@ -7,7 +7,6 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -77,16 +76,6 @@ PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_out
     }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
-
-tt::tt_metal::operation::OpPerformanceModelGeneral<PermuteDeviceOperation::tensor_return_value_t>
-PermuteDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
-    const auto& input_tensor = inputs.input_tensor;
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
-        {input_tensor}, {output}, ideal_dev_clock_cycles);
-    return result;
 }
 
 std::tuple<PermuteDeviceOperation::operation_attributes_t, PermuteDeviceOperation::tensor_args_t>
