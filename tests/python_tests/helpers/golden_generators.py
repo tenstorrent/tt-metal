@@ -116,6 +116,7 @@ class UnarySFPUGolden:
             MathOperation.Celu: self._celu,
             MathOperation.Silu: self._silu,
             MathOperation.Gelu: self._gelu,
+            MathOperation.Neg: self._neg,
         }
         self.data_format = None
         self.shared_exponent_zeroed = False
@@ -192,6 +193,9 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.silu(input_tensor).item()
+
+    def _neg(self, x):
+        return -x
 
     def _gelu(self, x):
         input_tensor = (

@@ -29,13 +29,13 @@ from helpers.test_config import run_test
 from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
-supported_formats = [
+supported_float_formats = [
     DataFormat.Float32,
     DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
-
+supported_int_formats = [DataFormat.Int32]
 
 #   INPUT-OUTPUT FORMAT SWEEP
 #   input_output_formats(supported_formats)
@@ -54,25 +54,42 @@ supported_formats = [
 #   SPECIFIC INPUT-OUTPUT COMBINATION
 #   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
 
-test_formats = input_output_formats(supported_formats)
-all_params = generate_params(
+float_ops = [
+    MathOperation.Abs,
+    MathOperation.Cos,
+    MathOperation.Log,
+    MathOperation.Reciprocal,
+    MathOperation.Sin,
+    MathOperation.Sqrt,
+    MathOperation.Square,
+    MathOperation.Celu,
+    MathOperation.Silu,
+    MathOperation.Gelu,
+    MathOperation.Neg,
+]
+
+int_ops = [
+    MathOperation.Neg,
+]
+
+float_params = generate_params(
     ["eltwise_unary_sfpu_test"],
-    test_formats,
+    input_output_formats(supported_float_formats),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    mathop=[
-        MathOperation.Abs,
-        MathOperation.Cos,
-        MathOperation.Log,
-        MathOperation.Reciprocal,
-        MathOperation.Sin,
-        MathOperation.Sqrt,
-        MathOperation.Square,
-        MathOperation.Celu,
-        MathOperation.Silu,
-        MathOperation.Gelu,
-    ],
+    mathop=float_ops,
 )
+
+int_params = generate_params(
+    ["eltwise_unary_sfpu_test"],
+    input_output_formats(supported_int_formats),
+    dest_acc=[DestAccumulation.Yes],
+    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
+    mathop=int_ops,
+)
+
+all_params = float_params + int_params
+
 param_ids = generate_param_ids(all_params)
 
 
