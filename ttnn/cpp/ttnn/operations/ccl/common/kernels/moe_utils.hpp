@@ -119,7 +119,7 @@ inline void dispatch_input_remote_device(
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
-        const_cast<LowLatencyMeshPacketHeader*>(packet_header),
+        (LowLatencyMeshPacketHeader*)packet_header,
         static_cast<eth_chan_directions>(fabric_connections[route].direction),
         SrcChipId,
         dest_chip_id,
