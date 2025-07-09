@@ -9,6 +9,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -31,12 +32,10 @@ void MAIN {
     constexpr auto cb_coeff10 = tt::CBIndex::c_13;    // coeff10
     constexpr auto cb_one = tt::CBIndex::c_14;        // one
 
-    constexpr uint32_t one = 0x3f800000u;  //  1.0f
-
     init_sfpu(cb_input, cb_output);
-    // binop_with_scalar_tile_init();
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        DeviceZoneScopedN("TEST-SFPU1");
         cb_reserve_back(cb_output, per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             // input_squared = input * input

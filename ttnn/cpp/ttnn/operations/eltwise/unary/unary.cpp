@@ -303,7 +303,7 @@ Tensor I0::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::I0;
-    bool fpu_mode = false;
+    bool fpu_mode = true;
     if (!fpu_mode) {
         std::cout << "i0: fpu_mode: " << fpu_mode << std::endl;
         return detail::unary_impl(
