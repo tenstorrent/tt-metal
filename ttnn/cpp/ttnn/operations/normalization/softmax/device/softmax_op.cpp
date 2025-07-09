@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,10 +34,10 @@ void Softmax::validate(
     auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
-        input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 ||
-            input_tensor.get_dtype() == DataType::BFLOAT8_B,
+        input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
+            input_tensor.dtype() == DataType::BFLOAT8_B,
         "Error");
     if (optional_input_tensors.size() == 1) {
         if (optional_input_tensors.at(0).has_value()) {
@@ -45,16 +45,16 @@ void Softmax::validate(
             TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
             TT_FATAL(input_tensor.device() == mask.device(), "Error");
             if (mask.is_sharded()) {  // sharded mask
-                TT_FATAL(mask.get_layout() == Layout::TILE, "Error");
-                TT_FATAL(mask.get_padded_shape() == input_tensor.get_padded_shape(), "Error");
+                TT_FATAL(mask.layout() == Layout::TILE, "Error");
+                TT_FATAL(mask.padded_shape() == input_tensor.padded_shape(), "Error");
             } else {
-                if (mask.get_layout() == Layout::ROW_MAJOR) {
+                if (mask.layout() == Layout::ROW_MAJOR) {
                     ttnn::Shape expected_shape(
-                        {mask.get_padded_shape()[0], 1, input_tensor.get_padded_shape()[-1] / TILE_WIDTH, TILE_WIDTH});
-                    TT_FATAL(mask.get_padded_shape() == expected_shape, "Error");
+                        {mask.padded_shape()[0], 1, input_tensor.padded_shape()[-1] / TILE_WIDTH, TILE_WIDTH});
+                    TT_FATAL(mask.padded_shape() == expected_shape, "Error");
                 }
-                for (uint32_t i = 1; i < input_tensor.get_padded_shape().rank() - 2; i++) {
-                    TT_FATAL(mask.get_padded_shape()[i] == 1, "Error");
+                for (uint32_t i = 1; i < input_tensor.padded_shape().rank() - 2; i++) {
+                    TT_FATAL(mask.padded_shape()[i] == 1, "Error");
                 }
             }
 
@@ -62,11 +62,11 @@ void Softmax::validate(
                 [&](const auto& program_config) {
                     using ProgramConfigType = std::decay_t<decltype(program_config)>;
                     if constexpr (std::is_same_v<ProgramConfigType, SoftmaxDefaultProgramConfig>) {
-                        TT_FATAL(input_tensor.get_padded_shape()[0] == mask.get_padded_shape()[0], "Error");
+                        TT_FATAL(input_tensor.padded_shape()[0] == mask.padded_shape()[0], "Error");
                         TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax, "Error");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                        const auto shape = input_tensor.get_padded_shape();
-                        uint32_t M = input_tensor.volume() / shape[-1];
+                        const auto& shape = input_tensor.padded_shape();
+                        uint32_t M = input_tensor.physical_volume() / shape[-1];
                         uint32_t K = shape[-1];
 
                         TT_FATAL(M % TILE_HEIGHT == 0, "M must be divisible by tile height.");
@@ -95,9 +95,9 @@ void Softmax::validate(
                                 num_cores_r * num_cores_c);
                         } else {
                             TT_FATAL(this->is_causal_mask, "Error");
-                            TT_FATAL(mask.get_layout() == Layout::TILE, "Error");
+                            TT_FATAL(mask.layout() == Layout::TILE, "Error");
                             TT_FATAL(mask.is_sharded() == false, "Error");
-                            TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
+                            TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
                             TT_FATAL(input_tensor.is_sharded(), "Error");
                             TT_FATAL(
                                 input_tensor.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
@@ -119,12 +119,12 @@ void Softmax::validate(
 std::vector<TensorSpec> Softmax::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     auto& input_tensor = input_tensors.at(0);
     if (this->inplace) {
-        return {input_tensor.get_tensor_spec()};
+        return {input_tensor.tensor_spec()};
     }
     return {TensorSpec(
-        input_tensor.get_logical_shape(),
+        input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
-            input_tensor.get_dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), output_mem_config))};
+            input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), output_mem_config))};
 }
 
 std::vector<Tensor> Softmax::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -142,7 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Softmax::create_program(
     auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     const auto& mask = optional_input_tensors.at(0);
-    // bool causal_mask = mask.has_value() ? mask.value().get_padded_shape()[-2] == mask.value().get_padded_shape()[-1]
+    // bool causal_mask = mask.has_value() ? mask.value().padded_shape()[-2] == mask.value().padded_shape()[-1]
     // : false;
     bool causal_mask = this->is_causal_mask;
 
@@ -171,7 +171,8 @@ tt::tt_metal::operation::ProgramWithCallbacks Softmax::create_program(
                     this->scale,
                     causal_mask,
                     this->compute_kernel_config,
-                    this->numeric_stable);
+                    this->numeric_stable,
+                    this->inplace);
             }
         },
         this->program_config);
@@ -181,12 +182,10 @@ tt::tt_metal::operation::Hash Softmax::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return tt::tt_metal::operation::hash_operation<Softmax>(
-        std::get<tt::tt_metal::DeviceStorage>(input_tensors.at(0).storage()).memory_config(),
+        input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
-        optional_input_tensors.at(0).has_value()
-            ? std::optional{std::get<tt::tt_metal::DeviceStorage>(optional_input_tensors.at(0).value().storage())
-                                .memory_config()}
-            : std::nullopt,
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()}
+                                                 : std::nullopt,
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()}
                                                  : std::nullopt,
         this->output_mem_config);
@@ -268,22 +267,21 @@ Tensor scale_mask_softmax(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
     ttnn::Shape input_pad_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape());
+        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = input_pad_shape,
         .pad_value = -std::numeric_limits<float>::infinity(),
         .target_layout = tt::tt_metal::Layout::TILE};
     std::optional<ttnn::operations::experimental::auto_format::FormatParams> mask_format_params = std::nullopt;
     if (mask.has_value()) {
-        TT_FATAL(input_tensor.get_padded_shape()[-1] == mask.value().get_padded_shape()[-1], "Error");
-        TT_FATAL(input_tensor.get_padded_shape()[0] == mask.value().get_padded_shape()[0], "Error");
-        TT_FATAL(
-            mask.value().get_padded_shape()[-2] == 1 or mask.value().get_padded_shape()[-2] == TILE_HEIGHT, "Error");
-        for (uint32_t i = 1; i < input_tensor.get_padded_shape().rank() - 2; i++) {
-            TT_FATAL(mask.value().get_padded_shape()[i] == 1, "Error");
+        TT_FATAL(input_tensor.padded_shape()[-1] == mask.value().padded_shape()[-1], "Error");
+        TT_FATAL(input_tensor.padded_shape()[0] == mask.value().padded_shape()[0], "Error");
+        TT_FATAL(mask.value().padded_shape()[-2] == 1 or mask.value().padded_shape()[-2] == TILE_HEIGHT, "Error");
+        for (uint32_t i = 1; i < input_tensor.padded_shape().rank() - 2; i++) {
+            TT_FATAL(mask.value().padded_shape()[i] == 1, "Error");
         }
         ttnn::Shape mask_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(mask.value().get_padded_shape());
+            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(mask.value().padded_shape());
         mask_format_params = {
             .pad_shape = mask_pad_shape,
             .pad_value = -std::numeric_limits<float>::infinity(),

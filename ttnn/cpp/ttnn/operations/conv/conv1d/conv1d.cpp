@@ -13,7 +13,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -50,6 +50,7 @@ Result conv1d(
     std::variant<std::array<uint32_t, 2>, uint32_t> padding,
     uint32_t dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -58,7 +59,7 @@ Result conv1d(
     bool return_weights_and_bias) {
     // reshape input tensor to 4D, if it is not already
     const ttnn::Tensor& input_tensor_4d =
-        (input_tensor.get_logical_shape().rank() < 4)
+        (input_tensor.logical_shape().rank() < 4)
             ? ttnn::reshape(input_tensor, Shape({batch_size, input_length, 1, in_channels}))
             : input_tensor;
 
@@ -93,6 +94,7 @@ Result conv1d(
             conv2d_padding,
             std::array<uint32_t, 2>{dilation, 1},
             groups,
+            std::move(dtype),
             std::move(bias_tensor),
             conv_config,
             compute_config,
@@ -125,6 +127,7 @@ Result Conv1dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, uint32_t> padding,
     uint32_t dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -145,6 +148,7 @@ Result Conv1dOperation::invoke(
         padding,
         dilation,
         groups,
+        std::move(dtype),
         std::move(bias_tensor),
         std::move(conv_config),
         std::move(compute_config),
@@ -167,6 +171,7 @@ Result Conv1dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, uint32_t> padding,
     uint32_t dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -187,6 +192,7 @@ Result Conv1dOperation::invoke(
         padding,
         dilation,
         groups,
+        std::move(dtype),
         std::move(bias_tensor),
         std::move(conv_config),
         std::move(compute_config),

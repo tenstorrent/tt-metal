@@ -23,14 +23,14 @@ Fold::MultiCore::cached_program_t fold_multi_core(
     auto all_cores = input.shard_spec()->grid;
     auto shard_shape = input.shard_spec()->shape;
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
 
     uint32_t pixel_size = shard_shape[1] * input.element_size();
     uint32_t num_pixels = shard_shape[0];
     uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
 
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
-    uint32_t width = input.get_padded_shape()[2];
+    uint32_t width = input.padded_shape()[2];
     uint32_t chunk_size = stride_w * pixel_size;
     uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;
@@ -111,13 +111,13 @@ void Fold::MultiCore::override_runtime_arguments(
     auto shard_shape = input_tensor.shard_spec()->shape;
     auto all_cores = input_tensor.shard_spec()->grid;
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t pixel_size = shard_shape[1] * input_tensor.element_size();
     uint32_t num_pixels = shard_shape[0];
     uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
 
-    uint32_t width = input_tensor.get_padded_shape()[2];
+    uint32_t width = input_tensor.padded_shape()[2];
     uint32_t chunk_size = stride_w * pixel_size;
     uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;

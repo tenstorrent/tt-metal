@@ -32,24 +32,31 @@ public:
     Tile tile() const { return tensor_layout_.get_tile(); }
 
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
-    std::optional<ShardSpecBuffer> compute_shard_spec_buffer() const {
-        return tensor_layout_.compute_shard_spec_buffer(logical_shape_);
+    BufferShardingArgs compute_buffer_sharding_args() const {
+        return tensor_layout_.compute_buffer_sharding_args(logical_shape_);
     }
     size_t compute_packed_buffer_size_bytes() const {
         return tensor_layout_.compute_packed_buffer_size_bytes(logical_shape_);
     }
     size_t compute_page_size_bytes() const { return tensor_layout_.compute_page_size_bytes(logical_shape_); }
 
-    TensorSpec with_memory_config(MemoryConfig memory_config) const {
-        TensorSpec result = *this;
-        result.tensor_layout_ = tensor_layout_.with_memory_config(std::move(memory_config));
-        return result;
+    size_t compute_consumed_memory_bytes_per_bank(const IDevice& device) const {
+        return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, device);
     }
+    size_t compute_consumed_memory_bytes_per_bank(size_t page_alignment, size_t num_banks) const {
+        return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, page_alignment, num_banks);
+    }
+
+    TensorSpec with_memory_config(MemoryConfig memory_config) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("logical_shape", "tensor_layout");
     auto attribute_values() const { return std::forward_as_tuple(logical_shape_, tensor_layout_); }
 
 private:
+    void populate_sharding_specs();
+    MemoryConfig populate_nd_shard_spec_from_legacy() const;
+    std::optional<MemoryConfig> populate_legacy_shard_spec_from_nd() const;
+
     ttnn::Shape logical_shape_;
     TensorLayout tensor_layout_;
 

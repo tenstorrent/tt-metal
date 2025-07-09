@@ -13,10 +13,9 @@
 #include "assert.hpp"
 #include "fmt/base.h"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include <umd/device/tt_core_coordinates.h>
-#include "utils.hpp"
 
 void memset_l1(tt::stl::Span<const uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
     // Utility function that writes a memory vector to L1 for all cores at a specific start address.
@@ -30,7 +29,8 @@ void memset_dram(std::vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start
     // Utility function that writes a memory to all channels and subchannels at a specific start address.
     const metal_SocDescriptor& sdesc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
     for (uint32_t dram_view = 0; dram_view < sdesc.get_num_dram_views(); dram_view++) {
-        tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(mem_vec, chip_id, dram_view, start_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
+            mem_vec.data(), mem_vec.size() * sizeof(uint32_t), chip_id, dram_view, start_addr);
     }
 }
 
@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
         "If you don't want to launch from memset.py, the order of arguments supplied is specified by the command list "
         "in memset.py.");
 
-    string mem_type = argv[1];
+    std::string mem_type = argv[1];
     uint32_t chip_id = std::stoi(argv[2]);
     uint32_t start_addr = std::stoi(argv[3]);
     uint32_t size = std::stoi(argv[4]);

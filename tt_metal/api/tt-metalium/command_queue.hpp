@@ -9,7 +9,6 @@
 #include <memory>
 #include <thread>
 
-#include <tt-metalium/trace_buffer.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 
 #include <tt-metalium/vector_aligned.hpp>
@@ -21,6 +20,7 @@ class Program;
 class Kernel;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
+class TraceDescriptor;
 
 class CommandQueue {
 public:
@@ -28,7 +28,7 @@ public:
 
     virtual const CoreCoord& virtual_enqueue_program_dispatch_core() const = 0;
 
-    virtual void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
+    virtual void record_begin(uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
 
     virtual void reset_worker_state(
@@ -49,7 +49,7 @@ public:
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
 
-    virtual void enqueue_trace(const uint32_t trace_id, bool blocking) = 0;
+    virtual void enqueue_trace(uint32_t trace_id, bool blocking) = 0;
 
     virtual void enqueue_program(Program& program, bool blocking) = 0;
 

@@ -63,9 +63,8 @@ ALWI void tile_regs_wait() { PACK((llk_packer_wait_for_math_done())); }
  */
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
-    MATH((llk_math_dest_section_done()));
-
-    PACK((llk_pack_dest_section_done()));
+    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
 }
 
 // new APIs, TODO: migrate all kernels to these
@@ -73,11 +72,11 @@ ALWI void release_dst() {
 /**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  */
-ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done())); }
+ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<DST_ACCUM_MODE>())); }
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
  */
-ALWI void tile_regs_release() { PACK((llk_pack_dest_section_done())); }
+ALWI void tile_regs_release() { PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>())); }
 
 }  // namespace ckernel

@@ -36,6 +36,8 @@
 // -32 for ETH barrier, see comment in eth_l1_address_map
 #define MEM_ETH_SIZE (256 * 1024 - 32)
 
+#define MEM_DRAM_SIZE (1048576 * 1024)
+
 #define MEM_LOCAL_BASE 0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE (4 * 1024)
 #define MEM_NCRISC_LOCAL_SIZE (4 * 1024)
@@ -89,15 +91,28 @@
 #define MEM_TRISC1_FIRMWARE_BASE (MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE)
 #define MEM_TRISC2_FIRMWARE_BASE (MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE)
 
-// Firmware is in L1 and kernel is in IRAM
-#define NCRISC_FIRMWARE_KERNEL_SPLIT 1
-#define MEM_NCRISC_KERNEL_BASE (MEM_NCRISC_IRAM_BASE)
+/* Kernel is in IRAM.  */
+#define MEM_NCRISC_KERNEL_BASE MEM_NCRISC_IRAM_BASE
 
 #define MEM_NOC_COUNTER_SIZE 4
 #define MEM_NOC_COUNTER_L1_SIZE 5 * 2 * 2 * MEM_NOC_COUNTER_SIZE
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
-#define MEM_MAP_END (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+// Tensix routing table for fabric networking
+#define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+#define MEM_TENSIX_ROUTING_TABLE_SIZE 2064
+#if (MEM_TENSIX_ROUTING_TABLE_BASE % 16 != 0) || (MEM_TENSIX_ROUTING_TABLE_SIZE % 16 != 0)
+#error "Tensix routing table base and size must be 16-byte aligned"
+#endif
+
+// Tensix fabric connection metadata for workers
+#define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 592  // sizeof(tensix_fabric_connections_l1_info_t)
+#if (MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 != 0) || (MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 != 0)
+#error "Tensix fabric connections base and size must be 16-byte aligned"
+#endif
+
+#define MEM_MAP_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
@@ -119,18 +134,14 @@
 
 /////////////
 // Stack info
-// Increasing the stack size comes at the expense of less local memory for globals
-#define MEM_BRISC_STACK_SIZE 1040
-#define MEM_NCRISC_STACK_SIZE 1040
-#define MEM_TRISC0_STACK_SIZE 320
-#define MEM_TRISC1_STACK_SIZE 256
-#define MEM_TRISC2_STACK_SIZE 720
-
-#define MEM_BRISC_STACK_TOP (MEM_LOCAL_BASE + MEM_BRISC_LOCAL_SIZE)
-#define MEM_NCRISC_STACK_TOP (MEM_LOCAL_BASE + MEM_NCRISC_LOCAL_SIZE)
-#define MEM_TRISC0_STACK_TOP (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE)
-#define MEM_TRISC1_STACK_TOP (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE)
-#define MEM_TRISC2_STACK_TOP (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE)
+// Stack and globals share the same piece of memory, one grows at the
+// expense of the other.
+#define MEM_BRISC_STACK_MIN_SIZE 256
+#define MEM_NCRISC_STACK_MIN_SIZE 256
+#define MEM_TRISC0_STACK_MIN_SIZE 192
+#define MEM_TRISC1_STACK_MIN_SIZE 192
+#define MEM_TRISC2_STACK_MIN_SIZE 256
+#define MEM_IERISC_STACK_MIN_SIZE 128
 
 /////////////
 // IERISC memory map
@@ -149,12 +160,9 @@
 #define MEM_IERISC_MAP_END (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
 #define MEM_IERISC_KERNEL_SIZE (24 * 1024)
 #define MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_IERISC_MAP_END
-#define MEM_IERISC_STACK_SIZE 1024
-#define MEM_IERISC_STACK_TOP (MEM_LOCAL_BASE + MEM_IERISC_LOCAL_SIZE)
 
 #define MEM_IERISC_BANK_TO_NOC_SCRATCH (MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_IERISC_LOCAL_SIZE)
 #define MEM_IERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
-
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc

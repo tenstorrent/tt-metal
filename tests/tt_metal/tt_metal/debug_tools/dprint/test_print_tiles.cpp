@@ -12,7 +12,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -117,8 +116,8 @@ static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
     return u32_vec;
 }
 
-static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t> &input_tile) {
-    string data = "";
+static std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+    std::string data = "";
     if (data_format == tt::DataFormat::Float32) {
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
@@ -212,9 +211,9 @@ static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint3
     return data;
 }
 
-static string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t> &input_tile) {
-    string data = GenerateExpectedData(data_format, input_tile);
-    string expected = fmt::format("Print tile from Data0:{}", data);
+static std::string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+    std::string data = GenerateExpectedData(data_format, input_tile);
+    std::string expected = fmt::format("Print tile from Data0:{}", data);
     expected += fmt::format("\nPrint tile from Unpack:{}", data);
     expected += fmt::format("\nPrint tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print...");
     expected += fmt::format("\nPrint tile from Pack:{}", data);
@@ -275,7 +274,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
         string tmp = fmt::format("data[{:#03}:{:#03}]:", idx - 1, idx - 16);
         for (int i = 0; i < 16; i++)
             tmp += fmt::format(" 0x{:08x}", u32_vec[idx + 15 - i]);
-        log_info("{}", tmp);
+        log_info(tt::LogTest, "{}", tmp);
     }*/
 
     // Send input tile to dram
@@ -290,8 +289,8 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     fixture->RunProgram(device, program);
 
     // Check against expected prints
-    string expected = GenerateGoldenOutput(data_format, u32_vec);
-    // log_info("Expected output:\n{}", expected);
+    std::string expected = GenerateGoldenOutput(data_format, u32_vec);
+    // log_info(tt::LogTest, "Expected output:\n{}", expected);
     EXPECT_TRUE(
         FilesMatchesString(
             DPrintFixture::dprint_file_name,

@@ -11,6 +11,7 @@ from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+from models.demos.llama3_subdevices.tt.sampling import TTSampling
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from tqdm import tqdm
@@ -24,6 +25,10 @@ from tqdm import tqdm
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
     ((512, 511, 128 * 1024),),
+)
+@pytest.mark.parametrize(
+    "sampling_params",
+    [{"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42}],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -73,7 +78,7 @@ from tqdm import tqdm
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -86,11 +91,11 @@ def test_tt_model_acc(
     min_top1_acc,
     min_top5_acc,
     paged_attention,
+    sampling_params,
     page_params,
     optimizations,
     mesh_device,
     use_reference_file,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,
@@ -98,14 +103,23 @@ def test_tt_model_acc(
     if is_ci_env and not use_reference_file:
         pytest.skip("CI test only runs vs reference file")
 
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     dtype = ttnn.bfloat8_b
 
     # Load model args and tokenizer
     model_args = TtModelArgs(
         mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, instruct=True
     )
-
-    # model_args.n_layers = 1
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -116,7 +130,7 @@ def test_tt_model_acc(
 
     if use_reference_file:
         # Existing reference file loading logic
-        reference_data_file = "models/tt_transformers/tests/reference_outputs/Llama3.1-70B-Instruct.refpt"
+        reference_data_file = "models/tt_transformers/tests/reference_outputs/Llama-3.1-70B-Instruct.refpt"
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
@@ -175,6 +189,12 @@ def test_tt_model_acc(
         paged_attention_config=paged_attention_config,
         enable_prefetcher_performance_mode=True,
     )
+    tt_sampling = TTSampling(
+        args=model_args,
+        mesh_device=mesh_device,
+        temperature=temperature,
+        tt_ccl=tt_model.tt_ccl,
+    )
     # Initialize embedding
     embd = HostEmbedding(model_args)
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
@@ -198,7 +218,7 @@ def test_tt_model_acc(
     )
 
     # Get the first input tensors
-    _, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    _, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     ref_token = input_ids[0, 0].item()  # First token
     ref_token = torch.tensor([[ref_token]], dtype=torch.int32)
@@ -210,7 +230,7 @@ def test_tt_model_acc(
     )
 
     def run_model():
-        rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
 
         tt_out = tt_model(
             decode_input,
@@ -220,18 +240,8 @@ def test_tt_model_acc(
             page_table=page_table_tt,
         )
 
-        tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0],
-            dim=3,
-            num_links=2,
-            cluster_axis=0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="SAMPLING",
-        )
-        tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-        tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-            tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
-        )
+        # Sampling
+        tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
 
         # Update the idxs
         ttnn.plus_one(
@@ -243,11 +253,11 @@ def test_tt_model_acc(
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
 
-        return tt_out_tok, tt_out_rm
+        return tt_out_tok, tt_out[0]
 
     # Compile the model
     logger.info("Compiling model...")
-    tt_out_tok, tt_out_rm = run_model()
+    tt_out_tok, tt_out = run_model()
 
     # Capturing trace
     logger.info("Capturing trace...")
@@ -256,7 +266,7 @@ def test_tt_model_acc(
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
-    tt_out_tok, tt_out_rm = run_model()
+    tt_out_tok, tt_out = run_model()
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -274,7 +284,7 @@ def test_tt_model_acc(
 
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     ttnn.synchronize_device(mesh_device)
@@ -332,14 +342,11 @@ def test_tt_model_acc(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
 
         if not use_reference_file:
+            # Convert ttnn tensor to torch tensor
             tt_logits = ttnn.to_torch(
-                tt_out_rm,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device,
-                    dims=(2, 1),
-                    mesh_shape=model_args.cluster_shape,
-                ),
-            )[0, 0, 0, :]
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
+            )[0, 0, 0, : model_args.vocab_size]
 
         tt_argmax_token = ttnn.to_torch(
             tt_out_tok,

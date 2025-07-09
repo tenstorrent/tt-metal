@@ -269,6 +269,8 @@ class TtLlamaCrossAttention(LightweightModule):
         output = ttnn.slice(output, (0, 0, 0, 0), (1, self.n_local_heads, batch, self.head_dim))
         output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
         output = ttnn.experimental.nlp_concat_heads(output)
+        # NOTE: The rest of the model expects output to be padded to tile height
+        output = ttnn.reshape(output, output.padded_shape, output.padded_shape)
 
         output = ttnn.matmul(
             output,

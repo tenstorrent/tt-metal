@@ -175,7 +175,7 @@ struct BinaryDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle binary_reader_kernel_id;
             tt::tt_metal::KernelHandle bcast_kernel_id;
-            uint32_t cb_src0;
+            tt::tt_metal::CBHandle cb_src0;
             tt::tt_metal::CBHandle out_cb;
             uint32_t ncores_x;
         };
@@ -198,7 +198,7 @@ struct BinaryDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle binary_reader_kernel_id;
             tt::tt_metal::KernelHandle bcast_kernel_id;
-            uint32_t cb_src0;
+            tt::tt_metal::CBHandle cb_src0;
             tt::tt_metal::CBHandle out_cb;
             uint32_t ncores_x;
         };

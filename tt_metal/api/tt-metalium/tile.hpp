@@ -54,17 +54,17 @@ struct Tile {
         bool transpose_tile = false);
 
     // Getter methods
-    const uint32_t get_height() const { return tile_shape[0]; }
-    const uint32_t get_width() const { return tile_shape[1]; }
-    const uint32_t get_num_faces() const { return num_faces; }
-    const uint32_t get_tile_hw() const { return tile_hw; }
-    const uint32_t get_face_hw() const { return face_hw; }
-    const uint32_t get_partial_face() const { return partial_face; }
-    const uint32_t get_narrow_tile() const { return narrow_tile; }
-    const std::array<uint32_t, 2> get_tile_shape() const { return tile_shape; }
-    const std::array<uint32_t, 2> get_face_shape() const { return face_shape; }
-    const bool get_transpose_within_face() const { return transpose_within_face; }
-    const bool get_transpose_of_faces() const { return transpose_of_faces; }
+    uint32_t get_height() const { return tile_shape[0]; }
+    uint32_t get_width() const { return tile_shape[1]; }
+    uint32_t get_num_faces() const { return num_faces; }
+    uint32_t get_tile_hw() const { return tile_hw; }
+    uint32_t get_face_hw() const { return face_hw; }
+    uint32_t get_partial_face() const { return partial_face; }
+    uint32_t get_narrow_tile() const { return narrow_tile; }
+    std::array<uint32_t, 2> get_tile_shape() const { return tile_shape; }
+    std::array<uint32_t, 2> get_face_shape() const { return face_shape; }
+    bool get_transpose_within_face() const { return transpose_within_face; }
+    bool get_transpose_of_faces() const { return transpose_of_faces; }
 
     uint32_t get_tile_size(const DataFormat& format) const;
 
@@ -72,7 +72,7 @@ struct Tile {
     bool operator==(const Tile& other) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("tile_shape", "face_shape", "num_faces");
-    const auto attribute_values() const { return std::forward_as_tuple(tile_shape, face_shape, num_faces); }
+    auto attribute_values() const { return std::forward_as_tuple(tile_shape, face_shape, num_faces); }
 };
 
 }  // namespace tt::tt_metal

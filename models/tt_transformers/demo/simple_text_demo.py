@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -23,7 +23,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
+from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -167,7 +167,7 @@ def prepare_generator_args(
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
@@ -365,6 +365,34 @@ def prepare_generator_args(
             True,  # ci_only
             8,  # data_parallel
         ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            16,  # data_parallel
+        ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            32,  # data_parallel
+        ),
         (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -394,6 +422,8 @@ def prepare_generator_args(
         "DP-4-b32",  # DP 4 throughput
         "ci-b1-DP-4",  # CI DP 4 batch 1
         "ci-b1-DP-8",  # CI DP 8 batch 1
+        "ci-b1-DP-16",  # CI DP 16 batch 1
+        "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
     ],
 )
@@ -405,11 +435,11 @@ def prepare_generator_args(
     ],
     ids=["performance", "accuracy"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 25000000, "num_command_queues": 1}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -428,7 +458,6 @@ def test_demo_text(
     optimizations,
     stop_at_eos,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     ci_only,
     data_parallel,
@@ -488,15 +517,16 @@ def test_demo_text(
 
     if is_ci_env:
         llama_dir = os.getenv("LLAMA_DIR", "")
-        is_31_70b = "3.1-70B" in llama_dir
+        is_33_70b = "3.3-70B" in llama_dir
         is_32_1b = "3.2-1B" in llama_dir
         is_31_8b = "3.1-8B" in llama_dir
-        if num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and not is_31_70b)):
-            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 on TG")
+
+        tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
+
+        if num_devices == 32 and not tg_enabled:
+            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
         if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
-        if data_parallel > 1 and batch_size > 1:
-            pytest.skip("CI only runs hybrid with batch 1 per submesh")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -817,22 +847,21 @@ def test_demo_text(
     logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
-    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
+    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
     logger.info(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B", "Mistral-7B"]
+    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
-    tt_device_name = model_args[0].device_name
+    tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
+    model_device_key = f"{tt_device_name}_{model_name}"
 
     if model_name in supported_models:
         assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        model_device_key = f"{tt_device_name}_{model_name}"
 
         # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
         dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
@@ -844,30 +873,30 @@ def test_demo_text(
 
         # Set the target decode t/s/u for every combination of device and model (optional - for tracking benchmark data)
         dict_target_decode_tok_s_u = {
-            "N150_Llama3.2-1B": 160,
-            "N300_Llama3.2-1B": 250,  # TODO Update target
-            "T3K_Llama3.2-1B": 300,  # TODO Update target
-            "TG_Llama3.2-1B": 300,  # TODO Update target
+            "N150_Llama-3.2-1B": 160,
+            "N300_Llama-3.2-1B": 250,  # TODO Update target
+            "T3K_Llama-3.2-1B": 300,  # TODO Update target
+            "TG_Llama-3.2-1B": 300,  # TODO Update target
             #
-            "N150_Llama3.2-3B": 60,
-            "N300_Llama3.2-3B": 100,  # TODO Update target
-            "T3K_Llama3.2-3B": 150,  # TODO Update target
-            "TG_Llama3.2-3B": 150,  # TODO Update target
+            "N150_Llama-3.2-3B": 60,
+            "N300_Llama-3.2-3B": 100,  # TODO Update target
+            "T3K_Llama-3.2-3B": 150,  # TODO Update target
+            "TG_Llama-3.2-3B": 150,  # TODO Update target
             #
-            "N150_Llama3.1-8B": 23,
-            "P150_Llama3.1-8B": 23,  # TODO Update target
-            "N300_Llama3.1-8B": 38,
-            "P300_Llama3.1-8B": 38,
-            "T3K_Llama3.1-8B": 45,
-            "TG_Llama3.1-8B": 45,  # TODO Update target
+            "N150_Llama-3.1-8B": 23,
+            "P150_Llama-3.1-8B": 23,  # TODO Update target
+            "N300_Llama-3.1-8B": 38,
+            "P300_Llama-3.1-8B": 38,
+            "T3K_Llama-3.1-8B": 45,
+            "TG_Llama-3.1-8B": 45,  # TODO Update target
             #
-            "N150_Llama3.2-11B": 23,
-            "N300_Llama3.2-11B": 38,  # TODO Update target
-            "T3K_Llama3.2-11B": 45,  # TODO Update target
-            "TG_Llama3.2-11B": 45,  # TODO Update target
+            "N150_Llama-3.2-11B": 23,
+            "N300_Llama-3.2-11B": 38,  # TODO Update target
+            "T3K_Llama-3.2-11B": 45,  # TODO Update target
+            "TG_Llama-3.2-11B": 45,  # TODO Update target
             #
-            "T3K_Llama3.1-70B": 20,  # TODO Update target
-            "TG_Llama3.1-70B": 20,  # TODO Update target
+            "T3K_Llama-3.1-70B": 20,  # TODO Update target
+            "TG_Llama-3.1-70B": 20,  # TODO Update target
             #
             "N150_Mistral-7B": 23,
             "N300_Mistral-7B": 38,  # TODO Update target
@@ -886,6 +915,7 @@ def test_demo_text(
             "decode_t/s": target_decode_tok_s,
             "decode_t/s/u": target_decode_tok_s_u,
         }
+
     else:
         logger.info(f"Model {model_name} does not have performance targets set")
         targets = {}
@@ -932,3 +962,58 @@ def test_demo_text(
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
+
+        # check measurements against CI performance targets -- for batch size 32
+        if global_batch_size == 32:
+            logger.info(
+                f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
+            )
+            # Targets set to 0.95x observed values for decode rates (higher is better)
+            # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
+            ci_target_ttft = {
+                # N150 targets (milliseconds) - lower is better
+                "N150_Llama3.2-1B": 26,
+                "N150_Llama3.2-3B": 57,
+                "N150_Llama3.1-8B": 112,
+                "N150_Mistral-7B": 106,
+                # N300 targets
+                "N300_Qwen2.5-7B": 150,
+                # T3K targets
+                "T3K_Llama3.1-70B": 181,
+                "T3K_Qwen2.5-72B": 211,
+                "T3K_Qwen3-32B": 470,
+            }
+            ci_target_decode_tok_s_u = {
+                # N150 targets - higher is better
+                "N150_Llama3.2-1B": 58,
+                "N150_Llama3.2-3B": 35,
+                "N150_Llama3.1-8B": 21,
+                "N150_Mistral-7B": 23,
+                # N300 targets
+                "N300_Qwen2.5-7B": 10,
+                # T3K targets
+                "T3K_Llama3.1-70B": 14,
+                "T3K_Qwen2.5-72B": 13,
+                "T3K_Qwen3-32B": 11,
+            }
+
+            # Only call verify_perf if the model_device_key exists in the targets
+            ci_targets = {}
+            if model_device_key in ci_target_ttft:
+                ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
+            if model_device_key in ci_target_decode_tok_s_u:
+                ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
+                # calculate from per-user rate
+                ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+
+            if ci_targets:  # Only verify performance if we have targets for this model/device combination
+                verify_perf(
+                    measurements,
+                    ci_targets,
+                    high_tol_percentage=1.15,
+                    expected_measurements={k: True for k in ci_targets.keys()},
+                )
+            else:
+                logger.warning(
+                    f"No CI performance targets found for {model_device_key}. Skipping performance verification."
+                )

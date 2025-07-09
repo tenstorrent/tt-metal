@@ -18,7 +18,9 @@ struct GatherDeviceOperation {
     using tensor_args_t = gather::tensor_args_t;
     using spec_return_value_t = gather::spec_return_value_t;
     using tensor_return_value_t = gather::tensor_return_value_t;
-    using program_factory_t = std::variant<gather::program::GatherProgramFactory>;
+    using program_factory_t = std::variant<
+        gather::program::GatherProgramFactorySingleRowSingleCore,
+        gather::program::GatherProgramFactorySingleRowMultiCore>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -30,9 +32,9 @@ struct GatherDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const int8_t dim,
+        int8_t dim,
         const Tensor& input_index_tensor,
-        const bool sparse_grad,
+        bool sparse_grad,
         const MemoryConfig& output_memory_config,
         const std::optional<Tensor>& output_tensors);
 };

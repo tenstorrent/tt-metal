@@ -92,6 +92,13 @@ add_custom_target(
 )
 
 add_library(metalium_test_files INTERFACE)
+# These headers are for the device, not host; will require cross compiling to verify.
+set_target_properties(
+    metalium_test_files
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 target_sources(
     metalium_test_files
     PUBLIC

@@ -7,11 +7,9 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <cstring>
-#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -24,7 +22,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -133,7 +131,7 @@ void run_single_core_copy_block_matmul_partials(
         uint(ouput_cb_index)               // Output CB idx
     };
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     if (test_config.fp32_dest_acc_en) {
         defines["DST_ACCUM_MODE"] = "1";
     }

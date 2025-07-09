@@ -6,7 +6,7 @@
 #include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdint.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -62,8 +62,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
     auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
 
-    auto input_storage =
-        tt::tt_metal::DeviceStorage{input_buffer, {{tt::tt_metal::distributed::MeshCoordinate{0, 0}, tensor_spec}}};
+    auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::distributed::MeshCoordinate{0, 0}}};
 
     Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
 
@@ -118,8 +117,13 @@ TEST_P(EmptyTensorTest, Combinations) {
     auto dtype = std::get<1>(params);
     auto layout = std::get<2>(params);
     auto memory_config = std::get<3>(params);
-    tt::log_info(
-        "Running test with shape={}, dtype={}, layout={}, memory_config={}", shape, dtype, layout, memory_config);
+    log_info(
+        tt::LogTest,
+        "Running test with shape={}, dtype={}, layout={}, memory_config={}",
+        shape,
+        dtype,
+        layout,
+        memory_config);
 
     if (layout == tt::tt_metal::Layout::ROW_MAJOR && dtype == tt::tt_metal::DataType::BFLOAT8_B) {
         GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
@@ -128,15 +132,8 @@ TEST_P(EmptyTensorTest, Combinations) {
     auto tensor_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
-    // Ignoring too large single bank allocations
-    if (memory_config.memory_layout() == TensorMemoryLayout::SINGLE_BANK) {
-        if (tensor_layout.compute_page_size_bytes(shape) >= 500 * 1024) {
-            GTEST_SKIP() << "Skipping test with page size exceeding single bank size of 500 kB!";
-        }
-    }
-
     auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
-    EXPECT_EQ(tensor.get_logical_shape(), shape);
+    EXPECT_EQ(tensor.logical_shape(), shape);
 
     test_utils::test_tensor_on_device(shape, tensor_layout, device_);
 }
@@ -170,10 +167,6 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(tt::tt_metal::Layout::TILE, tt::tt_metal::Layout::ROW_MAJOR),
 
         ::testing::Values(
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::SINGLE_BANK, ttnn::BufferType::L1},
-
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::SINGLE_BANK, ttnn::BufferType::DRAM},
-
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1},
 
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}

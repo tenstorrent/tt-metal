@@ -26,3 +26,6 @@ eval_config:
   temperature: 0.7
   top_k: 50
   top_p: 1.0
+device_config:
+  enable_tp: true
+  mesh_shape: [1,2]

@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -126,7 +126,7 @@ bool dram_to_l1_multicast(
                  (cfg.exclude_direction.x == 1 && j >= cfg.exclude_start.x)) &&
                 ((cfg.exclude_direction.y == 0 && i <= cfg.exclude_start.y) ||
                  (cfg.exclude_direction.y == 1 && i >= cfg.exclude_start.y))) {
-                tt::log_debug(
+                log_debug(
                     tt::LogTest, "Skipping core {},{}", j, i);  // debug print to verify we don't skip unnecessary cores
                 continue;
             }
@@ -152,6 +152,8 @@ TEST_F(DispatchFixture, TensixDRAMtoL1Multicast) {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast.cpp",
+        .exclude_start = {0, 0},
+        .exclude_direction = {0, 0},
     };
     for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
@@ -163,6 +165,8 @@ TEST_F(DispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
         .dest_buffer_addr = 500 * 1024,
         .target_grid_offset = 0,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
+        .exclude_start = {0, 0},
+        .exclude_direction = {0, 0},
     };
     for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(

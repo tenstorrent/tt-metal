@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -23,7 +24,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     auto input = tensor_args.input;
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
-    const auto shape = input.get_padded_shape();
+    const auto& shape = input.padded_shape();
 
     auto device = input.device();
     auto kernel_config_val =
@@ -39,14 +40,14 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     uint32_t HtWt = Ht * Wt;
 
     // check mask for h-dim
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape_without_padding = input.logical_shape();
     const auto origin_H = input_shape_without_padding[-2];
     const bool do_mask_h = (origin_H % constants::TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_H % constants::TILE_HEIGHT : constants::TILE_HEIGHT;
 
     auto program = CreateProgram();
 
-    auto units_to_divide = input.volume() / W / H * Wt;
+    auto units_to_divide = input.physical_volume() / W / H * Wt;
 
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
@@ -58,7 +59,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     // create circular buffers
-    tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     uint32_t num_input_tiles = 2;
@@ -82,7 +83,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(is_dram(input)), Ht, Wt, HtWt, packed_scaler_value};
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     reader_defines["REDUCE_SCALER"] = "1";
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
@@ -106,10 +107,10 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
-    string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp";
+    std::string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp";
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::H;
-    std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;

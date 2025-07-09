@@ -17,7 +17,7 @@ namespace ttnn::operations::experimental::tosa::gather {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, const int8_t dim, const uint32_t C) {
-    if (input_tensor.get_logical_shape().rank() == 1) {
+    if (input_tensor.logical_shape().rank() == 1) {
         // Early exit for scalar tensors, return the same tensor
         return input_tensor;
     }
@@ -25,8 +25,7 @@ Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, 
     // Unsqueeze the input tensor to add a new dimension
     const Tensor unsqueezed_tensor = ttnn::unsqueeze(input_tensor, -1);
     // Create a shape vector for the new tensor
-    ttnn::SmallVector<int32_t> shape_vector = {
-        input_tensor.get_logical_shape()[0], input_tensor.get_logical_shape()[1], C};
+    ttnn::SmallVector<int32_t> shape_vector = {input_tensor.logical_shape()[0], input_tensor.logical_shape()[1], C};
     Tensor expanded_tensor = ttnn::expand(unsqueezed_tensor, shape_vector, unsqueezed_tensor.memory_config());
     // --- --- ---
     // NOTE: Converting to uint16, this will be removed once ttnn.transpose will support uint32, currently index needs
@@ -57,20 +56,19 @@ Tensor ExecuteTosaGather::invoke(
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
 
     // Input tensor
-    const ttnn::Shape original_input_tensor_lshape = input_tensor.get_logical_shape();  // [N, K, C]
-    const auto input_tensor_rank = input_tensor.get_padded_shape().rank();
+    const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();  // [N, K, C]
+    const auto input_tensor_rank = input_tensor.padded_shape().rank();
     TT_FATAL(
         input_tensor_rank == input_tensor_rank_constraint,
         "Input tensor rank must be {}, got: {}",
         input_tensor_rank_constraint,
         input_tensor_rank);
     const auto N = original_input_tensor_lshape[0];
-    const auto K = original_input_tensor_lshape[1];
     const auto C = original_input_tensor_lshape[-1];
 
     // Index tensor
-    const auto original_input_index_tensor_lshape = input_index_tensor.get_logical_shape();  // [N, W]
-    const auto input_index_tensor_rank = input_index_tensor.get_padded_shape().rank();
+    const auto& original_input_index_tensor_lshape = input_index_tensor.logical_shape();  // [N, W]
+    const auto input_index_tensor_rank = input_index_tensor.padded_shape().rank();
     TT_FATAL(
         input_index_tensor_rank == input_index_tensor_rank_constraint,
         "Index tensor rank must be {}, got: {}",
@@ -79,7 +77,6 @@ Tensor ExecuteTosaGather::invoke(
     TT_FATAL(
         N == original_input_index_tensor_lshape[0],
         "Index tensor first dimension must be equal to input tensor first dimension");
-    const auto W = original_input_index_tensor_lshape[1];
 
     Tensor expanded_index_tensor =
         CMAKE_UNIQUE_NAMESPACE::pre_tosa_gather_transform_input_index_tensor(input_index_tensor, dim, C);

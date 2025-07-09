@@ -17,6 +17,7 @@ class TtUpsample2D(nn.Module):
         device,
         state_dict,
         module_path,
+        model_config,
         stride,
         padding,
         dilation,
@@ -35,10 +36,17 @@ class TtUpsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        self.compute_config, self.conv_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, ttnn.bfloat16, fp32_dest_acc_en=True, math_fidelity=ttnn.MathFidelity.LoFi
+        self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
+            device,
+            weights,
+            bias,
+            model_config.conv_w_dtype,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
@@ -55,7 +63,7 @@ class TtUpsample2D(nn.Module):
             ttnn.deallocate(hidden_state_l1)
         else:
             hidden_states = hidden_state_l1
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W], [self.tt_weights, self.tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
@@ -76,12 +84,8 @@ class TtUpsample2D(nn.Module):
             slice_config=self.conv_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
-        self.tt_weights = d_w
-        self.tt_bias = d_b
-
-        self.conv_config.preprocess_weights_on_device = False
-        self.conv_config.always_preprocess_weights = False
 
         return hidden_states, [C, H, W]

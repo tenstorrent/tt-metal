@@ -33,11 +33,12 @@ protected:
     size_t num_devices_ = 0;
 
 public:
-    void check_slow_dispatch() {
+    bool check_dispatch_mode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            GTEST_SKIP() << "Skipping test, since it can only be run in Fast Dispatch Mode.";
+            return false;
         }
+        return true;
     }
 
 public:
@@ -75,12 +76,13 @@ protected:
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
 
     void SetUp() override {
-        check_slow_dispatch();
+        if (!check_dispatch_mode()) {
+            GTEST_SKIP() << "Skipping test, since it can only be run in Fast Dispatch Mode.";
+        }
 
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ != 1) {
-            tt::log_warning(
-                tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
+            log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
             dispatch_core_type = DispatchCoreType::ETH;
         }
         device_holder_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
@@ -96,7 +98,9 @@ protected:
     std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
 
     void SetUp() override {
-        check_slow_dispatch();
+        if (!check_dispatch_mode()) {
+            GTEST_SKIP() << "Skipping test, since it can only be run in Fast Dispatch Mode.";
+        }
 
         if (num_devices_ < 8 or arch_ != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi CQ test suite on non T3K machine.";

@@ -27,7 +27,12 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": True,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -68,7 +73,6 @@ def test_llama_attention_inference(
     paged_attention,
     page_params,
     mesh_device,
-    use_program_cache,
     reset_seeds,
 ):
     dtype = ttnn.bfloat8_b
@@ -197,7 +201,7 @@ def test_llama_attention_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
 
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
@@ -236,7 +240,7 @@ def test_llama_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,

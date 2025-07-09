@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdio>
-
 #include "moreh_dot_backward_device_operation.hpp"
 #include <tt-metalium/util.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -25,16 +23,16 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     auto* src0_buffer = output_grad.buffer();
     auto* src1_buffer = input.buffer();
     auto* src2_buffer = other.buffer();
 
-    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     float scaler = 1.0f;
-    const auto& a_shape_wo_padding = input.get_logical_shape();
+    const auto& a_shape_wo_padding = input.logical_shape();
     uint32_t pad_h = a_shape_wo_padding[2] % tt::constants::TILE_HEIGHT;
     uint32_t pad_w = a_shape_wo_padding[3] % tt::constants::TILE_WIDTH;
     uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
@@ -102,7 +100,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp";

@@ -246,11 +246,12 @@ namespace matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
-    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
-    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    tt::DataFormat out_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat out_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
     tt_metal::Buffer* in0_buffer = a.buffer();
@@ -287,7 +288,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto cshape = output.get_padded_shape();  // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer* out_buffer = output.buffer();
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 

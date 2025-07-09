@@ -4,8 +4,6 @@
 
 #include "tanh_accurate_sharded_pgm_factory.hpp"
 
-#include <algorithm>
-
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
@@ -37,8 +35,8 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
         out_shard_spec.num_cores(),
         ncores);
 
-    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
@@ -47,7 +45,7 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
 
     uint32_t num_tile_per_core = 0;
 
-    if (input.get_dtype() == DataType::BFLOAT8_B) {
+    if (input.dtype() == DataType::BFLOAT8_B) {
         uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
         uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
@@ -150,7 +148,7 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
@@ -168,7 +166,7 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     }
 
     bool math_approx_mode = false;
-    std::map<string, string> unary_defines;
+    std::map<std::string, std::string> unary_defines;
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(

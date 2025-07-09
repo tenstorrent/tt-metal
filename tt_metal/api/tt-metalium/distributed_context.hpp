@@ -150,9 +150,14 @@ public:
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
     static void set_current_world(const ContextPtr& ctx);
+
+    // Returns true if the distributed context has already been initialized
+    static bool is_initialized();
+
     //--- Topology ------------------------------------------------------------
     [[nodiscard]] virtual Rank rank() const = 0;
     [[nodiscard]] virtual Size size() const = 0;
+    [[nodiscard]] virtual bool supports_fault_tolerance() const = 0;
 
     //--- Synchronization ----------------------------------------------------
     virtual void barrier() const = 0;
@@ -228,6 +233,10 @@ public:
 
     virtual void revoke_and_shrink() = 0;
     [[nodiscard]] virtual bool is_revoked() = 0;
+
+    //--- Message snooping -----------------------------------------------
+    // Probe for an incoming message from 'source' with 'tag'. Return the size of the message in bytes
+    virtual std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const = 0;
 
     virtual ~DistributedContext() = default;
 };

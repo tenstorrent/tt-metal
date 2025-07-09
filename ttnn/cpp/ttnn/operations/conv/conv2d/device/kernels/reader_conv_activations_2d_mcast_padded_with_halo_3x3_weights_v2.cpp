@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include "debug/dprint_pages.h"
 #endif
 
-constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);  // Input filter window width
+constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);  // Input filter window height
 constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);  // Input filter window width
 
 template <int window_height, int window_width>
@@ -48,10 +48,9 @@ void read_channels(
     const uint32_t conv_act_c_read_bytes,
     const uint32_t coalesced_read_bytes,
     const uint32_t stride_h_bytes) {
-    constexpr uint32_t unroll_factor = WINDOW_INNER;
     uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
-#pragma GCC unroll unroll_factor
-    for (uint32_t inner = 0; inner < WINDOW_INNER; inner++) {
+#pragma GCC unroll weight_size_h
+    for (uint32_t inner = 0; inner < weight_size_h; inner++) {
         noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
         l1_write_addr_act += coalesced_read_bytes;
         // +2 is hard-coded, TODO: generalize
@@ -63,9 +62,9 @@ constexpr uint32_t DILATION_W = get_compile_time_arg_val(1);
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(1);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t window_inner = get_compile_time_arg_val(4);
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(5);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t window_inner = get_compile_time_arg_val(5);
     constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
@@ -77,12 +76,12 @@ void kernel_main() {
     const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(18);
     constexpr bool transpose_mcast = get_compile_time_arg_val(19) == 1;
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(23);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(24);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(25);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(26);
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(27);
-    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
@@ -130,7 +129,6 @@ void kernel_main() {
         act_mcast_dest_noc_start_x, act_mcast_dest_noc_start_y, act_mcast_dest_noc_end_x, act_mcast_dest_noc_end_y, 0);
 
     uint64_t act_mcast_receiver_semaphore_noc_addr = act_multicast_noc_addr | act_mcast_receiver_semaphore_addr;
-    constexpr uint32_t num_issued_reads_per_block = act_block_h_datums * window_inner;
 
     // TODO: need to make the read coalescing optimization cleaner
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both
@@ -153,49 +151,36 @@ void kernel_main() {
         constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
         constexpr uint32_t stride_w_bytes = conv_act_c_read_bytes * dilation_w;
 
-        for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
-            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-            if constexpr (DILATION_W == 1) {
-                read_channels(
-                    l1_write_addr_act,
-                    act_l1_read_addr,
-                    two_reader_indices & 0xffff,
-                    conv_act_c_read_bytes,
-                    coalesced_read_bytes,
-                    stride_h_bytes);
-                if constexpr (act_block_w_extra_align_bytes) {
-                    l1_write_addr_act += act_block_w_extra_align_bytes;
-                }
-                read_channels(
-                    l1_write_addr_act,
-                    act_l1_read_addr,
-                    two_reader_indices >> 16,
-                    conv_act_c_read_bytes,
-                    coalesced_read_bytes,
-                    stride_h_bytes);
-                if constexpr (act_block_w_extra_align_bytes) {
-                    l1_write_addr_act += act_block_w_extra_align_bytes;
-                }
-            } else {
-                read_dilated_channels<weight_size_h, weight_size_w>(
-                    l1_write_addr_act,
-                    act_l1_read_addr,
-                    two_reader_indices & 0xffff,
-                    conv_act_c_read_bytes,
-                    stride_h_bytes,
-                    stride_w_bytes);
-                read_dilated_channels<weight_size_h, weight_size_w>(
-                    l1_write_addr_act,
-                    act_l1_read_addr,
-                    two_reader_indices >> 16,
-                    conv_act_c_read_bytes,
-                    stride_h_bytes,
-                    stride_w_bytes);
-            }
+        uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
+        while (num_elems--) {
             reader_idx++;
+            uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+            uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+            for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
+                if constexpr (DILATION_W == 1) {
+                    read_channels(
+                        l1_write_addr_act,
+                        act_l1_read_addr,
+                        ind,
+                        conv_act_c_read_bytes,
+                        coalesced_read_bytes,
+                        stride_h_bytes);
+                    if constexpr (act_block_w_extra_align_bytes) {
+                        l1_write_addr_act += act_block_w_extra_align_bytes;
+                    }
+                } else {
+                    read_dilated_channels<weight_size_h, weight_size_w>(
+                        l1_write_addr_act,
+                        act_l1_read_addr,
+                        ind,
+                        conv_act_c_read_bytes,
+                        stride_h_bytes,
+                        stride_w_bytes);
+                }
+            }
         }
-        // incrementing num issued in one shot is actually slower
-        // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
+        reader_idx++;
+
         noc_async_read_barrier();
         cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
@@ -226,7 +211,6 @@ void kernel_main() {
                     act_multicast_data_addr,
                     act_mcast_sender_size_bytes,
                     act_mcast_num_cores + 1,
-                    true,
                     true);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc

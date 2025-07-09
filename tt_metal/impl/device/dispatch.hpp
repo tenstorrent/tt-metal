@@ -39,6 +39,8 @@ struct CoreReadDispatchParams : public CoreDispatchParams {};
 void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes);
 
+DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address);
+
 void write_to_core(
     IDevice* device,
     const CoreCoord& virtual_core,

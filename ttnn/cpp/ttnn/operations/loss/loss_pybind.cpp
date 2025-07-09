@@ -4,6 +4,9 @@
 
 #include "loss_pybind.hpp"
 
+#include <optional>
+
+#include <fmt/format.h>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -13,11 +16,9 @@
 #include "ttnn-pybind/export_enum.hpp"
 #include "ttnn-pybind/decorators.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::loss {
 
-namespace detail {
+namespace {
 
 void bind_loss_type(py::module& m) { export_enum<LossReductionMode>(m, "LossReductionMode"); }
 
@@ -123,12 +124,12 @@ void bind_mae_loss_function(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_loss_functions(py::module& module) {
-    detail::bind_loss_type(module);
-    detail::bind_mse_loss_function(module);
-    detail::bind_mae_loss_function(module);
+    bind_loss_type(module);
+    bind_mse_loss_function(module);
+    bind_mae_loss_function(module);
 }
 
 }  // namespace ttnn::operations::loss

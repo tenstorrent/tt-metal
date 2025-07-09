@@ -1,13 +1,17 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "slice_write_pybind.hpp"
+
+#include <array>
+#include <cstdint>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "ttnn-pybind/decorators.hpp"
 
+#include "ttnn-pybind/decorators.hpp"
 #include "slice_write.hpp"
-#include "slice_write_pybind.hpp"
 
 namespace ttnn::operations::experimental::slice_write {
 namespace py = pybind11;

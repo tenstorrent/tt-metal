@@ -14,6 +14,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
+from loguru import logger
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -127,13 +129,12 @@ def run_argmax(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.argmax(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
+    op_output_tensor = ttnn.argmax(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
+    output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    result, msg = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    return result, msg, e2e_perf
+    expected_pcc = 0.999
+    tensors = [input_tensor_a, op_output_tensor]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -186,7 +187,7 @@ def test_argmax(
     result, reason = invalidate_vector(test_vector)
     if result:
         pytest.skip(reason)
-    result, msg, _perf = run_argmax(
+    (result, msg), e2e_perf = run_argmax(
         input_shape,
         dim,
         keepdim,
@@ -196,5 +197,7 @@ def test_argmax(
         output_memory_config,
         device=device,
     )
-    if not result:
-        assert False, msg
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")

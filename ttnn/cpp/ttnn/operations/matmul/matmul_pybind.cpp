@@ -15,9 +15,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -549,6 +547,4 @@ void py_module(py::module& module) {
         });
 }
 
-}  // namespace matmul
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

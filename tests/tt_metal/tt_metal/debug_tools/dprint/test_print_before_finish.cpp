@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <functional>
-#include <map>
 #include <string>
 #include <variant>
 #include <vector>
@@ -44,7 +43,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
 
     // Run the program, use a large delay for the last print to emulate a long-running kernel.
     uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
-    uint32_t delay_cycles = clk_mhz * 2000000; // 2 seconds
+    uint32_t delay_cycles = clk_mhz * 4000000;  // 4 seconds
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             const std::vector<uint32_t> args = { delay_cycles, x, y };
@@ -57,11 +56,11 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
         }
     }
     fixture->RunProgram(device, program);
-    // Close the device instantly after running to attempt to cut off prints.
-    tt::tt_metal::CloseDevice(device);
+    // Close system instantly after running to attempt to cut off prints.
+    fixture->EarlyTeardown();
 
     // Check the print log against expected output.
-    vector<string> expected_output;
+    vector<std::string> expected_output;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             expected_output.push_back(fmt::format("({},{}) Before wait...", x, y));

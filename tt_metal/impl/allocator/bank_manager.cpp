@@ -15,7 +15,7 @@
 #include "assert.hpp"
 #include "buffer_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt {
@@ -200,7 +200,7 @@ MemoryBlockTable BankManager::get_memory_block_table() const {
         return allocator_->get_memory_block_table();
     }
 
-    log_warning("allocator is not initialized, cannot get block table for memory");
+    log_warning(tt::LogAlways, "allocator is not initialized, cannot get block table for memory");
     return {};
 }
 

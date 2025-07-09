@@ -16,9 +16,8 @@ OUTPUT_ARCH(riscv)
 
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
-#define DATA_SIZE (MEM_BRISC_LOCAL_SIZE - STACK_SIZE)
-#define STACK_TOP MEM_BRISC_STACK_TOP
-#define STACK_SIZE MEM_BRISC_STACK_SIZE
+#define DATA_SIZE MEM_BRISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_BRISC_STACK_MIN_SIZE
 #define TEXT_START MEM_BRISC_FIRMWARE_BASE
 #if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_BRISC_FIRMWARE_SIZE
@@ -28,10 +27,9 @@ OUTPUT_ARCH(riscv)
 
 #elif defined(COMPILE_FOR_NCRISC)
 #define DATA_START MEM_LOCAL_BASE
-#define DATA_SIZE (MEM_NCRISC_LOCAL_SIZE - STACK_SIZE)
-#define STACK_TOP MEM_NCRISC_STACK_TOP
-#define STACK_SIZE MEM_NCRISC_STACK_SIZE
-#if defined(TYPE_FIRMWARE) || !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
+#define DATA_SIZE MEM_NCRISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_NCRISC_STACK_MIN_SIZE
+#if defined(TYPE_FIRMWARE) || !defined(ARCH_WORMHOLE)
 #define TEXT_START MEM_NCRISC_FIRMWARE_BASE
 #else
 #define TEXT_START MEM_NCRISC_KERNEL_BASE
@@ -44,9 +42,8 @@ OUTPUT_ARCH(riscv)
 
 #elif defined(COMPILE_FOR_IERISC)
 #define DATA_START MEM_LOCAL_BASE
-#define DATA_SIZE (MEM_IERISC_LOCAL_SIZE - STACK_SIZE)
-#define STACK_TOP MEM_IERISC_STACK_TOP
-#define STACK_SIZE MEM_IERISC_STACK_SIZE
+#define DATA_SIZE MEM_IERISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_IERISC_STACK_MIN_SIZE
 #define TEXT_START MEM_IERISC_FIRMWARE_BASE
 #if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_IERISC_FIRMWARE_SIZE
@@ -56,9 +53,8 @@ OUTPUT_ARCH(riscv)
 
 #elif defined(COMPILE_FOR_SUBORDINATE_IERISC)
 #define DATA_START MEM_LOCAL_BASE
-#define DATA_SIZE (MEM_SUBORDINATE_IERISC_LOCAL_SIZE - STACK_SIZE)
-#define STACK_TOP MEM_SUBORDINATE_IERISC_STACK_TOP
-#define STACK_SIZE MEM_SUBORDINATE_IERISC_STACK_SIZE
+#define DATA_SIZE MEM_SUBORDINATE_IERISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_SUBORDINATE_IERISC_STACK_MIN_SIZE
 #define TEXT_START MEM_SUBORDINATE_IERISC_FIRMWARE_BASE
 #define TEXT_SIZE MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE
 
@@ -68,9 +64,8 @@ OUTPUT_ARCH(riscv)
 #define TRISC_SELECT(BEFORE,AFTER) TRISC_SELECT_(BEFORE,COMPILE_FOR_TRISC,AFTER)
 
 #define DATA_START MEM_LOCAL_BASE
-#define DATA_SIZE (MEM_TRISC_LOCAL_SIZE - STACK_SIZE)
-#define STACK_TOP TRISC_SELECT(MEM_,_STACK_TOP)
-#define STACK_SIZE TRISC_SELECT(MEM_,_STACK_SIZE)
+#define DATA_SIZE MEM_TRISC_LOCAL_SIZE
+#define STACK_MIN_SIZE TRISC_SELECT(MEM_,_STACK_MIN_SIZE)
 #define TEXT_START TRISC_SELECT(MEM_,_FIRMWARE_BASE)
 #if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE TRISC_SELECT(MEM_,_FIRMWARE_SIZE)
@@ -81,9 +76,8 @@ OUTPUT_ARCH(riscv)
 #elif defined(COMPILE_FOR_AERISC)
 /* Yes, using IERISC sizes.  */
 #define DATA_START MEM_LOCAL_BASE
-#define DATA_SIZE (MEM_IERISC_LOCAL_SIZE - STACK_SIZE)
-#define STACK_TOP MEM_AERISC_STACK_TOP
-#define STACK_SIZE MEM_AERISC_STACK_SIZE
+#define DATA_SIZE MEM_IERISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_AERISC_STACK_MIN_SIZE
 #define TEXT_START MEM_AERISC_FIRMWARE_BASE
 #if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_IERISC_FIRMWARE_SIZE
@@ -101,14 +95,11 @@ PHDRS {
   attributes 0x70000003;
   text PT_LOAD;
   data PT_LOAD;
-#if defined(TYPE_FIRMWARE)
-  stack PT_GNU_STACK;
-#endif
 }
 
 SECTIONS
 {
-#if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(NCRISC_FIRMWARE_KERNEL_SPLIT))
+#if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :
 #else
   .text __fw_export_text_end :
@@ -152,20 +143,10 @@ SECTIONS
 
 /* Begin the data area.  */
 #if defined(TYPE_FIRMWARE)
-#if defined(COMPILE_FOR_NCRISC)
-  PROVIDE (_Z11kernel_initm =
-#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
-           ABSOLUTE(__fw_export_text_end)
-#else
-           MEM_NCRISC_KERNEL_BASE
-#endif
-           );
-#endif
   PROVIDE(__global_pointer$ = DATA_START + 0x7f0);
   .data DATA_START :
 #define SECTION(NEW, PREV) NEW :
 #else
-  __kernel_init_local_l1_base = ABSOLUTE(.);
   /* Where firmware ended. */
   .data __fw_export_ldm_end : AT(__kernel_data_lma)
 /* We can't rely on the linker's LMA computation because that fails when data is before text.  */
@@ -218,17 +199,12 @@ SECTIONS
     __ldm_bss_end = .;
   } :data
 
-#ifdef TYPE_FIRMWARE
   . = ALIGN(ABSOLUTE(.), 16);
-  __fw_export_ldm_end = ABSOLUTE(.);
-#endif
-
 #ifdef TYPE_FIRMWARE
-  .stack STACK_TOP - STACK_SIZE :
-  {
-   . += STACK_SIZE;
-    __stack_top = .;
-  } :stack
+  __fw_export_ldm_end = ABSOLUTE(.);
+  __stack_top = DATA_START + DATA_SIZE;
+#else
+  __stack_base = .;
 #endif
 
   /* The loader uses this data to check for size overflows.
@@ -236,11 +212,11 @@ SECTIONS
   .phdrs 0 (INFO) :
   {
     LONG(TEXT_SIZE
-#if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(NCRISC_FIRMWARE_KERNEL_SPLIT))
+#if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
          - (__fw_export_text_end - TEXT_START)
 #endif
          )
-    LONG(DATA_SIZE
+    LONG(DATA_SIZE - STACK_MIN_SIZE
 #if defined(TYPE_KERNEL)
          - (__fw_export_ldm_end - DATA_START)
 #endif

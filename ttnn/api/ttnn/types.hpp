@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -57,7 +56,7 @@ struct CoreGrid {
 
 using Buffer = tt::tt_metal::Buffer;
 
-static std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
+inline std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
     os << "ttnn.CoreGrid(x=" << core_grid.x << ", y=" << core_grid.y << ")";
     return os;
 }

@@ -6,6 +6,8 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -21,10 +23,8 @@ from models.utility_functions import torch_random
         ((1, 256, 256, 256), 2, 1, False, "up_blocks", 0.999),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
-def test_vae_resnetblock2d(
-    device, input_shape, block_id, resnet_id, conv_shortcut, block, pcc, use_program_cache, reset_seeds
-):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+def test_vae_resnetblock2d(device, input_shape, block_id, resnet_id, conv_shortcut, block, pcc, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
@@ -36,7 +36,9 @@ def test_vae_resnetblock2d(
         block = f"{block}.{block_id}"
     else:
         torch_resnet = vae.decoder.mid_block.resnets[resnet_id]
-    tt_resnet = TtResnetBlock2D(device, state_dict, f"decoder.{block}.resnets.{resnet_id}", conv_shortcut)
+
+    model_config = ModelOptimisations()
+    tt_resnet = TtResnetBlock2D(device, state_dict, f"decoder.{block}.resnets.{resnet_id}", model_config, conv_shortcut)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_resnet(torch_input_tensor, None)

@@ -9,6 +9,7 @@
 #include <tt-metalium/buffer.hpp>
 
 #include "cross_entropy_fw_device_operation_types.hpp"
+#include "metal/ops/common/program_utils.hpp"
 
 namespace {
 
@@ -58,16 +59,6 @@ constexpr uint32_t kPageElementsNumber = 32U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
-
-uint32_t get_block_size(uint32_t num_inner) {
-    const uint32_t max_block_size = 4U;  // 4 is the maximum block size for enabled fp32 dest acc
-    for (uint32_t block_size = max_block_size; block_size > 1; block_size--) {
-        if (num_inner % block_size == 0) {  // if num_inner is divisible by block_size - choose this block_size
-            return block_size;
-        }
-    }
-    return 1U;
-}
 
 }  // namespace
 
@@ -179,14 +170,14 @@ void assign_per_core_runtime_args(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        // Reader kernel: (input_addr, gamma_addr, number_of_rows, offset_in_rows)
+        // Reader kernel: (input_addr, target_addr, number_of_rows, offset_in_rows)
         SetRuntimeArgs(
             program,
             kernels.reader,
             core,
             {input_buffer->address(), target_buffer->address(), num_rows_per_core, num_rows_written});
 
-        // Writer kernel: (dst_addr, dst_rms_addr number_of_rows, offset_in_rows)
+        // Writer kernel: (dst_addr, number_of_rows, offset_in_rows)
         SetRuntimeArgs(
             program,
             kernels.writer,
@@ -218,7 +209,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
-    auto padded_tensor_volume = input.padded_volume();
+    auto padded_tensor_volume = input.physical_volume();
 
     TT_FATAL(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
@@ -247,7 +238,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // width index of first trash value in tile
 
     // compile arguments
-    uint32_t block_size = get_block_size(Wt);
+    uint32_t block_size = get_block_size(Wt, 4U);
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
@@ -443,10 +434,10 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     return cached_program_t{
         std::move(program),
-        {/* rmsnorm_fw_reader_kernel_id  = */ kernels.reader,
-         /* rmsnorm_fw_writer_kernel_id  = */ kernels.writer,
-         /* rmsnorm_fw_kernel_group_1_id = */ kernels.compute_group_1,
-         /* rmsnorm_fw_kernel_group_2_id = */ kernels.compute_group_2,
+        {/* cross_entropy_fw_reader_kernel_id  = */ kernels.reader,
+         /* cross_entropy_fw_writer_kernel_id  = */ kernels.writer,
+         /* cross_entropy_fw_kernel_group_1_id = */ kernels.compute_group_1,
+         /* cross_entropy_fw_kernel_group_2_id = */ kernels.compute_group_2,
          /* core_group_1              = */ core_group_1,
          /* core_group_2              = */ core_group_2,
          /* num_cores                 = */ num_cores,

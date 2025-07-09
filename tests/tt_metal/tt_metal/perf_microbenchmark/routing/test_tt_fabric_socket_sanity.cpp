@@ -17,7 +17,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -32,7 +31,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
@@ -256,7 +255,7 @@ int main(int argc, char** argv) {
 
     CoreCoord gk_core = {gk_x, gk_y};
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
@@ -484,7 +483,7 @@ int main(int argc, char** argv) {
                 (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
                 0x410,                                                                  // 1: dest_noc_offset
                 routing_plane,
-                (dev_r_mesh_id << 16 | dev_r_chip_id)};
+                (*dev_r_mesh_id << 16 | dev_r_chip_id)};
 
             if (ASYNC_WR == fabric_command) {
                 runtime_args.push_back(target_address);
@@ -527,7 +526,7 @@ int main(int argc, char** argv) {
                 (rx_queue_size_bytes >> 4),                            // 13: queue_size_words
             };
 
-            std::vector<uint32_t> runtime_args = {(dev_l_mesh_id << 16 | dev_l_chip_id)};
+            std::vector<uint32_t> runtime_args = {(*dev_l_mesh_id << 16 | dev_l_chip_id)};
 
             log_info(LogTest, "run socket rx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
@@ -679,7 +678,7 @@ int main(int argc, char** argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

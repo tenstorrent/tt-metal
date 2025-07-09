@@ -16,11 +16,40 @@
 #include <tt-metalium/program.hpp>
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "erisc_datamover_builder_helper.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
 namespace ccl {
+
+enum class LineDirection: uint8_t {
+    FORWARD,
+    BACKWARD,
+};
+
+// Creates a mesh workload by calling the `create_program` function for each coordinate in the `tensor_coords` set.
+tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
+
+// Configuration structure for a device, containing its receiver and sender device ids.
+struct SenderRecieverConfig {
+    uint32_t device_index = 0;
+    std::optional<chip_id_t> sender_device_id;
+    std::optional<chip_id_t> receiver_device_id;
+};
+
+// Returns `SenderRecieverConfig` for a given device, given topology.
+SenderRecieverConfig get_device_sender_receiver_config(
+    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
+
+// Returns `SenderRecieverConfig` for a given device in a ring topology with a given cluster axis.
+SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+    const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
+
+// Returns a vector of devices that the given tensor is stored on.
+std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 
 struct SyncModeSpec {
     uint32_t num_signals = 0;
@@ -33,30 +62,11 @@ struct SyncModeSpec {
 
 class EriscDatamoverBuilder;
 
-// Creates a mesh workload by calling the `create_program` function for each coordinate in the `tensor_coords` set.
-tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors,
-    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
-
-struct SenderRecieverConfig {
-    uint32_t device_index = 0;
-    std::optional<chip_id_t> sender_device_id;
-    std::optional<chip_id_t> receiver_device_id;
-};
-
-SenderRecieverConfig get_device_sender_receiver_config(
-    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
-
-SenderRecieverConfig get_device_sender_receiver_config_in_ring(
-    const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
-
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
-    const uint32_t num_devices,
+    uint32_t num_devices,
     const ttnn::SmallVector<uint32_t>& unpad_elements,
-    const int dim);
+    int dim);
 
 class LineTopology {
    public:
@@ -64,8 +74,8 @@ class LineTopology {
         size_t line_size,
         size_t line_index);
 
-    bool is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
-    bool is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+    bool is_first_device_in_line(ttnn::ccl::LineDirection direction) const;
+    bool is_last_device_in_line(ttnn::ccl::LineDirection direction) const;
 
     bool is_at_end_of_line() const;
 
@@ -73,7 +83,7 @@ class LineTopology {
 
     size_t line_index() const;
 
-    size_t get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+    size_t get_distance_to_end_of_line(ttnn::ccl::LineDirection direction) const;
 
     ttnn::ccl::Topology topology() const;
 
@@ -377,8 +387,8 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
             wrapped);
     }
 
-    [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]]
-    virtual void increment(uint32_t num_pages) override {
+    [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]] void increment(
+        uint32_t num_pages) override {
         TT_THROW("deprecated code path for ");
     }
 
@@ -479,16 +489,16 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
     InterleavedRingAllGatherTensorSlicer(
          const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
         LegacyCclTensorSlicer() {
-        this->row_major = input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR;
-        this->slice_dim_is_width = input_tensor.get_padded_shape().rank() - 1 == slice_dim;
+        this->row_major = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
+        this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
 
         this->input_page_size = input_tensor.buffer()->page_size();
 
         if (row_major) {
-            this->num_cols = input_tensor.get_padded_shape()[-1];
-            auto input_shape = input_tensor.get_padded_shape();
-            auto output_shape = output_tensor.get_padded_shape();
+            this->num_cols = input_tensor.padded_shape()[-1];
+            const auto& input_shape = input_tensor.padded_shape();
+            const auto& output_shape = output_tensor.padded_shape();
             this->num_rows =
                 std::accumulate(input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
             this->row_offset =
@@ -496,12 +506,12 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
                     output_shape.cbegin() + slice_dim, output_shape.cend() - 1, 1, std::multiplies<uint32_t>()) -
                 num_rows;
         } else {
-            auto input_shape = input_tensor.get_padded_shape();
-            auto output_shape = output_tensor.get_padded_shape();
+            auto input_shape = input_tensor.padded_shape();
+            const auto& output_shape = output_tensor.padded_shape();
             auto input_tile = input_tensor.tensor_spec().tile();
             auto output_tile = output_tensor.tensor_spec().tile();
             this->num_cols = input_shape[-1] / input_tile.get_width();
-            uint32_t num_output_cols = output_tensor.get_padded_shape()[-1] / output_tile.get_width();
+            uint32_t num_output_cols = output_tensor.padded_shape()[-1] / output_tile.get_width();
             this->num_rows =
                 std::accumulate(
                     input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>()) /
@@ -531,7 +541,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->output_start_addr_offset = slice_idx /*ring_index*/ * output_addr_offset;
     }
 
-    virtual void increment(uint32_t num_pages) override {
+    void increment(uint32_t num_pages) override {
         if (num_pages /*pages_per_worker*/ > 0) {
             if (row_major) {
                 uint32_t num_rows_shifted = row_idx + num_pages /*pages_per_worker*/;
@@ -552,20 +562,21 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
     }
 };
 
-
 tt::tt_metal::KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program& program,
-    tt::tt_metal::IDevice const* device,
-    tt::tt_fabric::FabricEriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core,
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::IDevice* device,
+    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core,
+    tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program& program,
-    IDevice const* device,
-    EriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core,
-    tt::tt_metal:: NOC noc_id);
+    tt::tt_metal::Program& program,
+    const IDevice* device,
+    const EriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core,
+    tt::tt_metal::DataMovementProcessor risc_id,
+    tt::tt_metal::NOC noc_id);
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,

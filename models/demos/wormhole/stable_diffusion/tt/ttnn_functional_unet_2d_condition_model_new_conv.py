@@ -351,11 +351,9 @@ class UNet2DConditionModel:
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if in_channels < 320 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=shard_layout,
-            transpose_shards=False,
             reshard_if_not_optimal=True,
         )
         compute_config = get_default_compute_config(self.device)
@@ -383,12 +381,14 @@ class UNet2DConditionModel:
                 input_layout=sample.get_layout(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv_in_bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv_in_bias,
                 input_memory_config=sample.memory_config(),
                 input_layout=sample.get_layout(),
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv_in_weights = ttnn.to_device(self.conv_in_weights, self.device)
             self.conv_in_bias = ttnn.to_device(self.conv_in_bias, self.device)
@@ -399,6 +399,7 @@ class UNet2DConditionModel:
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -634,12 +635,10 @@ class UNet2DConditionModel:
         sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG, sample.dtype)
 
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_h_override=64,
-            transpose_shards=False,
             reshard_if_not_optimal=True,
         )
         compute_config = get_default_compute_config(self.device)
@@ -667,12 +666,14 @@ class UNet2DConditionModel:
                 input_layout=sample.get_layout(),
                 has_bias=True,
                 **conv_kwargs_1,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv_out_bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv_out_bias,
                 input_memory_config=sample.memory_config(),
                 input_layout=sample.get_layout(),
                 **conv_kwargs_1,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv_out_weights = ttnn.to_device(self.conv_out_weights, self.device)
             self.conv_out_bias = ttnn.to_device(self.conv_out_bias, self.device)
@@ -683,6 +684,7 @@ class UNet2DConditionModel:
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)

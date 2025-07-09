@@ -33,7 +33,6 @@ def test_perf_bert_tiny(
     model_name,
     model_location_generator,
     reset_seeds,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
     model_name = str(model_location_generator(model_name, model_subdir="Bert"))
@@ -112,7 +111,7 @@ def test_perf_device_bare_metal(batch_size, expected_perf):
     margin = 0.03
 
     if is_wormhole_b0():
-        expected_perf = 5076.2
+        expected_perf = 5116
     else:
         expected_perf = 3460.0
 

@@ -372,8 +372,9 @@ bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, boo
                 print_faces(result_bfp16, "Result");
             }
         } else {
-            auto result_flat_layout = convert_to_flat_layout(tt::stl::make_const_span(result_bfp16));
-            auto result_untilized = untilize(result_flat_layout, M * 32, N * 32);
+            auto result_flat_layout =
+                convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+            auto result_untilized = untilize_swizzled(result_flat_layout, M * 32, N * 32);
             pass &= (tensor.get_values() == result_untilized);
             if (not pass) {
                 print_faces(result_untilized, "Result");
@@ -411,33 +412,33 @@ int main(int argc, char** argv) {
     // Tilized input, Tilized output
     pass &= test_matmul_large_block(device, false, false);
     if (pass) {
-        log_info("Tilized input, Tilized output Passed");
+        log_info(tt::LogTest, "Tilized input, Tilized output Passed");
     } else {
-        log_info("Tilized input, Tilized output Failed");
+        log_info(tt::LogTest, "Tilized input, Tilized output Failed");
     }
 
     // Row major input, Tilized output
     pass &= test_matmul_large_block(device, true, false);
     if (pass) {
-        log_info("Row major input, Tilized output Passed");
+        log_info(tt::LogTest, "Row major input, Tilized output Passed");
     } else {
-        log_info("Row major input, Tilized output Failed");
+        log_info(tt::LogTest, "Row major input, Tilized output Failed");
     }
 
     // Tilized input, Row major output
     pass &= test_matmul_large_block(device, false, true);
     if (pass) {
-        log_info("Tilized input, Row major output Passed");
+        log_info(tt::LogTest, "Tilized input, Row major output Passed");
     } else {
-        log_info("Tilized input, Row major output Failed");
+        log_info(tt::LogTest, "Tilized input, Row major output Failed");
     }
 
     // Row major input, Row major output
     pass &= test_matmul_large_block(device, true, true);
     if (pass) {
-        log_info("Row major input, Row major output Passed");
+        log_info(tt::LogTest, "Row major input, Row major output Passed");
     } else {
-        log_info("Row major input, Row major output Failed");
+        log_info(tt::LogTest, "Row major input, Row major output Failed");
     }
 
     pass &= tt_metal::CloseDevice(device);

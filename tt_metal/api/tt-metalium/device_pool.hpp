@@ -20,12 +20,10 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {
-namespace tt_metal::detail {
-void CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);
-}  // namespace tt_metal::detail
 
 class DevicePool {
     friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);
@@ -45,7 +43,7 @@ public:
 
     static void initialize(
         const std::vector<chip_id_t>& device_ids,
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
@@ -102,6 +100,7 @@ private:
     void initialize_host(tt_metal::IDevice* dev) const;
 
     // Initialize state for activated devices
+    void init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const;
     void initialize_active_devices() const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     void wait_for_fabric_router_sync() const;

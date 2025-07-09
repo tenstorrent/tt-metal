@@ -38,7 +38,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto num_tiles = tmp_pow_sum.volume() / tt::constants::TILE_HW;
+    const auto num_tiles = tmp_pow_sum.physical_volume() / tt::constants::TILE_HW;
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
 
@@ -61,7 +61,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     const uint32_t im2_t = 1;  // log(x)
     const uint32_t im3_t = 1;  // exp(log(x) * decimal)
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(total_norm.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(total_norm.dtype());
 
     CreateCircularBuffer(
         program,
@@ -109,7 +109,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     const std::array reader_runtime_args{
         input_addr,
         static_cast<uint32_t>(tmp_pow_sum.buffer()->is_dram()),
-        num_tiles,
+        static_cast<uint32_t>(num_tiles),
         *reinterpret_cast<uint32_t*>(&decimal)};
     SetRuntimeArgs(program, reader_kernel_id, single_core, reader_runtime_args);
 
@@ -118,7 +118,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     SetRuntimeArgs(program, writer_kernel_id, single_core, writer_runtime_args);
 
     // compute
-    const std::array compute_runtime_args{num_tiles, p, static_cast<uint32_t>(p_is_negative)};
+    const std::array compute_runtime_args{static_cast<uint32_t>(num_tiles), p, static_cast<uint32_t>(p_is_negative)};
     SetRuntimeArgs(program, compute_kernel_id, single_core, compute_runtime_args);
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, single_core}};

@@ -17,8 +17,8 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::UINT32 or
-            input_tensor_a.get_dtype() == DataType::FLOAT32,
+        input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::UINT32 or
+            input_tensor_a.dtype() == DataType::FLOAT32,
         "Can only work with bfloat16/float32 or uint32 tensors");
     TT_FATAL(
         this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
@@ -36,8 +36,8 @@ std::vector<TensorSpec> ReshapeDeviceOperation::compute_output_specs(const std::
     return {TensorSpec(
         logical_output_shape,
         TensorLayout::fromPaddedShape(
-            input_tensor_a.get_dtype(),
-            PageConfig(input_tensor_a.get_layout()),
+            input_tensor_a.dtype(),
+            PageConfig(input_tensor_a.layout()),
             mem_config,
             logical_output_shape,
             padded_output_shape))};
@@ -45,7 +45,7 @@ std::vector<TensorSpec> ReshapeDeviceOperation::compute_output_specs(const std::
 
 operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    if (input_tensors.at(0).get_layout() == Layout::ROW_MAJOR) {
+    if (input_tensors.at(0).layout() == Layout::ROW_MAJOR) {
         return operations::data_movement::reshape::rm_reshape_preparer(input_tensors.at(0), output_tensors.at(0));
     } else {
         return operations::data_movement::reshape::reshape_tiled_program_factory(

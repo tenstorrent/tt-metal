@@ -11,7 +11,7 @@
 #include <string_view>
 #include <tuple>
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn {
@@ -45,18 +45,18 @@ public:
 
     template <reflect::fixed_string name>
         requires requires { reflect::get<name>(std::declval<attributes_t>()); }
-    const auto get() const {
+    auto get() const {
         return reflect::get<name>(this->attributes);
     }
 
     template <std::size_t index>
-    const auto get() const {
+    auto get() const {
         return reflect::get<index>(this->attributes);
     }
 
     template <reflect::fixed_string name>
         requires(name == reflect::fixed_string{"report_path"})
-    const std::optional<std::filesystem::path> get() const {
+    std::optional<std::filesystem::path> get() const {
         if (this->attributes.report_name.has_value()) {
             auto hash = std::hash<std::string>{}(this->attributes.report_name.value());
             return this->attributes.root_report_path / std::to_string(hash);
@@ -82,7 +82,7 @@ public:
         if (name == "enable_fast_runtime_mode" or name == "enable_logging") {
             if (this->attributes.enable_fast_runtime_mode) {
                 if (this->attributes.enable_logging) {
-                    tt::log_warning(
+                    log_warning(
                         tt::LogAlways,
                         "Logging cannot be enabled in fast runtime mode. Please disable fast runtime mode if you want "
                         "to enable logging.");
@@ -92,7 +92,7 @@ public:
 
         if (name == "enable_comparison_mode") {
             if (this->attributes.enable_fast_runtime_mode && this->attributes.enable_comparison_mode) {
-                tt::log_warning(
+                log_warning(
                     tt::LogAlways,
                     "Comparison mode is currently not supported with fast runtime mode enabled. Please disable fast "
                     "runtime mode ('enable_fast_runtime_mode = false') to use tensor comparison mode.");
@@ -103,15 +103,14 @@ public:
             name == "enable_detailed_buffer_report" or name == "enable_detailed_tensor_report") {
             if (not this->attributes.enable_logging) {
                 if (this->attributes.enable_graph_report) {
-                    tt::log_warning(
-                        tt::LogAlways, "Running without logging. Please enable logging to save graph report");
+                    log_warning(tt::LogAlways, "Running without logging. Please enable logging to save graph report");
                 }
                 if (this->attributes.enable_detailed_buffer_report) {
-                    tt::log_warning(
+                    log_warning(
                         tt::LogAlways, "Running without logging. Please enable logging to save detailed buffer report");
                 }
                 if (this->attributes.enable_detailed_tensor_report) {
-                    tt::log_warning(
+                    log_warning(
                         tt::LogAlways, "Running without logging. Please enable logging to save detailed tensor report");
                 }
             }

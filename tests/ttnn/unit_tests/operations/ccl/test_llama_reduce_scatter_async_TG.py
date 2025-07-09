@@ -24,13 +24,14 @@ from tracy import signpost
 
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(
     [
-        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
-        ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+        ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
+        ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
     ]
 )
 
 
 def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
+    torch.manual_seed(2005)
     factor = 0
     torch_fracture_tensors = []
     for _ in range(num_devices_fracture):
@@ -71,8 +72,9 @@ def run_reduce_scatter_test(
     output_grid=None,
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
+    topology=ttnn.Topology.Linear,
+    use_noc1_only=False,
 ):
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
 
@@ -225,6 +227,8 @@ def run_reduce_scatter_test(
                 mesh_device=mesh_device,
                 num_links=num_links,
                 memory_config=output_mem_config,
+                topology=topology,
+                use_noc1_only=use_noc1_only,
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -314,7 +318,7 @@ def run_reduce_scatter_test(
     "device_params",
     [
         {
-            "trace_region_size": 237568,
+            "trace_region_size": 300000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -322,6 +326,7 @@ def run_reduce_scatter_test(
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -329,7 +334,7 @@ def run_reduce_scatter_test(
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
+def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode, use_noc1_only):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -356,6 +361,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
         num_iters,
         warmup_iters,
         trace_mode,
+        use_noc1_only=use_noc1_only,
         num_links=3,
         scheme="random",
     )
@@ -367,6 +373,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize("use_noc1_only", [False, True])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -374,7 +381,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
+def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode, use_noc1_only):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -403,6 +410,8 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         trace_mode,
         num_links=3,
         scheme="random",
+        topology=ttnn.Topology.Linear,
+        use_noc1_only=use_noc1_only,
     )
 
 
@@ -410,7 +419,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
     "device_params",
     [
         {
-            "trace_region_size": 90000,
+            "trace_region_size": 100000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -468,7 +477,7 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
     "device_params",
     [
         {
-            "trace_region_size": 90000,
+            "trace_region_size": 100000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }

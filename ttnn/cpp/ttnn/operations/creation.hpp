@@ -18,6 +18,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -39,11 +40,11 @@ template <typename T>
 Tensor arange_impl(
     const int64_t start,
     const int64_t stop,
-
     const int64_t step,
     const Layout layout = Layout::ROW_MAJOR,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-    const MemoryConfig& output_mem_config = MemoryConfig{}) {
+    const MemoryConfig& output_mem_config = ttnn::DRAM_MEMORY_CONFIG) {
+    using namespace tt::tt_metal;
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
     TT_FATAL(step != 0, "Step must be nonzero");
@@ -63,16 +64,10 @@ Tensor arange_impl(
         }
     }
 
-    auto output = Tensor(
-                      tt::tt_metal::HostBuffer(std::move(owned_buffer)),
-                      ttnn::Shape{static_cast<uint32_t>(size)},
-                      data_type,
-                      Layout::ROW_MAJOR)
-                      .to_layout(layout);
-    if (device.has_value()) {
-        return output.to_device(&device->get(), output_mem_config);
-    }
-    return output;
+    TensorSpec spec{
+        ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
+
+    return Tensor::from_vector(std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
 }
 
 template <typename T>
@@ -92,7 +87,7 @@ Tensor full_impl(
     Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
-        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, queue_id);
+        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, /*blocking=*/false, queue_id);
         return *optional_output_tensor;
     } else if (device != nullptr) {
         return host_tensor.to_device(device, output_mem_config);
@@ -115,17 +110,17 @@ Tensor full_impl(
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
     MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->mesh_device() : device;
 
-    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
+    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
     auto get_default_layout = [dtype_value]() {
         return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B) ? ttnn::TILE_LAYOUT
                                                                                           : ttnn::ROW_MAJOR_LAYOUT;
     };
 
-    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
+    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().layout()
                                                              : layout.value_or(get_default_layout());
     ttnn::Shape shape_value =
-        optional_output_tensor.has_value() ? optional_output_tensor.value().get_logical_shape() : shape;
+        optional_output_tensor.has_value() ? optional_output_tensor.value().logical_shape() : shape;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                               : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
 
@@ -193,12 +188,12 @@ Tensor full_like_impl(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
     MeshDevice* device = device_arg.has_value() ? &device_arg->get() : nullptr;
-    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
-                                                             : layout.value_or(tensor.get_layout());
-    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
-                                                              : dtype.value_or(tensor.get_dtype());
+    Layout layout_value =
+        optional_output_tensor.has_value() ? optional_output_tensor.value().layout() : layout.value_or(tensor.layout());
+    DataType dtype_value =
+        optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
     auto arch = tensor.device()->arch();
-    const bool is_tile_layout = (tensor.get_layout() == Layout::TILE) && (layout_value == Layout::TILE);
+    const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (tt::tt_metal::is_device_tensor(tensor)) {
         // requires reference tensor to be in TILE for device operation fill - this will be changed later
         if (is_tile_layout &&
@@ -209,7 +204,7 @@ Tensor full_like_impl(
         } else {
             return full_impl(
                 queue_id,
-                tensor.get_logical_shape(),
+                tensor.logical_shape(),
                 fill_value,
                 dtype_value,
                 layout_value,
@@ -220,7 +215,7 @@ Tensor full_like_impl(
     } else {
         return full_impl(
             queue_id,
-            tensor.get_logical_shape(),
+            tensor.logical_shape(),
             fill_value,
             dtype_value,
             layout_value,
@@ -271,7 +266,7 @@ struct Empty {
         const Layout& layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_mesh(
+        return allocate_tensor_on_device(
             TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
     }
 };
@@ -283,11 +278,11 @@ struct EmptyLike {
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        Layout layout_value = layout.value_or(tensor.get_layout());
-        DataType dtype_value = dtype.value_or(tensor.get_dtype());
+        Layout layout_value = layout.value_or(tensor.layout());
+        DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        return allocate_tensor_on_mesh(
-            TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+        return allocate_tensor_on_device(
+            TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             device.has_value() ? &device->get() : tensor.mesh_device());
     }
 };
@@ -373,8 +368,9 @@ struct Arange {
         const int64_t stop,
         const DataType dtype = DataType::BFLOAT16,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-        return Arange::invoke(0, stop, 1, dtype, device, memory_config);
+        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+        const Layout layout = Layout::ROW_MAJOR) {
+        return Arange::invoke(0, stop, 1, dtype, device, memory_config, layout);
     }
 
     static Tensor invoke(
@@ -383,9 +379,10 @@ struct Arange {
         const int64_t step = 1,
         const DataType dtype = ttnn::DataType::BFLOAT16,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
+        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+        const Layout layout = Layout::ROW_MAJOR) {
         auto concrete_arange = [&]<typename BufferType>() {
-            return detail::arange_impl<BufferType>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+            return detail::arange_impl<BufferType>(start, stop, step, layout, device, memory_config);
         };
 
         switch (dtype) {

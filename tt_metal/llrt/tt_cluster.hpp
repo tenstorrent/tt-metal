@@ -77,6 +77,7 @@ enum class ClusterType : std::uint8_t {
     P150_X4 = 9,                 // 4 Blackhole single card, ethernet connected
     SIMULATOR_WORMHOLE_B0 = 10,  // Simulator Wormhole B0
     SIMULATOR_BLACKHOLE = 11,    // Simulator Blackhole
+    N300_2x2 = 12,               // 2 N300 cards, ethernet connected to form 2x2
 };
 
 enum class EthRouterMode : uint32_t {
@@ -109,11 +110,20 @@ public:
 
     std::set<chip_id_t> all_chip_ids() const { return this->driver_->get_target_device_ids(); };
 
+    std::set<chip_id_t> mmio_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
+
     size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
+
+    std::set<chip_id_t> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
+
+    tt_ClusterDescriptor* get_cluster_desc() const {
+        TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
+        return this->cluster_desc_;
+    }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
-    std::unordered_map<chip_id_t, uint64_t> get_unique_chip_ids() const {
+    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
@@ -137,6 +147,10 @@ public:
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
     }
 
+    uint16_t get_bus_id(chip_id_t chip) const {
+        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
+    }
+
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
 
@@ -148,26 +162,13 @@ public:
         const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
-        std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access = false) const;
-    void read_dram_vec(
-        std::vector<uint32_t>& vec,
-        uint32_t size_in_bytes,
-        chip_id_t device_id,
-        int dram_view,
-        uint64_t addr,
-        bool small_access = false) const;
+        const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
+    void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
 
     // Accepts physical noc coordinates
-    void write_core(
-        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
-    void read_core(
-        void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
-    void read_core(
-        std::vector<uint32_t>& data,
-        uint32_t sz_in_bytes,
-        tt_cxy_pair core,
-        uint64_t addr,
-        bool small_access = false) const;
+    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
@@ -216,17 +217,6 @@ public:
     // Returns set of device ids connected via ethernet
     std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(chip_id_t chip_id) const;
 
-    // Returns set of logical active ethernet coordinates on chip
-    // If skip_reserved_tunnel_cores is true, will return cores that dispatch is not using,
-    // intended for users to grab available eth cores for testing
-    // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
-    // tunneling
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(
-        chip_id_t chip_id, bool skip_reserved_tunnel_cores = false) const;
-
-    // Returns set of logical inactive ethernet coordinates on chip
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
-
     // Returns whether `logical_core` has an eth link to a core on a connected chip
     // Cores that connect to another cluster will show up as connected
     bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const;
@@ -272,15 +262,17 @@ public:
     void set_internal_routing_info_for_ethernet_cores(
         bool enable_internal_routing, const std::vector<chip_id_t>& target_mmio_devices = {}) const;
 
-    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>
-    get_ethernet_connections() const {
+    const std::
+        unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>&
+        get_ethernet_connections() const {
         return this->cluster_desc_->get_ethernet_connections();
     }
 
     // TODO: unify uint64_t with ChipUID
-    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>
-    get_ethernet_connections_to_remote_mmio_devices() const {
-        return this->cluster_desc_->get_ethernet_connections_to_remote_mmio_devices();
+    const std::
+        unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>&
+        get_ethernet_connections_to_remote_devices() const {
+        return this->cluster_desc_->get_ethernet_connections_to_remote_devices();
     }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
@@ -311,15 +303,12 @@ public:
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
-    tt::tt_fabric::ControlPlane* get_control_plane();
+    // Configures ethernet cores for fabric routers depending on whether fabric is enabled
+    void configure_ethernet_cores_for_fabric_routers(
+        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
-    void set_custom_control_plane_mesh_graph(
-        const std::string& mesh_graph_desc_file,
-        const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-
-    void set_default_control_plane_mesh_graph();
-
-    void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
+    void initialize_fabric_config(
+        tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
 
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
@@ -328,8 +317,6 @@ public:
     BoardType get_board_type(chip_id_t chip_id) const;
 
     ClusterType get_cluster_type() const;
-
-    tt_metal::FabricConfig get_fabric_config() const;
 
     bool is_base_routing_fw_enabled() const;
 
@@ -348,6 +335,20 @@ public:
     std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
 
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
+
+    std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) const;
+
+    // TODO: move to separate system descriptor class
+    // return enum for connection type, Internal, QSFP, Other, Unknown
+    bool is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const;
+
+    const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(chip_id_t chip_id) const {
+        return this->frequent_retrain_cores_.at(chip_id);
+    }
+
+    const std::unordered_map<CoreCoord, EthRouterMode>& get_eth_routing_info(chip_id_t chip_id) const {
+        return this->device_eth_routing_info_.at(chip_id);
+    }
 
 private:
     void detect_arch_and_target();
@@ -373,11 +374,10 @@ private:
     // This should be removed when we handle retraining or dropped links in control plane properly
     void disable_ethernet_cores_with_retrain();
 
-    // Initialize control plane, which has mapping of physical device id to MeshGraph config
-    void initialize_control_plane();
-
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
+
+    bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
     ARCH arch_;
     TargetDevice target_type_;
@@ -407,15 +407,11 @@ private:
     // If any device has to board type of GALAXY, we are on a TG cluster.
     ClusterType cluster_type_ = ClusterType::INVALID;
 
-    // Reserves all free ethernet cores for fabric routers
-    void reserve_ethernet_cores_for_fabric_routers();
+    // Reserves specified number of ethernet cores for fabric routers
+    void reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes);
 
     // Releases all reserved ethernet cores for fabric routers
     void release_ethernet_cores_for_fabric_routers();
-
-    tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
-
-    std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

@@ -37,7 +37,7 @@ public:
 
     void set_issue_queue_size(uint8_t cq_id, uint32_t issue_queue_size);
 
-    void set_bypass_mode(const bool enable, const bool clear);
+    void set_bypass_mode(bool enable, bool clear);
 
     bool get_bypass_mode();
 
@@ -93,8 +93,8 @@ private:
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
     uint32_t channel_offset = 0;
-    std::vector<int> cq_to_event;
-    std::vector<int> cq_to_last_completed_event;
+    std::vector<uint32_t> cq_to_event;
+    std::vector<uint32_t> cq_to_last_completed_event;
     std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
     std::vector<tt::Writer> prefetch_q_writers;

@@ -37,13 +37,12 @@ void set_or_update_runtime_arguments(
 
     const auto ashape = input_tensor.padded_shape();
     const auto bshape = batch_mean_tensor.padded_shape();
-    const auto cshape = c.padded_shape();
 
     const auto [aN, aC, aHt, aWt] = extract_shape_dims(input_tensor);
     const auto [bN, bC, bHt, bWt] = extract_shape_dims(batch_mean_tensor);
     const auto [cN, cC, cHt, cWt] = extract_shape_dims(c);
 
-    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = c.physical_volume() / c.tensor_spec().tile().get_tile_hw();
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -74,7 +73,7 @@ void set_or_update_runtime_arguments(
 
         uint32_t cHtWt = cHt * cWt;
         const auto scalar = eps;
-        const auto packed_scalar_eps = input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32
+        const auto packed_scalar_eps = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32
                                            ? std::bit_cast<uint32_t>(scalar)
                                            : pack_two_bfloat16_into_uint32({scalar, scalar});
 
@@ -141,14 +140,14 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const bool weight_has_value = weight_tensor.has_value();
     const bool bias_has_value = bias_tensor.has_value();
 
-    auto a_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    auto b_data_format = datatype_to_dataformat_converter(batch_mean_tensor.get_dtype());
-    auto c_data_format = datatype_to_dataformat_converter(output.get_dtype());
-    auto d_data_format = datatype_to_dataformat_converter(batch_var_tensor.get_dtype());
+    auto a_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    auto b_data_format = datatype_to_dataformat_converter(batch_mean_tensor.dtype());
+    auto c_data_format = datatype_to_dataformat_converter(output.dtype());
+    auto d_data_format = datatype_to_dataformat_converter(batch_var_tensor.dtype());
     auto e_data_format =
-        weight_has_value ? datatype_to_dataformat_converter(weight_tensor->get_dtype()) : DataFormat::Float16_b;
+        weight_has_value ? datatype_to_dataformat_converter(weight_tensor->dtype()) : DataFormat::Float16_b;
     auto f_data_format =
-        bias_has_value ? datatype_to_dataformat_converter(bias_tensor->get_dtype()) : DataFormat::Float16_b;
+        bias_has_value ? datatype_to_dataformat_converter(bias_tensor->dtype()) : DataFormat::Float16_b;
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
@@ -157,7 +156,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     uint32_t e_single_tile_size = tt_metal::detail::TileSize(e_data_format);
     uint32_t f_single_tile_size = tt_metal::detail::TileSize(f_data_format);
 
-    uint32_t num_output_tiles = output.volume() / output.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     // we parallelize the computation across the output tiles
     constexpr bool row_major = true;
@@ -215,7 +214,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const auto f_is_dram = bias_has_value and bias_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
     std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16
-    if (input_tensor.get_dtype() == DataType::FLOAT32) {
+    if (input_tensor.dtype() == DataType::FLOAT32) {
         dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
         dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
     } else {

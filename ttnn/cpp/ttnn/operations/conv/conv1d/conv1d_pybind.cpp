@@ -2,18 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "conv1d_pybind.hpp"
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <variant>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
 #include <tt-metalium/constants.hpp>
 #include "ttnn-pybind/decorators.hpp"
 
-#include "conv1d_pybind.hpp"
 #include "conv1d.hpp"
 #include "ttnn/types.hpp"
 
-namespace py = pybind11;
-
-namespace ttnn {
-namespace operations::conv {
-namespace conv1d {
+namespace ttnn::operations::conv::conv1d {
 
 void py_bind_conv1d(py::module& module) {
     bind_registered_operation(
@@ -35,6 +40,7 @@ void py_bind_conv1d(py::module& module) {
         :param int or tuple[int, int]) padding: Zero-padding added to both sides of the input. pad_length or [pad_left, pad_right].
         :param int dilation: Spacing between kernel elements.
         :param int groups:  Number of blocked connections from input channels to output channels.
+        :param ttnn.DataType, None dtype: The data type of the input tensor. Default: None (will use the same dtype as input_tensor).
         :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
@@ -62,6 +68,7 @@ void py_bind_conv1d(py::module& module) {
                std::variant<std::array<uint32_t, 2>, uint32_t> padding,
                uint32_t dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv1dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -83,6 +90,7 @@ void py_bind_conv1d(py::module& module) {
                     padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -103,6 +111,7 @@ void py_bind_conv1d(py::module& module) {
             py::arg("padding") = 0,
             py::arg("dilation") = 1,
             py::arg("groups") = 1,
+            py::arg("dtype") = std::nullopt,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
@@ -125,6 +134,7 @@ void py_bind_conv1d(py::module& module) {
                std::variant<std::array<uint32_t, 2>, uint32_t> padding,
                uint32_t dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv1dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -146,6 +156,7 @@ void py_bind_conv1d(py::module& module) {
                     padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -166,6 +177,7 @@ void py_bind_conv1d(py::module& module) {
             py::arg("padding") = 0,
             py::arg("dilation") = 1,
             py::arg("groups") = 1,
+            py::arg("dtype") = std::nullopt,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
@@ -174,6 +186,4 @@ void py_bind_conv1d(py::module& module) {
             py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
-}  // namespace conv1d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv1d

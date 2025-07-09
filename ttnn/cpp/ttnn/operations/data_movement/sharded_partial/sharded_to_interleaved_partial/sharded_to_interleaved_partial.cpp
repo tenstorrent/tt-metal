@@ -27,7 +27,7 @@ ttnn::Tensor ShardedToInterleavedPartialOperation::invoke(
             .num_slices = num_slices,
             .slice_index = slice_index,
             .output_mem_config = memory_config,
-            .output_dtype = data_type_arg.value_or(input_tensor.get_dtype())},
+            .output_dtype = data_type_arg.value_or(input_tensor.dtype())},
         {input_tensor, cache_tensor});
 
     return cache_tensor;

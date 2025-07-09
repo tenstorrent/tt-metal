@@ -6,7 +6,7 @@
 
 // DRAM to L1 read
 void kernel_main() {
-    uint32_t src_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t src_addr = get_compile_time_arg_val(0);
     constexpr uint32_t bank_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
     constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
@@ -25,13 +25,9 @@ void kernel_main() {
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
     {
         DeviceZoneScopedN("RISCV1");
+        uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
-
             noc_async_read(src_noc_addr, l1_write_addr, transaction_size_bytes);
-
-            src_addr += transaction_size_bytes;
-            l1_write_addr += transaction_size_bytes;
         }
         noc_async_read_barrier();
     }

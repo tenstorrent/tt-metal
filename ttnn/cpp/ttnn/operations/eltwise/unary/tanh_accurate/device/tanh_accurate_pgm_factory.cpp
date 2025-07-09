@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
 #include "tanh_accurate_pgm_factory.hpp"
 
 #include <tt-metalium/work_split.hpp>
@@ -26,12 +24,12 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
-    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -140,7 +138,7 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     }
 
     bool math_approx_mode = false;
-    std::map<string, string> unary_defines;
+    std::map<std::string, std::string> unary_defines;
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(

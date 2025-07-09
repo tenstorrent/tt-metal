@@ -43,7 +43,7 @@ struct PagedUpdateCacheDeviceOperation {
     static constexpr auto attribute_names = std::forward_as_tuple(
         "batch_idx_fallback", "update_idxs", "batch_offset", "op_type", "compute_kernel_config", "share_cache");
 
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(
             batch_idx_fallback, update_idxs, batch_offset, op_type, compute_kernel_config, share_cache);
     }

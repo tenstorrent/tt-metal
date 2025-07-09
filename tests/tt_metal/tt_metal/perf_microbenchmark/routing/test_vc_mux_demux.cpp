@@ -17,7 +17,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -26,13 +25,12 @@
 #include "hw/inc/tt_fabric_status.h"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "test_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
 int main(int argc, char **argv) {
@@ -165,7 +163,7 @@ int main(int argc, char **argv) {
 
     bool pass = true;
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
     };
 
@@ -640,7 +638,7 @@ int main(int argc, char **argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

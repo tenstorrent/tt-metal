@@ -20,7 +20,7 @@ void GenericOpDeviceOperation::validate_on_program_cache_hit(
 GenericOpDeviceOperation::spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // User has to do this. Just referencing last element (preallocated output tensor).
-    return tensor_args.output_tensor.get_tensor_spec();
+    return tensor_args.output_tensor.tensor_spec();
 }
 
 GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(

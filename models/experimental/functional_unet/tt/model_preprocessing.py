@@ -30,6 +30,8 @@ def create_unet_input_tensors(
     channel_order: Literal["first", "last"] = "last",
     fold: bool = True,
     pad: bool = True,
+    device=None,
+    memory_config=None,
     mesh_mapper=None,
 ):
     torch_input_tensor = torch.randn(batch, input_channels * groups, input_height, input_width)
@@ -41,10 +43,13 @@ def create_unet_input_tensors(
 
     if fold:
         if channel_order == "first":
-            raise RuntimeError("Cannot fold B x H x W when in channels first ordering")
-        ttnn_input_tensor = ttnn_input_tensor.reshape(batch, 1, input_height * input_width, -1)
+            ttnn_input_tensor = ttnn_input_tensor.reshape(batch, 1, input_channels * groups, input_height * input_width)
+        else:
+            ttnn_input_tensor = ttnn_input_tensor.reshape(batch, 1, input_height * input_width, -1)
 
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+    ttnn_input_tensor = ttnn.from_torch(
+        ttnn_input_tensor, dtype=ttnn.bfloat16, device=device, memory_config=memory_config, mesh_mapper=mesh_mapper
+    )
 
     return torch_input_tensor, ttnn_input_tensor
 

@@ -5,11 +5,12 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <tuple>
 #include <vector>
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/logger.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -173,6 +174,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
             param.padding,
             std::array<uint32_t, 2>{1, 1},  // dilation
             1,                              // groups
+            std::nullopt,                   // dtype
             std::nullopt,                   // bias tensor
             std::nullopt,                   // conv config
             std::nullopt,                   // compute config

@@ -30,10 +30,13 @@ void write_go_signal(
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
-    bool send_unicasts) {
+    bool send_unicasts,
+    const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) +
                                   MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    cmd_sequence_sizeB +=
+        dispatch_md.prefetcher_cache_info.is_cached ? 0 : align(sizeof(CQPrefetchCmd), pcie_alignment);
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
@@ -41,6 +44,13 @@ void write_go_signal(
     auto sub_device_index = *sub_device_id;
 
     HugepageDeviceCommand go_signal_cmd_sequence(cmd_region, cmd_sequence_sizeB);
+
+    if (not dispatch_md.prefetcher_cache_info.is_cached) {
+        go_signal_cmd_sequence.add_prefetch_set_ringbuffer_offset(
+            dispatch_md.prefetcher_cache_info.offset + dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB,
+            true);
+    }
+
     go_msg_t run_program_go_signal;
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = dispatch_core.x;
@@ -71,6 +81,8 @@ void write_go_signal(
         send_unicasts ? device->num_virtual_eth_cores(sub_device_id) : 0,
         device->noc_data_start_index(sub_device_id, send_mcast, send_unicasts), /* noc_data_start_idx */
         dispatcher_for_go_signal);
+
+    TT_ASSERT(go_signal_cmd_sequence.size_bytes() == go_signal_cmd_sequence.write_offset_bytes());
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 

@@ -10,9 +10,9 @@
 #include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #else
 #include <tt-metalium/assert.hpp>
 #endif
@@ -23,6 +23,7 @@ enum TerminationSignal : uint32_t {
     KEEP_RUNNING = 0,
 
     // Wait for messages to drain
+    // Non functional. Use IMMEDIATELY_TERMINATE instead.
     GRACEFULLY_TERMINATE = 1,
 
     // Immediately terminate - don't wait for any outstanding messages to arrive or drain out
@@ -50,11 +51,12 @@ enum EDMStatus : uint32_t {
 enum NocSendType : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_UNICAST_INLINE_WRITE = 1,
-    NOC_MULTICAST_WRITE = 2,
-    NOC_UNICAST_ATOMIC_INC = 3,
-    NOC_FUSED_UNICAST_ATOMIC_INC = 4,
-    NOC_MULTICAST_ATOMIC_INC = 5,
-    NOC_SEND_TYPE_LAST = NOC_MULTICAST_ATOMIC_INC
+    NOC_UNICAST_ATOMIC_INC = 2,
+    NOC_FUSED_UNICAST_ATOMIC_INC = 3,
+    NOC_UNICAST_SCATTER_WRITE = 4,
+    NOC_MULTICAST_WRITE = 5,       // mcast has bug
+    NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 // How to send the payload across the cluster
 // 1 bit
@@ -88,6 +90,13 @@ static_assert(
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
+#ifdef ARCH_WORMHOLE
+#define NOC_SCATTER_WRITE_MAX_CHUNKS 2
+struct NocUnicastScatterCommandHeader {
+    uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
+    uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
+};
+#endif
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
     uint32_t value;
@@ -142,6 +151,9 @@ union NocCommandFields {
     NocUnicastAtomicIncCommandHeader unicast_seminc;
     NocUnicastAtomicIncFusedCommandHeader unicast_seminc_fused;
     NocMulticastAtomicIncCommandHeader mcast_seminc;
+#ifdef ARCH_WORMHOLE
+    NocUnicastScatterCommandHeader unicast_scatter_write;
+#endif
 };
 static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
 
@@ -166,6 +178,9 @@ struct PacketHeaderBase {
     inline size_t get_payload_size_including_header() volatile const {
         return get_payload_size_excluding_header() + sizeof(Derived);
     }
+
+    const volatile NocCommandFields& get_command_fields() volatile const { return this->command_fields; }
+    NocSendType get_noc_send_type() volatile const { return this->noc_send_type; }
 
     // Setters for noc_send_type, routing_fields, and command_fields
     inline void set_noc_send_type(NocSendType& type) { this->noc_send_type = type; }
@@ -288,6 +303,31 @@ struct PacketHeaderBase {
 #endif
         return static_cast<volatile Derived*>(this);
     }
+
+#ifdef ARCH_WORMHOLE
+    inline volatile Derived* to_noc_unicast_scatter_write(
+        const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
+        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
+            auto noc_addr = safe_get_noc_addr(
+                noc_address_components.first.x,
+                noc_address_components.first.y,
+                noc_address_components.second,
+                edm_to_local_chip_noc);
+            this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
+            if (i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+                this->command_fields.unicast_scatter_write.chunk_size[i] = noc_unicast_scatter_command_header.chunk_size[i];
+            }
+        }
+        this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return static_cast<volatile Derived*>(this);
+    }
+#endif
 
     inline volatile Derived* to_noc_unicast_inline_write(
         const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) volatile {

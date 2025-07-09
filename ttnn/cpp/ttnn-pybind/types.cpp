@@ -4,21 +4,23 @@
 
 #include "types.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <sstream>
+#include <string>
+#include <utility>
 
 #include <pybind11/operators.h>
 #include <pybind11/stl.h>
 
-#include <tt-metalium/small_vector.hpp>
-
-#include "export_enum.hpp"
+#include "ttnn-pybind/export_enum.hpp"
+#include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
-namespace ttnn {
-namespace types {
+namespace ttnn::types {
 
 void py_module_types(py::module& module) {
     py::class_<ttnn::CoreGrid>(module, "CoreGrid");
@@ -87,5 +89,4 @@ void py_module(py::module& module) {
     py::implicitly_convertible<ttnn::SmallVector<uint32_t>, ttnn::Shape>();
 }
 
-}  // namespace types
-}  // namespace ttnn
+}  // namespace ttnn::types

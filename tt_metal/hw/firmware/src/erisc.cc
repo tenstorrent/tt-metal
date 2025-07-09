@@ -128,7 +128,8 @@ void __attribute__((noinline)) Application(void) {
 #if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
                 iram_setup();
 #endif
-                kernel_init(0);
+                extern void kernel_init();
+                kernel_init();
                 WAYPOINT("D");
             }
             mailboxes->go_message.signal = RUN_MSG_DONE;

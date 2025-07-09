@@ -21,10 +21,8 @@
 #include <optional>
 #include <queue>
 #include <random>
-#include <set>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -41,7 +39,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
@@ -169,10 +167,10 @@ struct test_board_t {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
 
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
-        control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+        control_plane = &tt::tt_metal::MetalContext::instance().get_control_plane();
         control_plane->write_routing_tables_to_all_chips();
 
         if (num_chips_to_use != available_chip_ids.size()) {
@@ -188,7 +186,7 @@ struct test_board_t {
     void _init_galaxy_board(uint32_t num_chips, bool all_pcie = false) {
         // TODO: add support for quanta galaxy variant
         if (all_pcie) {
-            mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml";
+            mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
         } else {
             mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
         }
@@ -218,7 +216,7 @@ struct test_board_t {
             cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
             control_plane = cp_owning_ptr.get();
         } catch (const std::exception& e) {
-            log_fatal(e.what());
+            log_fatal(tt::LogTest, "{}", e.what());
         }
     }
 
@@ -252,7 +250,7 @@ struct test_board_t {
         // populate valid chip and available chip IDs
         for (auto i = start_row_idx; i < (start_row_idx + num_rows); i++) {
             for (auto j = i; j < 32; j += 8) {
-                physical_chip_id = control_plane->get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, j));
+                physical_chip_id = control_plane->get_physical_chip_id_from_fabric_node_id(FabricNodeId(MeshId{mesh_id}, j));
                 physical_chip_ids.push_back(physical_chip_id);
             }
         }
@@ -467,7 +465,7 @@ struct test_board_t {
         return control_plane->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
     }
 
-    inline std::vector<std::pair<chip_id_t, chan_id_t>> get_route_to_chip(
+    inline std::vector<std::pair<FabricNodeId, chan_id_t>> get_route_to_chip(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) {
         return control_plane->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id);
     }
@@ -505,7 +503,7 @@ struct test_device_t {
     std::vector<CoreCoord> router_virtual_cores;
     CoreCoord core_range_start_virtual;
     CoreCoord core_range_end_virtual;
-    mesh_id_t mesh_id;
+    MeshId mesh_id;
     chip_id_t logical_chip_id;
     uint32_t master_router_idx;
     uint32_t mesh_chip_id = 0;
@@ -523,7 +521,7 @@ struct test_device_t {
         auto fabric_node_id = board_handle->get_fabric_node_id(physical_chip_id);
         mesh_id = fabric_node_id.mesh_id;
         logical_chip_id = fabric_node_id.chip_id;
-        mesh_chip_id = (mesh_id << 16 | logical_chip_id);
+        mesh_chip_id = (*mesh_id << 16 | logical_chip_id);
         soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
 
         // initalize list of worker cores in 8X8 grid
@@ -565,7 +563,7 @@ struct test_device_t {
         master_router_idx = 0;
     }
 
-    void create_router_kernels(std::vector<uint32_t>& compile_args, std::map<string, string>& defines) {
+    void create_router_kernels(std::vector<uint32_t>& compile_args, std::map<std::string, std::string>& defines) {
         uint32_t num_routers = router_logical_cores.size();
         std::vector<uint32_t> zero_buf(1, 0);
 
@@ -658,10 +656,9 @@ struct test_device_t {
 
         // get the potential routers based on the fabric path
         for (auto i = 0; i < router_logical_cores.size(); i++) {
-            std::vector<std::pair<chip_id_t, chan_id_t>> route;
-            std::set<chip_id_t> chips_in_route;
+            std::vector<std::pair<FabricNodeId, chan_id_t>> route;
+            uint8_t num_chips_in_route = 1;  // include first chip
             chan_id_t src_eth_chan = soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]);
-            chips_in_route.insert(physical_chip_id);
             route = _get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, src_eth_chan);
             if (route.empty()) {
                 continue;
@@ -673,13 +670,11 @@ struct test_device_t {
                 // no need to check for path length for default case, all routers can be used
                 select_router = true;
             } else {
-                for (auto& [chip_, chan_] : route) {
-                    chips_in_route.insert(chip_);
-                }
+                num_chips_in_route += route.size();
 
                 // including the origin chip, the distinct number of chips should be num_hops + 1
                 // if 1st noc hop at tx is allowed, the path will be longer
-                if ((chips_in_route.size() == num_hops + 1) &&
+                if ((num_chips_in_route == num_hops + 1) &&
                     (allow_1st_noc_hop || route.size() == shortest_route_length)) {
                     select_router = true;
                 }
@@ -749,8 +744,8 @@ struct test_device_t {
         return result;
     }
 
-    inline std::vector<std::pair<chip_id_t, chan_id_t>> _get_route_to_chip(
-        mesh_id_t dst_mesh_id, chip_id_t dst_chip_id, chan_id_t src_chan_id) {
+    inline std::vector<std::pair<FabricNodeId, chan_id_t>> _get_route_to_chip(
+        MeshId dst_mesh_id, chip_id_t dst_chip_id, chan_id_t src_chan_id) {
         return board_handle->get_route_to_chip(
             FabricNodeId(mesh_id, logical_chip_id), FabricNodeId(dst_mesh_id, dst_chip_id), src_chan_id);
     }
@@ -764,10 +759,12 @@ struct test_device_t {
         uint32_t grid_size_x = grid_size.x;
         uint32_t grid_size_y = grid_size.y;
 
+        router_phys_cores.reserve(router_logical_cores.size());
         for (auto& core : router_logical_cores) {
             router_phys_cores.push_back(soc_desc.get_physical_core_from_logical_core(core, CoreType::ETH));
         }
 
+        worker_phys_cores.reserve(worker_logical_cores.size());
         for (auto& core : worker_logical_cores) {
             worker_phys_cores.push_back(soc_desc.get_physical_core_from_logical_core(core, CoreType::WORKER));
         }
@@ -900,7 +897,7 @@ struct test_traffic_t {
     void create_kernels(
         std::vector<uint32_t>& tx_compile_args,
         std::vector<uint32_t>& rx_compile_args,
-        std::map<string, string>& defines,
+        std::map<std::string, std::string>& defines,
         uint32_t fabric_command,
         uint32_t test_results_address_) {
         CoreCoord tx_core, rx_core;
@@ -1537,7 +1534,7 @@ int main(int argc, char **argv) {
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     uint16_t routing_mode;
     if (!push_mode) {
         defines["FVC_MODE_PULL"] = "";
@@ -1838,7 +1835,7 @@ int main(int argc, char **argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -16,7 +16,6 @@
 
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <magic_enum/magic_enum.hpp>
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -47,8 +46,8 @@ private:
     bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
-    uint64_t base_data_addr[magic_enum::enum_count<CoreType>()];
-    uint64_t base_result_data_addr[magic_enum::enum_count<CoreType>()];
+    uint64_t base_data_addr[static_cast<size_t>(CoreType::COUNT)];
+    uint64_t base_result_data_addr[static_cast<size_t>(CoreType::COUNT)];
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
     CoreCoord host_core;
 
@@ -57,7 +56,7 @@ private:
         IDevice* device,
         std::unordered_set<CoreCoord>& validated_cores,
         const one_core_data_t& one_core_data,
-        const uint32_t start_index,
+        uint32_t start_index,
         uint32_t result_addr);
     bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& one_core_data);
 
@@ -377,7 +376,7 @@ inline bool DeviceData::validate_one_core(
         return false;
     }
 
-    string core_string;
+    std::string core_string;
     if (core_type == CoreType::WORKER) {
         core_string = "L1";
     } else if (core_type == CoreType::DRAM) {
@@ -385,7 +384,7 @@ inline bool DeviceData::validate_one_core(
     } else if (core_type == CoreType::PCIE) {
         core_string = "PCIE";
     } else {
-        tt::log_fatal("Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
+        log_fatal(tt::LogTest, "Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
         TT_ASSERT(false, "Core type not found");
     }
 
@@ -533,8 +532,9 @@ void DeviceData::overflow_check(IDevice* device) {
 template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
-    string path,
-    std::vector<uint32_t> compile_args,  // yes, copy
+    std::string path,
+    const std::map<std::string, std::string>& defines_in,
+    std::vector<uint32_t> compile_args,
     CoreCoord my_core,
     CoreCoord phys_my_core,
     CoreCoord phys_upstream_core,
@@ -547,7 +547,7 @@ void configure_kernel_variant(
     auto upstream_virtual_noc_coords = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
     auto downstream_virtual_noc_coords = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
@@ -558,10 +558,16 @@ void configure_kernel_variant(
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(0xff)},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
-        {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
+        {"FD_CORE_TYPE", std::to_string(0)},                     // todo, support dispatch on eth
+        {"IS_D_VARIANT", std::to_string(is_dram_variant)},
+        {"IS_H_VARIANT", std::to_string(is_host_variant)},
     };
+
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
+
+    defines.insert(defines_in.begin(), defines_in.end());
+
     tt::tt_metal::CreateKernel(
         program,
         path,
@@ -1180,11 +1186,11 @@ inline void gen_dispatcher_set_write_offset_cmd(
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
-    cmd.set_write_offset.offset0 = wo0;
-    cmd.set_write_offset.offset1 = wo1;
-    cmd.set_write_offset.offset2 = wo2;
-    uint32_t payload_length = 0;
-    add_dispatcher_cmd(cmds, cmd, payload_length);
+    cmd.set_write_offset.offset_count = 3;
+    add_bare_dispatcher_cmd(cmds, cmd);
+    cmds.push_back(wo0);
+    cmds.push_back(wo1);
+    cmds.push_back(wo2);
 }
 
 inline void gen_dispatcher_terminate_cmd(std::vector<uint32_t>& cmds) {

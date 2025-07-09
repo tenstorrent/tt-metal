@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -17,7 +19,7 @@ namespace primary {
 
 tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     const tt::tt_metal::Tensor& input, const tt::tt_metal::Tensor& output, int64_t dim) {
-    TT_ASSERT(dim == 0 || dim == 1);
+    TT_FATAL(dim == 0 || dim == 1, "Dimension ({}) must be either 0 or 1", dim);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -28,11 +30,10 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    const auto input_shape = input.get_padded_shape();
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape = input.padded_shape();
 
     const auto N = input_shape[0];
     const auto C = input_shape[1];
@@ -42,7 +43,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     const auto CHtWt = C * Ht * Wt;
     const auto num_reduce_input_tile = input_shape[dim];
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
-    const auto num_output_tiles = output.volume() / TILE_HW;
+    const auto num_output_tiles = output.physical_volume() / TILE_HW;
 
     log_debug(LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
     log_debug(
@@ -111,7 +112,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
     const auto compute_kernel_1_id = ttnn::operations::CreateComputeKernel(
@@ -168,10 +169,10 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
         } else if (core_group_2.contains(core)) {
-            TT_ASSERT(compute_kernel_2_id.has_value());
+            TT_FATAL(compute_kernel_2_id.has_value(), "compute_kernel_2_id needs to have a value");
             SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_reduce_input_tile, num_tiles_per_core});
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
         tile_offset += num_tiles_per_core;
     }

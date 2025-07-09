@@ -10,8 +10,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <algorithm>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <cstdint>
 #include <exception>
 #include <iomanip>
@@ -31,7 +32,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -80,6 +81,7 @@ bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
 bool test_write = false;
 bool linked = false;
+bool dump_profiler_results = false;
 uint32_t nop_count_g = 0;
 
 void init(int argc, char** argv) {
@@ -121,6 +123,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
         log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
         log_info(LogTest, " -nop: time loop of <n> nops");
+        log_info(LogTest, "-profdump: dump profiler results before closing device");
         exit(0);
     }
 
@@ -158,6 +161,8 @@ void init(int argc, char** argv) {
     }
 
     linked = test_args::has_command_option(input_args, "-link");
+
+    dump_profiler_results = test_args::has_command_option(input_args, "-profdump");
 
     worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
     src_worker_g = {src_core_x, src_core_y};
@@ -216,7 +221,7 @@ int main(int argc, char** argv) {
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        string src_mem;
+        std::string src_mem;
         uint32_t noc_addr_x, noc_addr_y;
         uint64_t noc_mem_addr = 0;
         uint32_t dram_banked = 0;
@@ -296,7 +301,7 @@ int main(int argc, char** argv) {
             } break;
         }
 
-        std::map<string, string> defines = {
+        std::map<std::string, std::string> defines = {
             {"ITERATIONS", std::to_string(iterations_g)},
             {"PAGE_COUNT", std::to_string(page_count_g)},
             {"LATENCY", std::to_string(latency_g)},
@@ -314,7 +319,7 @@ int main(int argc, char** argv) {
             {"NOP_COUNT", std::to_string(nop_count_g)},
         };
         if (!page_size_as_runtime_arg_g) {
-            defines.insert(std::pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
+            defines.insert(std::pair<std::string, std::string>("PAGE_SIZE", std::to_string(page_size_g)));
         }
 
         tt_metal::CircularBufferConfig cb_config =
@@ -338,7 +343,7 @@ int main(int argc, char** argv) {
 
         CoreCoord w = device->worker_core_from_logical_core(worker_g.start_coord);
         log_info(LogTest, "Master core: {}", w.str());
-        string direction = test_write ? "Writing" : "Reading";
+        std::string direction = test_write ? "Writing" : "Reading";
         if (source_mem_g == 3) {
             log_info(LogTest, "{}: {}", direction, src_mem);
         } else if (source_mem_g == 4) {
@@ -360,7 +365,7 @@ int main(int argc, char** argv) {
         }
         if (source_mem_g < 4 || source_mem_g == 6) {
             std::string api;
-            string read_write = test_write ? "write" : "read";
+            std::string read_write = test_write ? "write" : "read";
             if (issue_mcast) {
                 api = "noc_async_" + read_write + "_multicast";
             } else if (read_one_packet_g) {
@@ -450,8 +455,7 @@ int main(int argc, char** argv) {
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
-                        dispatch_l1_unreserved_base,
-                        vec.size() == 1);
+                        dispatch_l1_unreserved_base);
                 }
             }
 
@@ -465,8 +469,7 @@ int main(int argc, char** argv) {
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
-                        dispatch_l1_unreserved_base,
-                        vec.size() == 1);
+                        dispatch_l1_unreserved_base);
                 }
             }
             auto end = std::chrono::system_clock::now();
@@ -489,10 +492,14 @@ int main(int argc, char** argv) {
             log_info(LogTest, "BW: {} GB/s", ss.str());
         }
 
+        if (dump_profiler_results) {
+            tt_metal::detail::DumpDeviceProfileResults(device);
+        }
+
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     if (pass) {

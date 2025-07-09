@@ -20,6 +20,8 @@
 #include <variant>
 #include <vector>
 
+#include "tt_memory.h"
+
 enum class CoreType;
 enum class AddressableCoreType : uint8_t;
 
@@ -38,6 +40,26 @@ struct HalJitBuildConfig {
     DeviceAddr local_init_addr;
     DeviceAddr fw_launch_addr;
     uint32_t fw_launch_addr_value;
+    ll_api::memory::Loading memory_load;
+};
+
+// Ethernet Firmware mailbox messages
+enum class FWMailboxMsg : uint8_t {
+    // Message status mask.
+    // msg & ETH_MSG_STATUS_MASK != ETH_MSG_CALL means the mailbox is free
+    ETH_MSG_STATUS_MASK,
+    // Execute message
+    ETH_MSG_CALL,
+    // Indicates message processed
+    ETH_MSG_DONE,
+    // Run link status check
+    // arg0: copy_addr, arg1: unused, arg2: unused
+    ETH_MSG_LINK_STATUS_CHECK,
+    // Execute function from the core
+    // arg0: L1 addr of function, arg1: unused, arg2: unused
+    ETH_MSG_RELEASE_CORE,
+    // Number of mailbox message types
+    COUNT,
 };
 
 class Hal;
@@ -53,6 +75,7 @@ private:
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
+    std::vector<uint32_t> eth_fw_mailbox_msgs_;
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
 
@@ -63,6 +86,7 @@ public:
         const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
         const std::vector<DeviceAddr>& mem_map_bases,
         const std::vector<uint32_t>& mem_map_sizes,
+        const std::vector<uint32_t>& eth_fw_mailbox_msgs,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds);
 
@@ -110,6 +134,7 @@ public:
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
     using NOCAddrFunc = std::function<uint64_t(uint64_t)>;
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
+    using EthFwArgAddrFunc = std::function<uint32_t(uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -136,6 +161,7 @@ private:
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
+    bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_;
 
@@ -159,7 +185,7 @@ private:
     NOCAddrFunc noc_ucast_addr_x_func_;
     NOCAddrFunc noc_ucast_addr_y_func_;
     NOCAddrFunc noc_local_addr_func_;
-    StackSizeFunc stack_size_func_;
+    EthFwArgAddrFunc eth_fw_arg_addr_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -214,9 +240,13 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
+    bool intermesh_eth_links_enabled() const { return this->intermesh_eth_links_enabled_; }
     const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
+    uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
+    uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
+    uint32_t get_eth_fw_mailbox_arg_count() const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
@@ -245,7 +275,9 @@ public:
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
-    uint32_t get_num_risc_processors() const;
+    uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+
+    uint32_t get_total_num_risc_processors() const;
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
@@ -257,8 +289,6 @@ public:
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
 
     uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
-
-    uint32_t get_stack_size(uint32_t type) const { return stack_size_func_(type); }
 
     const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
     const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
@@ -371,6 +401,18 @@ inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_ty
     return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
 }
 
+inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
+    const uint32_t num_processor_classes =
+        this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+            .get_processor_classes_count();
+    uint32_t num_riscs = 0;
+    for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
+        num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+                         .get_processor_types_count(processor_class_idx);
+    }
+    return num_riscs;
+}
+
 inline const HalJitBuildConfig& Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
     TT_ASSERT(programmable_core_type_index < this->core_info_.size());
@@ -378,6 +420,23 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
+
+inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
+    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].eth_fw_mailbox_msgs_[utils::underlying_type<FWMailboxMsg>(msg)];
+}
+
+inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const {
+    return this->eth_fw_arg_addr_func_(arg_index);
+}
+
+inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
+    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    // -1 for the message
+    return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
+}
 
 }  // namespace tt_metal
 }  // namespace tt

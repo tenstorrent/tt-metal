@@ -78,11 +78,9 @@ class upsample2d:
         #     tt_out = ttnn.to_memory_config(tt_out, self.conv.conv.input_sharded_memory_config)
         # tt_out = self.conv(tt_out)
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            transpose_shards=False,
             reshard_if_not_optimal=False,  # Reshard has error : 1616 Bytes unique+common runtime args targeting kernel reshard_reader on (x=0,y=0) are too large. Cannot be written as they will run into memory region reserved for result. Max allowable size is 1024 Bytes
         )
         compute_config = get_default_compute_config(self.device)
@@ -111,12 +109,14 @@ class upsample2d:
                 input_memory_config=tt_out.memory_config(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv_bias_tensor,
                 input_memory_config=tt_out.memory_config(),
                 input_layout=tt_out.get_layout(),
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
 
             self.conv_weight_tensor = ttnn.to_device(self.conv_weight_tensor, self.device)
@@ -128,5 +128,6 @@ class upsample2d:
             bias_tensor=self.conv_bias_tensor,
             **conv_kwargs,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
         )
         return tt_out

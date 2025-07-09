@@ -22,7 +22,6 @@ def run_rms_trace(
     num_devices,
     elements_per_batch,
     num_links,
-    use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
@@ -34,6 +33,8 @@ def run_rms_trace(
     layout=ttnn.TILE_LAYOUT,
     epsilon=1e-05,
     warmup_iters=0,
+    trace_mode=False,
+    use_noc1_only=False,
     use_new_version=True,
     profiler=BenchmarkProfiler(),
 ):
@@ -165,14 +166,15 @@ def run_rms_trace(
             1,
             mesh_device,
             ccl_semaphore_handles,
-            dtype=ttnn.bfloat8_b,
-            memory_config=output_memory_config,
-            residual_input_tensor=residual_tensor,
             topology=all_gather_topology,
+            memory_config=output_memory_config,
             epsilon=epsilon,
             weight=gamma_tensor,
+            residual_input_tensor=residual_tensor,
             stats=tt_stats,
+            use_noc1_only=use_noc1_only,
         )
+        ttnn.synchronize_device(mesh_device)
 
         logger.info("Capturing trace")
         if warmup_iters > 0:
@@ -184,16 +186,16 @@ def run_rms_trace(
                     1,
                     mesh_device,
                     ccl_semaphore_handles,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=output_memory_config,
                     topology=all_gather_topology,
-                    residual_input_tensor=residual_tensor,
+                    memory_config=output_memory_config,
                     epsilon=epsilon,
                     weight=gamma_tensor,
+                    residual_input_tensor=residual_tensor,
                     stats=tt_stats,
+                    use_noc1_only=use_noc1_only,
                 )
+                tt_out.deallocate(True)
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
-            logger.info("Done warmup")
             ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for _ in range(num_iters):
@@ -203,14 +205,15 @@ def run_rms_trace(
                 1,
                 mesh_device,
                 ccl_semaphore_handles,
-                dtype=ttnn.bfloat8_b,
                 topology=all_gather_topology,
                 memory_config=output_memory_config,
-                residual_input_tensor=residual_tensor,
                 epsilon=epsilon,
                 weight=gamma_tensor,
+                residual_input_tensor=residual_tensor,
                 stats=tt_stats,
+                use_noc1_only=use_noc1_only,
             )
+            tt_out.deallocate(True)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     else:
         tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -263,7 +266,6 @@ def run_rms_trace(
                 )
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             logger.info("Done warmup")
-            ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for _ in range(num_iters):
             tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -312,7 +314,6 @@ def run_rms_fuse_impl(
     num_devices,
     elements_per_batch,
     num_links,
-    use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
@@ -320,6 +321,7 @@ def run_rms_fuse_impl(
     fused_add,
     output_dtype=None,
     num_iters=1,
+    use_noc1_only=False,
     input_dtype=ttnn.bfloat8_b,
     residual_dtype=ttnn.bfloat16,
     layout=ttnn.TILE_LAYOUT,
@@ -470,6 +472,7 @@ def run_rms_fuse_impl(
             weight=gamma_tensor[i],
             residual_input_tensor=residual_tensor[i],
             stats=tt_stats,
+            use_noc1_only=use_noc1_only,
         )
         tt_out_array.append(tt_out)
     for i in range(num_iters):

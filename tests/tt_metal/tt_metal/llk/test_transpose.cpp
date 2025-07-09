@@ -15,7 +15,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -29,7 +28,7 @@
 #include "device_fixture.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
@@ -56,6 +55,7 @@ enum TransposeType : uint8_t { WH = 0 };
 
 struct TransposeConfig {
     bool short_init;
+    bool transpose_dest;
     uint32_t single_tile_size;
     std::vector<uint32_t> shape;
     TransposeType transpose_type;
@@ -160,7 +160,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
 
     vector<uint32_t> compute_kernel_args = {uint(Ht * Wt * NC)};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
 
     if (test_config.short_init) {
         defines["SHORT_INIT"] = "1";
@@ -168,7 +168,9 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
 
     auto transpose_compute_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
+        test_config.transpose_dest
+            ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
+            : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 
@@ -217,6 +219,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
 TEST_F(DeviceFixture, TensixComputeTransposeWH) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = false,
+        .transpose_dest = false,
         .single_tile_size = 2 * 1024,
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
@@ -226,6 +229,17 @@ TEST_F(DeviceFixture, TensixComputeTransposeWH) {
 TEST_F(DeviceFixture, TensixComputeTransposeWHShortInit) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = true,
+        .transpose_dest = false,
+        .single_tile_size = 2 * 1024,
+        .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
+        .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
+    unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, TensixComputeTransposeWHDest) {
+    unit_tests::compute::transpose::TransposeConfig test_config = {
+        .short_init = false,
+        .transpose_dest = true,
         .single_tile_size = 2 * 1024,
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};

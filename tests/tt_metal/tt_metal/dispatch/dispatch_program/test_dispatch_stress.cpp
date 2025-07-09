@@ -8,7 +8,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <map>
@@ -136,6 +136,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
         }
         vector<IDevice*> devices_;
         auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        devices_.reserve(reserved_devices_.size());
         for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }

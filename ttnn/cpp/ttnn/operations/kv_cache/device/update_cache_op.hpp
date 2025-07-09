@@ -17,11 +17,11 @@ enum class UpdateCacheOpType { FILL, UPDATE };
 tt::tt_metal::operation::ProgramWithCallbacks update_cache_multi_core(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
-    const uint32_t update_idx,
-    const uint32_t batch_offset,
+    uint32_t update_idx,
+    uint32_t batch_offset,
     ttnn::DeviceComputeKernelConfig compute_kernel_config);
 tt::tt_metal::operation::ProgramWithCallbacks fill_cache_multi_core(
-    const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t batch_idx, const uint32_t update_idx);
+    const Tensor& cache_tensor, const Tensor& input_tensor, uint32_t batch_idx, uint32_t update_idx);
 
 struct UpdateCache {
     const uint32_t batch_idx;

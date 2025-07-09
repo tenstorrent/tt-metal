@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
@@ -24,7 +24,7 @@ MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_padded_shape();
+    const auto input_shape = input.padded_shape();
     const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
 
     const auto H = input_shape[-2];
@@ -34,7 +34,7 @@ MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::
     const auto Wt = W / tt::constants::TILE_WIDTH;
 
     const auto num_reduced_tiles_along_dim = input_shape[dim];
-    const auto num_output_tiles = output.volume() / tt::constants::TILE_HW;
+    const auto num_output_tiles = output.physical_volume() / tt::constants::TILE_HW;
 
     uint32_t outer_stride{1};
     for (int64_t j = dim; j < input_rank; ++j) {
@@ -69,7 +69,7 @@ MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
     const uint32_t in0_t{1};  // input

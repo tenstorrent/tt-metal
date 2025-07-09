@@ -11,8 +11,6 @@
 #include "pybind11/cast.h"
 #include "ttnn-pybind/decorators.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::moreh::moreh_nll_loss_backward {
 
 void bind_moreh_nll_loss_backward_operation(py::module& module) {

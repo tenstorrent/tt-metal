@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,17 @@ import torch
 from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
+
+
+def _get_known_prefixes_mapping():
+    return {
+        # Llama Vision
+        "text_model.": "",
+        "vision_model.": "",
+        # Gemma3
+        "model.language_model.": "model.",
+        "model.vision_tower.": "model.",
+    }
 
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
@@ -42,9 +53,17 @@ def load_hf_state_dict(ckpt_dir):
 
 
 def standardize_hf_keys(state_dict):
-    if not "lm_head.weight" in state_dict:
+    key_meta = "lm_head.weight"
+    key_hf = "model.embed_tokens.weight"
+
+    # Check if the key_meta exists with any known prefix
+    if not any(f"{prefix}{key_meta}" in state_dict for prefix in _get_known_prefixes_mapping().keys()):
         # Assume tied to the embeddings if not present
-        state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+        for prefix in _get_known_prefixes_mapping().keys():
+            if f"{prefix}{key_hf}" in state_dict:
+                state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
+                break
+
     return state_dict
 
 
@@ -72,6 +91,8 @@ def map_hf_to_meta_keys(loaded_weights):
         "self_attn.q_proj.bias": "attention.wq.bias",
         "self_attn.k_proj.bias": "attention.wk.bias",
         "self_attn.v_proj.bias": "attention.wv.bias",
+        "self_attn.q_norm.weight": "attention.q_norm.weight",
+        "self_attn.k_norm.weight": "attention.k_norm.weight",
         # Feed forward module mappings
         "mlp.gate_proj.weight": "feed_forward.w1.weight",
         "mlp.up_proj.weight": "feed_forward.w3.weight",
@@ -87,6 +108,8 @@ def map_hf_to_meta_keys(loaded_weights):
         "q_proj.bias": "wq.bias",
         "k_proj.bias": "wk.bias",
         "v_proj.bias": "wv.bias",
+        "q_norm.weight": "q_norm.weight",
+        "k_norm.weight": "k_norm.weight",
         "weight": "emb.weight",  # For host embeddings
         # Full path layer mappings
         "model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
@@ -98,6 +121,8 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.self_attn.q_proj.bias": "layers.{layer}.attention.wq.bias",
         "model.layers.{layer}.self_attn.k_proj.bias": "layers.{layer}.attention.wk.bias",
         "model.layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
+        "model.layers.{layer}.self_attn.q_norm.weight": "layers.{layer}.attention.q_norm.weight",
+        "model.layers.{layer}.self_attn.k_norm.weight": "layers.{layer}.attention.k_norm.weight",
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
@@ -105,6 +130,10 @@ def map_hf_to_meta_keys(loaded_weights):
 
     meta_state_dict = {}
     for key, tensor in loaded_weights.items():
+        # Remove known prefix if present
+        prefix = next((p for p in _get_known_prefixes_mapping().keys() if key.startswith(p)), "")
+        key = key.replace(prefix, _get_known_prefixes_mapping().get(prefix, ""), 1)
+
         if key in hf_to_meta:
             # Direct match for top-level keys
             meta_state_dict[hf_to_meta[key]] = tensor
@@ -232,6 +261,8 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             # For biases: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
+        elif "q_norm.weight" in key or "k_norm.weight" in key:
+            converted_weights[key] = reverse_permute_1d(tensor)
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor
@@ -262,6 +293,8 @@ def map_meta_to_hf_keys(loaded_weights):
         "attention.wq.bias": "self_attn.q_proj.bias",
         "attention.wk.bias": "self_attn.k_proj.bias",
         "attention.wv.bias": "self_attn.v_proj.bias",
+        "attention.q_norm.weight": "self_attn.q_norm.weight",
+        "attention.k_norm.weight": "self_attn.k_norm.weight",
         # Feed forward module
         "feed_forward.w1.weight": "mlp.gate_proj.weight",
         "feed_forward.w3.weight": "mlp.up_proj.weight",
@@ -301,7 +334,7 @@ def map_meta_to_hf_keys(loaded_weights):
         # For submodule state dicts, try matching the end of the key
         matched = False
         for meta_pattern, hf_pattern in meta_to_hf_mappings.items():
-            if key.endswith(meta_pattern):
+            if key.endswith("." + meta_pattern):
                 # Replace only the matching part at the end
                 prefix = key[: -len(meta_pattern)]
                 new_key = prefix + hf_pattern
@@ -328,6 +361,8 @@ def convert_meta_qkv_to_hf_format(loaded_weights, head_dim):
             # For biases: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = permute(tensor.unsqueeze(-1), n_heads, tensor.shape[0], 1).squeeze(-1)
+        elif "q_norm.weight" in key or "k_norm.weight" in key:
+            converted_weights[key] = permute_1d(tensor)
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor
@@ -340,3 +375,25 @@ def reverse_permute(tensor, n_heads, dim1, dim2):
 
 def permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+
+
+def reverse_permute_1d(tensor):
+    """Convert the last dim of a tensor from separate real and imaginary parts (r1, r2, i1, i2, ...) to interleaved rope format (r1, i1, r2, i2, ...)"""
+    shape = tensor.shape
+    dim = shape[-1]
+    assert dim % 2 == 0, "Last dimension must be even"
+    reals = tensor[..., : dim // 2]
+    imags = tensor[..., dim // 2 :]
+    interleaved = torch.stack((reals, imags), dim=-1).flatten(start_dim=len(shape) - 1)
+    return interleaved
+
+
+def permute_1d(tensor):
+    """Convert the last dim of a tensor from interleaved rope format (r1, i1, r2, i2, ...) to separate real and imaginary parts (r1, r2, i1, i2, ...)"""
+    shape = tensor.shape
+    dim = shape[-1]
+    assert dim % 2 == 0, "Last dimension must be even"
+    reshaped = tensor.reshape(*shape[:-1], dim // 2, 2)
+    reals = reshaped[..., 0]
+    imags = reshaped[..., 1]
+    return torch.cat((reals, imags), dim=-1)

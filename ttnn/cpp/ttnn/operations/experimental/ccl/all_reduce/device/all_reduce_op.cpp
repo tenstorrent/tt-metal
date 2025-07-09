@@ -20,11 +20,11 @@ void AllReduce::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllReduce::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto shape = input_tensor.get_logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     TensorSpec spec(
         shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), output_mem_config));
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), output_mem_config));
     return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
@@ -84,7 +84,7 @@ namespace ccl {
 
 static AllReduceStrategy choose_all_reduce_strategy(
     const Tensor& input_tensor, uint32_t num_devices, uint32_t num_links, ttnn::ccl::Topology topology) {
-    auto shape = input_tensor.get_logical_shape();
+    auto shape = input_tensor.logical_shape();
     auto rank = shape.rank();
 
     uint32_t all_reduce_dim = -1;
@@ -112,7 +112,7 @@ static AllReduceStrategy choose_all_reduce_strategy(
             optimized_version = false;  // Reduce scatter hangs for this shape
         }
 
-        if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
+        if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
             if ((all_reduce_dim == 2 && shape[all_reduce_dim] % tt::constants::TILE_HEIGHT != 0) ||
                 (all_reduce_dim == 3 && shape[all_reduce_dim] % tt::constants::TILE_WIDTH != 0)) {
                 optimized_version = false;
@@ -138,7 +138,7 @@ static Tensor all_gather_local_reduce(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<IDevice*>& devices,
     ttnn::ccl::Topology topology) {
-    auto shape = input_tensor.get_logical_shape();
+    auto shape = input_tensor.logical_shape();
     auto rank = shape.rank();
     log_warning(
         tt::LogOp,
@@ -184,7 +184,7 @@ static std::vector<Tensor> all_gather_local_reduce(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<IDevice*>& devices,
     ttnn::ccl::Topology topology) {
-    auto shape = input_tensors.at(0).get_logical_shape();
+    auto shape = input_tensors.at(0).logical_shape();
     auto rank = shape.rank();
     log_warning(
         tt::LogOp,
@@ -248,7 +248,7 @@ static Tensor reduce_scatter_all_gather(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology) {
-    auto shape = input_tensor.get_logical_shape();
+    auto shape = input_tensor.logical_shape();
     auto rank = shape.rank();
 
     uint32_t all_reduce_dim = -1;
@@ -298,7 +298,7 @@ static std::vector<Tensor> reduce_scatter_all_gather(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology) {
-    auto shape = input_tensors.at(0).get_logical_shape();
+    auto shape = input_tensors.at(0).logical_shape();
     auto rank = shape.rank();
 
     uint32_t all_reduce_dim = -1;
@@ -390,7 +390,7 @@ Tensor run_all_reduce(
                 false,
                 "Invalid strategy selected {} for input tensor shape: {}",
                 strategy,
-                input_tensor.get_logical_shape());
+                input_tensor.logical_shape());
     }
 }
 
@@ -433,7 +433,7 @@ std::vector<Tensor> run_all_reduce(
                 false,
                 "Invalid strategy selected {} for input tensor shape: {}",
                 strategy,
-                input_tensors.at(0).get_logical_shape());
+                input_tensors.at(0).logical_shape());
     }
 }
 
@@ -450,7 +450,7 @@ Tensor all_reduce(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
 
-    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
+    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
 

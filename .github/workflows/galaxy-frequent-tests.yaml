@@ -3,11 +3,13 @@ name: "Galaxy frequent tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 5'  # Runs every Friday at 12am UTC
+    - cron: '0 3 * * *'  # Every day at 3:00 UTC
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-wheel: true

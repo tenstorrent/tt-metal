@@ -25,7 +25,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
-    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -33,12 +34,12 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat interm_data_format = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32
                                             ? tt::DataFormat::Float32
                                             : tt::DataFormat::Float16_b;
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
     uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_data_format);
@@ -49,19 +50,17 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
         TT_ASSERT(fp32_dest_acc_en == true, "when inputs/output are in fp32 format, fp32_dest_acc_en must be set");
     }
 
-    log_debug("math_fidelity: {}", math_fidelity);
-    log_debug("math_approx_mode: {}", math_approx_mode);
-    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
-    log_debug("packer_l1_acc: {}", packer_l1_acc);
-    log_debug("in0_data_format: {}", in0_data_format);
-    log_debug("in1_data_format: {}", in1_data_format);
-    log_debug("interm_data_format: {}", interm_data_format);
-    log_debug("output_data_format: {}", output_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "packer_l1_acc: {}", packer_l1_acc);
+    log_debug(tt::LogOp, "in0_data_format: {}", in0_data_format);
+    log_debug(tt::LogOp, "in1_data_format: {}", in1_data_format);
+    log_debug(tt::LogOp, "interm_data_format: {}", interm_data_format);
+    log_debug(tt::LogOp, "output_data_format: {}", output_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
-
-    auto cshape = output.get_padded_shape();
 
     // A block of work is one MtNt
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -264,8 +263,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
 
             auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-            auto ashape = input_tensors.at(0).get_padded_shape();
-            auto bshape = input_tensors.at(1).get_padded_shape();
+            auto ashape = input_tensors.at(0).padded_shape();
+            auto bshape = input_tensors.at(1).padded_shape();
 
             // C = torch.matmul(A.transpose(0, 2) * B).transpose(0, 2)
             // MN = MK*KN

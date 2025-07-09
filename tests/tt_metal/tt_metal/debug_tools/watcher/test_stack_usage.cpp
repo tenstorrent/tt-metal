@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "command_queue_fixture.hpp"
-
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -38,7 +36,7 @@ void RunOneTest(WatcherFixture* fixture, IDevice* device, unsigned free) {
     Program program = Program();
     CoreCoord coord = {0, 0};
     std::vector<uint32_t> compile_args{free};
-    std::vector<string> expected;
+    std::vector<std::string> expected;
 
     CreateKernel(program, path, coord,
                  DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
@@ -84,10 +82,14 @@ TEST_F(WatcherFixture, TestWatcherStackUsage0) {
     for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(RunTest<0>, device);
     }
+    // Trigger a watcher re-init, so that the stack usage is reset.
+    this->reset_server = true;
 }
 
 TEST_F(WatcherFixture, TestWatcherStackUsage16) {
     for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(RunTest<16>, device);
     }
+    // Trigger a watcher re-init, so that the stack usage is reset.
+    this->reset_server = true;
 }

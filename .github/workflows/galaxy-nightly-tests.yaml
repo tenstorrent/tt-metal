@@ -3,11 +3,13 @@ name: "Galaxy nightly tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * 3" # Runs every Wednesday at 12am UTC
+    - cron: "0 0 * * 6" # Runs every Saturday at 12am UTC
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04

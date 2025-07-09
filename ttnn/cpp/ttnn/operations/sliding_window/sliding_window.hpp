@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -55,6 +54,7 @@ struct SlidingWindowConfig {
     bool is_bilinear = false;
     bool is_transpose = false;
     bool ceil_mode = false;
+    bool is_avg_pool = false;
 
     std::string to_string() const;
     bool has_parallel_config() const;
@@ -129,7 +129,8 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     bool in_place = false);
 
 struct HaloGatherKernelConfig {
-    std::vector<std::vector<uint16_t>> pad_config;
+    std::vector<std::vector<uint16_t>> pad_config0;
+    std::vector<std::vector<uint16_t>> pad_config1;
     std::vector<std::vector<uint16_t>> gather_config0;
     std::vector<std::vector<uint16_t>> gather_config1;
     std::vector<uint16_t> number_of_blocks_per_core;
@@ -148,8 +149,12 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
-    bool pad_tile = false,
-    bool pad_cores = false);
+    uint32_t stride_w,
+    bool is_conv =
+        false,  // In convs, we have the concept of dividing the act block (act_block_h_override and split reader)
+    uint32_t reader0_datums = 0,
+    uint32_t reader1_datums = 0,
+    bool pad_cores = true);
 
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 
@@ -161,9 +166,7 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
     const std::vector<uint16_t>& config, const ParallelConfig& parallel_config);
 
 Tensor construct_on_host_config_tensor(
-    const std::vector<std::vector<uint16_t>>& config,
-    const SlidingWindowConfig& sw_config,
-    const ParallelConfig& p_config);
+    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config);
 
 Tensor move_config_tensor_to_device(
     const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, tt::tt_metal::IDevice* device);

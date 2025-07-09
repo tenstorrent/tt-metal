@@ -13,15 +13,12 @@
 #include <bit>
 #include <cctype>
 #include <functional>
-#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -34,7 +31,7 @@
 #include "device_fixture.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
@@ -158,7 +155,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    string reader_kernel_path;
+    std::string reader_kernel_path;
     if (test_config.untilize_type.has_value()) {
         reader_kernel_path = "tt_metal/kernels/dataflow/reader_unary.cpp";
     } else if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
@@ -186,9 +183,9 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         uint(test_config.num_tiles_c)   // per_core_block_tile_cnt
     };
 
-    string compute_kernel;
+    std::string compute_kernel;
     if (test_config.untilize_type.has_value()) {
-        string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
+        std::string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
             return std::tolower(c);
         });
@@ -201,10 +198,10 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/";
         compute_kernel += (test_config.tilize_type == TilizeType::UNPACK_A) ? "tilize.cpp" : "unpack_tilizeA_B.cpp";
     } else {
-        tt::log_fatal("Invalid untilize and tilize type value");
+        log_fatal(tt::LogTest, "Invalid untilize and tilize type value");
     }
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
 
     if (test_config.short_init) {
         defines["SHORT_INIT"] = "1";
@@ -293,7 +290,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
                                          const ::unit_tests::compute::GoldenConfig& config)>>) {
                 golden = func(src0_vec, src1_vec, config);
             } else {
-                log_fatal("Invalid golden function type");
+                log_fatal(tt::LogTest, "Invalid golden function type");
             }
         },
         test_config.golden_function);
@@ -465,7 +462,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
 Following tests are for pack untilize
 ***************************************/
 TEST_F(DeviceFixture, TensixComputePackUntilize) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS

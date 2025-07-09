@@ -14,6 +14,8 @@
 
 namespace tt::tt_metal {
 
+class IDevice;
+
 using Strides = std::vector<size_t>;
 
 // TensorLayout describes how a tensor is laid out in memory
@@ -42,10 +44,14 @@ public:
 
     Strides compute_strides(const ttnn::Shape& shape) const;
 
-    std::optional<ShardSpecBuffer> compute_shard_spec_buffer(const ttnn::Shape& shape) const;
+    BufferShardingArgs compute_buffer_sharding_args(const ttnn::Shape& shape) const;
 
     size_t compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const;
     size_t compute_page_size_bytes(const ttnn::Shape& shape) const;
+
+    size_t compute_consumed_memory_bytes_per_bank(const ttnn::Shape& shape, const IDevice& device) const;
+    size_t compute_consumed_memory_bytes_per_bank(
+        const ttnn::Shape& shape, size_t page_alignment, size_t num_banks) const;
 
     // This method is deprecated and should be replaced with get_strides() / get_physical_size()
     // It computes padded shape on the fly from shape and alignment
@@ -68,6 +74,9 @@ public:
     // Returns physical shard shape based on ShardMode, shard shape, and alignment
     Shape2D get_physical_shard_shape() const;
 
+    Shape2D compute_page_shape(const Shape2D& physical_size) const;
+    size_t compute_page_size_bytes(const Shape2D& page_size) const;
+
     TensorLayout with_memory_config(MemoryConfig memory_config) const {
         TensorLayout result = *this;
         result.memory_config_ = std::move(memory_config);
@@ -89,9 +98,6 @@ private:
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
     void initialize_alignment();
-
-    Shape2D compute_page_shape(const Shape2D& physical_size) const;
-    size_t compute_page_size_bytes(const Shape2D& page_size) const;
 
     DataType dtype_ = DataType::BFLOAT16;
     PageConfig page_config_;

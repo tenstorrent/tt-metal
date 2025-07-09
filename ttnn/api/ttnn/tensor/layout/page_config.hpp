@@ -36,7 +36,7 @@ public:
     bool operator!=(const RowMajorPageConfig&) const = default;
 
     static constexpr auto attribute_names = std::forward_as_tuple("tile");
-    const auto attribute_values() const { return std::forward_as_tuple(tile_); }
+    auto attribute_values() const { return std::forward_as_tuple(tile_); }
 
 private:
     // This is currently needed for compatibility reasons.
@@ -64,7 +64,7 @@ public:
     bool operator!=(const TilePageConfig&) const = default;
 
     static constexpr auto attribute_names = std::forward_as_tuple("tile");
-    const auto attribute_values() const { return std::forward_as_tuple(tile_); }
+    auto attribute_values() const { return std::forward_as_tuple(tile_); }
 
 private:
     Tile tile_;
@@ -96,7 +96,7 @@ public:
     bool operator!=(const PageConfig&) const = default;
 
     static constexpr auto attribute_names = std::forward_as_tuple("config");
-    const auto attribute_values() const { return std::forward_as_tuple(config_); }
+    auto attribute_values() const { return std::forward_as_tuple(config_); }
 
 private:
     Config config_;

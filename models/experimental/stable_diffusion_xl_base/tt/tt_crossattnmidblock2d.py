@@ -1,9 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
 
@@ -14,11 +13,10 @@ class TtUNetMidBlock2DCrossAttn(nn.Module):
         device,
         state_dict,
         module_path,
+        model_config,
         query_dim,
         num_attn_heads,
         out_dim,
-        transformer_weights_dtype=ttnn.bfloat16,
-        conv_weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -33,16 +31,16 @@ class TtUNetMidBlock2DCrossAttn(nn.Module):
                     device,
                     state_dict,
                     f"{module_path}.attentions.{i}",
+                    model_config,
                     query_dim,
                     num_attn_heads,
                     out_dim,
-                    weights_dtype=transformer_weights_dtype,
                 )
             )
 
         for i in range(num_layers_resn):
             self.resnets.append(
-                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", conv_weights_dtype=conv_weights_dtype)
+                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config)
             )
 
     def forward(self, input_tensor, input_shape, temb=None, encoder_hidden_states=None, attention_mask=None):

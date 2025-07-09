@@ -119,7 +119,7 @@ def create_custom_preprocessor(device):
 
 
 def get_expected_times(name):
-    base = {"vanilla_unet": (29.40, 0.51)}
+    base = {"vanilla_unet": (40, 0.51)}
     return base[name]
 
 
@@ -228,7 +228,7 @@ def test_vanilla_unet(device, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 68.5],
+        [1, 73],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

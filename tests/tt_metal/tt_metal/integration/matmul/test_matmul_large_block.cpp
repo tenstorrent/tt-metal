@@ -12,13 +12,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
-#include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -31,7 +28,7 @@
 #include <tt-metalium/data_types.hpp>
 #include "dispatch_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -278,7 +275,7 @@ bool matmul_large_block(
         N * in0_block_w * single_tile_size};  // input 1 block bytes
 
     std::vector<uint32_t> writer_rt_args;
-    string writer_kernel;
+    std::string writer_kernel;
     if (output_rm) {
         writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
         writer_rt_args = {dst_dram_buffer->address(), 0, uint(M * N)};
@@ -357,7 +354,7 @@ bool matmul_large_block(
         uint(activations_rm),
         uint(output_rm)};
 
-    string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp";
+    std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp";
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,
@@ -439,7 +436,7 @@ TEST_F(DispatchFixture, TensixMatmulLargeBlock) {
         if (i == 1) {
             continue;
         };
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < devices_.size(); id++) {
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
                 this, devices_.at(id), false, false, MathFidelity(i)));

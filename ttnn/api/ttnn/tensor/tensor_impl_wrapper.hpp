@@ -26,11 +26,11 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
 
 #define AS_LAMBDA(func) []<typename T>(auto&&... args) { return func<T>(std::forward<decltype(args)>(args)...); }
 
-#define WRAP_FUNCTION(func)                                                                                         \
-    template <typename... Args>                                                                                     \
-    auto func##_wrapper(Args&&... args) {                                                                           \
-        return dispatch(                                                                                            \
-            std::get<0>(std::forward_as_tuple(args...)).get_dtype(), AS_LAMBDA(func), std::forward<Args>(args)...); \
+#define WRAP_FUNCTION(func)                                                                                     \
+    template <typename... Args>                                                                                 \
+    auto func##_wrapper(Args&&... args) {                                                                       \
+        return dispatch(                                                                                        \
+            std::get<0>(std::forward_as_tuple(args...)).dtype(), AS_LAMBDA(func), std::forward<Args>(args)...); \
     }
 
 WRAP_FUNCTION(to_host)
@@ -38,7 +38,8 @@ WRAP_FUNCTION(to_host_mesh_tensor)
 WRAP_FUNCTION(extract_shard)
 WRAP_FUNCTION(to_device)
 WRAP_FUNCTION(to_device_mesh_tensor)
-WRAP_FUNCTION(copy_to_mesh_tensor)
+WRAP_FUNCTION(copy_to_device_tensor)
+WRAP_FUNCTION(copy_to_host_tensor)
 WRAP_FUNCTION(to_layout)
 WRAP_FUNCTION(pad)
 WRAP_FUNCTION(unpad)

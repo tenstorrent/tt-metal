@@ -73,6 +73,13 @@ public:
         uint16_t num_sub_cmds,
         uint32_t offset_idx = 0);
 
+    void add_prefetch_paged_to_ringbuffer(const CQPrefetchPagedToRingbufferCmd& paged_to_ringbuffer_info);
+
+    void add_prefetch_set_ringbuffer_offset(uint32_t offset, bool update_wp = false);
+
+    void add_prefetch_relay_ringbuffer(
+        uint32_t num_sub_cmds, const std::vector<CQPrefetchRelayRingbufferSubCmd>& sub_cmds, uint32_t offset_idx = 0);
+
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(
         uint8_t num_mcast_dests,
@@ -108,12 +115,12 @@ public:
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
-    void add_dispatch_set_num_worker_sems(const uint32_t num_worker_sems, DispatcherSelect dispatcher_type);
+    void add_dispatch_set_num_worker_sems(uint32_t num_worker_sems, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_go_signal_noc_data(
         const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
-    void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2);
+    void add_dispatch_set_write_offsets(tt::stl::Span<const uint32_t> write_offsets);
 
     void add_dispatch_terminate(DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER);
 
@@ -136,8 +143,8 @@ public:
         const std::vector<PackedSubCmd>& sub_cmds,
         const std::vector<std::pair<const void*, uint32_t>>& data_collection,
         uint32_t packed_write_max_unicast_sub_cmds,
-        const uint32_t offset_idx = 0,
-        const bool no_stride = false,
+        uint32_t offset_idx = 0,
+        bool no_stride = false,
         uint32_t write_offset_index = 0);
 
     // Tuple in data_collection is:
@@ -152,8 +159,8 @@ public:
         const std::vector<PackedSubCmd>& sub_cmds,
         const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>& data_collection,
         uint32_t packed_write_max_unicast_sub_cmds,
-        const uint32_t offset_idx = 0,
-        const bool no_stride = false,
+        uint32_t offset_idx = 0,
+        bool no_stride = false,
         uint32_t write_offset_index = 0);
 
     // Add write packed large, with no data.
@@ -162,7 +169,7 @@ public:
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
-        const uint32_t offset_idx = 0,
+        uint32_t offset_idx = 0,
         uint32_t write_offset_index = 0);
 
     // Add write packed large, with data inlined.
@@ -174,7 +181,7 @@ public:
         const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
         std::vector<uint8_t*>*
             data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
-        const uint32_t offset_idx = 0,
+        uint32_t offset_idx = 0,
         uint32_t write_offset_index = 0);
 
     template <typename CommandPtr, bool data = false>
@@ -205,7 +212,7 @@ private:
         uint32_t payload_sizeB,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
-        const uint32_t offset_idx,
+        uint32_t offset_idx,
         uint32_t write_offset_index);
 
     void validate_cmd_write(uint32_t data_sizeB) const;

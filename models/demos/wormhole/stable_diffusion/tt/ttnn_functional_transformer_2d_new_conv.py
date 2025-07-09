@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -239,11 +239,9 @@ class transformer_2d_model:
             }
         )
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            transpose_shards=False,
             reshard_if_not_optimal=False,
             override_sharding_config=True,
             core_grid=core_grid,
@@ -251,7 +249,8 @@ class transformer_2d_model:
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
 
         conv_kwargs = {
@@ -277,12 +276,14 @@ class transformer_2d_model:
                 input_layout=hidden_states.get_layout(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.proj_in_conv_bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.proj_in_conv_bias,
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.proj_in_conv_weights = ttnn.to_device(self.proj_in_conv_weights, self.device)
             self.proj_in_conv_bias = ttnn.to_device(self.proj_in_conv_bias, self.device)
@@ -295,6 +296,7 @@ class transformer_2d_model:
             compute_config=compute_config,
             return_output_dim=False,
             return_weights_and_bias=False,
+            dtype=ttnn.bfloat8_b,
         )
 
         inner_dim = hidden_states.shape[-1]
@@ -322,13 +324,16 @@ class transformer_2d_model:
         if is_input_continuous:
             if not use_linear_projection:
                 conv_config = ttnn.Conv2dConfig(
-                    dtype=ttnn.bfloat8_b,
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    transpose_shards=False,
                 )
-
+                compute_config = ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                )
                 conv_kwargs_1 = {
                     "in_channels": self.proj_out_in_channels,
                     "out_channels": self.proj_out_out_channels,
@@ -352,12 +357,14 @@ class transformer_2d_model:
                         input_layout=hidden_states.get_layout(),
                         has_bias=True,
                         **conv_kwargs_1,
+                        input_dtype=ttnn.bfloat8_b,
                     )
                     self.proj_out_conv_bias = ttnn.prepare_conv_bias(
                         bias_tensor=self.proj_out_conv_bias,
                         input_memory_config=hidden_states.memory_config(),
                         input_layout=hidden_states.get_layout(),
                         **conv_kwargs_1,
+                        input_dtype=ttnn.bfloat8_b,
                     )
                     self.proj_out_conv_weights = ttnn.to_device(self.proj_out_conv_weights, self.device)
                     self.proj_out_conv_bias = ttnn.to_device(self.proj_out_conv_bias, self.device)
@@ -371,8 +378,10 @@ class transformer_2d_model:
                     **conv_kwargs_1,
                     weight_tensor=self.proj_out_conv_weights,
                     bias_tensor=self.proj_out_conv_bias,
+                    compute_config=compute_config,
                     return_output_dim=True,
                     return_weights_and_bias=True,
+                    dtype=ttnn.bfloat8_b,
                 )
 
                 if output_bfloat16:

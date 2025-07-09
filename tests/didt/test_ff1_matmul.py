@@ -76,7 +76,6 @@ def test_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    use_program_cache,
     grid_size=(8, 8),
 ):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
@@ -185,7 +184,6 @@ def test_specific_chip_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    use_program_cache,
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
@@ -195,7 +193,6 @@ def test_specific_chip_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        use_program_cache,
         False,
     )
 
@@ -218,7 +215,6 @@ def test_specific_board_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    use_program_cache,
 ):
     test_ff1_matmul(
         t3k_single_board_mesh_device,
@@ -226,7 +222,6 @@ def test_specific_board_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        use_program_cache,
         False,
     )
 
@@ -253,7 +248,7 @@ def test_specific_board_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
 ):
     test_ff1_matmul(
         mesh_device,
@@ -261,7 +256,6 @@ def test_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        use_program_cache,
         False,
         grid_size=grid_size,
     )
@@ -290,7 +284,7 @@ def test_grid_size_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
 ):
     test_ff1_matmul(
         mesh_device,
@@ -298,7 +292,6 @@ def test_blackhole_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        use_program_cache,
         False,
         grid_size=grid_size,
     )

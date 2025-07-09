@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,9 +21,38 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
     return torch.cat(anchor_points), torch.cat(stride_tensor)
 
 
+def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
+    lt, rb = distance.chunk(2, dim)
+    x1y1 = anchor_points - lt
+    x2y2 = anchor_points + rb
+    if xywh:
+        c_xy = (x1y1 + x2y2) / 2
+        wh = x2y2 - x1y1
+        return torch.cat((c_xy, wh), dim)  # xywh bbox
+    return torch.cat((x1y1, x2y2), dim)  # xyxy bbox
+
+
+def autopad(k, p=None, d=1):  # kernel, padding, dilation
+    if d > 1:
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
+    return p
+
+
 class Conv(nn.Module):
     def __init__(
-        self, in_channel, out_channel, kernel=1, stride=1, padding=0, dilation=1, groups=1, enable_identity=False
+        self,
+        in_channel,
+        out_channel,
+        kernel=1,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups=1,
+        enable_identity=False,
+        enable_bn=True,
+        enable_autopad=True,
     ):
         super().__init__()
         self.conv = nn.Conv2d(
@@ -31,12 +60,13 @@ class Conv(nn.Module):
             out_channel,
             kernel,
             stride=stride,
-            padding=padding,
+            padding=autopad(k=kernel, p=None, d=dilation) if enable_autopad else padding,
             dilation=dilation,
             groups=groups,
             bias=False,
         )
-        self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
+        if enable_bn:
+            self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
         if enable_identity:
             self.act = nn.Identity()
         else:
@@ -44,7 +74,8 @@ class Conv(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.bn(x)
+        if self.bn:
+            x = self.bn(x)
         x = self.act(x)
         return x
 
@@ -141,216 +172,156 @@ class SPPELAN(nn.Module):
 
 
 class DFL(nn.Module):
-    def __init__(self):
-        super(DFL, self).__init__()
-        self.conv = nn.Conv2d(16, 1, kernel_size=1, stride=1, bias=False)
+    def __init__(self, c1=16):
+        super().__init__()
+        self.c1 = c1
+        self.conv = nn.Conv2d(c1, 1, 1, bias=False).requires_grad_(False)
+        x = torch.arange(c1, dtype=torch.float)
+        self.conv.weight.data[:] = nn.Parameter(x.view(1, c1, 1, 1))
+        self.c1 = c1
 
     def forward(self, x):
-        return self.conv(x)
+        b, _, a = x.shape  # batch, channels, anchors
+        return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
 
 
 class Detect(nn.Module):
-    def __init__(self, in_channel):
+    dynamic = False
+    export = False
+    format = None
+    end2end = False
+    max_det = 300
+    shape = None
+
+    def __init__(self, nc=80, ch=()):
         super().__init__()
-        self.in_channel = in_channel
+        self.nc = nc
+        self.nl = len(ch)
+        self.reg_max = 16
+        self.no = nc + self.reg_max * 4
+        self.stride = [8, 16, 32]
+        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))
         self.cv2 = nn.ModuleList(
-            [
-                nn.Sequential(
-                    Conv(
-                        in_channel[0],
-                        64,
-                        3,
-                        padding=1,
-                    ),
-                    Conv(
-                        in_channel[1],
-                        64,
-                        3,
-                        padding=1,
-                    ),
-                    nn.Conv2d(
-                        in_channel[2],
-                        64,
-                        1,
-                    ),
-                ),
-                nn.Sequential(
-                    Conv(
-                        in_channel[3],
-                        64,
-                        3,
-                        padding=1,
-                    ),
-                    Conv(
-                        in_channel[4],
-                        64,
-                        3,
-                        padding=1,
-                    ),
-                    nn.Conv2d(
-                        in_channel[5],
-                        64,
-                        1,
-                    ),
-                ),
-                nn.Sequential(
-                    Conv(
-                        in_channel[6],
-                        64,
-                        3,
-                        padding=1,
-                    ),
-                    Conv(
-                        in_channel[7],
-                        64,
-                        3,
-                        padding=1,
-                    ),
-                    nn.Conv2d(
-                        in_channel[8],
-                        64,
-                        1,
-                    ),
-                ),
-            ]
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
         )
-        self.cv3 = nn.ModuleList(
-            [
-                nn.Sequential(
-                    Conv(
-                        in_channel[9],
-                        256,
-                        3,
-                        padding=1,
-                    ),
-                    Conv(
-                        in_channel[10],
-                        256,
-                        3,
-                        padding=1,
-                    ),
-                    nn.Conv2d(
-                        in_channel[11],
-                        80,
-                        1,
-                    ),
-                ),
-                nn.Sequential(
-                    Conv(
-                        in_channel[12],
-                        256,
-                        3,
-                        padding=1,
-                    ),
-                    Conv(
-                        in_channel[13],
-                        256,
-                        3,
-                        padding=1,
-                    ),
-                    nn.Conv2d(
-                        in_channel[14],
-                        80,
-                        1,
-                    ),
-                ),
-                nn.Sequential(
-                    Conv(
-                        in_channel[15],
-                        256,
-                        3,
-                        padding=1,
-                    ),
-                    Conv(
-                        in_channel[16],
-                        256,
-                        3,
-                        padding=1,
-                    ),
-                    nn.Conv2d(
-                        in_channel[17],
-                        80,
-                        1,
-                    ),
-                ),
-            ]
-        )
-        self.dfl = DFL()
+        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
 
-    def forward(self, y1, y2, y3):
-        x1 = self.cv2[0](y1)
-        x2 = self.cv2[1](y2)
-        x3 = self.cv2[2](y3)
-        x4 = self.cv3[0](y1)
-        x5 = self.cv3[1](y2)
-        x6 = self.cv3[2](y3)
+        self.dfl = DFL(16)
 
-        y1 = torch.cat((x1, x4), 1)
-        y2 = torch.cat((x2, x5), 1)
-        y3 = torch.cat((x3, x6), 1)
-        y_all = [y1, y2, y3]
+    def forward(self, x):
+        for i in range(self.nl):
+            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
 
-        y1 = torch.reshape(y1, (y1.shape[0], y1.shape[1], y1.shape[2] * y1.shape[3]))
-        y2 = torch.reshape(y2, (y2.shape[0], y2.shape[1], y2.shape[2] * y2.shape[3]))
-        y3 = torch.reshape(y3, (y3.shape[0], y3.shape[1], y3.shape[2] * y3.shape[3]))
+        y = self._inference(x)
+        return (y, x)
 
-        y = torch.cat((y1, y2, y3), 2)
-        ya, yb = y.split((64, 80), 1)
+    def _inference(self, x):
+        shape = x[0].shape
+        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
 
-        ya = torch.reshape(ya, (ya.shape[0], int(ya.shape[1] / 16), 16, ya.shape[2]))
-        ya = torch.permute(ya, (0, 2, 1, 3))
-        ya = f.softmax(ya, dim=1)
-        c = self.dfl(ya)
-        c1 = torch.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
-        c2 = c1
-        c1 = c1[:, 0:2, :]
-        c2 = c2[:, 2:4, :]
+        self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
 
-        anchor, strides = (y_all.transpose(0, 1) for y_all in make_anchors(y_all, [8, 16, 32], 0.5))
-        anchor.unsqueeze(0)
+        box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
 
-        c1 = anchor - c1
-        c2 = anchor + c2
+        dfl = self.dfl(box)
+        cls = cls.sigmoid()
 
-        z1 = c2 - c1
-        z2 = c1 + c2
-        z2 = z2 / 2
+        dbox = self.decode_bboxes(dfl, self.anchors.unsqueeze(0)) * self.strides
+        return torch.cat((dbox, cls), 1)
 
-        z = torch.concat((z2, z1), 1)
-        z = z * strides
-        yb = torch.sigmoid(yb)
-        out = torch.concat((z, yb), 1)
-        return out
+    def decode_bboxes(self, bboxes, anchors, xywh=True):
+        return dist2bbox(bboxes, anchors, dim=1)
+
+
+class Proto(nn.Module):
+    def __init__(self, c1, c_=256, c2=32):
+        super().__init__()
+        self.cv1 = Conv(c1, c_, kernel=3, enable_autopad=True)
+        self.upsample = nn.ConvTranspose2d(c_, c_, 2, 2, 0, bias=True)
+        self.cv2 = Conv(c_, c_, kernel=3, enable_autopad=True)
+        self.cv3 = Conv(c_, c2, enable_autopad=True)
+
+    def forward(self, x):
+        return self.cv3(self.cv2(self.upsample(self.cv1(x))))
+
+
+class Segment(Detect):
+    def __init__(self, nc=80, nm=32, npr=256, ch=()):
+        super().__init__(nc, ch)
+        self.nm = nm
+        self.npr = npr
+        self.proto = Proto(ch[0], self.npr, self.nm)
+
+        c4 = max(ch[0] // 4, self.nm)
+        self.cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nm, 1)) for x in ch)
+
+    def forward(self, x):
+        p = self.proto(x[0])
+        bs = p.shape[0]
+
+        mc = torch.cat([self.cv4[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)
+        x = Detect.forward(self, x)
+        return (torch.cat([x[0], mc], 1), (x[1], mc, p))
 
 
 class YoloV9(nn.Module):
-    def __init__(self):
+    def __init__(self, enable_segment=True):
         super().__init__()
-        self.model = nn.Sequential(
-            Conv(3, 64, kernel=3, stride=2, padding=1),  # 0
-            Conv(64, 128, kernel=3, stride=2, padding=1),  # 1
-            RepNCSPELAN4(128, 128, 64, 64, 64, 64, 256, 256),  # 2
-            ADown(128, 128),  # 3
-            RepNCSPELAN4(256, 256, 128, 128, 128, 128, 512, 512),  # 4
-            ADown(256, 256),  # 5
-            RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 6
-            ADown(256, 256),  # 7
-            RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 8
-            SPPELAN(512, 256),  # 9
-            nn.Upsample(scale_factor=2.0, mode="nearest"),  # 10
-            Concat(),  # 11
-            RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 12
-            nn.Upsample(scale_factor=2.0, mode="nearest"),  # 13
-            Concat(),  # 14
-            RepNCSPELAN4(1024, 256, 128, 128, 128, 128, 512, 256),  # 15
-            ADown(128, 128),  # 16
-            Concat(),  # 17
-            RepNCSPELAN4(768, 512, 256, 256, 256, 256, 1024, 512),  # 18
-            ADown(256, 256),  # 19
-            Concat(),  # 20
-            RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 21
-            Detect([256, 64, 64, 512, 64, 64, 512, 64, 64, 256, 256, 256, 512, 256, 256, 512, 256, 256]),  # 22
-        )
+        if enable_segment:
+            self.model = nn.Sequential(
+                Conv(3, 64, kernel=3, stride=2, padding=1),  # 0
+                Conv(64, 128, kernel=3, stride=2, padding=1),  # 1
+                RepNCSPELAN4(128, 128, 64, 64, 64, 64, 256, 256),  # 2
+                ADown(128, 128),  # 3
+                RepNCSPELAN4(256, 256, 128, 128, 128, 128, 512, 512),  # 4
+                ADown(256, 256),  # 5
+                RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 6
+                ADown(256, 256),  # 7
+                RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 8
+                SPPELAN(512, 256),  # 9
+                nn.Upsample(scale_factor=2.0, mode="nearest"),  # 10
+                Concat(),  # 11
+                RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 12
+                nn.Upsample(scale_factor=2.0, mode="nearest"),  # 13
+                Concat(),  # 14
+                RepNCSPELAN4(1024, 256, 128, 128, 128, 128, 512, 256),  # 15
+                ADown(128, 128),  # 16
+                Concat(),  # 17
+                RepNCSPELAN4(768, 512, 256, 256, 256, 256, 1024, 512),  # 18
+                ADown(256, 256),  # 19
+                Concat(),  # 20
+                RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 21
+                Segment(80, 32, 256, [256, 512, 512]),  # 22 Enable this to use the model only for instance segmentation
+            )
+        else:
+            self.model = nn.Sequential(
+                Conv(3, 64, kernel=3, stride=2, padding=1),  # 0
+                Conv(64, 128, kernel=3, stride=2, padding=1),  # 1
+                RepNCSPELAN4(128, 128, 64, 64, 64, 64, 256, 256),  # 2
+                ADown(128, 128),  # 3
+                RepNCSPELAN4(256, 256, 128, 128, 128, 128, 512, 512),  # 4
+                ADown(256, 256),  # 5
+                RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 6
+                ADown(256, 256),  # 7
+                RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 8
+                SPPELAN(512, 256),  # 9
+                nn.Upsample(scale_factor=2.0, mode="nearest"),  # 10
+                Concat(),  # 11
+                RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 12
+                nn.Upsample(scale_factor=2.0, mode="nearest"),  # 13
+                Concat(),  # 14
+                RepNCSPELAN4(1024, 256, 128, 128, 128, 128, 512, 256),  # 15
+                ADown(128, 128),  # 16
+                Concat(),  # 17
+                RepNCSPELAN4(768, 512, 256, 256, 256, 256, 1024, 512),  # 18
+                ADown(256, 256),  # 19
+                Concat(),  # 20
+                RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 21
+                Detect(
+                    nc=80,
+                    ch=(256, 512, 512),
+                ),  # 22 Enable this to use the model only for object detection
+            )
 
     def forward(self, x):
         x = self.model[0](x)  # 0
@@ -382,7 +353,8 @@ class YoloV9(nn.Module):
         x = torch.cat((x, x10), 1)  # 20
         x = self.model[21](x)  # 21
         x22 = x
-        x = self.model[22](y1=x16, y2=x19, y3=x22)  # 22
+        x = self.model[22]([x16, x19, x22])  # 22
+
         return x
 
 
@@ -416,4 +388,9 @@ class BaseModel(nn.Module):
 
 class DetectionModel(BaseModel):
     def __init__(self, cfg="yolov9c.yaml", ch=3, nc=None, verbose=True):
+        super().__init__()
+
+
+class SegmentModel(BaseModel):
+    def __init__(self, cfg="yolov9c-seg.pt", ch=3, nc=None, verbose=True):
         super().__init__()

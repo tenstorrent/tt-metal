@@ -21,13 +21,12 @@ void MorehDotOperation::validate(const operation_attributes_t& operation_attribu
     TT_FATAL(is_1d_tensor(input_a), "Invalid input tensor dimensions.");
     TT_FATAL(is_1d_tensor(input_b), "Invalid input tensor dimensions.");
 
-    const auto& a_shape_wo_padding = input_a.get_logical_shape();
-    const auto& b_shape_wo_padding = input_b.get_logical_shape();
+    const auto& a_shape_wo_padding = input_a.logical_shape();
+    const auto& b_shape_wo_padding = input_b.logical_shape();
     TT_FATAL(a_shape_wo_padding[3] == b_shape_wo_padding[3], "Shape without padding must be the same.");
 
     TT_FATAL(
-        input_a.get_dtype() == DataType::BFLOAT16 || input_a.get_dtype() == DataType::BFLOAT8_B,
-        "Unsupported data format");
+        input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(
         input_a.storage_type() == StorageType::DEVICE and input_b.storage_type() == StorageType::DEVICE,
         "Operands to matmul need to be on device!");
@@ -50,10 +49,10 @@ void MorehDotOperation::validate_on_program_cache_hit(
 MorehDotOperation::spec_return_value_t MorehDotOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
     const auto& input = tensor_args.input_a;
-    auto output_shape = input.get_logical_shape();
+    auto output_shape = input.logical_shape();
     output_shape[3] = 1;
     return TensorSpec(
         output_shape, TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.memory_config));

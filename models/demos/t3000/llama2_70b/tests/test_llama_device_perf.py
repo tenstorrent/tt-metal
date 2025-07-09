@@ -63,7 +63,6 @@ def test_run_device_perf_llama(
     n_layers,
     t3k_mesh_device,
     llama_version,
-    use_program_cache,
 ):
     max_batch_size = batch if seq_len == 1 else 16  # max_batch_size is 16 for prefill
     max_context_len = {16: 8192, 32: 4096}[max_batch_size]  # set max context depending on max batch

@@ -126,7 +126,6 @@ def test_update_cache_decode(
     cache_idx_tensor,
     cache_dtype,
     device,
-    use_program_cache,
 ):
     if cache_dtype == ttnn.bfloat4_b and (share_cache or max_seq_len == 2048 or not cache_idx_tensor):
         pytest.skip("just need to sanity-check a select test case for bfp4")
@@ -214,7 +213,6 @@ def test_update_cache_decode_program_cache(
     input_dtype,
     cache_dtype,
     device,
-    use_program_cache,
 ):
     dummy_tensors = []
     for i in range(2):
@@ -334,7 +332,6 @@ def test_tensor_index_update_cache_decode(
     input_dtype,
     cache_dtype,
     device,
-    use_program_cache,
 ):
     run_test_tensor_index_update_cache_decode(
         cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
@@ -358,7 +355,6 @@ def test_tensor_index_update_cache_decode_program_cache(
     input_dtype,
     cache_dtype,
     device,
-    use_program_cache,
 ):
     for _ in range(2):
         run_test_tensor_index_update_cache_decode(
@@ -477,7 +473,7 @@ def run_test_paged_update_cache_decode(
 
 @skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
-@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("head_dim", [128, 512])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1, 8])
@@ -494,7 +490,6 @@ def test_paged_update_cache_decode(
     input_dtype,
     cache_dtype,
     device,
-    use_program_cache,
 ):
     run_test_paged_update_cache_decode(
         cache_idx, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
@@ -520,7 +515,6 @@ def test_paged_update_cache_decode_program_caching(
     input_dtype,
     cache_dtype,
     device,
-    use_program_cache,
 ):
     dummy_tensors = []
     for i in range(2):
@@ -665,7 +659,7 @@ def test_paged_fill_cache(
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_paged_fill_cache_program_cache(
-    block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, device, use_program_cache
+    block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, device
 ):
     cache_dtype = input_dtype
     run_test_paged_fill_cache(

@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include <stdlib.h>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
@@ -37,7 +37,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_memory.h>
+#include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/types/xy_pair.h"
@@ -189,7 +189,7 @@ bool send_over_eth(
     const CoreCoord& sender_core,
     const CoreCoord& receiver_core,
     const size_t& byte_size) {
-    tt::log_debug(
+    log_debug(
         tt::LogTest,
         "Running direct send test with sender chip {} core {}, receiver chip {} core {}, sending {} bytes",
         sender_device->id(),
@@ -452,6 +452,9 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
+            continue;
+        }
         auto [device_id, receiver_core] = device_0->get_connected_ethernet_core(sender_core);
         if (device_1->id() != device_id) {
             continue;
@@ -507,6 +510,9 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_1->id(), sender_core)) {
+            continue;
+        }
         auto [device_id, receiver_core] = device_1->get_connected_ethernet_core(sender_core);
         if (device_0->id() != device_id) {
             continue;
@@ -771,10 +777,16 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
+            continue;
+        }
         const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
         connectivity.insert({{0, sender_core}, receiver_core});
     }
     for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_1->id(), sender_core)) {
+            continue;
+        }
         const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
         connectivity.insert({{1, sender_core}, receiver_core});
     }

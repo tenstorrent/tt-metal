@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, torch_random
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -64,20 +64,21 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 @pytest.mark.parametrize("w", [77])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_prod(device, batch_size, c, h, w, dim, keepdim):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.prod(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=dtype
     )
 
     output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
@@ -206,16 +207,68 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_blackhole("Bad CosineSimilarity on BH. Issue #21881")
 @pytest.mark.parametrize("dim1", [1])
+# This test picks the maximum dim2 that will pick the singlecore implementation.
+# TopK multicore uses 8 cores in blackhole, so we need to add support for bitonic sort with 8 cores
+# and non power of 2 dims as compared to wormhole. Issue #23465.
 @pytest.mark.parametrize(
-    "dim2", [50257]
-)  # Need to resolve issue #20294 to verify 128256 for OXMIQ <- will need topk_local_sort to handle uint32_t
+    "dim2",
+    [8192 - 64, pytest.param(50257, marks=pytest.mark.xfail(condition=is_blackhole(), reason="Issue #23465"))],
+)
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("k", [50, 3200])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
+    torch.manual_seed(2005)
+    shape = [dim1, dim2]
+    torch_dtype = torch.bfloat16
+
+    input = torch.randn(shape, dtype=torch_dtype) * 0.9
+
+    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
+
+    ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=True)
+
+    desired_shape = [dim1, dim2]
+    desired_shape[dim] = k
+
+    assert list(ttnn_topk_values.shape) == desired_shape
+    assert list(ttnn_topk_indices.shape) == desired_shape
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices)
+
+    # Add 2^16 to negative values
+    ttnn_torch_indices = ttnn_torch_indices.to(dtype=torch.int32)
+    ttnn_torch_indices = torch.where(ttnn_torch_indices < 0, ttnn_torch_indices + 65536, ttnn_torch_indices)
+
+    if dtype == ttnn.bfloat8_b:
+        pcc_values = 0.99
+    else:
+        pcc_values = 1.0
+
+    # Convert to int64 only for torch.gather which requires signed indices
+    ttnn_torch_gather_from_indices = torch.gather(
+        input, dim, ttnn_torch_indices.to(torch.int64)  # Convert to signed only for PyTorch API compatibility
+    )
+
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
+    assert (
+        ttnn_torch_cosine > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
+    assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
+
+
+@pytest.mark.parametrize("dim1", [1])
+@pytest.mark.parametrize("dim2", [128256, 151936])
+@pytest.mark.parametrize("dim", [1])
+@pytest.mark.parametrize("k", [50])
+@pytest.mark.parametrize("largest", [True])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
     torch_dtype = torch.bfloat16
@@ -267,9 +320,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim", [3, 4])
 @pytest.mark.parametrize("k", [17, 32, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, pytest.param(ttnn.bfloat8_b, marks=pytest.mark.xfail(reason="Issue #21438"))]
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5]

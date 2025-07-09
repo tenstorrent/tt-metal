@@ -98,8 +98,8 @@ def run_llama3_decode_performance(
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
 
     if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama3.1-70B"
+        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
+        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -124,7 +124,7 @@ def run_llama3_decode_performance(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         )
 
-    # Load TTNN Llama3.1 model
+    # Load TTNN Llama-3.1 model
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -197,7 +197,7 @@ def run_llama3_decode_performance(
     logger.info("Current pos tensor done")
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
 
@@ -260,7 +260,7 @@ def run_llama3_decode_performance(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+    rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
     tt_decode_input = tt_embd(tt_out_tok)
     tt_out = tt_model(
         tt_decode_input,
@@ -307,7 +307,7 @@ def run_llama3_decode_performance(
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     profiler.end(f"capture_trace")
@@ -436,7 +436,7 @@ def run_llama3_decode_performance(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -456,7 +456,6 @@ def test_llama_decode_performance(
     weights,
     layers,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
 ):

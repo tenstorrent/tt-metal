@@ -28,26 +28,26 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
         tt::tt_metal::num_cores_to_corerangeset(num_cores_x * num_cores_y, compute_with_storage_grid_size);
     CoreRangeSet all_cores(set_of_core_ranges);
 
-    uint32_t B = input_a.get_padded_shape()[0];
-    uint32_t b = input_b.get_padded_shape()[0];
+    uint32_t B = input_a.padded_shape()[0];
+    uint32_t b = input_b.padded_shape()[0];
 
-    TT_ASSERT(batch_ids.get_padded_shape()[-1] == b);
+    TT_ASSERT(batch_ids.padded_shape()[-1] == b);
 
     // parallelize across batch
     uint32_t num_units = B;
     uint32_t cb_index = 0;
     uint32_t batch_cb_index = 1;
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
 
-    uint32_t page_size = input_a.get_padded_shape()[-1] * input_a.element_size();
+    uint32_t page_size = input_a.padded_shape()[-1] * input_a.element_size();
     uint32_t rounded_page_size = round_up_to_mul32(page_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(2 * rounded_page_size, {{cb_index, cb_data_format}})
             .set_page_size(cb_index, rounded_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    tt::DataFormat batch_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(batch_ids.get_dtype());
+    tt::DataFormat batch_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(batch_ids.dtype());
     uint32_t batch_page_size = round_up_to_mul32(b * sizeof(uint32_t));
     tt::tt_metal::CircularBufferConfig batch_cb_config =
         tt::tt_metal::CircularBufferConfig(2 * batch_page_size, {{batch_cb_index, cb_data_format}})
@@ -92,7 +92,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
 
     auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, false);
 
-    uint32_t batch_size_in_sticks = input_a.get_padded_shape()[1] * input_a.get_padded_shape()[2];
+    uint32_t batch_size_in_sticks = input_a.padded_shape()[1] * input_a.padded_shape()[2];
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -118,14 +118,14 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto output = output_tensors.at(0);
-        auto input_a = input_tensors.at(1);
-        auto input_b = input_tensors.at(2);
-        auto batch_ids = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
+        const auto& input_a = input_tensors.at(1);
+        const auto& input_b = input_tensors.at(2);
+        const auto& batch_ids = input_tensors.at(0);
         uint32_t core_id = 0;
-        uint32_t B = input_a.get_padded_shape()[0];
-        uint32_t b = input_b.get_padded_shape()[0];
-        uint32_t batch_size_in_sticks = input_a.get_padded_shape()[1] * input_a.get_padded_shape()[2];
+        uint32_t B = input_a.padded_shape()[0];
+        uint32_t b = input_b.padded_shape()[0];
+        uint32_t batch_size_in_sticks = input_a.padded_shape()[1] * input_a.padded_shape()[2];
         for (const auto& core : cores) {
             uint32_t local_b = (core_id < B) ? b : 0;
             uint32_t local_batch_size_in_sticks = (core_id < B) ? batch_size_in_sticks : 0;

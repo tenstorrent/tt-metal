@@ -318,7 +318,7 @@ tt_metal::SetRuntimeArgs(
 ```
 Note that both sender and receiver channels can be added to an EDM builder.
 
-After all channels have been registered with a given EDM, the EDM can be built with the ccl::generate_edm_kernel function. This function should only be called once per EDM per link per chip. Calling this function multiple times for a given Ethernet core is an error.
+After all channels have been registered with a given EDM, the EDM can be built with the ccl::generate_edm_kernel function. This function should only be called once per EDM per link per chip. Calling this function multiple times for a given Risc core in Ethernet core is an error.
 ```c++
 auto edm_sender_kernel =
     ccl::generate_edm_kernel(
@@ -326,6 +326,7 @@ auto edm_sender_kernel =
         device,
         edm_builder,
         eth_sender_core,
+        risc_id,
         edm_noc_id);
 ```
 Note that this call will only create the EDM for one side of the link, at the core location specified to the call. A corresponding EDM must also be built on the other end of the link, for the program associated with that remote chip.

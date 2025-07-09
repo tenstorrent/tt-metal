@@ -287,13 +287,13 @@ Tensor compute_reshape_mapping_host_tensor(
 
 tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const Tensor& input_tensor, const Tensor& output_tensor) {
-    const auto& input_shape = input_tensor.get_logical_shape();
-    const auto& output_shape = output_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto& output_shape = output_tensor.logical_shape();
 
     TT_FATAL(input_shape.volume() == output_shape.volume(), "Requested shapes are not of equal volume");
 
-    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    const auto& face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
     TT_ASSERT(input_shape.size() == 3 && output_shape.size() == 3, "Kernel designed for rank 3 tensors");
 
@@ -309,8 +309,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     TT_ASSERT(input_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const uint32_t num_input_pages = tt::div_up(input_tensor.volume(), tile_shape[0] * tile_shape[1]);
-    const uint32_t num_output_pages = tt::div_up(output_tensor.volume(), tile_shape[0] * tile_shape[1]);
+    const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+    const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
                                 num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
@@ -328,8 +328,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     // PCC fails when this is greater than 1. TODO figure out why.
     constexpr auto reader_cb_len = 1;
 
-    auto mapping_page_size = mapping_tensor.get_logical_shape()[-1];
-    auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.get_dtype());
+    auto mapping_page_size = mapping_tensor.logical_shape()[-1];
+    auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
     auto mapping_page_size_bytes = mapping_page_size * mapping_tensor.element_size();
     constexpr auto mapping_cb_idx = tt::CBIndex::c_0;
 
@@ -340,7 +340,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const auto cb_mapping = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_mapping_config);
 
     // set up CB for input tiles
-    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto input_tile_size_bytes = tt::tile_size(input_cb_data_format);
     constexpr auto input_cb_idx = tt::CBIndex::c_1;
 
@@ -351,7 +351,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     auto cb_input = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_input_config);
 
     // TODO assert output tile size and data format same as input
-    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const auto output_tile_size_bytes = tt::tile_size(output_cb_data_format);
     constexpr auto output_cb_idx = tt::CBIndex::c_2;
 

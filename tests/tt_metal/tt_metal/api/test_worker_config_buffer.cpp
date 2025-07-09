@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <cstddef>
 #include <deque>
 #include <utility>
@@ -156,6 +156,7 @@ TEST(WorkerConfigBuffer, Randomized) {
 
     for (size_t i = 0; i < 1000; i++) {
         std::vector<uint32_t> sizes;
+        sizes.reserve(kSizes.size());
         for (uint32_t size : kSizes) {
             sizes.push_back(rand() % (size + 1));
         }

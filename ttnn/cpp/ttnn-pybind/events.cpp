@@ -4,11 +4,17 @@
 
 #include "events.hpp"
 
-#include <tt-metalium/event.hpp>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <vector>
+
 #include "pybind11/pybind11.h"
 #include <pybind11/stl.h>
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/events.hpp"
+#include <tt-metalium/event.hpp>
 
 using namespace tt::tt_metal;
 

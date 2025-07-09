@@ -43,8 +43,8 @@ TEST_P(CreateTensorWithLayoutTest, Tile) {
     CreateTensorParams params = GetParam();
 
     auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(params.inputs.shape, params.inputs.layout), device_);
-    EXPECT_EQ(tensor.get_padded_shape(), params.expected.padded_shape);
-    EXPECT_EQ(tensor.get_logical_shape(), params.inputs.shape);
+    EXPECT_EQ(tensor.padded_shape(), params.expected.padded_shape);
+    EXPECT_EQ(tensor.logical_shape(), params.inputs.shape);
 }
 
 namespace {

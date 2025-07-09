@@ -17,9 +17,12 @@ option(TT_UNITY_BUILDS "Build with Unity builds" ON)
 option(BUILD_TT_TRAIN "Enables build of tt-train" OFF)
 option(ENABLE_TTNN_SHARED_SUBLIBS "Use shared libraries for ttnn to speed up incremental builds" OFF)
 option(TT_ENABLE_LIGHT_METAL_TRACE "Enable Light Metal Trace" ON)
+option(TT_ENABLE_LTO "Build Releases with Link-Time-Optimization (LTO)" ON)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI)" ON)
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 option(TT_INSTALL "Define installation rules" ON)
+option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
 
 ###########################################################################################
 

@@ -10,33 +10,31 @@
 #include <string_view>
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
-inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {
+inline bool OpenFile(std::string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {
     file_stream.open(file_name, mode);
     if (file_stream.is_open()) {
         return true;
     }
-    tt::log_info(tt::LogTest, "Test Error: Couldn't open file {}.", file_name);
+    log_info(tt::LogTest, "Test Error: Couldn't open file {}.", file_name);
     return false;
 }
 
 // Helper function to dump a file
-inline void DumpFile(string file_name) {
+inline void DumpFile(std::string file_name) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in)) {
-        tt::log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
+        log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
         return;
     }
 
-    tt::log_info(tt::LogTest, "File \'{}\' contains:", file_name);
-    string line;
+    log_info(tt::LogTest, "File \'{}\' contains:", file_name);
+    std::string line;
     while (getline(log_file, line)) {
-        tt::log_info(tt::LogTest, "{}", line);
+        log_info(tt::LogTest, "{}", line);
     }
 }
 
-std::string_view::size_type FloatingGlobEndsAt(const std::string_view haystack,
-                                               const std::string_view needle,
-                                               unsigned globs);
+std::string_view::size_type FloatingGlobEndsAt(std::string_view haystack, std::string_view needle, unsigned globs);
 
 // Check of pattern matches at the beginning of str.
 inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str,
@@ -122,7 +120,7 @@ inline bool StringContainsGlob(const std::string_view haystack, const std::strin
 
 // Check whether the given file contains a list of strings in any order. Doesn't check for
 // strings between lines in the file.
-inline bool FileContainsAllStrings(string file_name, const std::vector<string> &must_contain) {
+inline bool FileContainsAllStrings(std::string file_name, const std::vector<std::string> &must_contain) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
@@ -139,7 +137,7 @@ inline bool FileContainsAllStrings(string file_name, const std::vector<string> &
             return true;
         }
 
-        string line;
+        std::string line;
         if (!getline(log_file, line)) {
             break;
         }
@@ -158,11 +156,11 @@ inline bool FileContainsAllStrings(string file_name, const std::vector<string> &
     }
 
     // Reached EOF with strings yet to find.
-    string missing_strings = "";
+    std::string missing_strings = "";
     for (const auto &s : must_contain_set) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
-    tt::log_info(
+    log_info(
         tt::LogTest,
         "Test Error: Expected file {} to contain the following strings: {}",
         file_name,
@@ -173,7 +171,7 @@ inline bool FileContainsAllStrings(string file_name, const std::vector<string> &
 
 // Check whether the given file contains a list of strings (in order). Doesn't check for strings
 // between lines in a file.
-inline bool FileContainsAllStringsInOrder(string file_name, const std::vector<string> &must_contain) {
+inline bool FileContainsAllStringsInOrder(std::string file_name, const std::vector<std::string> &must_contain) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
@@ -190,7 +188,7 @@ inline bool FileContainsAllStringsInOrder(string file_name, const std::vector<st
             return true;
         }
 
-        string line;
+        std::string line;
         if (!getline(log_file, line)) {
             break;
         }
@@ -204,11 +202,11 @@ inline bool FileContainsAllStringsInOrder(string file_name, const std::vector<st
     }
 
     // Reached EOF with strings yet to find.
-    string missing_strings = "";
+    std::string missing_strings = "";
     for (const auto &s : must_contain_queue) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
-    tt::log_info(
+    log_info(
         tt::LogTest,
         "Test Error: Expected file {} to contain the following strings: {}",
         file_name,
@@ -218,11 +216,11 @@ inline bool FileContainsAllStringsInOrder(string file_name, const std::vector<st
 }
 
 // Checkes whether a given file matches a golden string.
-inline bool FilesMatchesString(string file_name, const string& expected) {
+inline bool FilesMatchesString(std::string file_name, const std::string& expected) {
     // Open the input file.
     std::fstream file;
     if (!OpenFile(file_name, file, std::fstream::in)) {
-        tt::log_info(
+        log_info(
             tt::LogTest,
             "Test Error: file {} could not be opened.",
             file_name
@@ -234,12 +232,12 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
     std::istringstream expect_stream(expected);
 
     // Go through line-by-line
-    string line_a, line_b;
+    std::string line_a, line_b;
     int line_num = 0;
     while (getline(file, line_a) && getline(expect_stream, line_b)) {
         line_num++;
         if (!StringMatchesGlob(line_a, line_b)) {
-            tt::log_info(
+            log_info(
                 tt::LogTest,
                 "Test Error: Line {} of {} did not match expected:\n\t{}\n\t{}",
                 line_num,
@@ -253,7 +251,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
 
     // Make sure that there's no lines left over in either stream
     if (getline(file, line_a)) {
-        tt::log_info(
+        log_info(
             tt::LogTest,
             "Test Error: file {} has more lines than expected (>{}).",
             file_name,
@@ -262,7 +260,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
         return false;
     }
     if (getline(expect_stream, line_b)) {
-        tt::log_info(
+        log_info(
             tt::LogTest,
             "Test Error: file {} has less lines than expected ({}).",
             file_name,

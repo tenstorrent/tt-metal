@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import re
 
 import torch
 from loguru import logger
@@ -409,7 +410,7 @@ def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
     return None, pt_out
 
 
-def get_padded_prefill_len(seq_len):
+def get_padded_prefill_len(seq_len: int) -> int:
     """
     If seq_len is less than 128, pad to 128
     If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048
@@ -502,6 +503,12 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
 
     padded_x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
     return padded_x
+
+
+def get_base_model_name(model_name: str) -> str:
+    # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
+    match = re.search(r"(.*?\d+[bB])-", model_name)
+    return match.group(1) if match else model_name
 
 
 def create_tt_model(

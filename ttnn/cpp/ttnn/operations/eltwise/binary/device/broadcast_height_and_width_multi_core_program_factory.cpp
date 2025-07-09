@@ -76,10 +76,10 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         shard_spec = output.shard_spec().value();
     }
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat src1_cb_data_format =
-        b.has_value() ? tt_metal::datatype_to_dataformat_converter(b->get_dtype()) : tt::DataFormat::Float16_b;
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+        b.has_value() ? tt_metal::datatype_to_dataformat_converter(b->dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
@@ -144,8 +144,8 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     auto src0_is_dram = static_cast<uint32_t>(src0_buffer->buffer_type() == tt_metal::BufferType::DRAM);
     auto dst_is_dram = static_cast<uint32_t>(dst_buffer->buffer_type() == tt_metal::BufferType::DRAM);
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
     if (bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
         bcast_compute_defines["BCAST_SCALAR"] = "1";
@@ -173,7 +173,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
             tt_metal::ReaderDataMovementConfig({src0_is_dram}, reader_defines));
     }
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (output_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }

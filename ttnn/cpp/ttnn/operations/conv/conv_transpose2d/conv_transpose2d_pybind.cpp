@@ -2,17 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn-pybind/decorators.hpp"
-
 #include "conv_transpose2d_pybind.hpp"
+
+#include <array>
+#include <cstdint>
+#include <optional>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
 #include "conv_transpose2d.hpp"
 #include "prepare_conv_transpose2d_weights.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
-namespace py = pybind11;
-
-namespace ttnn {
-namespace operations::conv {
-namespace conv_transpose2d {
+namespace ttnn::operations::conv::conv_transpose2d {
 
 void py_bind_conv_transpose2d(py::module& module) {
     bind_registered_operation(
@@ -60,6 +63,7 @@ void py_bind_conv_transpose2d(py::module& module) {
         :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
         :param tuple[int, int] dilation: spacing between kernel elements.
         :param int groups:  number of blocked connections from input channels to output channels.
+        :param DataType, None dtype:  the data type of the output tensor. Default: None (will use the same dtype as input_tensor).
         :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
         :param bool mirror_kernel: Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.
@@ -90,6 +94,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                std::array<uint32_t, 2> output_padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -114,6 +119,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                     output_padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -137,6 +143,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("output_padding") = std::array<uint32_t, 2>{0, 0},
             py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             py::arg("groups") = 1,
+            py::arg("dtype") = std::nullopt,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
@@ -162,6 +169,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                std::array<uint32_t, 2> output_padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -186,6 +194,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                     output_padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -209,6 +218,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("output_padding") = std::array<uint32_t, 2>{0, 0},
             py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             py::arg("groups") = 1,
+            py::arg("dtype") = std::nullopt,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
@@ -238,6 +248,8 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("has_bias"),
         py::arg("groups"),
         py::arg("device"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
         py::arg("mirror_kernel") = true);
@@ -262,6 +274,8 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("has_bias"),
         py::arg("groups"),
         py::arg("device"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
         py::arg("mirror_kernel") = true);
@@ -284,6 +298,8 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("dilation"),
         py::arg("groups"),
         py::arg("device"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt);
 
@@ -305,10 +321,10 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("dilation"),
         py::arg("groups"),
         py::arg("device"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt);
 }
 
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv_transpose2d
