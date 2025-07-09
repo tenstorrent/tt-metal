@@ -662,6 +662,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto chip_eth_coords = cluster.get_user_chip_ethernet_coordinates();
         std::vector<eth_coord_t> eth_coords;
+        eth_coords.reserve(chip_eth_coords.size());
         for (const auto& [_, eth_coord] : chip_eth_coords) {
             eth_coords.push_back(eth_coord);
         }
