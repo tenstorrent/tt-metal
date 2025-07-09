@@ -37,9 +37,9 @@ void kernel_main() {
     constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(34);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(36);
 
-    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(38);
+    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(39);
 
-    constexpr bool write_page_by_page = get_compile_time_arg_val(39);
+    constexpr bool write_page_by_page = get_compile_time_arg_val(40);
 
 #ifdef AXIS
     constexpr int axis = AXIS;

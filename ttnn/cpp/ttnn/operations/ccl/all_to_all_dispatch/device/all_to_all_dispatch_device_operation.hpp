@@ -19,28 +19,7 @@
 
 namespace ttnn::operations::ccl {
 
-// !TODO these should go in a common library, drop `detail` namespace
 namespace detail {
-
-// pretty sure this one is used in a couple of ops
-std::string stringify_vector(const std::vector<uint32_t>& vec);
-
-std::string stringify_array(const std::array<bool, 4>& arr);
-
-tt::tt_metal::Shape2D get_physical_size(const ttnn::Tensor& tensor);
-
-std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
-    const MeshDeviceView& mesh_view,
-    const MeshCoordinate& mesh_coordinate,
-    tt::tt_fabric::Topology topology,
-    std::optional<uint32_t> axis);
-
-uint32_t select_link(
-    const MeshDeviceView& mesh_view,
-    const MeshCoordinate& src,
-    const MeshCoordinate& dst,
-    uint32_t num_links,
-    tt::tt_fabric::Topology topology);
 
 std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
     const ttnn::Tensor& input_tensor,
