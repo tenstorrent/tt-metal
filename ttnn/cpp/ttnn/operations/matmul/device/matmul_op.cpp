@@ -2234,9 +2234,18 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     uint32_t M =
                         input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
+                    uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
 
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
+                    uint32_t per_core_K = input_tensor_a.shard_spec().value().shape[1] / in0_tile_shape[1];
+
+                    TT_FATAL(
+                        K % per_core_K == 0,
+                        "in DRAM sharded Matmul we don't have support for un-even sharding currently. K: {}, "
+                        "per_core_K: {}.",
+                        K,
+                        per_core_K);
 
                     TT_FATAL(
                         per_core_N % tile_width_ratio == 0,
@@ -2245,8 +2254,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
                     uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
-                    auto end_core = input_tensor_a.shard_spec()->grid.bounding_box().end_coord;
-                    auto grid_size = CoreCoord{end_core.x + 1, end_core.y + 1};
+                    auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
                     CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid_size, true);
                     ShardSpec shard_spec = ShardSpec{
                         all_cores,
