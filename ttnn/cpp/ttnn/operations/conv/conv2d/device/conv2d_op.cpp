@@ -292,11 +292,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             kernel_dims[1],
             sliding_window_config.get_output_shape()[2],
             has_bias),
-        is_singlecore_skip_mcast(
-            parallelization_config,
-            input_tensor_a.memory_config().memory_layout(),
-            input_tensor_a.memory_config().shard_spec().value().grid.num_cores(),
-            output_tensor.memory_config().shard_spec().value().grid.num_cores()));
+        is_singlecore_skip_mcast(parallelization_config, input_tensor_a.memory_config().memory_layout()));
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,
