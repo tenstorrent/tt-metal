@@ -209,7 +209,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
-        bool disabled = str[0] == '0';
+        bool disabled = strcmp(str, "0") == 0;
         this->erisc_iram_enabled = !disabled;
         this->erisc_iram_enabled_env_var = !disabled;
     }
