@@ -1850,10 +1850,6 @@ void ControlPlane::generate_local_intermesh_link_table() {
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (this->has_intermesh_links(chip_id)) {
             for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
-                if (not this->is_intermesh_eth_link_trained(chip_id, eth_core)) {
-                    // Link is untrained/unusuable
-                    continue;
-                }
                 tt_cxy_pair virtual_eth_core(
                     chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 uint64_t local_board_id = 0;
