@@ -170,7 +170,7 @@ void RunTestUnicastRaw(
     bool enable_fabric_tracing = false);
 
 void RunTestUnicastConnAPI(
-    BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
+    BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E, bool use_dram_dst = false);
 
 void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
 

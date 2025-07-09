@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <optional>
+#include <string>
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
@@ -93,7 +94,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const string& activation,
+    const std::string& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c);
 
@@ -191,9 +192,7 @@ ttnn::Tensor fold_tensor(
     T* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor = false);
+    std::array<uint32_t, 4> padding_n4);
 
 struct KernelStrideFoldingResult {
     uint32_t input_height;
