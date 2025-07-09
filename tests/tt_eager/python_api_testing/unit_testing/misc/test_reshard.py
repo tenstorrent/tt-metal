@@ -33,8 +33,7 @@ def run_nd_reshard_test(
         ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(output_shard_shape), grid, output_shard_orientation)
     )
 
-    # torch_tensor = torch.randn(input_shape).bfloat16()
-    torch_tensor = torch.randint(0, 10, input_shape).bfloat16()
+    torch_tensor = torch.randn(input_shape).bfloat16()
     tt_tensor_sharded = ttnn.from_torch(
         torch_tensor, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=input_memory_config
     )
@@ -292,7 +291,6 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             None,
         ),
-        # ROW_MAJOR_LAYOUT test cases
         (
             [1, 1, 32, 64],
             ttnn.TILE_LAYOUT,
@@ -302,7 +300,7 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             None,
         ),
-        # Row-major layout
+        # ROW_MAJOR_LAYOUT test cases
         # Case below won't work since page size changes
         # ([1, 1, 64, 32], ttnn.ROW_MAJOR_LAYOUT, (32, 32), ttnn.ShardOrientation.ROW_MAJOR, (32, 64), ttnn.ShardOrientation.COL_MAJOR, None),
         (
@@ -465,15 +463,15 @@ def test_reshard(
             ttnn.ShardOrientation.COL_MAJOR,
             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
         ),
-        # (
-        #     [32, 64, 96],
-        #     ttnn.ROW_MAJOR_LAYOUT,
-        #     (32, 32, 32),
-        #     ttnn.ShardOrientation.COL_MAJOR,
-        #     (32, 32, 32),
-        #     ttnn.ShardOrientation.ROW_MAJOR,
-        #     ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(3, 3))]),
-        # ),
+        (
+            [32, 64, 96],
+            ttnn.ROW_MAJOR_LAYOUT,
+            (32, 32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+            (32, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(3, 3))]),
+        ),
         # 4D Tensor with 2D CoreRangeSet
         (
             [2, 16, 64, 64],
