@@ -7,8 +7,6 @@ import os
 import statistics
 import json
 from PIL import Image
-import matplotlib.pyplot as plt
-from datetime import datetime
 
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
@@ -137,9 +135,6 @@ def test_accuracy_with_reset(
 
     logger.info(f"Test results saved to {OUT_ROOT}/{NEW_JSON_FILE_NAME}")
 
-    period = max(num_prompts // 25, 2)  # max 25 points, min 2 for FID calculation
-    sdxl_metrix_graph(coco_statistics_path, images, prompts, period)
-
 
 def sdxl_collect_images(start_from, num_prompts):
     assert (
@@ -152,66 +147,6 @@ def sdxl_collect_images(start_from, num_prompts):
         img = Image.open(current_filename_path).convert("RGB")
         collected_images.append(img)
     return collected_images
-
-
-def sdxl_metrix_graph(coco_statistics_path, images, prompts, period):
-    if len(prompts) < 2 or period < 2:
-        logger.warning("Not enough prompts or period is too small for graph generation.")
-        return
-
-    clip = CLIPEncoder()
-    clip_scores = []
-    x_axis = []
-    num_prompts = len(prompts)
-
-    for idx, image in enumerate(images):
-        clip_scores.append(100 * clip.get_clip_score(prompts[idx], image).item())
-    average_clip_score = sum(clip_scores) / len(clip_scores)
-    deviation_clip_score = statistics.stdev(clip_scores)
-
-    average_clip_iterative, fid_iterative = [], []
-    for index in range(period - 1, num_prompts, period):
-        average_clip_iterative.append(sum(clip_scores[: index + 1]) / (index + 1))
-
-        current_fid_score = calculate_fid_score(images[: index + 1], coco_statistics_path)
-        fid_iterative.append(current_fid_score)
-
-        x_axis.append(index + 1)
-
-    if not x_axis or x_axis[-1] != num_prompts:
-        average_clip_iterative.append(average_clip_score)
-
-        current_fid_score = calculate_fid_score(images, coco_statistics_path)
-        fid_iterative.append(current_fid_score)
-        x_axis.append(num_prompts)
-
-    last_fid = fid_iterative[-1]
-    fig, ax1 = plt.subplots()
-
-    ax1.set_xlabel("Number of images generated")
-    ax1.set_ylabel("Average CLIP score", color="tab:blue")
-    ax1.plot(x_axis, average_clip_iterative, label="Avg CLIP", color="tab:blue")
-    ax1.tick_params(axis="y", labelcolor="tab:blue")
-
-    ax2 = ax1.twinx()
-    ax2.set_ylabel("FID", color="tab:red")
-    ax2.plot(x_axis, fid_iterative, label="FID", color="tab:red")
-    ax2.tick_params(axis="y", labelcolor="tab:red")
-
-    title = (
-        f"Avg CLIP: {average_clip_score:.2f}, σ: {deviation_clip_score:.2f}, Last FID: {last_fid:.2f}"
-        if last_fid
-        else f"Avg CLIP: {average_clip_score:.2f}, σ: {deviation_clip_score:.2f}, FID: N/A"
-    )
-
-    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-
-    plt.title(title)
-    fig.tight_layout()
-    plt.grid()
-    os.makedirs(GRAPH_OUT_FOLDER, exist_ok=True)
-    plt.savefig(f"{GRAPH_OUT_FOLDER}/CLIP_FID_{timestamp}.png")
-    plt.close(fig)
 
 
 def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
