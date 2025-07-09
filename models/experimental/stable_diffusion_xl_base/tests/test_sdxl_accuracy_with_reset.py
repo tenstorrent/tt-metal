@@ -1,0 +1,233 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+import pytest
+import subprocess
+import os
+import statistics
+import json
+from PIL import Image
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+from loguru import logger
+from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
+from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts
+from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
+
+OUT_ROOT, NEW_JSON_FILE_NAME = "test_reports", "sdxl_test_results_with_reset.json"
+READ_JSON_FILE_NAME = "sdxl_test_results.json"
+
+IMAGES_PATH, IMAGE_NAME_BASE = "output", "output"
+GRAPH_OUT_FOLDER = "plots"
+
+
+@pytest.mark.parametrize(
+    "vae_on_device",
+    [
+        (True),
+        (False),
+    ],
+    ids=("device_vae", "host_vae"),
+)
+@pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
+@pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
+@pytest.mark.parametrize("reset_bool", [True])
+@pytest.mark.parametrize("reset_period", [200])
+def test_accuracy_with_reset(
+    vae_on_device, captions_path, coco_statistics_path, evaluation_range, reset_bool, reset_period
+):
+    start_from, num_prompts = evaluation_range
+    vae_str = "device_vae" if vae_on_device else "host_vae"
+
+    if reset_bool:
+        assert reset_period >= 2, "reset_period should be at least 2, so FID can be calculated"
+
+    total_denoising_time, total_vae_time = 0.0, 0.0
+    min_inference_time, max_inference_time = float("inf"), float("-inf")
+
+    for current_start in range(start_from, start_from + num_prompts, reset_period):
+        current_num_prompts = min(reset_period, start_from + num_prompts - current_start)
+
+        subprocess.run(
+            [
+                "pytest",
+                "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py",
+                "--start-from",
+                str(current_start),
+                "--num-prompts",
+                str(current_num_prompts),
+                "-k",
+                vae_str,
+            ],
+            check=True,
+        )
+
+        json_file_path = f"{OUT_ROOT}/{READ_JSON_FILE_NAME}"
+        with open(json_file_path, "r") as f:
+            data = json.load(f)
+
+            total_denoising_time += data["benchmarks_summary"][0]["average_denoising_time"] * current_num_prompts
+            total_vae_time += data["benchmarks_summary"][0]["average_vae_time"] * current_num_prompts
+            min_inference_time = min(data["benchmarks_summary"][0]["min_inference_time"], min_inference_time)
+            max_inference_time = max(data["benchmarks_summary"][0]["max_inference_time"], max_inference_time)
+
+        if reset_bool and current_start + reset_period < start_from + num_prompts:
+            subprocess.run(["tt-smi", "-r"], check=True)
+
+    prompts = sdxl_get_prompts(captions_path, start_from, num_prompts)
+    images = sdxl_collect_images(start_from, num_prompts)
+
+    clip = CLIPEncoder()
+
+    clip_scores = []
+
+    for idx, image in enumerate(images):
+        clip_scores.append(100 * clip.get_clip_score(prompts[idx], image).item())
+    check_clip_scores(start_from, num_prompts, prompts, clip_scores)
+
+    average_clip_score = sum(clip_scores) / len(clip_scores)
+
+    deviation_clip_score = "N/A"
+    fid_score = "N/A"
+
+    if num_prompts >= 2:
+        deviation_clip_score = statistics.stdev(clip_scores)
+        fid_score = calculate_fid_score(images, coco_statistics_path)
+    else:
+        logger.info("FID score is not calculated for less than 2 prompts.")
+
+    print(f"FID score: {fid_score}")
+    print(f"Average CLIP Score: {average_clip_score}")
+    print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
+
+    average_denoising_time = total_denoising_time / num_prompts
+    average_vae_time = total_vae_time / num_prompts
+
+    data = {
+        "model": "sdxl",  # For compatibility with current processes
+        "metadata": {
+            "device": "N150",
+            "device_vae": vae_on_device,
+            "start_from": start_from,
+            "num_prompts": num_prompts,
+            "model_name": "sdxl",
+        },
+        "benchmarks_summary": [
+            {
+                "device": "N150",
+                "model": "sdxl",
+                "average_denoising_time": average_denoising_time,
+                "average_vae_time": average_vae_time,
+                "average_inference_time": average_denoising_time + average_vae_time,
+                "min_inference_time": min_inference_time,
+                "max_inference_time": max_inference_time,
+                "average_clip": average_clip_score,
+                "deviation_clip": deviation_clip_score,
+                "fid_score": fid_score,
+            }
+        ],
+    }
+
+    os.makedirs(OUT_ROOT, exist_ok=True)
+
+    with open(f"{OUT_ROOT}/{NEW_JSON_FILE_NAME}", "w") as f:
+        json.dump(data, f, indent=4)
+
+    logger.info(f"Test results saved to {OUT_ROOT}/{NEW_JSON_FILE_NAME}")
+
+    period = max(num_prompts // 25, 2)  # max 25 points, min 2 for FID calculation
+    sdxl_metrix_graph(coco_statistics_path, images, prompts, period)
+
+
+def sdxl_collect_images(start_from, num_prompts):
+    assert (
+        0 <= start_from < 5000 and start_from + num_prompts <= 5000
+    ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
+
+    collected_images = []
+    for index in range(start_from, start_from + num_prompts):
+        current_filename_path = f"{IMAGES_PATH}/{IMAGE_NAME_BASE}{index+1}.png"
+        img = Image.open(current_filename_path).convert("RGB")
+        collected_images.append(img)
+    return collected_images
+
+
+def sdxl_metrix_graph(coco_statistics_path, images, prompts, period):
+    if len(prompts) < 2 or period < 2:
+        logger.warning("Not enough prompts or period is too small for graph generation.")
+        return
+
+    clip = CLIPEncoder()
+    clip_scores = []
+    x_axis = []
+    num_prompts = len(prompts)
+
+    for idx, image in enumerate(images):
+        clip_scores.append(100 * clip.get_clip_score(prompts[idx], image).item())
+    average_clip_score = sum(clip_scores) / len(clip_scores)
+    deviation_clip_score = statistics.stdev(clip_scores)
+
+    average_clip_iterative, fid_iterative = [], []
+    for index in range(period - 1, num_prompts, period):
+        average_clip_iterative.append(sum(clip_scores[: index + 1]) / (index + 1))
+
+        current_fid_score = calculate_fid_score(images[: index + 1], coco_statistics_path)
+        fid_iterative.append(current_fid_score)
+
+        x_axis.append(index + 1)
+
+    if not x_axis or x_axis[-1] != num_prompts:
+        average_clip_iterative.append(average_clip_score)
+
+        current_fid_score = calculate_fid_score(images, coco_statistics_path)
+        fid_iterative.append(current_fid_score)
+        x_axis.append(num_prompts)
+
+    last_fid = fid_iterative[-1]
+    fig, ax1 = plt.subplots()
+
+    ax1.set_xlabel("Number of images generated")
+    ax1.set_ylabel("Average CLIP score", color="tab:blue")
+    ax1.plot(x_axis, average_clip_iterative, label="Avg CLIP", color="tab:blue")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("FID", color="tab:red")
+    ax2.plot(x_axis, fid_iterative, label="FID", color="tab:red")
+    ax2.tick_params(axis="y", labelcolor="tab:red")
+
+    title = (
+        f"Avg CLIP: {average_clip_score:.2f}, σ: {deviation_clip_score:.2f}, Last FID: {last_fid:.2f}"
+        if last_fid
+        else f"Avg CLIP: {average_clip_score:.2f}, σ: {deviation_clip_score:.2f}, FID: N/A"
+    )
+
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+
+    plt.title(title)
+    fig.tight_layout()
+    plt.grid()
+    os.makedirs(GRAPH_OUT_FOLDER, exist_ok=True)
+    plt.savefig(f"{GRAPH_OUT_FOLDER}/CLIP_FID_{timestamp}.png")
+    plt.close(fig)
+
+
+def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
+    assert len(clip_scores) == num_prompts == len(prompts), f"Expected {num_prompts} CLIP scores and prompts."
+    low_counter = 0
+    for idx, score in enumerate(clip_scores):
+        if clip_scores[idx] < 27:  # Threshold for low CLIP score
+            if (
+                clip_scores[idx] < 20
+            ):  # Threshold for very low CLIP score, this indicates a fragmented image or noise or prompt mismatch
+                logger.error(
+                    f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
+                )
+            else:
+                logger.warning(
+                    f"Low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
+                )
+            low_counter += 1
+    if low_counter == 0:
+        logger.info(f"All {num_prompts} CLIP scores are above the threshold.")
