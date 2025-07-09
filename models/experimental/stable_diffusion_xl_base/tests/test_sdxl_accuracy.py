@@ -17,6 +17,7 @@ from models.utility_functions import profiler
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
+OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -113,13 +114,12 @@ def test_accuracy_sdxl(
         ],
     }
 
-    out_root, file_name = "test_reports", "sdxl_test_results.json"
-    os.makedirs(out_root, exist_ok=True)
+    os.makedirs(OUT_ROOT, exist_ok=True)
 
-    with open(f"{out_root}/{file_name}", "w") as f:
+    with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:
         json.dump(data, f, indent=4)
 
-    logger.info(f"Test results saved to {out_root}/{file_name}")
+    logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
 
 
 def sdxl_get_prompts(

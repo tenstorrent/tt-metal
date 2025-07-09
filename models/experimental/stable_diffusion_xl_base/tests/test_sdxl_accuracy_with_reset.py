@@ -14,9 +14,10 @@ from loguru import logger
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
+from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import OUT_ROOT, RESULTS_FILE_NAME
 
-OUT_ROOT, NEW_JSON_FILE_NAME = "test_reports", "sdxl_test_results_with_reset.json"
-READ_JSON_FILE_NAME = "sdxl_test_results.json"
+NEW_JSON_FILE_NAME = "sdxl_test_results_with_reset.json"
+READ_JSON_FILE_NAME = RESULTS_FILE_NAME
 
 IMAGES_PATH, IMAGE_NAME_BASE = "output", "output"
 GRAPH_OUT_FOLDER = "plots"
