@@ -53,6 +53,12 @@ target_sources(
         all_broadcast_async/all_broadcast_async.cpp
         all_broadcast_async/device/all_broadcast_async_op.cpp
         all_broadcast_async/device/all_broadcast_async_program.cpp
+        send_async/send_async.cpp
+        send_async/device/send_async_op.cpp
+        send_async/device/send_async_program.cpp
+        recv_async/recv_async.cpp
+        recv_async/device/recv_async_op.cpp
+        recv_async/device/recv_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
