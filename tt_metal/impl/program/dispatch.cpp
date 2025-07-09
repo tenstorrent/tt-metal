@@ -257,8 +257,9 @@ uint32_t finalize_cbs(
     uint32_t min_remote_start_index = NUM_CIRCULAR_BUFFERS;
 
     for (auto& kg : kernel_groups) {
-        max_local_end_index =
-            std::max(max_local_end_index, (uint32_t)kg->launch_msg.kernel_config.max_local_cb_end_index);
+        uint32_t local_cb_mask = kg->launch_msg.kernel_config.local_cb_mask;
+        uint32_t current_local_end_index = local_cb_mask == 0 ? 0 : 32 - __builtin_clz(local_cb_mask);
+        max_local_end_index = std::max(max_local_end_index, current_local_end_index);
         min_remote_start_index =
             std::min(min_remote_start_index, (uint32_t)kg->launch_msg.kernel_config.min_remote_cb_start_index);
     }
