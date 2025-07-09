@@ -1,4 +1,6 @@
 #include "ttnn/distributed/fabric_socket.hpp"
+#include "ttnn/operations/experimental/ccl/send_async/send_async.hpp"
+#include "ttnn/operations/experimental/ccl/recv_async/recv_async.hpp"
 #include <stdexcept>
 
 namespace ttnn::distributed {
@@ -23,7 +25,7 @@ FabricSocket::FabricSocket(const tt::tt_metal::distributed::MeshSocket& mesh_soc
 
 void FabricSocket::send(const ttnn::Tensor& tensor) {
     assert(check_if_send_socket(mesh_socket_));
-    throw std::runtime_error("FabricSocket::send is not implemented yet. Please use MPISocket for now.");
+    ttnn::experimental::send_async(tensor, mesh_socket_);
 }
 
 void FabricSocket::recv(ttnn::Tensor& tensor) {
