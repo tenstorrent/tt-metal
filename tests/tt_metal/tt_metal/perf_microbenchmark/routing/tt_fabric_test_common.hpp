@@ -70,8 +70,62 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
         topology_to_fabric_config_map;
 
 public:
-    void init() {
-        // NOTE: We defer all control plane access until open_devices_internal
+    void init(const PhysicalMeshConfig* physical_mesh_config = nullptr) {
+        auto local_mesh_id = -1;
+        if (physical_mesh_config) {
+            // hacky workaround for now, will change as more multi-host infra is brought up
+            const char* mesh_id_str = std::getenv("TT_MESH_ID");
+            const char* host_rank_str = std::getenv("TT_HOST_RANK");
+            local_mesh_id = std::stoi(std::string(mesh_id_str));
+            auto local_host_rank = std::string(host_rank_str);
+
+            const auto& eth_coord_mapping = physical_mesh_config->eth_coord_mapping;
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+            for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
+                if (mesh_id == local_mesh_id) {
+                    for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
+                        const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
+                        chip_to_eth_coord_mapping.insert(
+                            {FabricNodeId(MeshId{mesh_id}, chip_id),
+                             cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                    }
+                }
+            }
+            tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+                physical_mesh_config->mesh_descriptor_path, chip_to_eth_coord_mapping);
+        }
+        control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
+        TT_FATAL(
+            user_meshes.size() == 1,
+            "Only expected a single user mesh for a single host, but got: {}",
+            user_meshes.size());
+        TT_FATAL(
+            *(user_meshes[0]) == local_mesh_id,
+            "Local mesh id {} does not not match user mesh id {}",
+            *(user_meshes[0]),
+            local_mesh_id);
+        available_mesh_ids_.insert(user_meshes[0]);
+        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
+        const auto coordinates = MeshCoordinateRange(mesh_shape_);
+        for (const auto& coord : coordinates) {
+            available_device_coordinates_.push_back(coord);
+        }
+
+        for (auto i = 0; i < available_device_coordinates_.size(); i++) {
+            local_available_node_ids_.emplace_back(FabricNodeId(MeshId{local_mesh_id}, i));
+        }
+        if (physical_mesh_config) {  // TOOD: temporary workaround
+            for (auto i = 0; i < physical_mesh_config->eth_coord_mapping.size(); i++) {
+                auto j = 0;
+                const auto mesh_shape = control_plane_ptr_->get_physical_mesh_shape(MeshId{i});
+                const auto coordinates = MeshCoordinateRange(mesh_shape);
+                for (const auto& coord : coordinates) {
+                    global_available_node_ids_.emplace_back(FabricNodeId(MeshId{i}, j++));
+                }
+            }
+        }
         // to ensure fabric config is set first, which affects mesh graph descriptor selection
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
     }
@@ -170,8 +224,8 @@ public:
     }
 
     uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, const CoreCoord logical_core) const override {
-        const auto& device_coord = get_device_coord(node_id);
-        return get_worker_noc_encoding(device_coord, logical_core);
+        const auto virtual_core = mesh_device_->worker_core_from_logical_core(logical_core);
+        return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
     }
 
     CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
@@ -180,7 +234,9 @@ public:
         return (*node_id.mesh_id << 12) | (node_id.chip_id << 8) | (logical_core.x << 4) | (logical_core.y);
     }
 
-    std::vector<FabricNodeId> get_all_node_ids() const override { return available_node_ids_; }
+    std::vector<FabricNodeId> get_all_node_ids() const override { return local_available_node_ids_; }
+
+    std::vector<FabricNodeId> get_global_node_ids() const override { return global_available_node_ids_; }
 
     uint32_t get_l1_unreserved_base() const override {
         return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
@@ -437,7 +493,7 @@ public:
     }
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_full_device_random_pairs(std::mt19937& gen) const override {
-        auto unpaired = get_all_node_ids();
+        auto unpaired = get_global_node_ids();
 
         if (unpaired.size() % 2 != 0) {
             log_warning(
@@ -487,7 +543,7 @@ public:
     }
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_all_unicast_pairs() const override {
-        const auto device_ids = get_all_node_ids();
+        const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
         pairs.reserve(device_ids.size() * (device_ids.size() - 1));
         for (const auto& src_node : device_ids) {
@@ -809,7 +865,7 @@ public:
     }
 
     FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const override {
-        auto all_devices = this->get_all_node_ids();
+        auto all_devices = this->get_global_node_ids();
         std::vector<FabricNodeId> possible_dsts;
         possible_dsts.reserve(all_devices.size());
         for (const auto& dev : all_devices) {
@@ -1314,7 +1370,8 @@ private:
     std::set<MeshId> available_mesh_ids_;
     tt::tt_fabric::FabricConfig current_fabric_config_;
     std::vector<MeshCoordinate> available_device_coordinates_;
-    std::vector<FabricNodeId> available_node_ids_;
+    std::vector<FabricNodeId> local_available_node_ids_;
+    std::vector<FabricNodeId> global_available_node_ids_;
     std::shared_ptr<MeshDevice> mesh_device_;
     std::unordered_map<MeshCoordinate, FabricNodeId> mesh_coordinate_to_node_id_;
     std::unordered_map<FabricNodeId, MeshCoordinate> node_id_to_mesh_coordinate_;

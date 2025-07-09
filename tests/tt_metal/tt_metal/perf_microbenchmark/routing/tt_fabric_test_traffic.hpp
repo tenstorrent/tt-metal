@@ -221,7 +221,7 @@ struct TestTrafficSenderConfig {
     TrafficParameters parameters;
     FabricNodeId src_node_id;
     std::vector<FabricNodeId> dst_node_ids;
-    std::unordered_map<RoutingDirection, uint32_t> hops;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     CoreCoord dst_logical_core;
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
@@ -310,7 +310,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         }
     } else {  // 1D logic
         uint32_t num_hops_1d = 0;
-        for (const auto& [_, hops_in_dir] : this->hops) {
+        for (const auto& [_, hops_in_dir] : *(this->hops)) {
             if (hops_in_dir > 0) {
                 num_hops_1d = hops_in_dir;
                 break;

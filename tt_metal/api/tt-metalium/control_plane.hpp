@@ -174,6 +174,9 @@ public:
     // by SPI-ROM firmware)
     uint64_t get_asic_id(chip_id_t chip_id) const;
 
+    // Check if the provided mesh is local to this host
+    bool is_local_mesh(MeshId mesh_id) const;
+
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
@@ -259,9 +262,6 @@ private:
     // TODO: remove once UMD can provide all intermesh links
     // Check if intermesh links are available by reading SPI ROM config from first chip
     bool is_intermesh_enabled() const;
-
-    // Check if the provided mesh is local to this host
-    bool is_local_mesh(MeshId mesh_id) const;
 
     void assign_direction_to_fabric_eth_core(
         const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);

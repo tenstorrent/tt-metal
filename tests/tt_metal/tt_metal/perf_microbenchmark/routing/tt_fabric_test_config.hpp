@@ -25,6 +25,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
@@ -172,6 +173,7 @@ inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id,
 struct ParsedYamlConfig {
     std::vector<ParsedTestConfig> test_configs;
     std::optional<AllocatorPolicies> allocation_policies;
+    std::optional<PhysicalMeshConfig> physical_mesh_config;
 };
 
 template <typename TrafficPatternType>
@@ -238,6 +240,7 @@ private:
     ParsedTestConfig parse_test_config(const YAML::Node& test_yaml);
     AllocatorPolicies parse_allocator_policies(const YAML::Node& policies_yaml);
     CoreAllocationConfig parse_core_allocation_config(const YAML::Node& config_yaml, CoreAllocationConfig base_config);
+    PhysicalMeshConfig parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml);
 
     // Parsing helpers
     CoreCoord parse_core_coord(const YAML::Node& node);
@@ -247,6 +250,8 @@ private:
     T parse_scalar(const YAML::Node& yaml_node);
     template <typename T>
     std::vector<T> parse_scalar_sequence(const YAML::Node& yaml_node);
+    template <typename T1>
+    std::vector<std::vector<T1>> parse_2d_array(const YAML::Node& yaml_node);
     template <typename T1, typename T2>
     std::pair<T1, T2> parse_pair(const YAML::Node& yaml_sequence);
     template <typename T1, typename T2>
@@ -291,6 +296,11 @@ inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_con
     YAML::Node yaml = YAML::LoadFile(yaml_config_path);
 
     ParsedYamlConfig result;
+
+    if (yaml["physical_mesh"]) {
+        result.physical_mesh_config = parse_physical_mesh_config(yaml["physical_mesh"]);
+    }
+
     if (yaml["allocation_policies"]) {
         result.allocation_policies = parse_allocator_policies(yaml["allocation_policies"]);
     }
@@ -530,6 +540,22 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
     }
 
     return fabric_setup;
+}
+
+inline PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml) {
+    TT_FATAL(physical_mesh_yaml.IsMap(), "Expected physical mesh config to be a map");
+    TT_FATAL(
+        physical_mesh_yaml["mesh_descriptor_path"].IsDefined() == physical_mesh_yaml["eth_coord_mapping"].IsDefined(),
+        "Physical mesh config must contain both 'mesh_descriptor_path' and 'eth_coord_mapping', or neither");
+    PhysicalMeshConfig physical_mesh_config;
+    if (physical_mesh_yaml["mesh_descriptor_path"]) {
+        physical_mesh_config.mesh_descriptor_path =
+            parse_scalar<std::string>(physical_mesh_yaml["mesh_descriptor_path"]);
+    }
+    if (physical_mesh_yaml["eth_coord_mapping"]) {
+        physical_mesh_config.eth_coord_mapping = parse_2d_array<eth_coord_t>(physical_mesh_yaml["eth_coord_mapping"]);
+    }
+    return physical_mesh_config;
 }
 
 // CmdlineParser methods
@@ -779,6 +805,35 @@ inline std::vector<std::pair<T1, T2>> YamlConfigParser::parse_pair_sequence(cons
     }
 
     return pair_sequence;
+}
+
+template <typename T1>
+inline std::vector<std::vector<T1>> YamlConfigParser::parse_2d_array(const YAML::Node& yaml_node) {
+    std::vector<std::vector<T1>> array;
+    TT_FATAL(yaml_node.IsSequence(), "Expected a sequence for 2D array");
+
+    for (const auto& row : yaml_node) {
+        TT_FATAL(row.IsSequence(), "Expected each row to be a sequence");
+        std::vector<T1> row_vector;
+        row_vector.reserve(row.size());
+        for (const auto& entry : row) {
+            // only deals with ethernet core case
+            if constexpr (std::is_same_v<T1, eth_coord_t>) {
+                TT_FATAL(entry.size() == 5, "Expected ethernet core coordinates to be a sequence of 5 elements");
+                row_vector.push_back(eth_coord_t{
+                    parse_scalar<uint32_t>(entry[0]),
+                    parse_scalar<uint32_t>(entry[1]),
+                    parse_scalar<uint32_t>(entry[2]),
+                    parse_scalar<uint32_t>(entry[3]),
+                    parse_scalar<uint32_t>(entry[4])});
+            } else {
+                TT_THROW("Unsupported entry type in 2D array for type: {}", entry.Type());
+            }
+        }
+        array.push_back(std::move(row_vector));
+    }
+
+    return array;
 }
 
 template <typename T>
@@ -1631,6 +1686,19 @@ private:
 
 class YamlTestConfigSerializer {
 public:
+    static void dump(const PhysicalMeshConfig& physical_mesh_config, std::ofstream& fout) {
+        YAML::Emitter out;
+        out << YAML::BeginMap;
+
+        out << YAML::Key << "physical_mesh";
+        out << YAML::Value;
+        to_yaml(out, physical_mesh_config);
+
+        out << YAML::EndMap;
+
+        fout << out.c_str() << std::endl;
+    }
+
     static void dump(const AllocatorPolicies& policies, std::ofstream& fout) {
         YAML::Emitter out;
         out << YAML::BeginMap;
@@ -1845,6 +1913,29 @@ private:
         out << YAML::Key << "pool_refill_size";
         out << YAML::Value << config.pool_refill_size;
         out << YAML::EndMap;
+    }
+
+    static void to_yaml(YAML::Emitter& out, const PhysicalMeshConfig& config) {
+        out << YAML::BeginMap;
+        out << YAML::Key << "mesh_descriptor_path";
+        out << YAML::Value << config.mesh_descriptor_path;
+        out << YAML::Key << "eth_coord_mapping";
+        out << YAML::Value;
+        to_yaml(out, config.eth_coord_mapping);
+        out << YAML::EndMap;
+    }
+
+    static void to_yaml(YAML::Emitter& out, const std::vector<std::vector<eth_coord_t>>& mapping) {
+        out << YAML::BeginSeq;
+        for (const auto& row : mapping) {
+            out << YAML::BeginSeq;
+            for (const auto& coord : row) {
+                out << YAML::Flow << YAML::BeginSeq << coord.cluster_id << coord.x << coord.y << coord.rack
+                    << coord.shelf << YAML::EndSeq;
+            }
+            out << YAML::EndSeq;
+        }
+        out << YAML::EndSeq;
     }
 
     static void to_yaml(YAML::Emitter& out, const AllocatorPolicies& policies) {
