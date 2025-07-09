@@ -66,7 +66,12 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
         topology_to_fabric_config_map;
 
 public:
-    void init() {
+    void init(const PhysicalMeshConfig* physical_mesh_config = nullptr) {
+        // TODO
+        // if (physical_mesh_config) {
+        //     tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(physical_mesh_config->mesh_descriptor_path,
+        //     physical_mesh_config->logical_to_physical_mapping);
+        // }
         control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
         TT_FATAL(
