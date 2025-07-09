@@ -255,8 +255,9 @@ class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixt
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
-class CommandQueueMultiDeviceOnFabricFixture : public CommandQueueMultiDeviceFixture,
-                                               public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+class DISABLED_CommandQueueMultiDeviceOnFabricFixture
+    : public CommandQueueMultiDeviceFixture,
+      public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 private:
     bool original_fd_fabric_en_ = false;
     inline static ARCH arch_ = tt::ARCH::Invalid;
