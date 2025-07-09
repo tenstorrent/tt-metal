@@ -358,6 +358,10 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
         uint32_t go_addr =
             hal_->get_dev_addr(get_programmable_core_type(virtual_eth_core, device_id), HalL1MemAddrType::GO_MSG);
         cluster_->write_core(&go_msg, sizeof(go_msg_t), tt_cxy_pair(device_id, virtual_eth_core), go_addr);
+
+        std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
+        std::vector<uint32_t> data = {0};
+        cluster_->write_core(&data, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_eth_core), launch_erisc_addr);
     };
 
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
@@ -548,7 +552,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         }
     } else {
         for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-            // Only reset subordinate cores
+            // Only send reset to subordinate cores. For primary cores send signal to return to base fw
             TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
             reset_val =
                 reset_val & static_cast<TensixSoftResetOptions>(
@@ -557,6 +561,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(device_id, virtual_core), reset_val);
+            erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
         }
     }
 
