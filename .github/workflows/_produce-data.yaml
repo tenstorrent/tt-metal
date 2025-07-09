@@ -116,13 +116,6 @@ jobs:
           sleep 60
           echo "[Info] Workflow run attempt"
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
-      - name: Fetch workflow jobs data
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --fetch-jobs-only
-          find generated/cicd/ -type f
       - name: Collect workflow artifact and job logs
         shell: bash
         env:

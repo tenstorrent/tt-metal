@@ -34,13 +34,6 @@ get_jobs_with_pagination_fallback() {
 
     local jobs_json_file="workflow_jobs_${workflow_run_id}_${attempt_number}.json"
 
-    # Check if the jobs JSON file already exists
-    if [[ -f "$jobs_json_file" ]]; then
-        echo "[info] Using existing $jobs_json_file"
-        cat "$jobs_json_file"
-        return 0
-    fi
-
     # Try the original --paginate approach first, fall back to manual pagination if it fails
     set +e  # Disable exit on error
     paginated_output=$(gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate 2>&1)
@@ -113,9 +106,6 @@ download_logs_for_all_jobs() {
 }
 
 main() {
-    # Default: only fetch jobs if flag is set
-    fetch_jobs_only=false
-
     # Parse the arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -130,9 +120,6 @@ main() {
             --repo)
                 repo=$2
                 shift
-                ;;
-            --fetch-jobs-only)
-                fetch_jobs_only=true
                 ;;
             *)
                 echo "Unknown option: $1"
@@ -153,11 +140,6 @@ main() {
     if [[ -z "$attempt_number" ]]; then
         echo "attempt_number is empty"
         exit 1
-    fi
-
-    if $fetch_jobs_only; then
-        get_jobs_with_pagination_fallback "$repo" "$workflow_run_id" "$attempt_number" > /dev/null
-        exit 0
     fi
 
     set_up_dirs "$workflow_run_id"
