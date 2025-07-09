@@ -12,7 +12,7 @@ from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/24768")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
