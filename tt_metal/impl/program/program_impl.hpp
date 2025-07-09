@@ -141,43 +141,23 @@ private:
 public:
     ProgramCompileGroup() = default;
 
-    ~ProgramCompileGroup() { program_device_map_.clear(); }
+    ~ProgramCompileGroup();
 
     // Add a program to the compile group. Throws if the program already exists in the group.
-    void add_program(IDevice* device, std::unique_ptr<Program> program) {
-        TT_FATAL(!program_device_map_.contains(device), "Program already exists in the compile group.");
-        program_device_map_[device] = std::move(program);
-    }
+    void add_program(IDevice* device, std::unique_ptr<Program> program);
 
     // Compiles all programs in the group
-    void compile_all(bool force_slow_dispatch) {
-        std::vector<std::shared_future<void>> events;
-        for (auto& [device, program] : program_device_map_) {
-            auto pgm = program.get();
-            launch_build_step(
-                [device, pgm, force_slow_dispatch]() { pgm->compile(device, force_slow_dispatch); }, events);
-        }
-        sync_build_steps(events);
-    }
+    void compile_all(bool force_slow_dispatch);
 
     // Write runtime args for all programs in the group
-    void write_runtime_args(bool force_slow_dispatch) {
-        for (auto& [device, program] : program_device_map_) {
-            detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
-        }
-    }
+    void write_runtime_args(bool force_slow_dispatch);
 
     // Remove and return a program from the compile group
-    std::unique_ptr<Program> remove_program(IDevice* device) {
-        TT_FATAL(program_device_map_.contains(device), "Program not found in the compile group.");
-        std::unique_ptr<Program> program = std::move(program_device_map_[device]);
-        program_device_map_.erase(device);
-        return program;
-    }
+    std::unique_ptr<Program> remove_program(IDevice* device);
 
-    void clear() { program_device_map_.clear(); }
+    void clear();
 
-    bool contains(IDevice* device) const { return program_device_map_.contains(device); }
+    bool contains(IDevice* device);
 };
 
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
