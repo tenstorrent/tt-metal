@@ -119,7 +119,6 @@ class UnarySFPUGolden:
             MathOperation.Neg: self._neg,
         }
         self.data_format = None
-        self.shared_exponent_zeroed = False
 
     def __call__(self, operation, operand1, data_format):
         self.data_format = data_format
@@ -127,7 +126,7 @@ class UnarySFPUGolden:
             raise ValueError(f"Unsupported operation: {operation}")
         tensor = to_tensor(operand1, self.data_format)
         result = [self.ops[operation](x) for x in tensor.tolist()]
-        if self.shared_exponent_zeroed:
+        if self.data_format == DataFormat.Bfp8_b:
             check_bfp8_b(result)
         return torch.tensor(result, dtype=format_dict[data_format])
 
@@ -140,9 +139,6 @@ class UnarySFPUGolden:
             Depending on our format we either return NaN or +/- inf.
         """
         if self.data_format.is_exponent_B():
-
-            if self.data_format == DataFormat.Bfp8_b:
-                self.shared_exponent_zeroed = True
             return expected
         else:  # self.data_format == DataFormat.Float16:
             return float("NaN")
@@ -170,7 +166,7 @@ class UnarySFPUGolden:
 
     def _sqrt(self, x):
         if x < 0.0:
-            self.handle_infinite_numbers(float("inf"))
+            return self.handle_infinite_numbers(float("nan"))
         return math.sqrt(x)
 
     def _square(self, x):
