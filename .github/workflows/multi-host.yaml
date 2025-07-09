@@ -1,0 +1,14 @@
+---
+name: Multi-host Deployment
+on:
+  push:
+    branches:
+      - akirby/multi-host-workflow
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
