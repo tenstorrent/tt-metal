@@ -29,7 +29,7 @@ namespace ckernel {
  * | param0          | The value the output is if the input is greater than 0                     | float    |                                                       | True     |
  */
 // clang-format on
-ALWI void fill_tile(uint32_t idst, float param0) { MATH((llk_math_eltwise_unary_sfpu_fill<APPROX>(idst, param0))); }
+ALWI void fill_tile(uint32_t idst, uint param0) { MATH((llk_math_eltwise_unary_sfpu_fill<APPROX>(idst, param0))); }
 
 // clang-format off
 /**
