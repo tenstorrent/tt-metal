@@ -681,16 +681,11 @@ std::shared_ptr<Buffer> to_device_buffer(
 
 template <typename T>
 Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id) {
-    if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device)) {
-        return to_device_mesh_tensor<T>(tensor, mesh_device, memory_config, cq_id);
-    }
     TT_FATAL(tensor.storage_type() != StorageType::DEVICE, "Tensor is already on device!");
     TT_FATAL(target_device != nullptr, "Need target device in order to move tensor to device!");
 
-    TensorSpec tensor_spec(
-        tensor.logical_shape(), tensor.tensor_spec().tensor_layout().with_memory_config(memory_config));
-    auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.storage(), target_device, tensor_spec, cq_id);
-    return Tensor(DeviceStorage{device_buffer}, tensor_spec, tensor.distributed_tensor_config());
+    auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device);
+    return to_device_mesh_tensor<T>(tensor, mesh_device, memory_config, cq_id);
 }
 
 template Tensor to_device<bfloat16>(

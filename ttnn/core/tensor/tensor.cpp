@@ -156,11 +156,8 @@ void Tensor::deallocate_impl(bool force) {
                 [this, force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
-                    } else if (can_deallocate(storage.buffer, force)) {
-                        DeallocateBuffer(*(storage.buffer));
                     }
                     storage.mesh_buffer.reset();
-                    storage.buffer.reset();
                 }},
             this->tensor_attributes->get_storage());
     }
@@ -554,12 +551,8 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
         tensor_spec.tensor_layout().get_memory_config());
 
     Tensor output;
-    if (distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
-        output = allocate_tensor_on_mesh(tensor_spec, mesh_device);
-    } else {
-        auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-        output = Tensor(DeviceStorage{device_buffer}, tensor_spec, ReplicateTensor{});
-    }
+    distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
+    output = allocate_tensor_on_mesh(tensor_spec, mesh_device);
     output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
@@ -736,45 +729,14 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
         host_tensor.storage_type() == StorageType::HOST or host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
         "write_tensor only supports host_tensor to device_tensor data transfer");
 
-    auto& device_storage = std::get<DeviceStorage>(device_tensor.storage());
-    if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
-        tensor_impl::copy_to_mesh_tensor_wrapper(host_tensor, device_tensor, cq_id);
-        return;
-    }
-
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Error");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Error");
     TT_FATAL(host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(), "Error");
-    std::visit(
-        tt::stl::overloaded{
-            [cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
-                // Copying from host to a single device.
-                const void* host_data = std::visit(
-                    tt::stl::overloaded{
-                        [](const HostStorage& host_storage) -> const void* {
-                            return host_storage.buffer.view_bytes().data();
-                        },
-                        [](const MultiDeviceHostStorage& host_storage) -> const void* {
-                            std::vector<HostBuffer> buffers;
-                            host_storage.distributed_buffer().apply(
-                                [&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                            TT_FATAL(
-                                buffers.size() == 1,
-                                "Can't get a single buffer from multi device host storage of size: {}",
-                                buffers.size());
-                            return buffers.front().view_bytes().data();
-                        },
-                        [](auto&&) -> const void* { TT_THROW("Unreachable"); },
-                    },
-                    host_tensor.storage());
-                if (auto mesh_device = device_tensor.mesh_device()) {
-                    tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
-                } else {
-                    tt::tt_metal::memcpy(device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
-                }
-            },
-            [](auto&& s) { TT_THROW("Unreachable"); }},
-        device_tensor.storage());
+
+    auto& device_storage = std::get<DeviceStorage>(device_tensor.storage());
+
+    TT_FATAL(device_storage.get_mesh_buffer() != nullptr, "Unsupported write_tensor: does not have a mesh buffer");
+    tensor_impl::copy_to_mesh_tensor_wrapper(host_tensor, device_tensor, cq_id);
 }
 
 Tensor set_tensor_id(const Tensor& tensor) {
