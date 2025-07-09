@@ -141,7 +141,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel;
     if (is_eth_core) {
-        std::map<string, string> dram_copy_kernel_defines = {
+        std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
         };
         dram_copy_kernel = tt_metal::CreateKernel(
@@ -150,7 +150,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
             core,
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines});
     } else {
-        std::map<string, string> dram_copy_kernel_defines = {
+        std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
         };
         dram_copy_kernel = tt_metal::CreateKernel(
@@ -216,19 +216,20 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     try {
         fixture->RunProgram(device, program);
     } catch (std::runtime_error& e) {
-        string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
+        std::string expected =
+            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
         expected += tt::watcher_get_log_file_name();
-        const string error = string(e.what());
+        const std::string error = std::string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-        EXPECT_TRUE(error.find(expected) != string::npos);
+        EXPECT_TRUE(error.find(expected) != std::string::npos);
     }
 
     // We should be able to find the expected watcher error in the log as well.
-    string expected;
+    std::string expected;
     int noc = (use_ncrisc) ? 1 : 0;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    string risc_name = (is_eth_core) ? "erisc" : " brisc";
+    std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
     if (use_ncrisc) {
         risc_name = "ncrisc";
     }
@@ -388,10 +389,10 @@ void CheckHostSanitization(IDevice* device) {
     try {
         llrt::read_hex_vec_from_core(device->id(), core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
-        const string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
-        const string error = string(e.what());
+        const std::string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
+        const std::string error = std::string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-        EXPECT_TRUE(error.find(expected) != string::npos);
+        EXPECT_TRUE(error.find(expected) != std::string::npos);
     }
 }
 

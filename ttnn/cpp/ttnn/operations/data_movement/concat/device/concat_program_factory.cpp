@@ -848,7 +848,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         (std::uint32_t)num_input_tensors,
     };
 
-    std::map<string, string> concat_defines;
+    std::map<std::string, std::string> concat_defines;
 
     if (rm_layout && dim == num_dims - 1) {
         concat_defines["WIDTH_CONCAT"] = "1";

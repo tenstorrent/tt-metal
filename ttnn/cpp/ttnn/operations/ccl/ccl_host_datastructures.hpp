@@ -9,7 +9,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <limits>
+#include <string>
 
 namespace ttnn {
 namespace ccl {
@@ -56,7 +56,7 @@ public:
     bool get_shard_grid_size() const;
     Tensor const& get_input_tensor(std::size_t i) const;
     Tensor const& get_output_tensor(std::size_t i) const;
-    std::map<string, string> emit_worker_defines() const;
+    std::map<std::string, std::string> emit_worker_defines() const;
 
 private:
     uint32_t page_size;

@@ -2228,7 +2228,7 @@ void configure_for_single_chip(
             log_info(
                 LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
 
-            std::map<string, string> defines = {
+            std::map<std::string, std::string> defines = {
                 {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
             };
 
@@ -2349,7 +2349,7 @@ void configure_for_single_chip(
             .dispatch_mem_map(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
-    std::map<string, string> dispatch_defines = {
+    std::map<std::string, std::string> dispatch_defines = {
         {"DISPATCH_CB_BASE", std::to_string(dispatch_buffer_base)},
         {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DISPATCH_CB_PAGES",
@@ -2429,7 +2429,7 @@ void configure_for_single_chip(
         CoreCoord phys_dispatch_d_downstream_core =
             packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
 
-        std::map<string, string> dispatch_d_defines = dispatch_defines;
+        std::map<std::string, std::string> dispatch_d_defines = dispatch_defines;
         dispatch_d_defines["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
         dispatch_d_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
         dispatch_d_defines["SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE"] = std::to_string(dispatch_d_preamble_size);
@@ -2457,7 +2457,7 @@ void configure_for_single_chip(
         CoreCoord phys_dispatch_h_upstream_core =
             packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
 
-        std::map<string, string> dispatch_h_defines = dispatch_defines;
+        std::map<std::string, std::string> dispatch_h_defines = dispatch_defines;
         dispatch_h_defines["MY_DISPATCH_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
         dispatch_h_defines["UPSTREAM_DISPATCH_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
         dispatch_h_defines["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
@@ -2559,7 +2559,7 @@ void configure_for_single_chip(
             log_info(
                 LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
 
-            std::map<string, string> defines = {
+            std::map<std::string, std::string> defines = {
                 {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
             };
 
@@ -2843,7 +2843,7 @@ void configure_for_multi_chip(
     TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
     const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
-    std::map<string, string> prefetch_defines = {
+    std::map<std::string, std::string> prefetch_defines = {
         {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_buffer_base)},  // overridden below for prefetch_h
         {"DOWNSTREAM_CB_LOG_PAGE_SIZE",
          std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},        // overridden below for prefetch_h
@@ -3041,7 +3041,7 @@ void configure_for_multi_chip(
             log_info(
                 LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
 
-            std::map<string, string> defines = {
+            std::map<std::string, std::string> defines = {
                 {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
             };
 
@@ -3313,7 +3313,7 @@ void configure_for_multi_chip(
             .dispatch_mem_map(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
-    std::map<string, string> dispatch_defines = {
+    std::map<std::string, std::string> dispatch_defines = {
         {"DISPATCH_CB_BASE", std::to_string(dispatch_buffer_base)},
         {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DISPATCH_CB_PAGES",
@@ -3389,7 +3389,7 @@ void configure_for_multi_chip(
         uint32_t dispatch_d_preamble_size = packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
         CoreCoord phys_dispatch_d_downstream_core =
             packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
-        std::map<string, string> dispatch_d_defines_multi = dispatch_defines;
+        std::map<std::string, std::string> dispatch_d_defines_multi = dispatch_defines;
         dispatch_d_defines_multi["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
         dispatch_d_defines_multi["DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
         dispatch_d_defines_multi["SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE"] = std::to_string(dispatch_d_preamble_size);
@@ -3415,7 +3415,7 @@ void configure_for_multi_chip(
         // dispatch_h
         CoreCoord phys_dispatch_h_upstream_core =
             packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
-        std::map<string, string> dispatch_h_defines_multi = dispatch_defines;
+        std::map<std::string, std::string> dispatch_h_defines_multi = dispatch_defines;
         dispatch_h_defines_multi["MY_DISPATCH_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
         dispatch_h_defines_multi["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
         dispatch_h_defines_multi["DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
@@ -3520,7 +3520,7 @@ void configure_for_multi_chip(
             log_info(
                 LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
 
-            std::map<string, string> defines = {
+            std::map<std::string, std::string> defines = {
                 {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
             };
 
@@ -3612,7 +3612,7 @@ void configure_for_multi_chip(
         }
 
     } else {
-        std::map<string, string> dispatch_hd_defines = dispatch_defines;
+        std::map<std::string, std::string> dispatch_hd_defines = dispatch_defines;
         dispatch_hd_defines["IS_D_VARIANT"] = "1";
         dispatch_hd_defines["IS_H_VARIANT"] = "1";
 

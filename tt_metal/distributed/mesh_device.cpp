@@ -449,7 +449,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
-    if (is_line_topology(new_shape)) {
+    if (new_shape.is_line_topology()) {
         return view_->get_line_devices();
     }
 

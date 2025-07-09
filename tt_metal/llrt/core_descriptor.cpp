@@ -32,7 +32,7 @@ namespace tt {
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    string core_desc_dir;
+    std::string core_desc_dir;
     if (getenv("TT_METAL_HOME")) {
         core_desc_dir = getenv("TT_METAL_HOME");
     } else {

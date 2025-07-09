@@ -90,7 +90,7 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
 
     uint32_t rta_base_dm = get_runtime_arg_addr(
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), tt::RISCV::BRISC, common_rtas);
-    std::map<string, string> dm_defines = {
+    std::map<std::string, std::string> dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm)}};
