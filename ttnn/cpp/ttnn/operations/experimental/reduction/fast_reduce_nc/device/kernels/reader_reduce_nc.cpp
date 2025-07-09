@@ -46,16 +46,17 @@ void kernel_main() {
             uint32_t i = outer_id + id_offset;
             auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));
             for (uint32_t j = 0; j < num_input_tiles; ++j) {
-                DPRINT << dim << " RTI " << read_tile_id << " i " << i << " outer_id " << outer_id << " id_offset "
-                       << id_offset << " j " << j << " start_id " << start_id << " irl " << id_range_length << " oii "
-                       << outer_id_increment << " sf " << shard_factor << " nit " << num_input_tiles << " igi "
-                       << input_granularity_index << ENDL();
+                // DPRINT << dim << " RTI " << read_tile_id << " i " << i << " outer_id " << outer_id << " id_offset "
+                //        << id_offset << " j " << j << " start_id " << start_id << " irl " << id_range_length << " oii
+                //        "
+                //        << outer_id_increment << " sf " << shard_factor << " nit " << num_input_tiles << " igi "
+                //        << input_granularity_index << ENDL();
                 if (input_granularity_index == 0) {
                     cb_reserve_back(cb_id_in0, input_granularity);
                     l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                 }
-                DPRINT << "READ TILE " << read_tile_id << " x " << (uint32_t)my_x[0] << " y " << (uint32_t)my_y[0]
-                       << " " << ENDL();
+                // DPRINT << "READ TILE " << read_tile_id << " x " << (uint32_t)my_x[0] << " y " << (uint32_t)my_y[0]
+                //        << " " << ENDL();
                 noc_async_read_tile(read_tile_id, tensor_accessor, l1_write_addr_in0);
                 l1_write_addr_in0 += input_tile_bytes;
                 read_tile_id += inner_tile_size;
