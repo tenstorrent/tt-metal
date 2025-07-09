@@ -220,12 +220,12 @@ class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCa
 // If the device should open closed/reopned for each test case then override the SetUpTestSuite and TearDownTestSuite
 // methods
 class CommandQueueMultiDeviceFixture : public DispatchFixture {
-private:
+protected:
     inline static std::vector<tt::tt_metal::IDevice*> devices_internal;
     inline static std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_internal;
     inline static size_t num_devices_internal;
+    inline static ARCH arch_internal = tt::ARCH::Invalid;
 
-protected:
     static bool ShouldSkip() {
         if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
             return true;
@@ -253,9 +253,9 @@ protected:
         }
 
         auto dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_internal = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        if (num_cqs > 1 && arch == tt::ARCH::WORMHOLE_B0 && tt::tt_metal::GetNumAvailableDevices() != 1) {
+        if (num_cqs > 1 && arch_internal == tt::ARCH::WORMHOLE_B0 && tt::tt_metal::GetNumAvailableDevices() != 1) {
             if (!tt::tt_metal::IsGalaxyCluster()) {
                 log_warning(
                     tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
@@ -298,7 +298,6 @@ protected:
         devices_.clear();
         reserved_devices_.clear();
         num_devices_ = 0;
-        arch_ = tt::ARCH::Invalid;
     }
 
     std::vector<tt::tt_metal::IDevice*> devices_;
@@ -370,7 +369,9 @@ protected:
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         CommandQueueMultiDeviceFixture::DoSetUpTestSuite();
-        CommandQueueMultiDeviceFixture::SetUp();
+        num_devices_ = devices_internal.size();
+        devices_ = devices_internal;
+        reserved_devices_ = reserved_devices_internal;
 
         if (::testing::Test::IsSkipped()) {
             tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
