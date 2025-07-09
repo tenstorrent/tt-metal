@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -38,8 +38,8 @@ void kernel_main() {
 
 #if CAUSAL_MASK
     constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(2);
-    uint32_t mask_start_ht = get_arg_val<uint32_t>(11);
-    uint32_t mask_offset = get_arg_val<uint32_t>(12);
+    uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
+    uint32_t mask_offset = get_arg_val<uint32_t>(13);
 
     uint32_t mask_id_offset = mask_offset;
     uint32_t mask_ht = mask_start_ht;

@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -127,7 +128,11 @@ def run_mean(device, params):
 
 @pytest.mark.parametrize("params", parameters["pytorch"]["params"])
 def test_pytorch(device, params):
-    run_mean(device, params)
+    (result, msg), e2e_perf = run_mean(device, params)
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
 
 
 def run(

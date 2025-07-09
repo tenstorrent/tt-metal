@@ -7,9 +7,9 @@
 #include <utility>
 
 #include <tt-metalium/command_queue.hpp>
-#include "cpp/ttnn/operations/data_movement/move/move.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -59,24 +59,6 @@ ttnn::Tensor to_device(
     QueueId cq_id) {
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     return tensor.to_device(mesh_device, mem_config, cq_id);
-}
-
-ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
-    DataType data_type,
-    Layout layout,
-    MeshDevice* mesh_device,
-    const std::optional<MemoryConfig>& memory_config) {
-    return allocate_tensor_on_mesh(
-        TensorSpec(
-            shape,
-            tt::tt_metal::TensorLayout(
-                data_type, tt::tt_metal::PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
-        mesh_device);
-}
-
-ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* mesh_device) {
-    return tt::tt_metal::allocate_tensor_on_mesh(spec, mesh_device);
 }
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, QueueId cq_id) {

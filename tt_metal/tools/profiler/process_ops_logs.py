@@ -279,7 +279,7 @@ def extract_dispatch_op_id(dispatchOps):
 
 
 # Append device data to device ops and return the list of mapped device op ref list
-def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
+def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types):
     traceReplayCounts = {}
     for deviceID in traceReplays:
         traceReplayCounts[deviceID] = {}
@@ -291,9 +291,18 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
     traceOps = {}
     if os.path.isfile(deviceTimesLog):
         setup = device_post_proc_config.default_setup()
+        if device_analysis_types:
+            allAnalysis = setup.timerAnalysis
+            pickedAnalysis = {}
+            for analysis in device_analysis_types:
+                assert analysis in allAnalysis.keys(), f" {analysis} is not calculated in device analysis"
+                pickedAnalysis[analysis] = allAnalysis[analysis]
+
+            setup.timerAnalysis = pickedAnalysis
         setup.deviceInputLog = deviceTimesLog
         deviceData = import_log_run_stats(setup)
         freq = deviceData["deviceInfo"]["freq"]
+        arch = deviceData["deviceInfo"]["arch"]  # passed to NPE later
         for device in devicesOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
@@ -418,7 +427,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
     # if enabled, analyze noc trace files present in log folder and add
     # relevant statistics to 'ops' dict
     if analyze_noc_traces:
-        npe_stats = analyzeNoCTraces(logFolder)
+        npe_stats = analyzeNoCTraces(logFolder, arch)
         if npe_stats is not None:
             ops_found = 0
             for op_id in ops:
@@ -434,7 +443,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
 
 
 def get_device_data_generate_report(
-    logFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False
+    logFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False, device_analysis_types=[]
 ):
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
@@ -475,6 +484,14 @@ def get_device_data_generate_report(
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
         setup = device_post_proc_config.default_setup()
+        if device_analysis_types:
+            allAnalysis = setup.timerAnalysis
+            pickedAnalysis = {}
+            for analysis in device_analysis_types:
+                assert analysis in allAnalysis.keys(), f" {analysis} is not calculated in device analysis"
+                pickedAnalysis[analysis] = allAnalysis[analysis]
+
+            setup.timerAnalysis = pickedAnalysis
         setup.deviceInputLog = deviceTimesLog
         deviceData = import_log_run_stats(setup)
         logger.info(f"Generating device op report ...")
@@ -648,6 +665,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
         os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
     if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
+        os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
 
     logger.info(f"Generating OPs CSV")
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
@@ -887,14 +906,17 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 
 
-def analyzeNoCTraces(logFolder):
+def analyzeNoCTraces(logFolder, arch):
     """Attempts to import tt-npe from $PYTHONPATH and process noc traces to
-    obtain per-operation DRAM BW and NoC utilization statistics"""
+    obtain per-operation DRAM BW and NoC utilization statistics and create
+    visualizer timeline files"""
     try:
         from npe_analyze_noc_trace_dir import analyze_noc_traces_in_dir
 
         logger.info(f"tt-npe module imported successfully; analyzing noc traces ... ")
-        return analyze_noc_traces_in_dir(logFolder, False, True)
+        return analyze_noc_traces_in_dir(
+            noc_trace_dir=logFolder, device_name=arch, emit_viz_timeline_files=True, quiet=True
+        )
     except ImportError:
         logger.warning("Could not import tt-npe module. Ensure tt-npe is built, then source 'tt-npe/ENV_SETUP'")
         return None
@@ -904,7 +926,9 @@ def analyzeNoCTraces(logFolder):
         return None
 
 
-def process_ops(output_folder, name_append, date, device_only=False, analyze_noc_traces=False):
+def process_ops(
+    output_folder, name_append, date, device_only=False, analyze_noc_traces=False, device_analysis_types=[]
+):
     if not output_folder:
         output_folder = PROFILER_ARTIFACTS_DIR
     logFolder = generate_logs_folder(output_folder)
@@ -913,10 +937,14 @@ def process_ops(output_folder, name_append, date, device_only=False, analyze_noc
     ops, signposts, traceReplays = import_tracy_op_logs(logFolder)
 
     if ops and not device_only:
-        deviceOps, traceOps = append_device_data(ops, traceReplays, logFolder, analyze_noc_traces)
+        deviceOps, traceOps = append_device_data(
+            ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types
+        )
         generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
     else:
-        deviceOps = get_device_data_generate_report(logFolder, reportFolder, date, name_append)
+        deviceOps = get_device_data_generate_report(
+            logFolder, reportFolder, date, name_append, device_analysis_types=device_analysis_types
+        )
 
 
 @click.command()
@@ -927,10 +955,11 @@ def process_ops(output_folder, name_append, date, device_only=False, analyze_noc
 @click.option(
     "--analyze-noc-traces", is_flag=True, help="Use tt-npe to analyze profiler noc event trace files (if available)"
 )
-def main(output_folder, name_append, date, device_only, analyze_noc_traces):
+@click.option("-a", "--device-analysis-types", multiple=True, help="Subset of analysis types to be performed on device")
+def main(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types):
     if output_folder:
         output_folder = Path(output_folder)
-    process_ops(output_folder, name_append, date, device_only, analyze_noc_traces)
+    process_ops(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types)
 
 
 if __name__ == "__main__":

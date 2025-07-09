@@ -161,6 +161,7 @@ private:
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
+    bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_;
 
@@ -239,6 +240,7 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
+    bool intermesh_eth_links_enabled() const { return this->intermesh_eth_links_enabled_; }
     const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
@@ -273,7 +275,9 @@ public:
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
-    uint32_t get_num_risc_processors() const;
+    uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+
+    uint32_t get_total_num_risc_processors() const;
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
@@ -395,6 +399,18 @@ inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
 
 inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
+}
+
+inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
+    const uint32_t num_processor_classes =
+        this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+            .get_processor_classes_count();
+    uint32_t num_riscs = 0;
+    for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
+        num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+                         .get_processor_types_count(processor_class_idx);
+    }
+    return num_riscs;
 }
 
 inline const HalJitBuildConfig& Hal::get_jit_build_config(

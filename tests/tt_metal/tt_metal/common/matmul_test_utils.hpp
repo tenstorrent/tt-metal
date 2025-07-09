@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -63,7 +65,7 @@ inline std::vector<bfloat16> get_col_slice(
     return result;
 }
 
-inline void print_faces(std::vector<bfloat16> data, string name) {
+inline void print_faces(std::vector<bfloat16> data, std::string name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
 

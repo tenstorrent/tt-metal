@@ -50,7 +50,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               bool use_optimal_ccl_for_llama) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -58,7 +59,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     num_links,
                     memory_config,
                     topology,
-                    subdevice_id);
+                    subdevice_id,
+                    use_optimal_ccl_for_llama);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -67,32 +69,34 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
-            py::arg("subdevice_id") = std::nullopt},
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("use_optimal_ccl_for_llama") = false},
 
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& persistent_intermediate_buffer,
                ttnn::Tensor& persistent_output_buffer,
                const int32_t dim,
                const GlobalSemaphoreArg& multi_device_global_semaphore,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               std::optional<uint32_t> cluster_axis,
+               bool use_optimal_ccl_for_llama) -> ttnn::Tensor {
                 return self(
                     input_tensor,
-                    persistent_intermediate_buffer,
                     persistent_output_buffer,
                     dim,
                     multi_device_global_semaphore.get(),
                     num_links,
                     memory_config,
                     topology,
-                    subdevice_id);
+                    subdevice_id,
+                    cluster_axis,
+                    use_optimal_ccl_for_llama);
             },
             py::arg("input_tensor"),
-            py::arg("persistent_intermediate_buffer"),
             py::arg("persistent_output_buffer"),
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
@@ -100,7 +104,9 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
-            py::arg("subdevice_id") = std::nullopt},
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("cluster_axis") = std::nullopt,
+            py::arg("use_optimal_ccl_for_llama") = false},
 
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
@@ -113,7 +119,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const std::optional<ttnn::Tensor>& persistent_output_tensor,
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               bool use_optimal_ccl_for_llama) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -124,7 +131,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     persistent_output_tensor,  // = std::nullopt,
                     memory_config,             // = std::nullopt,
                     num_preferred_links,       // = std::nullopt,
-                    subdevice_id);             // = std::nullopt
+                    subdevice_id,
+                    use_optimal_ccl_for_llama);  // = std::nullopt
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -136,7 +144,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("persistent_output_tensor") = std::nullopt,
             py::arg("num_links") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt});
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("use_optimal_ccl_for_llama") = false});
 }
 
 }  // namespace

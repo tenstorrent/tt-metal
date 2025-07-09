@@ -8,6 +8,7 @@
 // issues
 #include <stdio.h>
 #include <cstring>
+#include <type_traits>
 
 constexpr uint64_t ALIGN_REQ_64 = 64;
 constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
@@ -183,6 +184,19 @@ FORCE_INLINE void transpose_2d(
 template <uint32_t AlignReq>
 FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask) {
     return (address & mask) + AlignReq;
+}
+
+// Wait for a specified number of cycles
+// This is a blocking wait, so it should only be used for debugging purposes
+// It is not recommended to use this in production code
+inline void spin(uint32_t cycles) {
+    volatile uint tt_reg_ptr* clock_lo = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    volatile uint tt_reg_ptr* clock_hi = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+    uint64_t wall_clock = 0;
+    do {
+        wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+    } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
 }  // namespace tt::data_movement::common

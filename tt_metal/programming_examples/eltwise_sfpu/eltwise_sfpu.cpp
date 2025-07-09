@@ -16,7 +16,9 @@ using namespace tt::tt_metal;
  * 2. Device eltwise performs a unary SFPU operation on the data.
  * 3. Read result back and compare to golden.
  * */
-
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main() {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
@@ -62,30 +64,29 @@ int main() {
         CircularBufferConfig cb_src0_config =
             CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, tile_size_bytes);
-        CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-        constexpr uint32_t num_output_tiles = 2;
         CircularBufferConfig cb_output_config =
             CircularBufferConfig(num_input_tiles * tile_size_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(output_cb_index, tile_size_bytes);
-        CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         // Create the 2 data movement kernels and the compute kernel.
         KernelHandle unary_reader_kernel_id = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/read_tile.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         KernelHandle unary_writer_kernel_id = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/write_tile.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         KernelHandle eltwise_sfpu_kernel_id = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
             core,
             ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
@@ -136,21 +137,21 @@ int main() {
             float result = result_vec[i].to_float();
             if (std::abs(expected - result) > eps) {
                 pass = false;
-                log_error(tt::LogTest, "Result mismatch at index {}: {} != {}", i, expected, result);
+                fmt::print(stderr, "Result mismatch at index {}: {} != {}\n", i, expected, result);
             }
         }
 
         pass &= CloseDevice(device);
 
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
+        fmt::print(stderr, "Test failed with exception!\n");
+        fmt::print(stderr, "{}\n", e.what());
 
         throw;
     }
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

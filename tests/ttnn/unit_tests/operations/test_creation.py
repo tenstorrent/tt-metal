@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
+import math
 import torch
 import torch.nn as nn
 import ttnn
@@ -264,6 +264,59 @@ def test_full_multi_device(mesh_device, input_shape, fill_value, layout):
         assert torch.allclose(torch_tensor, output_tensor)
 
 
+def test_arange_defaults():
+    start = 0
+    end = 10
+    step = 3
+    width_dim = int(((abs(end - start) + abs(step) - 1) // abs(step)))
+
+    output_tensor = ttnn.arange(start, end, step)
+    assert output_tensor.shape == [width_dim]
+
+    output_tensor = ttnn.arange(end)
+    assert output_tensor.shape == [end]
+
+    output_tensor = ttnn.arange(start, end)
+    assert output_tensor.shape == [end - start]
+
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.dtype == ttnn.bfloat16
+    assert output_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+
+
+@pytest.mark.parametrize(
+    "end",
+    [100, 103, 226, 300, 3, 1, 0],
+)
+@pytest.mark.parametrize(
+    "step",
+    [1, 2, 3, 5, 0, -1, -3, -4],
+)
+@pytest.mark.parametrize(
+    "start",
+    [4, 8, 16, 0, 201, 135, 98],
+)
+def test_arange_tile_layout(device, start, end, step):
+    if (start > end and step > 0) or (start < end and step < 0) or (step == 0):
+        pytest.skip(f"Skipping invalid case: start={start}, end={end}, step={step}")
+
+    golden_arange = ttnn.get_golden_function(ttnn.arange)
+    torch_output_tensor = golden_arange(start, end, step)
+
+    output_tensor = ttnn.arange(start, end, step, device=device, layout=ttnn.TILE_LAYOUT)
+    width_dim = int(((abs(end - start) + abs(step) - 1) // abs(step)))
+
+    assert output_tensor.layout == ttnn.TILE_LAYOUT
+    assert output_tensor.padded_shape == [ttnn.TILE_SIZE, math.ceil(width_dim / ttnn.TILE_SIZE) * ttnn.TILE_SIZE]
+    assert output_tensor.shape == [width_dim]
+    assert output_tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE
+
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
 @pytest.mark.parametrize(
     "start",
     [4, 8, 16, 0, 201, 135, 98],
@@ -282,8 +335,8 @@ def test_arange(device, start, end, step):
 
     torch_output_tensor = torch.arange(start, end, step)
 
-    output_tensor = ttnn.arange(start, end, step, ttnn.bfloat16, device)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.arange(start, end, step, dtype=ttnn.bfloat16, device=device)
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -311,10 +364,11 @@ def test_arange_multi_device(mesh_device, start, end, step):
         start,
         end,
         step,
-        ttnn.bfloat16,
-        mesh_device,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
     )
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
     output_tensor = ttnn.from_device(output_tensor)
     output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]
     for output_tensor in output_tensors:

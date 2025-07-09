@@ -81,12 +81,12 @@ page](docs/source/tt-metalium/get_started/get_started.rst).
 ### Setting logger level
 
 In order to get debug level log messages, set the environment variable
-`TT_METAL_LOGGER_LEVEL=Debug`.
+`TT_LOGGER_LEVEL=Debug`.
 
 For example,
 
 ```
-TT_METAL_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
+TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ```
 
 ### Building and viewing the documentation locally

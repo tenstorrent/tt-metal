@@ -78,6 +78,9 @@ void help(std::string_view program_name) {
     exit(0);
 }
 
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main(int argc, char** argv) {
     int seed = std::random_device{}();
     int device_id = 0;
@@ -120,9 +123,9 @@ int main(int argc, char** argv) {
     const uint32_t tiles_per_cb = 4;
     // Create 3 circular buffers. These will be used by the data movement kernels to stream data into the compute cores
     // and for the compute cores to stream data out.
-    CBHandle cb_a = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
 
     EnqueueWriteBuffer(cq, a, a_data, false);
     EnqueueWriteBuffer(cq, b, b_data, false);
@@ -140,17 +143,17 @@ int main(int argc, char** argv) {
     // output buffer C.
     auto reader = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/interleaved_tile_read.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     auto writer = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/tile_write.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     auto compute = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/add.cpp",
         core,
         ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
 

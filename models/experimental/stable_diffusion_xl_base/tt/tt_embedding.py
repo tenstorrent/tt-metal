@@ -13,10 +13,10 @@ class TtTimestepEmbedding(nn.Module):
         super().__init__()
 
         self.device = device
-        weights_1 = state_dict[f"{module_path}.linear_1.weight"].unsqueeze(0).unsqueeze(0)
+        weights_1 = state_dict[f"{module_path}.linear_1.weight"]
         bias_1 = state_dict[f"{module_path}.linear_1.bias"]
 
-        weights_2 = state_dict[f"{module_path}.linear_2.weight"].unsqueeze(0).unsqueeze(0)
+        weights_2 = state_dict[f"{module_path}.linear_2.weight"]
         bias_2 = state_dict[f"{module_path}.linear_2.bias"]
 
         self.tt_weights_1, self.tt_bias_1 = prepare_linear_params(device, weights_1, bias_1, linear_weights_dtype)

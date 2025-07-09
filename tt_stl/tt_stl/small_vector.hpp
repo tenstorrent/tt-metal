@@ -8,7 +8,7 @@
 
 #include <tt_stl/reflection.hpp>
 
-namespace tt::stl {
+namespace ttsl {
 
 static constexpr size_t SMALL_VECTOR_SIZE = 8;
 
@@ -24,36 +24,42 @@ std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZ
         if (i > 0) {
             os << ", ";
         }
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         os << vec[i];
     }
     os << "])";
     return os;
 }
 
-}  // namespace tt::stl
+}  // namespace ttsl
 
 namespace ttnn {
-template <typename T, size_t PREALLOCATED_SIZE = tt::stl::SMALL_VECTOR_SIZE>
-using SmallVector [[deprecated("Use tt::stl::SmallVector instead")]] = tt::stl::SmallVector<T, PREALLOCATED_SIZE>;
+template <typename T, size_t PREALLOCATED_SIZE = ttsl::SMALL_VECTOR_SIZE>
+using SmallVector [[deprecated("Use ttsl::SmallVector instead")]] = tt::stl::SmallVector<T, PREALLOCATED_SIZE>;
 }
 
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt
+
 template <typename T, size_t PREALLOCATED_SIZE>
-struct std::hash<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
-    size_t operator()(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
+struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    size_t operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
         size_t hash = 0;
         for (const auto& element : vec) {
-            hash = tt::stl::hash::detail::hash_objects(hash, element);
+            hash = ttsl::hash::detail::hash_objects(hash, element);
         }
         return hash;
     }
 };
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct fmt::formatter<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
+struct fmt::formatter<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
+    auto format(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
         -> format_context::iterator {
         std::stringstream ss;
         ss << vector;
@@ -62,8 +68,8 @@ struct fmt::formatter<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
 };
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct tt::stl::json::to_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
-    nlohmann::json operator()(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vector) const {
+struct ttsl::json::to_json_t<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    nlohmann::json operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector) const {
         nlohmann::json json_array = nlohmann::json::array();
         for (const auto& element : vector) {
             json_array.push_back(to_json(element));
@@ -73,9 +79,9 @@ struct tt::stl::json::to_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
 };
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct tt::stl::json::from_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
-    tt::stl::SmallVector<T, PREALLOCATED_SIZE> operator()(const nlohmann::json& json_object) const {
-        tt::stl::SmallVector<T, PREALLOCATED_SIZE> vector;
+struct ttsl::json::from_json_t<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    ttsl::SmallVector<T, PREALLOCATED_SIZE> operator()(const nlohmann::json& json_object) const {
+        ttsl::SmallVector<T, PREALLOCATED_SIZE> vector;
         for (const auto& element : json_object) {
             vector.push_back(from_json<T>(element));
         }

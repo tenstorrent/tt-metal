@@ -62,7 +62,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const string& activation,
+    const std::string& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const MemoryConfig& memory_config,
@@ -236,7 +236,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const bool has_bias = input_tensor_bias.has_value();
 
-    const auto weights_shape = input_tensor_b.padded_shape();
+    const auto& weights_shape = input_tensor_b.padded_shape();
 
     std::optional<unary::UnaryWithParam> fused_activation = std::nullopt;
 
@@ -276,16 +276,14 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         weights_shape,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
-            .dtype = output_tensor.dtype(),
             .weights_dtype = input_tensor_b.dtype(),
             .shard_layout = this->memory_config.memory_layout(),
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
             .enable_weights_double_buffer = enable_weights_double_buffer,
-            .enable_split_reader = enable_split_reader,
-            .enable_subblock_padding = enable_subblock_padding},
+            .enable_split_reader = enable_split_reader},
         input_tensor_a.dtype(),
-        this->memory_config,
+        this->dtype,
         has_bias,
         is_1d_deptwise_conv(
             groups,

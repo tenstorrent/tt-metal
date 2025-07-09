@@ -36,6 +36,8 @@
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
+#include "persistent_kernel_cache.hpp"
+#include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -44,7 +46,6 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
-#include "utils.hpp"
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -226,14 +227,14 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     {4, 0, 1, 0, DISPATCH_H, {7, x, x, x}, {3, 5, x, x}, k_dispatcher_noc},
 
     // H2D via MUX
-    {5, 0, 1, 0, FABRIC_MUX, /*Full size*/ {3}, /*Header Only*/ {4}, k_fabric_mux_noc},
+    {5, 0, 1, 0, FABRIC_MUX, /*Full size*/ {3}, /*Header Only*/ {4}, k_fabric_mux_noc, 0},
 
     {6, 1, x, 0, PREFETCH_D, {3, x, x, x}, {7, 8, 9, x}, k_prefetcher_noc},
     {7, 1, x, 0, DISPATCH_D, {6, x, x, x}, {8, 4, 9, x}, k_dispatcher_noc},
     {8, 1, x, 0, DISPATCH_S, {6, x, x, x}, {7, x, x, x}, k_dispatcher_s_noc},
 
     // D2H via MUX
-    {9, 1, 0, 0, RETURN_FABRIC_MUX, /*Full size*/ {7}, /*Header Only*/ {6}, k_fabric_mux_noc},
+    {9, 1, 0, 0, RETURN_FABRIC_MUX, /*Full size*/ {7}, /*Header Only*/ {6}, k_fabric_mux_noc, 0},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq_fabric = {
@@ -248,7 +249,7 @@ static const std::vector<DispatchKernelNode> two_chip_arch_2cq_fabric = {
     {7, 0, 1, 1, DISPATCH_H, {12, x, x, x}, {5, 8, x, x}, k_dispatcher_noc},
 
     // H2D via MUX
-    {8, 0, 1, 0, FABRIC_MUX, /*Full size*/ {4, 5}, /*Header Only*/ {6, 7}, k_fabric_mux_noc},
+    {8, 0, 1, 0, FABRIC_MUX, /*Full size*/ {4, 5}, /*Header Only*/ {6, 7}, k_fabric_mux_noc, 0},
 
     {9, 1, x, 0, PREFETCH_D, {4, x, x, x}, {11, 13, x, x}, k_prefetcher_noc},
     {10, 1, x, 1, PREFETCH_D, {5, x, x, x}, {12, 13, x, x}, k_prefetcher_noc},
@@ -256,7 +257,7 @@ static const std::vector<DispatchKernelNode> two_chip_arch_2cq_fabric = {
     {12, 1, x, 1, DISPATCH_D, {10, x, x, x}, {7, 13, x, x}, k_dispatcher_noc},
 
     // D2H via MUX
-    {13, 1, 0, 0, RETURN_FABRIC_MUX, /*Full size*/ {11, 12}, /*Header Only*/ {9, 10}, k_fabric_mux_noc},
+    {13, 1, 0, 0, RETURN_FABRIC_MUX, /*Full size*/ {11, 12}, /*Header Only*/ {9, 10}, k_fabric_mux_noc, 0},
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq_fabric = {
@@ -295,49 +296,49 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq_fabric = 
     {18, 1, x, 0, PREFETCH_D, {0, x, x, x}, {19, 20, 21, x}, k_prefetcher_noc},
     {19, 1, x, 0, DISPATCH_D, {18, x, x, x}, {1, 20, 21, x}, k_dispatcher_noc},
     {20, 1, x, 0, DISPATCH_S, {18, x, x, x}, {19, x, x, x}, k_dispatcher_s_noc},
-    {21, 1, x, 0, RETURN_FABRIC_MUX, /*full size*/ {19}, /*header only*/ {18}, k_fabric_mux_noc},
+    {21, 1, x, 0, RETURN_FABRIC_MUX, /*full size*/ {19}, /*header only*/ {18}, k_fabric_mux_noc, 0},
 
     // Remote chip 2
     {22, 2, x, 0, PREFETCH_D, {2, x, x, x}, {23, 24, 25, x}, k_prefetcher_noc},
     {23, 2, x, 0, DISPATCH_D, {22, x, x, x}, {3, 24, 25, x}, k_dispatcher_noc},
     {24, 2, x, 0, DISPATCH_S, {22, x, x, x}, {23, x, x, x}, k_dispatcher_s_noc},
-    {25, 2, x, 0, RETURN_FABRIC_MUX, /*full size*/ {23}, /*header only*/ {22}, k_fabric_mux_noc},
+    {25, 2, x, 0, RETURN_FABRIC_MUX, /*full size*/ {23}, /*header only*/ {22}, k_fabric_mux_noc, 0},
 
     // Remote chip 3
     {26, 3, x, 0, PREFETCH_D, {4, x, x, x}, {27, 28, 29, x}, k_prefetcher_noc},
     {27, 3, x, 0, DISPATCH_D, {26, x, x, x}, {5, 28, 29, x}, k_dispatcher_noc},
     {28, 3, x, 0, DISPATCH_S, {26, x, x, x}, {27, x, x, x}, k_dispatcher_s_noc},
-    {29, 3, x, 0, RETURN_FABRIC_MUX, /*full size*/ {27}, /*header only*/ {26}, k_fabric_mux_noc},
+    {29, 3, x, 0, RETURN_FABRIC_MUX, /*full size*/ {27}, /*header only*/ {26}, k_fabric_mux_noc, 0},
 
     // Remote chip 4
     {30, 4, x, 0, PREFETCH_D, {6, x, x, x}, {31, 32, 33, x}, k_prefetcher_noc},
     {31, 4, x, 0, DISPATCH_D, {30, x, x, x}, {7, 32, 33, x}, k_dispatcher_noc},
     {32, 4, x, 0, DISPATCH_S, {30, x, x, x}, {31, x, x, x}, k_dispatcher_s_noc},
-    {33, 4, x, 0, RETURN_FABRIC_MUX, /*full size*/ {31}, /*header only*/ {30}, k_fabric_mux_noc},
+    {33, 4, x, 0, RETURN_FABRIC_MUX, /*full size*/ {31}, /*header only*/ {30}, k_fabric_mux_noc, 0},
 
     // Remote chip 5
     {34, 5, x, 0, PREFETCH_D, {9, x, x, x}, {35, 36, 37, x}, k_prefetcher_noc},
     {35, 5, x, 0, DISPATCH_D, {34, x, x, x}, {10, 36, 37, x}, k_dispatcher_noc},
     {36, 5, x, 0, DISPATCH_S, {34, x, x, x}, {35, x, x, x}, k_dispatcher_s_noc},
-    {37, 5, x, 0, RETURN_FABRIC_MUX, /*full size*/ {35}, /*header only*/ {34}, k_fabric_mux_noc},
+    {37, 5, x, 0, RETURN_FABRIC_MUX, /*full size*/ {35}, /*header only*/ {34}, k_fabric_mux_noc, 0},
 
     // Remote chip 6
     {38, 6, x, 0, PREFETCH_D, {11, x, x, x}, {39, 40, 41, x}, k_prefetcher_noc},
     {39, 6, x, 0, DISPATCH_D, {38, x, x, x}, {12, 40, 41, x}, k_dispatcher_noc},
     {40, 6, x, 0, DISPATCH_S, {38, x, x, x}, {39, x, x, x}, k_dispatcher_s_noc},
-    {41, 6, x, 0, RETURN_FABRIC_MUX, /*full size*/ {39}, /*header only*/ {38}, k_fabric_mux_noc},
+    {41, 6, x, 0, RETURN_FABRIC_MUX, /*full size*/ {39}, /*header only*/ {38}, k_fabric_mux_noc, 0},
 
     // Remote chip 7
     {42, 7, x, 0, PREFETCH_D, {13, x, x, x}, {43, 44, 45, x}, k_prefetcher_noc},
     {43, 7, x, 0, DISPATCH_D, {42, x, x, x}, {14, 44, 45, x}, k_dispatcher_noc},
     {44, 7, x, 0, DISPATCH_S, {42, x, x, x}, {43, x, x, x}, k_dispatcher_s_noc},
-    {45, 7, x, 0, RETURN_FABRIC_MUX, /*full size*/ {43}, /*header only*/ {42}, k_fabric_mux_noc},
+    {45, 7, x, 0, RETURN_FABRIC_MUX, /*full size*/ {43}, /*header only*/ {42}, k_fabric_mux_noc, 0},
 
     // Remote chip 8
     {46, 8, x, 0, PREFETCH_D, {15, x, x, x}, {47, 48, 49, x}, k_prefetcher_noc},
     {47, 8, x, 0, DISPATCH_D, {46, x, x, x}, {16, 48, 49, x}, k_dispatcher_noc},
     {48, 8, x, 0, DISPATCH_S, {46, x, x, x}, {47, x, x, x}, k_dispatcher_s_noc},
-    {49, 8, x, 0, RETURN_FABRIC_MUX, /*full size*/ {47}, /*header only*/ {46}, k_fabric_mux_noc},
+    {49, 8, x, 0, RETURN_FABRIC_MUX, /*full size*/ {47}, /*header only*/ {46}, k_fabric_mux_noc, 0},
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = {
@@ -403,7 +404,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {37, 1, x, 1, DISPATCH_D, {35, x, x, x}, {40, 39, 3, x}, k_dispatcher_noc},
     {38, 1, x, 0, DISPATCH_S, {34, x, x, x}, {36, x, x, x}, k_dispatcher_s_noc},
     {39, 1, x, 1, DISPATCH_S, {35, x, x, x}, {37, x, x, x}, k_dispatcher_s_noc},
-    {40, 1, x, 0, RETURN_FABRIC_MUX, /*full size*/ {36, 37}, /*header only*/ {34, 35}, k_fabric_mux_noc},
+    {40, 1, x, 0, RETURN_FABRIC_MUX, /*full size*/ {36, 37}, /*header only*/ {34, 35}, k_fabric_mux_noc, 0},
 
     // Remote chip 2
     {41, 2, x, 0, PREFETCH_D, {4, x, x, x}, {47, 43, 45, x}, k_prefetcher_noc},
@@ -412,7 +413,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {44, 2, x, 1, DISPATCH_D, {42, x, x, x}, {47, 46, 7, x}, k_dispatcher_noc},
     {45, 2, x, 0, DISPATCH_S, {41, x, x, x}, {43, x, x, x}, k_dispatcher_s_noc},
     {46, 2, x, 1, DISPATCH_S, {42, x, x, x}, {44, x, x, x}, k_dispatcher_s_noc},
-    {47, 2, x, 0, RETURN_FABRIC_MUX, /*full size*/ {43, 44}, /*header only*/ {41, 42}, k_fabric_mux_noc},
+    {47, 2, x, 0, RETURN_FABRIC_MUX, /*full size*/ {43, 44}, /*header only*/ {41, 42}, k_fabric_mux_noc, 0},
 
     // Remote chip 3
     {48, 3, x, 0, PREFETCH_D, {8, x, x, x}, {54, 50, 52, x}, k_prefetcher_noc},
@@ -421,7 +422,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {51, 3, x, 1, DISPATCH_D, {49, x, x, x}, {54, 53, 11, x}, k_dispatcher_noc},
     {52, 3, x, 0, DISPATCH_S, {48, x, x, x}, {50, x, x, x}, k_dispatcher_s_noc},
     {53, 3, x, 1, DISPATCH_S, {49, x, x, x}, {51, x, x, x}, k_dispatcher_s_noc},
-    {54, 3, x, 0, RETURN_FABRIC_MUX, /*full size*/ {50, 51}, /*header only*/ {48, 49}, k_fabric_mux_noc},
+    {54, 3, x, 0, RETURN_FABRIC_MUX, /*full size*/ {50, 51}, /*header only*/ {48, 49}, k_fabric_mux_noc, 0},
 
     // Remote chip 4
     {55, 4, x, 0, PREFETCH_D, {12, x, x, x}, {61, 57, 59, x}, k_prefetcher_noc},
@@ -430,7 +431,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {58, 4, x, 1, DISPATCH_D, {56, x, x, x}, {61, 60, 15, x}, k_dispatcher_noc},
     {59, 4, x, 0, DISPATCH_S, {55, x, x, x}, {57, x, x, x}, k_dispatcher_s_noc},
     {60, 4, x, 1, DISPATCH_S, {56, x, x, x}, {58, x, x, x}, k_dispatcher_s_noc},
-    {61, 4, x, 0, RETURN_FABRIC_MUX, /*full size*/ {57, 58}, /*header only*/ {55, 56}, k_fabric_mux_noc},
+    {61, 4, x, 0, RETURN_FABRIC_MUX, /*full size*/ {57, 58}, /*header only*/ {55, 56}, k_fabric_mux_noc, 0},
 
     // Remote chip 5
     {62, 5, x, 0, PREFETCH_D, {17, x, x, x}, {68, 64, 66, x}, k_prefetcher_noc},
@@ -439,7 +440,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {65, 5, x, 1, DISPATCH_D, {63, x, x, x}, {68, 67, 20, x}, k_dispatcher_noc},
     {66, 5, x, 0, DISPATCH_S, {62, x, x, x}, {64, x, x, x}, k_dispatcher_s_noc},
     {67, 5, x, 1, DISPATCH_S, {63, x, x, x}, {65, x, x, x}, k_dispatcher_s_noc},
-    {68, 5, x, 0, RETURN_FABRIC_MUX, /*full size*/ {64, 65}, /*header only*/ {62, 63}, k_fabric_mux_noc},
+    {68, 5, x, 0, RETURN_FABRIC_MUX, /*full size*/ {64, 65}, /*header only*/ {62, 63}, k_fabric_mux_noc, 0},
 
     // Remote chip 6
     {69, 6, x, 0, PREFETCH_D, {21, x, x, x}, {75, 71, 73, x}, k_prefetcher_noc},
@@ -448,7 +449,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {72, 6, x, 1, DISPATCH_D, {70, x, x, x}, {75, 74, 24, x}, k_dispatcher_noc},
     {73, 6, x, 0, DISPATCH_S, {69, x, x, x}, {71, x, x, x}, k_dispatcher_s_noc},
     {74, 6, x, 1, DISPATCH_S, {70, x, x, x}, {72, x, x, x}, k_dispatcher_s_noc},
-    {75, 6, x, 0, RETURN_FABRIC_MUX, /*full size*/ {71, 72}, /*header only*/ {69, 70}, k_fabric_mux_noc},
+    {75, 6, x, 0, RETURN_FABRIC_MUX, /*full size*/ {71, 72}, /*header only*/ {69, 70}, k_fabric_mux_noc, 0},
 
     // Remote chip 7
     {76, 7, x, 0, PREFETCH_D, {25, x, x, x}, {82, 78, 80, x}, k_prefetcher_noc},
@@ -457,7 +458,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {79, 7, x, 1, DISPATCH_D, {77, x, x, x}, {82, 81, 28, x}, k_dispatcher_noc},
     {80, 7, x, 0, DISPATCH_S, {76, x, x, x}, {78, x, x, x}, k_dispatcher_s_noc},
     {81, 7, x, 1, DISPATCH_S, {77, x, x, x}, {79, x, x, x}, k_dispatcher_s_noc},
-    {82, 7, x, 0, RETURN_FABRIC_MUX, /*full size*/ {78, 79}, /*header only*/ {76, 77}, k_fabric_mux_noc},
+    {82, 7, x, 0, RETURN_FABRIC_MUX, /*full size*/ {78, 79}, /*header only*/ {76, 77}, k_fabric_mux_noc, 0},
 
     // Remote chip 8
     {83, 8, x, 0, PREFETCH_D, {29, x, x, x}, {89, 85, 87, x}, k_prefetcher_noc},
@@ -466,7 +467,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {86, 8, x, 1, DISPATCH_D, {84, x, x, x}, {89, 88, 32, x}, k_dispatcher_noc},
     {87, 8, x, 0, DISPATCH_S, {83, x, x, x}, {85, x, x, x}, k_dispatcher_s_noc},
     {88, 8, x, 1, DISPATCH_S, {84, x, x, x}, {86, x, x, x}, k_dispatcher_s_noc},
-    {89, 8, x, 0, RETURN_FABRIC_MUX, /*full size*/ {85, 86}, /*header only*/ {83, 84}, k_fabric_mux_noc},
+    {89, 8, x, 0, RETURN_FABRIC_MUX, /*full size*/ {85, 86}, /*header only*/ {83, 84}, k_fabric_mux_noc, 0},
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq = {
@@ -746,11 +747,11 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
 // clang-format on
 
 std::vector<FDKernel*> node_id_to_kernel;
-std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
+tt::tt_metal::detail::ProgramCompileGroup command_queue_compile_group;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> routing_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> empty_cores;
-std::unordered_map<chip_id_t, std::vector<TerminationInfo>> termination_info;
+std::unordered_map<chip_id_t, std::unordered_set<TerminationInfo>> termination_info;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
 std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -934,6 +935,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
             delete node_id_to_kernel[idx];
         }
         node_id_to_kernel.clear();
+        command_queue_compile_group.clear();
     }
 
     // Read the input table, create configs for each node + track mmio devices and number of cqs.
@@ -942,7 +944,13 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     for (const auto& node : nodes) {
         TT_ASSERT(node_id_to_kernel.size() == node.id);
         node_id_to_kernel.push_back(FDKernel::Generate(
-            node.id, node.device_id, node.servicing_device_id, node.cq_id, node.noc_selection, node.kernel_type));
+            node.id,
+            node.device_id,
+            node.servicing_device_id,
+            node.cq_id,
+            node.noc_selection,
+            node.kernel_type,
+            node.tunnel_index));
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(node.device_id) ==
             node.device_id) {
             mmio_device_ids.insert(node.device_id);
@@ -1019,9 +1027,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
         }
     }
     for (auto& mmio_device_id_and_kernels : mmio_device_id_to_kernels) {
-        chip_id_t mmio_device_id = mmio_device_id_and_kernels.first;
-        int prefetch_h_id = 0, dispatch_h_id = 0;
-        int demux_id = 0, router_id = 0, tunneler_id = 0;
+        int demux_id = 0, router_id = 0;
         for (auto fd_kernel : mmio_device_id_and_kernels.second) {
             if (auto demux_kernel = dynamic_cast<DemuxKernel*>(fd_kernel)) {
                 demux_kernel->SetPlacementCQID((demux_id++) % 3);
@@ -1106,18 +1112,17 @@ void populate_cq_static_args(IDevice* device) {
         }
     }
 
-    // Move program into the storage for create_and_compile_cq_program to be called later
-    command_queue_pgms[device->id()] = std::move(cq_program_ptr);
+    // Move program into the storage for later steps
+    command_queue_compile_group.add_program(device, std::move(cq_program_ptr));
 }
 
-std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
-    TT_ASSERT(
-        command_queue_pgms.contains(device->id()),
+void create_cq_program(IDevice* device) {
+    TT_FATAL(
+        command_queue_compile_group.contains(device),
         "Tried to create and compile CQ program on device {} without static args populated (need to run "
         "populate_cq_static_args())",
         device->id());
     empty_cores.clear();
-    std::unique_ptr<Program> cq_program = std::move(command_queue_pgms[device->id()]);
     // Third pass, populate dependent configs and create kernels for each node
     for (auto node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
@@ -1161,18 +1166,28 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
 
         const auto& info = node_and_kernel->GetTerminationInfo();
         if (info.has_value()) {
-            termination_info[device->id()].push_back(info.value());
+            termination_info[device->id()].insert(info.value());
         }
     }
+}
 
-    // Compile the program and return it so Device can register it
-    detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
+void compile_cq_programs() {
+    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
+        detail::EnablePersistentKernelCache();
+    }
+
+    command_queue_compile_group.compile_all(/*force_slow_dispatch=*/true);
+
     // Write runtime args to device
-    detail::WriteRuntimeArgsToDevice(device, *cq_program, /*force_slow_dispatch=*/true);
-    // Erase from map. Note: program in map is no longer valid
-    // It is returned from this function and the caller will take ownership of it
-    command_queue_pgms.erase(device->id());
-    return cq_program;
+    command_queue_compile_group.write_runtime_args(/*force_slow_dispatch=*/true);
+
+    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
+        detail::DisablePersistentKernelCache();
+    }
+}
+
+std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDevice* device) {
+    return command_queue_compile_group.remove_program(device);
 }
 
 void configure_dispatch_cores(IDevice* device) {
@@ -1236,7 +1251,7 @@ void configure_dispatch_cores(IDevice* device) {
     }
 }
 
-tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
+std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDatamoverAxis> get_fabric_edm_type(
     const tt::tt_fabric::ControlPlane& control_plane,
     tt_fabric::Topology topology,
     tt::tt_fabric::MeshId mesh_id,
@@ -1244,7 +1259,7 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
     chip_id_t chip1,
     bool wrap_around_mesh) {
     if (topology != tt_fabric::Topology::Ring) {
-        return tt::tt_fabric::FabricEriscDatamoverType::Default;
+        return {tt::tt_fabric::FabricEriscDatamoverType::Default, tt::tt_fabric::FabricEriscDatamoverAxis::Short};
     }
 
     auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
@@ -1253,6 +1268,7 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
     auto mesh_num_rows = physical_mesh_shape[0];
     auto mesh_num_columns = physical_mesh_shape[1];
     auto fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
+    auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
 
     auto smaller_chip_id = std::min(chip0, chip1);
     auto larger_chip_id = std::max(chip0, chip1);
@@ -1268,6 +1284,13 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
         } else if ((chip1 == 0 || chip1 == mesh_num_columns) && chip0 == chip1 + 1) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
+        } else if ((chip0 == 1 || chip0 == mesh_num_columns + 1) && (chip1 == chip0 + 1)) {
+            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+        }
+        // check if edm is on the longer axis
+        if ((mesh_num_rows * mesh_num_columns) >=
+            tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
         }
     } else {
         bool is_dateline_edm_along_column =
@@ -1287,6 +1310,15 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
         bool is_dateline_upstream_adjacent_edm_along_row =
             (chip1 < mesh_num_columns && chip0 == chip1 + mesh_num_columns) ||
             (chip1 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip0 == chip1 - mesh_num_columns);
+        bool is_dateline_upstream_adjacent_upstream_edm_along_column =
+            (chip0 % mesh_num_columns == 1 && chip1 == chip0 + 1) ||
+            (chip0 % mesh_num_columns == mesh_num_columns - 2 && chip1 == chip0 - 1);
+        bool is_dateline_upstream_adjacent_upstream_edm_along_row =
+            (chip0 >= mesh_num_columns && chip0 < (2 * mesh_num_columns) && chip1 == chip0 + mesh_num_columns) ||
+            (chip0 >= (mesh_num_columns * (mesh_num_rows - 2)) && chip0 < (mesh_num_columns * (mesh_num_rows - 1)) &&
+             chip1 == chip0 - mesh_num_columns);
+        bool is_edm_along_row = ((larger_chip_id - smaller_chip_id) == mesh_num_columns) ||
+                                (smaller_chip_id == larger_chip_id % mesh_num_columns);
         // Column dateline
         if (is_dateline_edm_along_column) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
@@ -1311,9 +1343,25 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
         else if (is_dateline_upstream_adjacent_edm_along_row) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
         }
+        // Column dateline upstream adjacent device upstream
+        else if (is_dateline_upstream_adjacent_upstream_edm_along_column) {
+            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+        }
+        // Row dateline upstream adjacent device upstream
+        else if (is_dateline_upstream_adjacent_upstream_edm_along_row) {
+            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+        }
+
+        // check if edm is on the longer axis
+        if ((mesh_num_columns >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD &&
+             !is_edm_along_row) ||
+            (mesh_num_rows >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD &&
+             is_edm_along_row)) {
+            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
+        }
     }
 
-    return fabric_edm_type;
+    return {fabric_edm_type, fabric_edm_axis};
 }
 
 void build_tt_fabric_program(
@@ -1327,24 +1375,34 @@ void build_tt_fabric_program(
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
+    const auto configure_edm_builder_for_dispatch = [&](tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+            return;
+        }
+        constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 64;
+        // Dispatch requires a higher context switching freq to service slow dispatch / UMD / debug tools
+        edm_builder.set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);
+        edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+    };
 
     if (is_TG && device->is_mmio_capable()) {
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
-            // remote chip id is only used to dertmine the handshake master, no functional impact
+            // remote_fabric_node_id is only used to determine the handshake master, no functional impact
             // for now treat the mmio chips as the handshake master
-            auto remote_chip_id = device->id() + 1;
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
                 *fabric_program_ptr,
                 eth_logical_core,
-                device->id(),
-                remote_chip_id,
+                fabric_node_id,
+                FabricNodeId{fabric_node_id.mesh_id, fabric_node_id.chip_id + 1},
                 edm_config,
                 false, /* build_in_worker_connection_mode */
                 false, /* is_dateline */
                 eth_direction);
+            // Both links used by dispatch on TG Gateway (mmio device)
+            configure_edm_builder_for_dispatch(edm_builder);
             edm_builders.insert({eth_chan, edm_builder});
         }
 
@@ -1352,13 +1410,14 @@ void build_tt_fabric_program(
     }
 
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
-    std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
+    std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors;
     uint32_t num_intra_chip_neighbors = 0;
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2D_routing = topology == Topology::Mesh;
 
     for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
-        auto active_eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
+        auto active_eth_chans =
+            control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
         if (active_eth_chans.empty()) {
             continue;
         }
@@ -1389,9 +1448,16 @@ void build_tt_fabric_program(
         }
 
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
-        chip_neighbors[direction] = control_plane.get_physical_chip_id_from_fabric_node_id(neighbor_fabric_node_id);
+        chip_neighbors.emplace(direction, neighbor_fabric_node_id);
 
         active_fabric_eth_channels.insert({direction, active_eth_chans});
+        log_debug(
+            tt::LogMetal,
+            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans: {}",
+            device->id(),
+            control_plane.get_fabric_node_id_from_physical_chip_id(device->id()).chip_id,
+            direction,
+            active_eth_chans.size());
     }
 
     if (active_fabric_eth_channels.empty()) {
@@ -1401,9 +1467,8 @@ void build_tt_fabric_program(
 
     const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh(fabric_node_id.mesh_id);
 
-    for (const auto& [direction, remote_physical_chip_id] : chip_neighbors) {
-        auto remote_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(remote_physical_chip_id);
-        const auto& fabric_edm_type = get_fabric_edm_type(
+    for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
+        const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
             control_plane,
             topology,
             fabric_node_id.mesh_id,
@@ -1414,21 +1479,27 @@ void build_tt_fabric_program(
         bool is_dateline = remote_fabric_node_id.mesh_id == fabric_node_id.mesh_id &&
                            fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline;
 
-        const auto& curr_edm_config = fabric_context.get_fabric_router_config(fabric_edm_type);
-
+        const auto& curr_edm_config = fabric_context.get_fabric_router_config(fabric_edm_type, fabric_edm_axis);
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
                 *fabric_program_ptr,
                 eth_logical_core,
-                device->id(),
-                remote_physical_chip_id,
+                fabric_node_id,
+                remote_fabric_node_id,
                 curr_edm_config,
                 false, /* build_in_worker_connection_mode */
                 is_dateline,
                 control_plane.routing_direction_to_eth_direction(direction));
             edm_builders.insert({eth_chan, edm_builder});
+        }
+
+        // Last link may be used by dispatch
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+        if (!active_fabric_eth_channels[direction].empty()) {
+            const auto dispatch_eth_chan = active_fabric_eth_channels[direction].back();
+            configure_edm_builder_for_dispatch(edm_builders.at(dispatch_eth_chan));
         }
     }
 
@@ -1455,7 +1526,7 @@ void build_tt_fabric_program(
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
 
                 // select VC based on the current link
-                auto edm_noc_vc = link & edm_builder1.config.MAX_EDM_NOC_VC;
+                auto edm_noc_vc = edm_builder1.config.DEFAULT_NOC_VC + (link % edm_builder1.config.NUM_EDM_NOC_VCS);
                 edm_builder1.config.edm_noc_vc = edm_noc_vc;
                 edm_builder2.config.edm_noc_vc = edm_noc_vc;
 
@@ -1512,7 +1583,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
         router_channels_mask += 0x1 << (uint32_t)router_chan;
     }
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     const auto topology = fabric_context.get_fabric_topology();
     if (topology == tt::tt_fabric::Topology::Mesh) {
         defines["FABRIC_2D"] = "";
@@ -1522,6 +1593,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     const auto num_enabled_eth_cores = edm_builders.size();
     const auto num_enabled_risc_cores =
         edm_builders.begin()->second.get_configured_risc_count();  // same across all eth cores
+    size_t num_local_fabric_routers = num_enabled_risc_cores * num_enabled_eth_cores;
     for (auto& [eth_chan, edm_builder] : edm_builders) {
         edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
@@ -1531,7 +1603,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
             const auto is_master_risc_core = eth_chan == master_router_chan && (risc_id == 0);
             ct_args.push_back(is_master_risc_core);
             ct_args.push_back(master_router_chan);
-            ct_args.push_back(num_enabled_risc_cores * num_enabled_eth_cores);
+            ct_args.push_back(num_local_fabric_routers);
             ct_args.push_back(router_channels_mask);
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
@@ -1548,6 +1620,14 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
 
             tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, eth_logical_core, rt_args);
         }
+
+        log_debug(
+            tt::LogMetal,
+            "Building fabric router -> device (phys): {}, (logical): {}, channel: {}, num_local_fabric_routers: {}",
+            device->id(),
+            control_plane.get_fabric_node_id_from_physical_chip_id(device->id()).chip_id,
+            eth_chan,
+            num_local_fabric_routers);
     }
 
     detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
@@ -1591,11 +1671,24 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_
     return routing_cores[dev_id];
 }
 
-const std::vector<TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id) {
+const std::unordered_set<TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id) {
     if (!termination_info.contains(dev_id)) {
         termination_info[dev_id] = {};
     }
-    return termination_info[dev_id];
+    return termination_info.at(dev_id);
+}
+
+void reset_topology_state() {
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24439
+    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
+        delete node_id_to_kernel[idx];
+    }
+    node_id_to_kernel.clear();
+    command_queue_compile_group.clear();
+    dispatch_cores.clear();
+    routing_cores.clear();
+    empty_cores.clear();
+    termination_info.clear();
 }
 
 }  // namespace tt::tt_metal

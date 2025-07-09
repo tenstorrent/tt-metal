@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <functional>
 #include <optional>
+#include <string>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -39,7 +39,7 @@ struct GeluBackwardDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& grad_output,
         const Tensor& input,
-        const string& approximate,
+        const std::string& approximate,
         DataType output_dtype,
         const MemoryConfig& output_memory_config,
         const std::optional<Tensor>& preallocated_input_grad);

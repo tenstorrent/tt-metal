@@ -11,10 +11,10 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/operations/creation.hpp"
-#include "cpp/ttnn/operations/data_movement/copy/copy.hpp"
-#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -44,15 +44,8 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     bool rm_only = !no_step && input_tensor.layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
     if (rm_only) {
-        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
+        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
-    TT_FATAL(
-        (!input_tensor.is_sharded()) ||
-            (input_tensor.is_sharded() &&
-             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ||
-            (input_tensor.is_sharded() &&
-             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED),
-        "Slice Write currently supports Interleaved or Height & Block Sharding for input tensors.");
 
     TT_FATAL(!output_tensor.is_sharded(), "Slice Write currently doesn't support sharded output tensors.");
     const bool tiled = input.layout() == Layout::TILE;
@@ -106,12 +99,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         uint32_t input_nhw_volume = shard_spec.shape[0] * num_cores_nhw;
         uint32_t calc_nhw_volume_padded =
             tt::round_up(tt::div_up(calc_nhw_volume, num_cores_nhw), tt::constants::TILE_HEIGHT) * num_cores_nhw;
-        TT_FATAL(
-            input_nhw_volume == calc_nhw_volume_padded,
-            "Input tensor size {} does not match the size of the slice being written {}",
-            input_nhw_volume,
-            calc_nhw_volume_padded);
-
     } else {
         for (int i = 0; i < 4; i++) {
             TT_FATAL(
@@ -128,7 +115,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     }
 
     if (on_device) {
-        auto memory_config = output_tensor.memory_config();
+        const auto& memory_config = output_tensor.memory_config();
 
         // Check for in-place unpad optimization
         if (input.is_sharded() && input.memory_config() == memory_config && padded_input_shape.rank() > 1) {

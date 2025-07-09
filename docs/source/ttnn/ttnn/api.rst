@@ -400,7 +400,7 @@ Reduction
    :nosignatures:
    :template: function.rst
 
-   ttnn.experimental.cumprod
+   ttnn.cumprod
    ttnn.max
    ttnn.mean
    ttnn.min
@@ -411,7 +411,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.experimental.sort
-   ttnn.experimental.cumsum
+   ttnn.cumsum
 
 Data Movement
 =============
@@ -436,6 +436,7 @@ Data Movement
    ttnn.untilize
    ttnn.untilize_with_unpadding
    ttnn.indexed_fill
+   ttnn.experimental.gather
 
 Normalization
 =============
@@ -545,7 +546,6 @@ Vision
    :template: function.rst
 
    ttnn.upsample
-   ttnn.downsample
 
 KV Cache
 ========

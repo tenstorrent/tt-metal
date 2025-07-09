@@ -43,7 +43,7 @@ public:
 
     static void initialize(
         const std::vector<chip_id_t>& device_ids,
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,

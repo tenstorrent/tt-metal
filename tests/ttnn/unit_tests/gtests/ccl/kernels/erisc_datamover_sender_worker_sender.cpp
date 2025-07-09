@@ -6,7 +6,7 @@
 #include <array>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 // Worker core - Data Movement Writer -> Sends to Erisc Data Mover (sender side).
 // -> takes input from local cb and pushes to erisc L1

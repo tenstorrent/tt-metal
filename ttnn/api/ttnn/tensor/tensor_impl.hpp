@@ -148,7 +148,7 @@ std::vector<T> convert_layout_tile_to_row_major(
 //     ** For the last shard, we only align to nearest page instead of full shard size for partial shards
 //   * After conversion, size of physical data will match 2D physical size indicated by tensor_spec.physical_shape()
 template <typename T>
-std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec, T pad_value = 0);
+std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value = 0);
 
 // Converts physical data into logical data based on tensor spec (see encode_tensor_data for details)
 // - Physical data: Flat container of physical data corresponding to tensor spec
@@ -158,7 +158,13 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
 //   * To get logical data, perform the exact inverse process of encode_tensor_data
 //   * Resulting data is safe to be converted to python tensors or general consumption with just a ND logical shape
 template <typename T>
-std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec);
+std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec);
+
+// Returns true if the logical tensor data matches the physical tensor data:
+// 1. Row major layout is used.
+// 2. Logical 2D shape matches physical shape.
+// Used for optimizing conversion operations.
+bool logical_matches_physical(const TensorSpec& tensor_spec);
 
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -172,6 +178,8 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
 
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
+
+HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
 template <typename T>
 void read_data_from_device_buffer(CommandQueue& cq, Buffer& device_buffer, void* host_buffer_data, bool blocking) {
@@ -195,6 +203,10 @@ template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
+void copy_to_host_tensor(
+    const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+
+template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     IDevice* target_device,
@@ -210,7 +222,7 @@ Tensor to_device_mesh_tensor(
     QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device_tensor(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
 
 // ======================================================================================
 //                                  .to_layout()

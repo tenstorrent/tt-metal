@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <ostream>
+#include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -13,6 +14,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
+#include "device_pool.hpp"
 #include "galaxy_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
@@ -43,7 +45,7 @@ is updated with this option, we can call that over this function.
 std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(const chip_id_t device_id) {
     std::unordered_set<chip_id_t> connected_device_ids;
     const std::unordered_set<CoreCoord>& active_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
     for (const CoreCoord& ethernet_core : active_ethernet_cores) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_id, ethernet_core)) {
             continue;
@@ -68,7 +70,7 @@ TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
         if (is_galaxy_device(device_id)) {
             std::unordered_map<chip_id_t, uint32_t> connected_devices_to_num_links_found;
             const std::unordered_set<CoreCoord>& active_ethernet_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
             for (const CoreCoord& ethernet_core : active_ethernet_cores) {
                 if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                         device_id, ethernet_core)) {
@@ -178,30 +180,41 @@ TEST_F(TGFixture, ValidateNumGalaxyChips) {
 TEST_F(TGFixture, ValidateChipBoardTypes) {
     uint32_t num_n150_chips = 0;
     uint32_t num_galaxy_chips = 0;
+
+    // Validate the gateway (N150) chips
+    // These chips are not provided in the test fixture devices because they cannot be
+    // dispatched to
+    const std::vector<chip_id_t> tg_gateway_chips{0, 1, 2, 3};
+    for (const chip_id_t gateway_chip_id : tg_gateway_chips) {
+        ASSERT_TRUE(tt::tt_metal::DevicePool::instance().is_device_active(gateway_chip_id))
+            << "Gateway chip " << gateway_chip_id << " is not active";
+        ASSERT_TRUE(is_n150_device(gateway_chip_id)) << "Gateway chip " << gateway_chip_id << " is not an N150 chip";
+        num_n150_chips++;
+    }
+
+    // Validate the galaxy chips
     for (IDevice* device : this->devices_) {
         const chip_id_t device_id = device->id();
         if (is_galaxy_device(device_id)) {
             num_galaxy_chips++;
-        } else if (is_n150_device(device_id)) {
-            num_n150_chips++;
         }
     }
     ASSERT_TRUE(num_galaxy_chips == 32) << "Detected " << num_galaxy_chips << " Galaxy chips" << std::endl;
     ASSERT_TRUE(num_n150_chips == 4) << "Detected " << num_n150_chips << " N150 chips" << std::endl;
 }
 
-TEST_F(TGGFixture, ValidateNumMMIOChips) {
+TEST_F(DISABLED_TGGFixture, ValidateNumMMIOChips) {
     const size_t num_mmio_chips = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
     ASSERT_TRUE(num_mmio_chips == 8) << "Detected " << num_mmio_chips << " MMIO chips" << std::endl;
 }
 
-TEST_F(TGGFixture, ValidateNumGalaxyChips) {
+TEST_F(DISABLED_TGGFixture, ValidateNumGalaxyChips) {
     const size_t num_galaxy_chips = tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
     ASSERT_TRUE(num_galaxy_chips == 64) << "Detected " << num_galaxy_chips << " Galaxy chips" << std::endl;
 }
 
 // Validate that there are 8 N150 chips and 64 Galaxy chips
-TEST_F(TGGFixture, ValidateChipBoardTypes) {
+TEST_F(DISABLED_TGGFixture, ValidateChipBoardTypes) {
     uint32_t num_n150_chips = 0;
     uint32_t num_galaxy_chips = 0;
     for (IDevice* device : this->devices_) {

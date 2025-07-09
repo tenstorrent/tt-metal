@@ -21,6 +21,7 @@ struct SortDeviceOperation {
     using tensor_return_value_t = sort::tensor_return_value_t;
     using program_factory_t = std::variant<
         sort::program::SortProgramFactorySingleRowSingleCore,
+        sort::program::SortProgramFactoryCrossCoreDataExchange,
         sort::program::SortProgramFactorySingleRowMultiCore>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -33,9 +34,9 @@ struct SortDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const int8_t dim,
-        const bool descending,
-        const bool stable,
+        int8_t dim,
+        bool descending,
+        bool stable,
         const MemoryConfig& output_memory_config,
         const std::vector<std::optional<Tensor>>& output_tensors);
 };

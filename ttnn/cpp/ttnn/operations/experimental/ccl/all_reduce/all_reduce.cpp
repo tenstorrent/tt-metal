@@ -4,7 +4,7 @@
 
 #include "all_reduce.hpp"
 
-#include "cpp/ttnn/operations/experimental/ccl/all_reduce/device/all_reduce_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_reduce/device/all_reduce_op.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
