@@ -35,4 +35,14 @@ pytest --disable-warnings models/experimental/swin_s/tests/perf/test_e2e_perform
 ```
 - end-2-end perf is 5 FPS
 
+## Model demo with trace
+
+- When running the ImageNet demo for the first time, you need to authenticate with Hugging Face by either running `huggingface-cli login` or setting the token directly using `export HF_TOKEN=<your_token>`.
+- To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
+
+- Use the following command to run the demo for Imagenet-1K:
+```sh
+pytest --disable-warnings models/demos/swin_s/demo/demo.py::test_run_swin_s_trace_2cqs_inference
+```
+
 ### Owner: [HariniMohan0102](https://github.com/HariniMohan0102)
