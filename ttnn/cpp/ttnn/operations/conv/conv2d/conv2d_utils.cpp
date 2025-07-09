@@ -459,18 +459,11 @@ bool is_1d_deptwise_conv(
 }
 
 bool is_singlecore_skip_mcast(
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    TensorMemoryLayout memory_layout,
-    uint32_t input_cores,
-    uint32_t output_cores) {
+    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
     if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
         return false;
     }
-    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        return parallelization_config.grid_size.x * parallelization_config.grid_size.y == 1;
-    }
-    // WIDTH_SHARDED
-    return input_cores == 1 && output_cores == 1;
+    return parallelization_config.num_cores_c * parallelization_config.num_cores_nhw == 1;
 }
 
 template <typename DeviceType>

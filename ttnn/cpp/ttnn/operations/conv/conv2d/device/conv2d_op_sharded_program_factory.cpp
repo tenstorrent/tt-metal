@@ -79,11 +79,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    const bool skip_mcast = is_singlecore_skip_mcast(
-        parallelization_config,
-        a.memory_config().memory_layout(),
-        a.memory_config().shard_spec().value().grid.num_cores(),
-        output.memory_config().shard_spec().value().grid.num_cores());
+    const bool skip_mcast = is_singlecore_skip_mcast(parallelization_config, a.memory_config().memory_layout());
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 

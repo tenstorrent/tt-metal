@@ -353,8 +353,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (output_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
-    bool skip_mcast =
-        is_singlecore_skip_mcast(p_config, a.memory_config().memory_layout(), input_num_cores, output_num_cores);
+    bool skip_mcast = is_singlecore_skip_mcast(p_config, a.memory_config().memory_layout());
     if (skip_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
     }
