@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
@@ -169,6 +170,8 @@ def run_all_gather_impl(
     t3k_mesh_device.clear_loaded_sub_device_manager()
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, ag_output_shape, dim, layout, ag_input_dtype",
     [
@@ -215,6 +218,9 @@ def test_all_gather_async_interleaved_to_interleaved(
     all_gather_topology,
     num_iters,
 ):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3K!")
+
     run_all_gather_impl(
         t3k_mesh_device,
         num_devices,
@@ -231,6 +237,8 @@ def test_all_gather_async_interleaved_to_interleaved(
     )
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, ag_input_dtype",
     [
@@ -307,6 +315,9 @@ def test_all_gather_async_sharded_to_sharded(
     all_gather_topology,
     num_iters,
 ):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3K!")
+
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
@@ -339,6 +350,8 @@ def test_all_gather_async_sharded_to_sharded(
     )
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, ag_input_dtype",
     [
@@ -396,6 +409,9 @@ def test_all_gather_async_sharded_to_interleaved(
     all_gather_topology,
     num_iters,
 ):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3K!")
+
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
@@ -423,6 +439,8 @@ def test_all_gather_async_sharded_to_interleaved(
     )
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, ag_input_dtype",
     [
@@ -480,6 +498,9 @@ def test_all_gather_async_interleaved_to_sharded(
     all_gather_topology,
     num_iters,
 ):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3K!")
+
     output_shard_spec = ttnn.ShardSpec(
         output_shard_grid,
         output_shard_shape,
