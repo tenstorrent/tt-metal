@@ -20,6 +20,9 @@
 #include "ttnn_test_fixtures.hpp"
 
 namespace {
+
+namespace CMAKE_UNIQUE_NAMESPACE {
+
 struct Inputs {
     ttnn::Shape shape;
     TensorLayout layout;
@@ -34,13 +37,14 @@ struct CreateTensorParams {
     Expected expected;
 };
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 class CreateTensorWithLayoutTest : public ttnn::TTNNFixtureWithDevice,
-                                   public ::testing::WithParamInterface<CreateTensorParams> {};
+                                   public ::testing::WithParamInterface<CMAKE_UNIQUE_NAMESPACE::CreateTensorParams> {};
 
 TEST_P(CreateTensorWithLayoutTest, Tile) {
-    CreateTensorParams params = GetParam();
+    CMAKE_UNIQUE_NAMESPACE::CreateTensorParams params = GetParam();
 
     auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(params.inputs.shape, params.inputs.layout), device_);
     EXPECT_EQ(tensor.padded_shape(), params.expected.padded_shape);
@@ -56,20 +60,20 @@ INSTANTIATE_TEST_SUITE_P(
     CreateTensorWithLayoutTestWithShape,
     CreateTensorWithLayoutTest,
     ::testing::Values(
-        CreateTensorParams{
-            Inputs{
+        CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{
+            CMAKE_UNIQUE_NAMESPACE::Inputs{
                 .shape = ttnn::Shape({1, 1, 32, 32}),
                 .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)},
-            Expected{.padded_shape = ttnn::Shape({1, 1, 32, 32})}},
+            CMAKE_UNIQUE_NAMESPACE::Expected{.padded_shape = ttnn::Shape({1, 1, 32, 32})}},
 
-        CreateTensorParams{
-            Inputs{
+        CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{
+            CMAKE_UNIQUE_NAMESPACE::Inputs{
                 .shape = ttnn::Shape({1, 1, 16, 10}),
                 .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)},
-            Expected{.padded_shape = ttnn::Shape({1, 1, 32, 32})}},
+            CMAKE_UNIQUE_NAMESPACE::Expected{.padded_shape = ttnn::Shape({1, 1, 32, 32})}},
 
-        CreateTensorParams{
-            Inputs{
+        CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{
+            CMAKE_UNIQUE_NAMESPACE::Inputs{
                 .shape = ttnn::Shape({1, 1, 16, 10}),
                 .layout = TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig)},
-            Expected{.padded_shape = ttnn::Shape({1, 1, 16, 10})}}));
+            CMAKE_UNIQUE_NAMESPACE::Expected{.padded_shape = ttnn::Shape({1, 1, 16, 10})}}));
