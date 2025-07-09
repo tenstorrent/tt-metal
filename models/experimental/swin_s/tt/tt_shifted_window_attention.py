@@ -29,6 +29,7 @@ class TtShiftedWindowAttention(nn.Module):
         self.shift_size = shift_size
         self.num_heads = num_heads
         self.attn_mask = attn_mask
+        self.core_grid = self.device.compute_with_storage_grid_size()
 
     def forward(self, input_tensor):
         relative_position_bias = self.parameters[
@@ -78,6 +79,49 @@ class TtShiftedWindowAttention(nn.Module):
         qkv_bias = self.parameters.qkv.bias
 
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        if input_tensor.shape[0] == 361:
+            shape = ttnn.pad_to_tile_shape([1, 384, 49, 96])
+            mem_config = ttnn.create_sharded_memory_config_(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            )
+
+            input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
+            input_tensor = ttnn.interleaved_to_sharded(input_tensor, mem_config)
+        elif input_tensor.shape[0] == 100:
+            shape = ttnn.pad_to_tile_shape([1, 128, 49, 192])
+            mem_config = ttnn.create_sharded_memory_config_(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            )
+            input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
+            input_tensor = ttnn.interleaved_to_sharded(input_tensor, mem_config)
+        elif input_tensor.shape[0] == 25:
+            shape = ttnn.pad_to_tile_shape([1, 32, 49, 384])
+            mem_config = ttnn.create_sharded_memory_config_(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            )
+        elif input_tensor.shape[0] == 9:
+            shape = ttnn.pad_to_tile_shape([1, 9, 49, 768])
+            mem_config = ttnn.create_sharded_memory_config_(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            )
+
         qkv = ttnn.linear(
             input_tensor,
             qkv_weight,
@@ -88,11 +132,14 @@ class TtShiftedWindowAttention(nn.Module):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
+        input_tensor = ttnn.squeeze(input_tensor, dim=0)
         qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.reshape(qkv, (input_tensor.shape[0], input_tensor.shape[1], 3, self.num_heads, C // self.num_heads))
 
         qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4), memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        channel = input_tensor.shape[1]
+        ttnn.deallocate(input_tensor)
         q = qkv[0:1, :, :, :, :]
         k = qkv[1:2, :, :, :, :]
         v = qkv[2:3, :, :, :, :]
@@ -121,7 +168,7 @@ class TtShiftedWindowAttention(nn.Module):
         if sum(self.shift_size) > 0:
             attn = attn + self.attn_mask
             attn = ttnn.to_layout(attn, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-            attn = ttnn.reshape(attn, (-1, self.num_heads, input_tensor.shape[1], input_tensor.shape[1]))
+            attn = ttnn.reshape(attn, (-1, self.num_heads, channel, channel))
             attn = ttnn.to_layout(attn, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -148,6 +195,46 @@ class TtShiftedWindowAttention(nn.Module):
 
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        if input_tensor.shape[0] == 361:
+            shape = ttnn.pad_to_tile_shape([1, 384, 49, 96])
+            mem_config = ttnn.create_sharded_memory_config_(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            )
+            input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
+            input_tensor = ttnn.interleaved_to_sharded(input_tensor, mem_config)
+        elif input_tensor.shape[0] == 100:
+            shape = ttnn.pad_to_tile_shape([1, 128, 49, 192])
+            mem_config = ttnn.create_sharded_memory_config_(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            )
+            input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
+            input_tensor = ttnn.interleaved_to_sharded(input_tensor, mem_config)
+        elif input_tensor.shape[0] == 25:
+            shape = ttnn.pad_to_tile_shape([1, 32, 49, 384])
+            mem_config = ttnn.create_sharded_memory_config_(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            )
+        elif input_tensor.shape[0] == 9:
+            shape = ttnn.pad_to_tile_shape([1, 9, 49, 768])
+            mem_config = ttnn.create_sharded_memory_config_(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            )
         output_tensor = ttnn.linear(
             input_tensor,
             proj_weight,
@@ -157,7 +244,7 @@ class TtShiftedWindowAttention(nn.Module):
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
+        output_tensor = ttnn.squeeze(output_tensor, dim=0)
         # reverse windows
         output_tensor = ttnn.reshape(
             output_tensor,
@@ -181,6 +268,5 @@ class TtShiftedWindowAttention(nn.Module):
 
         # unpad features
         output_tensor = output_tensor[:, :H, :W, :]
-
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         return output_tensor
