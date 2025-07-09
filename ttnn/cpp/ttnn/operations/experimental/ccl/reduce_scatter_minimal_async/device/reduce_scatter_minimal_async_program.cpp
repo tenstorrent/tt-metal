@@ -142,7 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     // scatter-write currently only supports 2 distinct noc addresses, and is only supported for wormhole
     uint32_t max_target_noc_addresses_per_packet = 1;
     if (tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0) {
-        uint32_t max_target_noc_addresses_per_packet = 2;
+        max_target_noc_addresses_per_packet = 2;
     }
 
     // L1 Scratch CB Creation
