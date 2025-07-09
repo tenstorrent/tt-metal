@@ -255,7 +255,7 @@ struct EdmChannelWorkerInterface {
         invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address;
-        if constexpr (MY_ETH_CHANNEL == 255) {  // EDM-EDM connection
+        if constexpr (MY_ETH_CHANNEL == 255) {  // EDM-EDM or mux connection
             worker_semaphore_address = get_noc_addr(
                 (uint32_t)worker_info.worker_xy.x,
                 (uint32_t)worker_info.worker_xy.y,

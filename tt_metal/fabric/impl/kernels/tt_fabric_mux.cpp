@@ -111,7 +111,8 @@ void forward_data(
         increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
     }
 
-    check_worker_connections(worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
+    tt::tt_fabric::check_worker_connections<255>(
+        worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
 }
 
 void kernel_main() {

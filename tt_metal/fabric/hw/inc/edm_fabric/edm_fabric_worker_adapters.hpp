@@ -362,7 +362,14 @@ struct WorkerToFabricEdmSenderImpl {
                 edm_worker_location_info_addr +
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
         // write the address of our local copy of read counter (that EDM is supposed to update)
-        if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            // TODO: Remove this. Still needed for mux kernel until it adjusts to build_from_arg based construction
+            noc_inline_dw_write<false, posted>(
+                dest_edm_location_info_addr,
+                reinterpret_cast<size_t>(from_remote_buffer_free_slots_ptr),
+                0xf,
+                WORKER_HANDSHAKE_NOC);
+        } else {
             noc_inline_dw_write<false, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
