@@ -85,8 +85,14 @@ on:
         description: "Name of the published build artifact"
         value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
       wheel-artifact-name:
-        description: "Name of the published wheel artifact"
-        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
+        description: "Name of the published wheel artifact (default Python 3.12)"
+        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name_312 }}
+      wheel-artifact-name-310:
+        description: "Name of the published wheel artifact (Python 3.10)"
+        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name_310 }}
+      wheel-artifact-name-312:
+        description: "Name of the published wheel artifact (Python 3.12)"
+        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name_312 }}
 
   workflow_dispatch:
     inputs:
@@ -309,13 +315,17 @@ jobs:
 
   build-wheel:
     if: ${{ inputs.build-wheel }}
-    name: 🐍 Build wheel
+    name: 🐍 Build wheel (Python ${{ matrix.python-version }})
     needs: build-docker-image
     timeout-minutes: 30
     runs-on: tt-beta-ubuntu-2204-large
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
     outputs:
-      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
+      wheel_artifact_name_310: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name_310 }}
+      wheel_artifact_name_312: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name_312 }}
     defaults:
       run:
         shell: bash
@@ -362,13 +372,16 @@ jobs:
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
+          CIBW_BUILD: "cp${{ fromJSON('{\"3.10\":\"310\",\"3.12\":\"312\"}')[matrix.python-version] }}-manylinux_x86_64*"
+          CIBW_SKIP: "*-musllinux_*"
           CIBW_BUILD_FRONTEND: build
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
-          CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z && ccache -p
+            CMAKE_ARGS="-DPYTHON_EXECUTABLE=$(which python)"
+          CIBW_BEFORE_BUILD: "rm -rf build/ build_Release/ .cpmcache/ || true && mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
@@ -376,15 +389,16 @@ jobs:
       - name: Set wheel artifact name
         id: set_wheel_artifact_name
         run: |
-          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          PYTHON_VERSION_NODOT=$(echo "${{ matrix.python-version }}" | tr -d '.')
+          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          echo "wheel_artifact_name_${PYTHON_VERSION_NODOT}=${WHEEL_ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          echo "wheel_artifact_name_${PYTHON_VERSION_NODOT}=${WHEEL_ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
       - name: ☁️ Upload wheel
         if: ${{ inputs.build-wheel }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ env.wheel_artifact_name }}
+          name: ${{ steps.set_wheel_artifact_name.outputs[format('wheel_artifact_name_{0}', fromJSON('{"3.10":"310","3.12":"312"}')[matrix.python-version])] }}
           path: wheelhouse
           if-no-files-found: error

@@ -200,11 +200,28 @@ class CMakeBuild(build_ext):
                     "-DENABLE_CCACHE=TRUE",
                 ]
 
+                # Add Python executable configuration
+                python_exe = os.environ.get("PYTHON_EXECUTABLE")
+                if python_exe:
+                    cmake_args.extend(
+                        [
+                            f"-DPYTHON_EXECUTABLE={python_exe}",
+                            f"-DPython_EXECUTABLE={python_exe}",
+                            f"-DPython3_EXECUTABLE={python_exe}",
+                        ]
+                    )
+
                 # Add Tracy flags if enabled
                 if os.environ.get("CIBW_ENABLE_TRACY") == "ON":
                     cmake_args.extend(
                         [
                             "-DENABLE_TRACY=ON",
+                        ]
+                    )
+                else:
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=OFF",
                         ]
                     )
 

@@ -7,6 +7,10 @@ on:
         required: false
         default: Release
         type: string
+      version:
+          required: false
+          default: "22.04"
+          type: string
   workflow_dispatch:
     inputs:
       build-type:
@@ -19,6 +23,13 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
+      version:
+        required: false
+        default: "22.04"
+        type: choice
+        options:
+          - "22.04"
+          - "24.04"
       with-retries:
         default: false
         type: boolean
@@ -45,7 +56,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      version: 22.04
+      version: ${{ inputs.version || '22.04' }}
       skip-tt-train: false
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
@@ -56,11 +67,50 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: 22.04
+      version: ${{ inputs.version || '22.04' }}
+
+  # Single wheel selection job that handles both artifacts
+  select-wheels:
+    runs-on: ubuntu-latest
+    needs: [build-artifact, build-artifact-profiler]
+    outputs:
+      wheel-artifact-name: ${{ steps.select-wheels.outputs.wheel-artifact-name }}
+      wheel-artifact-name-profiler: ${{ steps.select-wheels.outputs.wheel-artifact-name-profiler }}
+    steps:
+      - name: Select appropriate wheels based on version
+        id: select-wheels
+        run: |
+          VERSION="${{ inputs.version || '22.04' }}"
+
+          if [[ "$VERSION" == "22.04" ]]; then
+            WHEEL_NAME="${{ needs.build-artifact.outputs.wheel-artifact-name-310 }}"
+            PROFILER_WHEEL_NAME="${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-310 }}"
+            echo "wheel-artifact-name=$WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "wheel-artifact-name-profiler=$PROFILER_WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "Using Python 3.10 wheels for Ubuntu 22.04"
+            echo "Wheel artifact name set: $WHEEL_NAME"
+            echo "Profiler wheel artifact name set: $PROFILER_WHEEL_NAME"
+          elif [[ "$VERSION" == "24.04" ]]; then
+            WHEEL_NAME="${{ needs.build-artifact.outputs.wheel-artifact-name-312 }}"
+            PROFILER_WHEEL_NAME="${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-312 }}"
+            echo "wheel-artifact-name=$WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "wheel-artifact-name-profiler=$PROFILER_WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "Using Python 3.12 wheels for Ubuntu 24.04"
+            echo "Wheel artifact name set: $WHEEL_NAME"
+            echo "Profiler wheel artifact name set: $PROFILER_WHEEL_NAME"
+          else
+            WHEEL_NAME="${{ needs.build-artifact.outputs.wheel-artifact-name-312 }}"
+            PROFILER_WHEEL_NAME="${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-312 }}"
+            echo "wheel-artifact-name=$WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "wheel-artifact-name-profiler=$PROFILER_WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "Using Python 3.12 wheels as default for version: $VERSION"
+            echo "Wheel artifact name set: $WHEEL_NAME"
+            echo "Profiler wheel artifact name set: $PROFILER_WHEEL_NAME"
+          fi
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, select-wheels]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -75,10 +125,10 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, select-wheels]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -92,10 +142,10 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   # Fabric Unit Tests
   fabric-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, select-wheels]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -109,10 +159,10 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, select-wheels]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -127,10 +177,11 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
+      version: ${{ inputs.version || '22.04' }}
   # FD Model Tests
   models-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, select-wheels]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -144,10 +195,10 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, select-wheels]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -162,7 +213,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -180,7 +231,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   run-profiler-regression:
-    needs: build-artifact-profiler
+    needs: [build-artifact-profiler, select-wheels]
     strategy:
       fail-fast: false
       matrix:
@@ -195,24 +246,24 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label}}
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name-profiler }}
   t3000-fast-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
-    needs: build-artifact
+    needs: [build-artifact, select-wheels]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   build-docs:
-    needs: build-artifact
+    needs: [build-artifact, select-wheels]
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   build:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
