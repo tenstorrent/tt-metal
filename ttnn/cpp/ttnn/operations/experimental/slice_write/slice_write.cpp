@@ -46,13 +46,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     if (rm_only) {
         input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
-    TT_FATAL(
-        (!input_tensor.is_sharded()) ||
-            (input_tensor.is_sharded() &&
-             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ||
-            (input_tensor.is_sharded() &&
-             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED),
-        "Slice Write currently supports Interleaved or Height & Block Sharding for input tensors.");
 
     TT_FATAL(!output_tensor.is_sharded(), "Slice Write currently doesn't support sharded output tensors.");
     const bool tiled = input.layout() == Layout::TILE;
@@ -106,12 +99,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         uint32_t input_nhw_volume = shard_spec.shape[0] * num_cores_nhw;
         uint32_t calc_nhw_volume_padded =
             tt::round_up(tt::div_up(calc_nhw_volume, num_cores_nhw), tt::constants::TILE_HEIGHT) * num_cores_nhw;
-        TT_FATAL(
-            input_nhw_volume == calc_nhw_volume_padded,
-            "Input tensor size {} does not match the size of the slice being written {}",
-            input_nhw_volume,
-            calc_nhw_volume_padded);
-
     } else {
         for (int i = 0; i < 4; i++) {
             TT_FATAL(
