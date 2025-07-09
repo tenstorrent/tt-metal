@@ -19,8 +19,7 @@ inline void llk_math_eltwise_unary_sfpu_min_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_min(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_min<APPROXIMATE>, dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_min<APPROXIMATE>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

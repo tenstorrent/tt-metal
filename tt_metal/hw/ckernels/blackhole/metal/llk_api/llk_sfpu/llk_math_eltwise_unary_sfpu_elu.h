@@ -19,7 +19,7 @@ inline void llk_math_eltwise_unary_sfpu_elu_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_elu(uint dst_index, uint param0) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_elu<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0);
 }
 

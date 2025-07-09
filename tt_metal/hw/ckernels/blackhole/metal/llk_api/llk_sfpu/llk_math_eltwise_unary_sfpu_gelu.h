@@ -14,8 +14,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = 0) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_gelu<APPROXIMATE>, dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_gelu<APPROXIMATE>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -25,7 +24,7 @@ inline void llk_math_eltwise_unary_sfpu_gelu_init() {
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_gelu_derivative(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_gelu_derivative<APPROXIMATE>, dst_index, vector_mode);
 }
 
