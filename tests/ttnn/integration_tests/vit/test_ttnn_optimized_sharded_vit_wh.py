@@ -19,7 +19,7 @@ from models.utility_functions import torch_random
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/actions/runs/16176280294/job/45662599109#step:8:3468")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])

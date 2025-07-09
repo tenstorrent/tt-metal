@@ -18,7 +18,7 @@ from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from models.demos.ufld_v2.ttnn.ttnn_basic_block import TtnnBasicBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/actions/runs/16176280294/job/45662599111#step:8:9248")
 def custom_preprocessor_basic_block(model, name):
     parameters = {}
     if isinstance(model, BasicBlock):
