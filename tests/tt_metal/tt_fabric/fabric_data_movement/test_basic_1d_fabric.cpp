@@ -33,6 +33,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -49,6 +50,7 @@ struct WorkerMemMap {
     uint32_t packet_payload_size_bytes;
     uint32_t test_results_address;
     uint32_t target_address;
+    uint32_t notification_mailbox_address;
     uint32_t test_results_size_bytes;
 };
 
@@ -57,12 +59,14 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
+    uint32_t NOTIFICATION_MAILBOX_ADDR_SIZE_BYTES = tt::tt_metal::hal::get_l1_alignment();
 
     uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     uint32_t packet_header_address = base_addr;
     uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
     uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
     uint32_t target_address = source_l1_buffer_address;
+    uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
 
     uint32_t packet_payload_size_bytes = (topology == Topology::Mesh) ? 2048 : 4096;
 
@@ -72,6 +76,7 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
         packet_payload_size_bytes,
         test_results_address,
         target_address,
+        notification_mailbox_address,
         TEST_RESULTS_SIZE_BYTES};
 }
 
@@ -200,10 +205,15 @@ void RunTestLineMcast(
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     // common compile time args for sender and receiver
+    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // so use_dram_dst is set to 0; see run_unicast_bw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
-        worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, worker_mem_map.target_address};
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        worker_mem_map.target_address,
+        0 /* use_dram_dst */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
     }
@@ -299,7 +309,7 @@ void RunTestUnicastRaw(
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
@@ -319,7 +329,6 @@ void RunTestUnicastRaw(
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    const auto& edm_config = fabric_context.get_fabric_router_config();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     if (!is_2d_fabric) {
@@ -381,9 +390,6 @@ void RunTestUnicastRaw(
     log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
 
     auto edm_direction = control_plane.get_eth_chan_direction(src_fabric_node_id, edm_port);
-    CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-        src_physical_device_id, edm_port);
-
     log_info(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
@@ -399,16 +405,18 @@ void RunTestUnicastRaw(
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     // common compile time args for sender and receiver
+    // Note: see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
+        0 /* use_dram_dst */,
         topology == Topology::Mesh,
         fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
     }
@@ -444,26 +452,11 @@ void RunTestUnicastRaw(
         dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
-    // append the EDM connection rt args
-    const auto sender_channel = topology == Topology::Mesh ? edm_direction : 0;
-    tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
-        .edm_noc_x = edm_eth_core.x,
-        .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .edm_direction = edm_direction};
-
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
     auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
-
     append_worker_to_fabric_edm_sender_rt_args(
-        edm_connection,
+        edm_port,
         worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
@@ -527,7 +520,11 @@ void RunTestUnicastRaw(
 }
 
 void run_unicast_test_bw_chips(
-    BaseFabricFixture* fixture, chip_id_t src_physical_device_id, chip_id_t dst_physical_device_id, uint32_t num_hops) {
+    BaseFabricFixture* fixture,
+    chip_id_t src_physical_device_id,
+    chip_id_t dst_physical_device_id,
+    uint32_t num_hops,
+    bool use_dram_dst = false) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
@@ -554,12 +551,13 @@ void run_unicast_test_bw_chips(
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
+        use_dram_dst,
         topology == Topology::Mesh,
         fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
     }
@@ -581,6 +579,11 @@ void run_unicast_test_bw_chips(
     log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
 
+    // Set up destination address/coordinates. One bank should be enough for testing
+    uint32_t dest_bank_id = 0;
+    uint32_t dest_dram_addr =
+        use_dram_dst ? receiver_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::DRAM) : 0;
+
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
@@ -596,6 +599,12 @@ void run_unicast_test_bw_chips(
         dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
+    // Only add DRAM args if use_dram_dst is true
+    if (use_dram_dst) {
+        sender_runtime_args.insert(
+            sender_runtime_args.end(), {dest_bank_id, dest_dram_addr, worker_mem_map.notification_mailbox_address});
+    }
+
     // append the EDM connection rt args
     const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
     EXPECT_EQ(available_links.size() > 0, true);
@@ -606,7 +615,27 @@ void run_unicast_test_bw_chips(
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
+    // If using DRAM destination, zero out the mailbox
+    // Simple notification mailbox with flushing atomic increment is used instead of 2-way handshake for simple testing
+    if (use_dram_dst) {
+        std::vector<uint32_t> zeros(tt::tt_metal::hal::get_l1_alignment() / sizeof(uint32_t), 0);  // zero out mailbox
+        tt_metal::detail::WriteToDeviceL1(
+            receiver_device,
+            receiver_logical_core,
+            worker_mem_map.notification_mailbox_address,
+            zeros,
+            CoreType::WORKER);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_device->id());
+    }
+
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
+
+    // Only add DRAM args if use_dram_dst is true
+    if (use_dram_dst) {
+        receiver_runtime_args.insert(
+            receiver_runtime_args.end(),
+            {dest_bank_id, dest_dram_addr, worker_mem_map.notification_mailbox_address, 1 /* notification value */});
+    }
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
@@ -657,7 +686,7 @@ void run_unicast_test_bw_chips(
     EXPECT_EQ(sender_bytes, receiver_bytes);
 }
 
-void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction) {
+void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction, bool use_dram_dst) {
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
@@ -678,7 +707,7 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
     chip_id_t src_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
     chip_id_t dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
 
-    run_unicast_test_bw_chips(fixture, src_physical_device_id, dst_physical_device_id, num_hops);
+    run_unicast_test_bw_chips(fixture, src_physical_device_id, dst_physical_device_id, num_hops, use_dram_dst);
 }
 
 void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
@@ -817,16 +846,19 @@ void RunTestMCastConnAPI(
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     // common compile time args for sender and receiver
+    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
+        0 /* use_dram_dst */,
         topology == Topology::Mesh,
         fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
     }
@@ -1075,16 +1107,19 @@ void RunTestChipMCast1D(
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     // common compile time args for sender and receiver
+    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
+        0 /* use_dram_dst */,
         0 /* is_2d_fabric */,
         0 /* use_dynamic_routing */,
         1 /* is_chip_multicast */,
         0 /* additional_dir */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
 
     if (enable_fabric_tracing) {
         defines["TEST_ENABLE_FABRIC_TRACING"] = "1";
@@ -1239,6 +1274,7 @@ void RunTestChipMCast1D(
 
 TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1, RoutingDirection::E, false); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+TEST_F(Fabric1DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
 TEST_F(Fabric1DFixture, TestUnicastTGGateways) { RunTestUnicastTGGateways(this); }
 TEST_F(Fabric1DFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
 

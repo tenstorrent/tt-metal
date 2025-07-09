@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -539,8 +541,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -610,7 +612,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
         1,
@@ -668,7 +670,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             .compile_args = writer_mcast_sender_compile_time_args,
             .defines = writer_defines});
     // defines
-    std::map<string, string> eltwise_binary_defines;
+    std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
     }
@@ -1601,8 +1603,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -1766,7 +1768,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {
         1,
@@ -1861,7 +1863,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .compile_args = writer_mcast_sender_compile_time_args_group_2,
             .defines = writer_defines});
     // defines
-    std::map<string, string> eltwise_binary_defines;
+    std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
     }

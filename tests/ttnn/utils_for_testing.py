@@ -122,7 +122,10 @@ def assert_allclose(
 
 
 def assert_with_ulp(
-    expected_result: Union[ttnn.Tensor, torch.Tensor], actual_result: Union[ttnn.Tensor, torch.Tensor], ulp_threshold=10
+    expected_result: Union[ttnn.Tensor, torch.Tensor],
+    actual_result: Union[ttnn.Tensor, torch.Tensor],
+    ulp_threshold=10,
+    allow_nonfinite=False,
 ):
     """
     Assert that two tensors are similar within a given distance expressed in Units of Least Precision (ULP)
@@ -139,6 +142,7 @@ def assert_with_ulp(
         expected_result (Union[ttnn.Tensor, torch.Tensor]): The expected reference tensor
         actual_result (Union[ttnn.Tensor, torch.Tensor]): The actual tensor to compare against the reference
         ulp_threshold (float, optional): Maximum tolerated ULP distance. Defaults to 10.
+        allow_nonfinite (bool, optional): If disabled, any non-finite value (NaN, +inf, -inf) will trigger an assertion. If enabled, differences between non-finite values at the same positions will trigger an assertion.
 
     Note:
         The length of a single ULP is measured using the difference between two consecutive floating point numbers.
@@ -160,7 +164,7 @@ def assert_with_ulp(
         actual_result.shape
     ), f"list(expected_result.shape)={list(expected_result.shape)} vs list(actual_result.shape)={list(actual_result.shape)}"
 
-    ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold)
+    ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite)
     assert ulp_passed, ulp_message
     return ulp_passed, ulp_message
 

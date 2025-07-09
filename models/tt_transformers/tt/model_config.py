@@ -1356,9 +1356,7 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if "gemma-3" in self.model_name.lower():
-            return "language_model."
-        elif self.is_vision():
+        if self.is_vision():
             return "text_model."
         else:
             return ""
@@ -2018,7 +2016,8 @@ class ModelArgs:
                     model = self.cached_hf_model
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
-                    model = model.language_model
+                    model.model = model.language_model
+                    # We keep language_model because transformers don't let us change or delete it
                 model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
