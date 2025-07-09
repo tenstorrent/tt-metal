@@ -111,6 +111,9 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_rep_coord, dst_logical_core);
     uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
+    // Get payload buffer size from receiver memory map (cached during initialization)
+    uint32_t payload_buffer_size = receiver_memory_map_.get_payload_chunk_size();
+
     TestTrafficSenderConfig sender_config = {
         .parameters = traffic_config.parameters,
         .src_node_id = traffic_config.src_node_id,
@@ -119,13 +122,15 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .dst_logical_core = dst_logical_core,
         .target_address = target_address,
         .atomic_inc_address = atomic_inc_address,
-        .dst_noc_encoding = dst_noc_encoding};
+        .dst_noc_encoding = dst_noc_encoding,
+        .payload_buffer_size = payload_buffer_size};
 
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters,
         .sender_id = sender_id,
         .target_address = target_address,
-        .atomic_inc_address = atomic_inc_address};
+        .atomic_inc_address = atomic_inc_address,
+        .payload_buffer_size = payload_buffer_size};
 
     src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
     for (const auto& dst_node_id : dst_node_ids) {

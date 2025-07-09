@@ -133,8 +133,11 @@ struct ReceiverMemoryMap {
     BaseMemoryRegion payload_chunks;
     BaseMemoryRegion atomic_counters;
 
+    // Store the payload chunk size for later access
+    uint32_t payload_chunk_size_;
+
     // Default constructor
-    ReceiverMemoryMap() : common(), payload_chunks(0, 0), atomic_counters(0, 0) {}
+    ReceiverMemoryMap() : common(), payload_chunks(0, 0), atomic_counters(0, 0), payload_chunk_size_(0) {}
 
     ReceiverMemoryMap(
         uint32_t l1_unreserved_base,
@@ -142,10 +145,10 @@ struct ReceiverMemoryMap {
         uint32_t l1_alignment,
         uint32_t payload_chunk_size,
         uint32_t num_configs) :
-        common(0, 0),          // Will be set below
-        payload_chunks(0, 0),  // Will be set below
-        atomic_counters(0, 0)  // Will be set below
-    {
+        common(0, 0),           // Will be set below
+        payload_chunks(0, 0),   // Will be set below
+        atomic_counters(0, 0),  // Will be set below
+        payload_chunk_size_(payload_chunk_size) {
         // Layout: [result_buffer][atomic_counters][payload_chunks]
         uint32_t current_addr = l1_unreserved_base;
 
@@ -179,6 +182,9 @@ struct ReceiverMemoryMap {
     // Convenience methods for reading results
     uint32_t get_result_buffer_address() const { return common.get_result_buffer_address(); }
     uint32_t get_result_buffer_size() const { return common.get_result_buffer_size(); }
+
+    // Getter for payload chunk size used in this memory map
+    uint32_t get_payload_chunk_size() const { return payload_chunk_size_; }
 };
 
 }  // namespace tt::tt_fabric::fabric_tests
