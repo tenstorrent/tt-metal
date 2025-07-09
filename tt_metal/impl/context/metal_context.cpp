@@ -471,8 +471,8 @@ void MetalContext::initialize_control_plane() {
         case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::GALAXY:
             if (tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type) ==
-                tt::tt_fabric::FabricType::TORUS_2D) {
-                mesh_graph_descriptor = "single_galaxy_torus_2d_graph_descriptor.yaml";
+                tt::tt_fabric::FabricType::TORUS_XY) {
+                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
             } else {
                 mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
             }
@@ -551,7 +551,6 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         }
     };
 
-    auto mmio_device_id = cluster_->get_associated_mmio_device(device_id);
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
