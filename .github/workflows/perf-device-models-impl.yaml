@@ -121,7 +121,7 @@ jobs:
           fi
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov7/tests/perf/test_perf.py -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d)_1.csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
@@ -137,7 +137,7 @@ jobs:
           fi
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d)_2.csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
@@ -153,7 +153,7 @@ jobs:
           fi
           WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d)_3.csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
