@@ -13,6 +13,7 @@ namespace ttnn::operations::experimental::ccl {
 ttnn::Tensor ExecuteAllGatherReplicateAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& intermediate_tensor,
+    const ttnn::Tensor& aggregated_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -24,6 +25,7 @@ ttnn::Tensor ExecuteAllGatherReplicateAsync::invoke(
     return ttnn::operations::experimental::ccl::all_gather_replicate_async(
         input_tensor,
         intermediate_tensor,
+        aggregated_tensor,
         dim,
         cluster_axis,
         mesh_device,

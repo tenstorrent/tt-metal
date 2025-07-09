@@ -27,6 +27,7 @@ void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operati
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& intermediate_tensor,
+               const ttnn::Tensor& aggregated_tensor,
                const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
@@ -38,6 +39,7 @@ void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operati
                 return self(
                     input_tensor,
                     intermediate_tensor,
+                    aggregated_tensor,
                     dim,
                     cluster_axis,
                     mesh_device,
@@ -49,6 +51,7 @@ void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operati
             },
             py::arg("input_tensor"),
             py::arg("intermediate_tensor"),
+            py::arg("aggregated_tensor"),
             py::arg("dim"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),

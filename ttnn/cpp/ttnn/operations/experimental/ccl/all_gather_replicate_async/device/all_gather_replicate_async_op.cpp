@@ -12,7 +12,7 @@
 namespace ttnn {
 
 void AllGatherReplicateAsync::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
@@ -248,6 +248,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherReplicateAsync::create_pr
             return all_gather_replicate_async_sharded(
                 input_tensors[0],
                 input_tensors[1],
+                input_tensors[2],
                 target_device,
                 forward_device,
                 backward_device,
@@ -305,6 +306,7 @@ namespace {
 Tensor all_gather_replicate_async_impl(
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const Tensor& aggregated_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -341,7 +343,7 @@ Tensor all_gather_replicate_async_impl(
                    multi_device_global_semaphore,
                    sub_device_id,
                    cluster_axis},
-               {input_tensor, intermediate_tensor})
+               {input_tensor, intermediate_tensor, aggregated_tensor})
         .at(0);
 }
 }  // namespace
@@ -349,6 +351,7 @@ Tensor all_gather_replicate_async_impl(
 Tensor all_gather_replicate_async(
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const Tensor& aggregated_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -360,6 +363,7 @@ Tensor all_gather_replicate_async(
     return all_gather_replicate_async_impl(
         input_tensor,
         intermediate_tensor,
+        aggregated_tensor,
         dim,
         cluster_axis,
         mesh_device,

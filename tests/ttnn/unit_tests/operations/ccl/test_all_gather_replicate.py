@@ -166,6 +166,15 @@ def run_all_gather_replicate_impl(
         # breakpoint()
         tt_intermediate_tensors.append(tt_intermediate_tensor)
 
+    aggregated_tensor = torch.zeros(intermediate_shape)
+    tt_aggregated_tensor = ttnn.from_torch(
+        aggregated_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=input_dtype,
+        memory_config=intermediate_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
     # All Gather Replicate Golden
     output_tensor_goldens_list = []
     for i in range(num_iters):
@@ -187,6 +196,7 @@ def run_all_gather_replicate_impl(
             out = ttnn.experimental.all_gather_replicate_async(
                 tt_input_tensor,
                 intermediate_tensor=tt_intermediate_tensors[i % num_buffers],
+                aggregated_tensor=tt_aggregated_tensor,
                 dim=3,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,

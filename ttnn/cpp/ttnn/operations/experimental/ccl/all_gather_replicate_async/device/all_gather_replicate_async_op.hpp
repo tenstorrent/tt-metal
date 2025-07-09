@@ -100,6 +100,7 @@ struct AllGatherReplicateAsync {
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded(
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const Tensor& aggregated_tensor,
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -118,6 +119,7 @@ namespace ccl {
 Tensor all_gather_replicate_async(
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const Tensor& aggregated_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,

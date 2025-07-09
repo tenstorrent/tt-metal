@@ -39,6 +39,7 @@ using namespace ccl;
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded(
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const Tensor& aggregated_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
