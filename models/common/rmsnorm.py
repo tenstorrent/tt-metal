@@ -46,6 +46,7 @@ class RMSNorm(LightweightModule):
         weight_dtype=ttnn.bfloat16,
         is_distributed=None,
         eps: float = 1e-05,
+        add_unit_offset=False,
         sharded_program_config=None,
         sharded_output_config=None,
         output_mem_config=None,
@@ -67,6 +68,10 @@ class RMSNorm(LightweightModule):
         torch_weight = (
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )
+
+        # Add offset before caching
+        if add_unit_offset:
+            torch_weight = torch_weight + 1.0
 
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
