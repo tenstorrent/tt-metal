@@ -279,7 +279,6 @@ void watcher_init(chip_id_t device_id) {
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.
     std::vector<uint32_t> debug_ring_buf_init_val(sizeof(debug_ring_buf_msg_t) / sizeof(uint32_t), 0);
-    debug_ring_buf_msg_t* ring_buf_data = reinterpret_cast<debug_ring_buf_msg_t*>(&(debug_ring_buf_init_val[0]));
     data->debug_ring_buf.current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
     data->debug_ring_buf.wrapped = 0;
 

@@ -68,7 +68,7 @@ int main() {
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(shard_size * input_unit_size, {{input_cb_index, cb_data_format}})
             .set_page_size(input_cb_index, input_unit_size);
-    auto cb_input = tt_metal::CreateCircularBuffer(program, cores, input_cb_config);
+    tt_metal::CreateCircularBuffer(program, cores, input_cb_config);
 
     // create data movement kernel to shard data
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram};

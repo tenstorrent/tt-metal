@@ -136,9 +136,9 @@ int main(int argc, char** argv) {
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     const uint32_t cir_buf_num_title = 4;
-    CBHandle cb_a = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_0, cir_buf_num_title);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_1, cir_buf_num_title);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_2, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_0, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_1, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_2, cir_buf_num_title);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors,
     // and 3 compute processors. The 2 data movement processors act independent

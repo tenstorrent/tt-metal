@@ -123,9 +123,9 @@ int main(int argc, char** argv) {
     const uint32_t tiles_per_cb = 4;
     // Create 3 circular buffers. These will be used by the data movement kernels to stream data into the compute cores
     // and for the compute cores to stream data out.
-    CBHandle cb_a = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
 
     EnqueueWriteBuffer(cq, a, a_data, false);
     EnqueueWriteBuffer(cq, b, b_data, false);

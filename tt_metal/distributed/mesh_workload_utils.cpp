@@ -40,7 +40,6 @@ void write_go_signal(
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     auto sub_device_index = *sub_device_id;
 
     HugepageDeviceCommand go_signal_cmd_sequence(cmd_region, cmd_sequence_sizeB);
