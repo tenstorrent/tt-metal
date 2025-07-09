@@ -282,7 +282,6 @@ RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtim
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
-    auto arch = MetalContext::instance().hal().get_arch();
     uint32_t idle_eth_max_runtime_args = MetalContext::instance().hal().get_dev_size(
                                             HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
                                             sizeof(uint32_t);
@@ -570,7 +569,6 @@ void ComputeKernel::read_binaries(IDevice* device) {
         const ll_api::memory& binary_mem =
             llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
         binaries.push_back(&binary_mem);
-        uint32_t binary_size = binary_mem.get_packed_size();
     }
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));

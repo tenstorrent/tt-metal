@@ -154,7 +154,6 @@ public:
         static_assert(
             std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-        bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
         uint32_t packed_write_max_multicast_sub_cmds =
             get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);

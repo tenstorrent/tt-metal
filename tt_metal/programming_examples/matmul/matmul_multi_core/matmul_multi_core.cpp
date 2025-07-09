@@ -162,21 +162,20 @@ void matmul_multi_core(
     // diminishing returns are observed after several tiles.
     // input tiles count is = 2 so one tile can be read while the other is being processed
     const auto cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t src0_cb_index = CBIndex::c_0;  // Circular buffer index for matrix A
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
             .set_page_size(CBIndex::c_0, single_tile_size));
 
-    auto cb_src1 = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_1, cb_data_format}})
             .set_page_size(CBIndex::c_1, single_tile_size));
 
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_16, cb_data_format}})
@@ -285,13 +284,10 @@ int main() {
 
         // Calculate matrix dimensions in tiles for the accelerator
         uint32_t Mt = M / TILE_HEIGHT;
-        uint32_t Kt = K / TILE_WIDTH;
         uint32_t Nt = N / TILE_WIDTH;
 
         // Calculate buffer sizes needed for each matrix in bytes
         constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
-        uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt;  // num_tiles of FP16_B
-        uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt;  // num_tiles of FP16_B
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt;  // num_tiles of FP16_B
 
         // Create random input vectors for matrices A and B
