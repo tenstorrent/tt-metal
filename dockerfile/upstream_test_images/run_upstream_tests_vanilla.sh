@@ -63,9 +63,10 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 test_suite_bh_llmbox_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/test_system_health
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/unit_tests_eth
 }
 
 test_suite_bh_llmbox_llama_demo_tests() {
@@ -73,8 +74,6 @@ test_suite_bh_llmbox_llama_demo_tests() {
 
     verify_llama_dir_
 
-    # TODO: remove me once upgraded
-    pip3 install -r models/tt_transformers/requirements.txt
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4
 }
 

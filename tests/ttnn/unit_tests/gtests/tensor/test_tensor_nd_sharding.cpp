@@ -20,13 +20,13 @@ struct LegacyToNdShardingParams {
     Layout layout = Layout::TILE;
 
     std::optional<Shape> shard_shape_nd;
-    std::optional<CoreCoord> grid_size;
 };
 struct NdToLegacyShardingParams {
     Shape shape;
     Shape shard_shape_nd;
     Layout layout = Layout::TILE;
     CoreCoord grid_size;
+    ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D;
 
     TensorMemoryLayout memory_layout = TensorMemoryLayout::BLOCK_SHARDED;
     std::optional<Shape2D> shard_shape_2d;
@@ -168,12 +168,7 @@ TEST_P(LegacyToNdShardingTests, LegacyToNdSharding) {
     ASSERT_EQ(nd_shard_spec.has_value(), params.shard_shape_nd.has_value());
     if (nd_shard_spec.has_value()) {
         ASSERT_EQ(nd_shard_spec->shard_shape, params.shard_shape_nd.value());
-        if (params.grid_size.has_value()) {
-            ASSERT_EQ(nd_shard_spec->grid.ranges().size(), 1);
-            ASSERT_EQ(nd_shard_spec->grid.ranges()[0].grid_size(), params.grid_size.value());
-        } else {
-            ASSERT_EQ(nd_shard_spec->grid, cores);
-        }
+        ASSERT_EQ(nd_shard_spec->grid, cores);
     }
 }
 
@@ -183,7 +178,8 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     const auto& params = GetParam();
 
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
-    NdShardSpec nd_shard_spec{params.shard_shape_nd, cores, ShardOrientation::ROW_MAJOR};
+    NdShardSpec nd_shard_spec{
+        params.shard_shape_nd, cores, ShardOrientation::ROW_MAJOR, params.shard_distribution_strategy};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
     TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
@@ -206,15 +202,15 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
     NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
-    TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::TILE), memory_config);
+    // NOTE: currently binary op does not support interger data types with uneven shard size, so we use float32
+    TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::TILE), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
 
     size_t volume = params.shape.volume();
-    std::vector<uint32_t> data(volume);
+    std::vector<float> data(volume);
     for (size_t i = 0; i < volume; i++) {
-        data[i] = static_cast<uint32_t>(i);
+        data[i] = static_cast<float>(i);
     }
-
     auto tensor_a = Tensor::from_vector(data, tensor_spec, device_);
     for (auto& elem : data) {
         elem *= 2;
@@ -223,9 +219,9 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
 
     auto sum_tensor = ttnn::add(tensor_a, tensor_b);
 
-    auto sum_vector = sum_tensor.to_vector<uint32_t>();
+    auto sum_vector = sum_tensor.to_vector<float>();
     for (size_t i = 0; i < volume; i++) {
-        ASSERT_EQ(sum_vector[i], i * 3);
+        EXPECT_FLOAT_EQ(sum_vector[i], static_cast<float>(i * 3));
     }
 }
 
@@ -533,7 +529,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = Shape2D{32, 32},
             .layout = Layout::TILE,
             .shard_shape_nd = Shape({32, 32}),
-            .grid_size = CoreCoord{2, 4},
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
@@ -541,7 +536,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = Shape2D{32 * 2, 32},
             .layout = Layout::TILE,
             .shard_shape_nd = Shape({32 * 2, 32}),
-            .grid_size = CoreCoord{2, 2},
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
@@ -549,7 +543,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = Shape2D{32 * 3, 32},
             .layout = Layout::TILE,
             .shard_shape_nd = Shape({32 * 3, 32}),
-            .grid_size = CoreCoord{2, 2},
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 4, 4}),
@@ -557,7 +550,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = Shape2D{2, 2},
             .layout = Layout::ROW_MAJOR,
             .shard_shape_nd = Shape({2, 2}),
-            .grid_size = CoreCoord{2, 4},
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 4}),
@@ -565,7 +557,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = Shape2D{2, 2},
             .layout = Layout::ROW_MAJOR,
             .shard_shape_nd = Shape({2, 2}),
-            .grid_size = CoreCoord{2, 1},
         },
         LegacyToNdShardingParams{
             .shape = Shape({4}),
@@ -573,7 +564,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = Shape2D{1, 2},
             .layout = Layout::ROW_MAJOR,
             .shard_shape_nd = Shape({2}),
-            .grid_size = CoreCoord{2, 1},
         },
         LegacyToNdShardingParams{
             .shape = Shape({}),
@@ -581,7 +571,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = Shape2D{1, 1},
             .layout = Layout::ROW_MAJOR,
             .shard_shape_nd = Shape({1}),
-            .grid_size = CoreCoord{1, 1},
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
@@ -681,6 +670,15 @@ INSTANTIATE_TEST_SUITE_P(
             .grid_size = CoreCoord{3, 4},
             .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_shape_2d = std::nullopt,  // Can't convert, different shard distribution
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .shard_shape_nd = Shape({1, 32, 32}),
+            .layout = Layout::TILE,
+            .grid_size = CoreCoord{3, 4},
+            .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_shape_2d = Shape2D{32, 32},
         },
         NdToLegacyShardingParams{
             .shape = Shape({2, 2, 4}),

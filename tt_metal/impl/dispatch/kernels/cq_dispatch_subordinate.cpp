@@ -24,25 +24,22 @@
 // Reads cannot be issued by dispatch_s.
 constexpr uint32_t DISPATCH_S_WR_REG_CMD_BUF = 1;
 constexpr uint32_t DISPATCH_S_ATOMIC_CMD_BUF = 2;
-constexpr uint32_t cb_base = get_compile_time_arg_val(0);
-constexpr uint32_t cb_log_page_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_size = get_compile_time_arg_val(2);
-constexpr uint32_t my_dispatch_cb_sem_id = get_compile_time_arg_val(3);
-constexpr uint32_t upstream_dispatch_cb_sem_id = get_compile_time_arg_val(4);
-constexpr uint32_t dispatch_s_sync_sem_base_addr = get_compile_time_arg_val(5);
-constexpr uint32_t mcast_go_signal_addr = get_compile_time_arg_val(6);
-constexpr uint32_t unicast_go_signal_addr = get_compile_time_arg_val(7);
+constexpr uint32_t cb_base = CB_BASE;
+constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
+constexpr uint32_t cb_size = CB_SIZE;
+constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
+constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
+constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
+constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
 constexpr uint32_t distributed_dispatcher =
-    get_compile_time_arg_val(8);  // dispatch_s and dispatch_d running on different cores
-constexpr uint32_t first_stream_used = get_compile_time_arg_val(9);
-
-constexpr uint32_t max_num_worker_sems = get_compile_time_arg_val(10);  // maximum number of worker semaphores
-constexpr uint32_t max_num_go_signal_noc_data_entries =
-    get_compile_time_arg_val(11);  // maximum number of go signal data words
-
-constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(12);
-constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(13);
-constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(14);
+    DISTRIBUTED_DISPATCHER;  // dispatch_s and dispatch_d running on different cores
+constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
+constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
+constexpr uint32_t max_num_go_signal_noc_data_entries = MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;
+constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
+constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
+constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));

@@ -77,6 +77,7 @@ enum class ClusterType : std::uint8_t {
     P150_X4 = 9,                 // 4 Blackhole single card, ethernet connected
     SIMULATOR_WORMHOLE_B0 = 10,  // Simulator Wormhole B0
     SIMULATOR_BLACKHOLE = 11,    // Simulator Blackhole
+    N300_2x2 = 12,               // 2 N300 cards, ethernet connected to form 2x2
 };
 
 enum class EthRouterMode : uint32_t {
@@ -261,15 +262,17 @@ public:
     void set_internal_routing_info_for_ethernet_cores(
         bool enable_internal_routing, const std::vector<chip_id_t>& target_mmio_devices = {}) const;
 
-    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>
-    get_ethernet_connections() const {
+    const std::
+        unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>&
+        get_ethernet_connections() const {
         return this->cluster_desc_->get_ethernet_connections();
     }
 
     // TODO: unify uint64_t with ChipUID
-    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>
-    get_ethernet_connections_to_remote_mmio_devices() const {
-        return this->cluster_desc_->get_ethernet_connections_to_remote_mmio_devices();
+    const std::
+        unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>&
+        get_ethernet_connections_to_remote_devices() const {
+        return this->cluster_desc_->get_ethernet_connections_to_remote_devices();
     }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.

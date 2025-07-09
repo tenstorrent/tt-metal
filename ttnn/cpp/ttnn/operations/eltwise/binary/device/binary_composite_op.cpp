@@ -47,24 +47,6 @@ Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const std::optional<
     return result;
 }
 
-// subalpha(input,other,alpha)=input-alpha*other
-Tensor _subalpha(
-    const Tensor& input_a, const Tensor& input_b, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::add(
-        ttnn::neg(ttnn::multiply(input_b, alpha, std::nullopt, output_mem_config), output_mem_config),
-        input_a,
-        std::nullopt,
-        output_mem_config);
-    return result;
-}
-
-// addalpha(input, other, alpha) = input + (alpha * other)
-Tensor _addalpha(
-    const Tensor& input_a, const Tensor& input_b, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::add(
-        ttnn::multiply(input_b, alpha, std::nullopt, output_mem_config), input_a, std::nullopt, output_mem_config);
-}
-
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();
@@ -143,10 +125,13 @@ Tensor ExecuteMinimum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    TT_FATAL(std::holds_alternative<float>(value), "int32 minimum not yet supported");
-    return ttnn::operations::unary::
-        ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(
-            queue_id, input_a, std::get<float>(value), memory_config, optional_output_tensor);
+    return std::visit(
+        [&](auto input_b) {
+            return ttnn::operations::unary::
+                ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(
+                    queue_id, input_a, input_b, memory_config, optional_output_tensor);
+        },
+        value);
 }
 
 Tensor ExecuteMaximum::invoke(

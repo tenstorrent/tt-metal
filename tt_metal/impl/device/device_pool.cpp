@@ -22,7 +22,6 @@
 #include "core_coord.hpp"
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dprint_server.hpp"
 #include "env_lib.hpp"
 #include "erisc_datamover_builder.hpp"
 #include "fabric_edm_packet_header.hpp"
@@ -31,9 +30,9 @@
 #include "hal.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_types.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -309,25 +308,21 @@ void DevicePool::initialize(
 
         if (all_devices_open && any_remote_devices) {
             FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-            if (tt::tt_fabric::is_2d_fabric_config(fabric_config) || hal::get_arch() == tt::ARCH::BLACKHOLE) {
-                // 2D Fabric config or Blackhole
+            if (hal::get_arch() == tt::ARCH::BLACKHOLE) {
                 fallback_to_tunneling();
-                log_debug(
-                    tt::LogMetal, "Cannot launch Dispatch on Fabric on unsupported configuration. Using tunneling.");
-            } else if (fabric_config == FabricConfig::DISABLED) {
-                tt::tt_metal::detail::SetFabricConfig(
-                    FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                // Previously disabled. Need to init
-                if (fabric_config == FabricConfig::DISABLED) {
-                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-                }
-                fabric_config = FabricConfig::FABRIC_1D;
-                log_info(tt::LogMetal, "Dispatch on 1D Fabric");
             } else {
-                // Use the same 1D mode
-                tt::tt_metal::detail::SetFabricConfig(
-                    fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                log_info(tt::LogMetal, "Dispatch on 1D Fabric");
+                if (fabric_config == FabricConfig::DISABLED) {
+                    tt::tt_metal::detail::SetFabricConfig(
+                        FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                    // Call initialize again because previously it was a no-op
+                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+                    fabric_config = FabricConfig::FABRIC_1D;
+                } else {
+                    // Use the same mode
+                    tt::tt_metal::detail::SetFabricConfig(
+                        fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                }
+                log_info(tt::LogMetal, "Dispatch on {} Fabric", fabric_config);
             }
         } else {
             fallback_to_tunneling();
@@ -393,12 +388,7 @@ void DevicePool::initialize_active_devices() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
-        if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-            // TODO: need to write routing tables for unified 2d fabric.
-            // write routing tables to all ethernet cores
-            tt::tt_metal::MetalContext::instance()
-                .get_control_plane().write_routing_tables_to_all_chips();
-        }
+        tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
 
         // Initialize fabric on mmio device
         init_fabric(active_devices);

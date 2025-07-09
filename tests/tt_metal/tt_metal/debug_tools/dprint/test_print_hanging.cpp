@@ -5,7 +5,6 @@
 #include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
-#include <map>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -57,10 +56,10 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
 try {
     fixture->RunProgram(device, program);
 } catch (std::runtime_error& e) {
-    const string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
-    const string error = string(e.what());
+    const std::string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
+    const std::string error = std::string(e.what());
     log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-    EXPECT_TRUE(error.find(expected) != string::npos);
+    EXPECT_TRUE(error.find(expected) != std::string::npos);
 }
 
     // Check the print log against golden output.
@@ -83,9 +82,4 @@ TEST_F(DPrintFixture, TensixTestPrintHanging) {
 
     // Since the dprint server gets killed from a timeout, only run on one device.
     this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, this->devices_[0]);
-    // Since the dprint server exited with an exception, detach manually
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    for (unsigned int id = 0; id < num_devices; id++) {
-        DprintServerDetach(id);
-    }
 }

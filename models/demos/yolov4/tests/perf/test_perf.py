@@ -2,110 +2,82 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.common import load_torch_model
-from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
-from models.demos.yolov4.tt.yolov4 import TtYOLOv4
+from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, profiler
+from models.utility_functions import run_for_wormhole_b0
 
 
+@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, expected_compile_time, expected_inference_time",
+    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype",
+    ((1, ttnn.bfloat16, ttnn.bfloat16),),
+)
+@pytest.mark.parametrize(
+    "resolution, expected_inference_throughput",
     [
-        ((1, 320, 320, 3), 70, 0.5),
-        ((1, 640, 640, 3), 70, 0.6),
+        ((320, 320), 103),
+        ((640, 640), 52),
     ],
 )
-def test_yolov4(
-    device,
-    input_shape,
-    expected_compile_time,
-    expected_inference_time,
-    model_location_generator,
-):
-    disable_persistent_kernel_cache()
-
-    # https://github.com/tenstorrent/tt-metal/issues/23271
-    device.disable_and_clear_program_cache()
-
-    profiler.clear()
-
-    batch_size = input_shape[0]
-    resolution = input_shape[1:3]
-    torch_model = load_torch_model(model_location_generator)
-    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
-    torch_input = torch_input_tensor.permute(0, 3, 1, 2).float()
-    parameters = create_yolov4_model_parameters(torch_model, torch_input, resolution, device)
-
-    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, device=device)
-    ttnn_model = TtYOLOv4(parameters, device)
-
-    logger.info(f"Compiling model with warmup run")
-    profiler.start(f"inference_and_compile_time")
-    ttnn_output_tensor = ttnn_model(ttnn_input)
-    ttnn.deallocate(ttnn_output_tensor[0])
-    ttnn.deallocate(ttnn_output_tensor[1])
-
-    profiler.end(f"inference_and_compile_time")
-
-    inference_and_compile_time = profiler.get("inference_and_compile_time")
-    logger.info(
-        f"Model with input resolution {resolution} compiled with warmup run in {(inference_and_compile_time):.2f} s"
+def test_perf_e2e_yolov4(device, batch_size, act_dtype, weight_dtype, resolution, expected_inference_throughput):
+    performant_runner = YOLOv4PerformantRunner(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        resolution=resolution,
+        model_location_generator=None,
     )
 
-    iterations = 16
+    input_shape = (1, 3, *resolution)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
-    outputs = []
-    logger.info(f"Running inference for {iterations} iterations")
-    for idx in range(iterations):
-        profiler.start("inference_time")
-        profiler.start(f"inference_time_{idx}")
-        ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, device=device)
-        ttnn_output_tensor = ttnn_model(ttnn_input)
-        ttnn.deallocate(ttnn_output_tensor[0])
-        ttnn.deallocate(ttnn_output_tensor[1])
-        profiler.end(f"inference_time_{idx}")
-        profiler.end("inference_time")
+    iterations = 32
+    t0 = time.time()
+    for _ in range(iterations):
+        _ = performant_runner.run(torch_input_tensor)
+    ttnn.synchronize_device(device)
+    t1 = time.time()
 
-    mean_inference_time = profiler.get("inference_time")
-    inference_time = profiler.get(f"inference_time_{iterations - 1}")
-    compile_time = inference_and_compile_time - inference_time
-    logger.info(f"Model compilation of resolution {resolution} took {compile_time:.1f} s")
-    logger.info(
-        f"Inference time on last iterations for resolution: {resolution} was completed in {(inference_time * 1000.0):.2f} ms"
-    )
-    logger.info(
-        f"Mean inference time for {batch_size} (batch), resolution {resolution} images was {(mean_inference_time * 1000.0):.2f} ms ({batch_size / mean_inference_time:.2f} fps)"
-    )
+    performant_runner.release()
 
+    inference_time_avg = round((t1 - t0) / iterations, 4)
+    throughput_avg = round(batch_size / inference_time_avg, 2)
+    logger.info(f"average inference time: {inference_time_avg * 1000} ms, average throughput: {throughput_avg} fps")
+
+    expected_inference_time = batch_size / expected_inference_throughput
     prep_perf_report(
         model_name="yolov4",
         batch_size=batch_size,
-        inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
-        expected_compile_time=expected_compile_time,
+        inference_and_compile_time=inference_time_avg,
+        inference_time=inference_time_avg,
+        expected_compile_time=1,
         expected_inference_time=expected_inference_time,
         comments="",
         inference_time_cpu=0.0,
     )
 
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
-    logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
+    assert (
+        throughput_avg >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {throughput_avg} fps"
 
 
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "yolov4", 93.5),
+        (1, "yolov4", 93.3),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

@@ -6,19 +6,26 @@
 
 #include <gtest/gtest.h>
 #include "debug/watcher_server.hpp"
-#include "dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
-
-#include "dprint_server.hpp"
 
 namespace tt::tt_metal {
 
 class DebugToolsFixture : public DispatchFixture {
-   protected:
+protected:
     bool watcher_previous_enabled;
+
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    // This fixture closes/reopens the device on each test
+    void SetUp() override {
+        DispatchFixture::SetUpTestSuite();
+        DispatchFixture::SetUp();
+    }
 
     void TearDown() override {
         DispatchFixture::TearDown();
+        DispatchFixture::TearDownTestSuite();
     }
 
     template <typename T>
@@ -26,19 +33,24 @@ class DebugToolsFixture : public DispatchFixture {
         auto run_function_no_args = [=,this]() { run_function(static_cast<T*>(this), device); };
         DispatchFixture::RunTestOnDevice(run_function_no_args, device);
     }
+
+public:
+    void EarlyTeardown() {
+        DispatchFixture::TearDown();
+    }
 };
 
 // A version of DispatchFixture with DPrint enabled on all cores.
 class DPrintFixture : public DebugToolsFixture {
 public:
-    inline static const string dprint_file_name = "gtest_dprint_log.txt";
+    inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
 
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(IDevice* device, Program& program) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         DebugToolsFixture::RunProgram(device, program);
-        DprintServerAwait();
+        MetalContext::instance().dprint_server()->await();
     }
 
 protected:
@@ -73,11 +85,15 @@ protected:
         DebugToolsFixture::TearDown();
         ExtraTearDown();
 
-        // If test induced a watcher error, re-initialize the context.
-        if (DPrintServerHangDetected()) {
-            MetalContext::instance().reinitialize();
+        // If test induced a dprint error, re-initialize the context. If the test brought down the whole server/context,
+        // then no need to do this since it'll re-init for the next test.
+        if (MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()) {
+            // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
+            // when watcher_dump is removed.
+            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
+                MetalContext::instance().reinitialize();
+            }
         }
-
 
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
@@ -99,8 +115,8 @@ protected:
         IDevice* device
     ) {
         DebugToolsFixture::RunTestOnDevice(run_function, device);
-        DPrintServerClearLogFile();
-        DPrintServerClearSignals();
+        MetalContext::instance().dprint_server()->clear_log_file();
+        MetalContext::instance().dprint_server()->clear_signals();
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup
@@ -125,7 +141,7 @@ protected:
 // A version of DispatchFixture with watcher enabled
 class WatcherFixture : public DebugToolsFixture {
 public:
-    inline static const string log_file_name = "generated/watcher/watcher.log";
+    inline static const std::string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.

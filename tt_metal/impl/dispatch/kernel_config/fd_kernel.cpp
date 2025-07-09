@@ -15,11 +15,8 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
-#include "fabric_types.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "mux.hpp"
@@ -147,16 +144,16 @@ CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const
 }
 
 KernelHandle FDKernel::configure_kernel_variant(
-    const string& path,
+    const std::string& path,
     const std::vector<uint32_t>& compile_args,
-    std::map<string, string> defines_in,
+    std::map<std::string, std::string> defines_in,
     bool is_active_eth_core,
     bool send_to_brisc,
     bool force_watcher_no_inline,
     KernelBuildOptLevel opt_level) {
     uint32_t programmable_core_type_index = get_programmable_core_type_index(GetCoreType(), is_active_eth_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
@@ -167,7 +164,8 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (!DPrintServerReadsDispatchCores(device_->id())) {
+    if (!(MetalContext::instance().dprint_server() and
+          MetalContext::instance().dprint_server()->reads_dispatch_cores(device_->id()))) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());

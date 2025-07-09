@@ -24,7 +24,6 @@
 #include "ttnn/operations/creation.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include <magic_enum/magic_enum.hpp>
-#include <utility>
 
 namespace ttnn::operations::binary_backward {
 
@@ -43,10 +42,6 @@ void preallocated_tensors_check(
     if (required_outputs[1] && !other_grad.has_value()) {
         other_grad = ttnn::empty_like(other);
     }
-}
-
-bool is_block_format_dtype(const Tensor& tensor) {
-    return (tensor.dtype() == ttnn::DataType::BFLOAT8_B || tensor.dtype() == ttnn::DataType::BFLOAT4_B);
 }
 
 std::vector<ttnn::Tensor> ExecuteBackwardAtan2::invoke(
@@ -331,6 +326,10 @@ std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp::invoke(
     const Tensor& input_a,
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        !(is_block_float(input_a.dtype()) || is_block_float(grad.dtype()) || is_block_float(other.dtype())),
+        "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
+
     std::vector<Tensor> grad_tensor;
     Tensor opexp = ttnn::add(
         ttnn::exp(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), false, output_mem_config),
@@ -362,7 +361,7 @@ std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp2::invoke(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
-        !(is_block_format_dtype(input_a) || is_block_format_dtype(grad) || is_block_format_dtype(other)),
+        !(is_block_float(input_a.dtype()) || is_block_float(grad.dtype()) || is_block_float(other.dtype())),
         "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
 
     std::vector<Tensor> grad_tensor;
@@ -549,7 +548,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad,
     const Tensor& input_a,
     const Tensor& input_b,
-    string approximate,
+    std::string approximate,
     const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
         (approximate == "none" || approximate == "tanh"), "Incorrect approximation type (expected 'none', 'tanh')");
@@ -567,7 +566,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad,
     const Tensor& input_tensor,
     float bias,
-    string approximate,
+    std::string approximate,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL(

@@ -15,10 +15,10 @@ from models.demos.yolov9c.demo.demo_utils import (
     save_seg_predictions_by_model,
 )
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
-from models.experimental.yolo_evaluation.yolo_common_evaluation import save_yolo_predictions_by_model
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import LoadImages
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import postprocess as obj_postprocess
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import preprocess
+from models.experimental.yolo_eval.evaluate import save_yolo_predictions_by_model
+from models.experimental.yolo_eval.utils import LoadImages
+from models.experimental.yolo_eval.utils import postprocess as obj_postprocess
+from models.experimental.yolo_eval.utils import preprocess
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
@@ -98,7 +98,7 @@ def test_demo(
             performant_runner._capture_yolov9_trace_2cqs()
             logger.info("Inferencing [TTNN] Model")
 
-            preds = performant_runner.run(torch_input_tensor=im.permute(0, 2, 3, 1))
+            preds = performant_runner.run(torch_input_tensor=im)
             preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
             if enable_segment:
                 detect1_out, detect2_out, detect3_out = [

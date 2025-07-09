@@ -32,6 +32,7 @@ def run_reduce_scatter_impl(
     rs_topology,
     num_iters=1,
     enable_trace=True,
+    ones_tensor=False,
 ):
     torch.manual_seed(0)
 
@@ -101,13 +102,26 @@ def run_reduce_scatter_impl(
     for i in range(num_iters):
         rs_global_input_shape = rs_input_shape[:]
         rs_global_input_shape[3] *= num_devices
-        rs_input_tensor = torch.rand(rs_global_input_shape).bfloat16()
+        if ones_tensor:
+            rs_input_tensor = torch.ones(rs_global_input_shape).bfloat16()
+        else:
+            rs_input_tensor = torch.rand(rs_global_input_shape).bfloat16()
         input_tensors = torch.chunk(rs_input_tensor, num_devices, dim)
         torch_input_tensor_list.append(input_tensors)
-        tt_input_tensors = []
-        for j, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, rs_input_dtype).to(layout))
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config_input)
+
+        input_tensor_mesh = ttnn.from_torch(
+            rs_input_tensor,
+            device=t3k_mesh_device,
+            layout=layout,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                t3k_mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -175,7 +189,12 @@ def run_reduce_scatter_impl(
 
         tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
         tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
-        eq, output = comp_pcc(tt_rs_out, torch_rs_out)
+
+        if ones_tensor:
+            eq, output = comp_equal(tt_rs_out, torch_rs_out)
+        else:
+            eq, output = comp_pcc(tt_rs_out, torch_rs_out)
+
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
 
@@ -199,8 +218,17 @@ def run_reduce_scatter_impl(
         (8, 1, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, 1, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, 1, [1, 1, 512, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [1, 1, 512, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
-    ids=["batch_8", "batch_4", "batch_2", "batch_1"],
+    ids=[
+        "batch_8",
+        "batch_4",
+        "batch_2",
+        "batch_1",
+        "batch_1_slice_wt_1",
+        "batch_1_slice_wt_2",
+    ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
@@ -218,6 +246,13 @@ def run_reduce_scatter_impl(
         (False, 1),
     ],
     ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "ones_tensor",
+    [
+        True,
+        False,
+    ],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -239,6 +274,7 @@ def test_reduce_scatter_async(
     mem_config_rs,
     enable_trace,
     num_iters,
+    ones_tensor,
     rs_topology,
 ):
     run_reduce_scatter_impl(
@@ -254,4 +290,5 @@ def test_reduce_scatter_async(
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        ones_tensor=ones_tensor,
     )

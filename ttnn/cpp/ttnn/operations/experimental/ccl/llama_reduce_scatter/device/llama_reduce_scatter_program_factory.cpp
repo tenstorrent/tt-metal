@@ -9,6 +9,7 @@
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
@@ -228,10 +229,6 @@ uint32_t max_shards_per_worker(const std::vector<std::vector<ReadRequest>>& sche
     }
     return max_shards_per_worker;
 }
-CoreRangeSet get_llama_ccl_cores() {
-    // We externally reserve this core range for CCL cores
-    return CoreRangeSet(CoreRange({1, 6}, {2, 7}));
-}
 
 CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
@@ -427,7 +424,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    auto available_cores = detail::get_llama_ccl_cores();
+    auto available_cores = llama_specific::get_custom_cores(num_links);
 
     auto sender_core_grid = detail::get_worker_cores(
         available_cores, num_workers_per_link * num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);

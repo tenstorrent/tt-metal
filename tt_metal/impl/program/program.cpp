@@ -30,7 +30,6 @@
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,8 +46,6 @@
 #include "dev_msgs.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dprint_server.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
@@ -67,7 +64,6 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
-#include "dispatch/system_memory_manager.hpp"
 #include "tile.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_memory.h"
@@ -144,7 +140,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
-    string compile_hash_str = fmt::format(
+    std::string compile_hash_str = fmt::format(
         "{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
@@ -1299,7 +1295,7 @@ void Program::generate_dispatch_commands(IDevice* device, bool use_prefetcher_ca
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
@@ -1341,7 +1337,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
@@ -1389,7 +1385,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
-    DprintServerSetProfilerState(profile_kernel);
 
     auto sync_events = [&events] {
         for (auto& event : events) {
@@ -1468,8 +1463,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
-                    while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
-                    }
+                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },

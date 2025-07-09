@@ -11,8 +11,6 @@
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_pybind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
-#include "ttnn/operations/experimental/reduction/cumprod/cumprod_pybind.hpp"
-#include "ttnn/operations/experimental/reduction/cumsum/cumsum_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_pybind.hpp"
@@ -51,6 +49,7 @@
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
+#include "ttnn/operations/experimental/where/where_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -91,7 +90,6 @@ void py_module(py::module& module) {
     cnn::detail::bind_convert_to_hwc(module);
 
     ttnn::operations::experimental::conv3d::detail::py_bind_conv3d(module);
-    ttnn::operations::experimental::reduction::cumprod::detail::bind_cumprod_operation(module);
 
     copy::detail::py_bind_typecast(module);
 
@@ -111,8 +109,6 @@ void py_module(py::module& module) {
 
     reduction::sort::detail::bind_reduction_sort_operation(module);
 
-    reduction::detail::bind_cumsum_operation(module);
-
     gather::detail::bind_gather_operation(module);
 
     tosa::gather::detail::bind_gather_tosa_operation(module);
@@ -123,6 +119,8 @@ void py_module(py::module& module) {
     ccl::py_module(m_experimental_ccl);
 
     broadcast_to::detail::py_bind_broadcast_to(module);
+
+    operations::experimental::ternary::detail::bind_where(module);
 }
 
 }  // namespace ttnn::operations::experimental

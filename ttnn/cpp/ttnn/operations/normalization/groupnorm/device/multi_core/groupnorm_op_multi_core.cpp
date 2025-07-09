@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -128,12 +130,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
-    const uint32_t num_groups,
-    const uint32_t num_batches,
-    MathFidelity fidelity,
+    uint32_t num_groups,
+    uint32_t num_batches,
     DataType im_data_format,
     CoreCoord grid_size,
-    bool inplace) {
+    bool inplace,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (gamma.has_value()) {
         TT_FATAL(
@@ -539,8 +541,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -610,7 +612,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
         1,
@@ -668,7 +670,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             .compile_args = writer_mcast_sender_compile_time_args,
             .defines = writer_defines});
     // defines
-    std::map<string, string> eltwise_binary_defines;
+    std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
     }
@@ -742,14 +744,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
     // compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     auto mcast_sender_compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
         mcast_sender_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args,
@@ -759,7 +761,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
         mcast_receiver_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args,
@@ -1115,13 +1117,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
-    const uint32_t num_groups,
-    const uint32_t num_batches,
-    MathFidelity fidelity,
+    uint32_t num_groups,
+    uint32_t num_batches,
     DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    uint32_t num_out_blocks) {
+    uint32_t num_out_blocks,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     if (gamma.has_value()) {
@@ -1601,8 +1603,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -1766,7 +1768,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {
         1,
@@ -1861,7 +1863,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .compile_args = writer_mcast_sender_compile_time_args_group_2,
             .defines = writer_defines});
     // defines
-    std::map<string, string> eltwise_binary_defines;
+    std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
     }
@@ -1998,14 +2000,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
     };
     // compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     auto mcast_sender_compute_kernels_id_group_1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_sender_cores_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args_group_1,
@@ -2015,7 +2017,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_sender_cores_group_2,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args_group_2,
@@ -2025,7 +2027,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_receiver_cores_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args_group_1,
@@ -2035,7 +2037,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_receiver_cores_group_2,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args_group_2,

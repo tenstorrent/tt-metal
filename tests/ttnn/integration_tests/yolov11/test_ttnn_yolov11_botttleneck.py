@@ -7,12 +7,12 @@ import pytest
 import ttnn
 import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov11.tt.model_preprocessing import (
+from models.demos.yolov11.tt.model_preprocessing import (
     create_yolov11_input_tensors,
     create_yolov11_model_parameters,
 )
-from models.experimental.yolov11.reference.yolov11 import Bottleneck as torch_bottleneck
-from models.experimental.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck as ttnn_bottleneck
+from models.demos.yolov11.reference.yolov11 import Bottleneck as torch_bottleneck
+from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck as ttnn_bottleneck
 
 
 @pytest.mark.parametrize(
@@ -31,7 +31,6 @@ from models.experimental.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottlenec
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolo_v11_bottleneck(
     device,
-    use_program_cache,
     reset_seeds,
     in_channel,
     out_channel,

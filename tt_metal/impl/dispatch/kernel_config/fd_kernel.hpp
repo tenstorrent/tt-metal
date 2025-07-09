@@ -12,12 +12,8 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "device/device_impl.hpp"
-#include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
-#include "utils.hpp"
 
 enum class CoreType;
 
@@ -50,9 +46,14 @@ struct TerminationInfo {
     CoreType core_type;      // Core Type
     uint32_t address;        // Termination signal address in L1
     uint32_t val;            // Termination signal value
+
+    bool operator==(const TerminationInfo& other) const {
+        return logical_core == other.logical_core && core_type == other.core_type && address == other.address &&
+               val == other.val;
+    }
 };
 
-static std::vector<string> dispatch_kernel_file_names = {
+static std::vector<std::string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_HD
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_H
@@ -154,9 +155,9 @@ protected:
     };
 
     [[maybe_unused]] KernelHandle configure_kernel_variant(
-        const string& path,
+        const std::string& path,
         const std::vector<uint32_t>& compile_args,
-        std::map<string, string> defines_in,
+        std::map<std::string, std::string> defines_in,
         bool is_active_eth_core,
         bool send_to_brisc,
         bool force_watcher_no_inline,
@@ -195,3 +196,17 @@ protected:
 
 }  // namespace tt_metal
 }  // namespace tt
+
+namespace std {
+template <>
+struct hash<tt::tt_metal::TerminationInfo> {
+    std::size_t operator()(const tt::tt_metal::TerminationInfo& info) const {
+        size_t hash = 0;
+        tt::utils::hash_combine(hash, info.logical_core);
+        tt::utils::hash_combine(hash, info.core_type);
+        tt::utils::hash_combine(hash, info.address);
+        tt::utils::hash_combine(hash, info.val);
+        return hash;
+    }
+};
+}  // namespace std
