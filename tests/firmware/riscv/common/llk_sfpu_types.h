@@ -91,6 +91,7 @@ enum class SfpuType
     fmod,
     ceil,
     unused,
+    neg,
     cumsum,
     fill,
     prelu,
