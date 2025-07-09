@@ -323,6 +323,7 @@ public:
             total_hops);
 
         return ring_destinations;
+    }
 
     std::shared_ptr<MeshBuffer> create_mesh_buffer_helper(
         const std::vector<CoreCoord>& cores, uint32_t address, uint32_t size_bytes) const {

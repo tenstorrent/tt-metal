@@ -1194,7 +1194,8 @@ private:
         }
     }
 
-    void expand_unidirectional_linear_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+    void expand_unidirectional_linear_multicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding unidirectional_linear_multicast pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear_multicast because no devices were found.");
@@ -1209,18 +1210,18 @@ private:
 
                 auto hops = this->route_manager_.get_unidirectional_linear_mcast_hops(src_node, dim);
 
-                TrafficPatternConfig specific_pattern;
-                specific_pattern.destination = DestinationConfig{.hops = hops};
+                ParsedTrafficPatternConfig specific_pattern;
+                specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
                 specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
-                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
     }
 
     void expand_full_or_half_ring_multicast(
-        TestConfig& test, const TrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
         log_info(LogTest, "Expanding full_or_half_ring_multicast pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
@@ -1242,19 +1243,24 @@ private:
             auto hops = this->route_manager_.get_full_or_half_ring_mcast_hops(
                 src_node, dst_node_forward, dst_node_backward, pattern_type);
 
-            TrafficPatternConfig specific_pattern;
-            specific_pattern.destination = DestinationConfig{.hops = hops};
+            ParsedTrafficPatternConfig specific_pattern;
+            specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
             specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
             auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
 
-            auto it = std::find_if(
-                test.senders.begin(), test.senders.end(), [&](const SenderConfig& s) { return s.device == src_node; });
+            auto it = std::find_if(test.senders.begin(), test.senders.end(), [&](const ParsedSenderConfig& s) {
+                // Compare FabricNodeId with DeviceIdentifier
+                if (std::holds_alternative<FabricNodeId>(s.device)) {
+                    return std::get<FabricNodeId>(s.device) == src_node;
+                }
+                return false;
+            });
 
             if (it != test.senders.end()) {
                 it->patterns.push_back(merged_pattern);
             } else {
-                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
     }
