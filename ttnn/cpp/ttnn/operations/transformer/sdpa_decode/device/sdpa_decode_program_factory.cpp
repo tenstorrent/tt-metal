@@ -5,6 +5,7 @@
 #include "sdpa_decode_program_factory.hpp"
 
 #include <optional>
+#include <string>
 
 #include <tt-metalium/buffer.hpp>
 #include "sdpa_decode_op.hpp"
@@ -720,7 +721,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     };
 
     // Determine granularity for compute loops
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (Sk_chunk_t > 0) {
         const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
         const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);

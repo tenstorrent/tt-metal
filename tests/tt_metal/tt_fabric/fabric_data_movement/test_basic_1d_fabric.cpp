@@ -204,7 +204,7 @@ void RunTestLineMcast(
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, worker_mem_map.target_address};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
     }
@@ -405,7 +405,7 @@ void RunTestUnicastRaw(
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
     }
@@ -541,7 +541,7 @@ void run_unicast_test_bw_chips(
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
     }
@@ -808,7 +808,7 @@ void RunTestMCastConnAPI(
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
     }
@@ -1066,7 +1066,7 @@ void RunTestChipMCast1D(
         1 /* is_chip_multicast */,
         0 /* additional_dir */};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
 
     if (enable_fabric_tracing) {
         defines["TEST_ENABLE_FABRIC_TRACING"] = "1";
