@@ -8,6 +8,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
 #include <umd/device/tt_core_coordinates.h>
@@ -66,6 +67,8 @@ std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
 FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
+
+tt::tt_fabric::Topology get_fabric_topology();
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(

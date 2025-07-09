@@ -348,7 +348,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tokens_per_device,
 
         num_links,
-        topology == tt::tt_fabric::Topology::Ring ? 1u : 0u,
+        (uint32_t)tt::tt_fabric::get_fabric_topology(),
 
         src_mesh_id,
         (uint32_t)src_chip_id,

@@ -12,6 +12,8 @@
 
 namespace detail {
 
+enum Topology { Ring = 0, Linear = 1, Mesh = 2, Torus = 3 };
+
 inline void dispatch_input_local_device(
     uint32_t input_token_read_addr, uint64_t output_token_write_addr, uint32_t output_page_size) {
     noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
@@ -38,6 +40,7 @@ inline void dispatch_noc_uni_fused_sem_inc(
     uint64_t noc_remote_semaphore_address,
     int32_t size,
     uint16_t increment_value,
+    bool flush,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile PACKET_HEADER_TYPE* metadata_packet_header) {
     while (size > 0) {
@@ -47,7 +50,7 @@ inline void dispatch_noc_uni_fused_sem_inc(
             // Fill header for fused unicast + atomic increment command when it is the last packet
             metadata_packet_header->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
-                    noc_payload_write_address, noc_remote_semaphore_address, increment_value, 32, true),
+                    noc_payload_write_address, noc_remote_semaphore_address, increment_value, 32, flush),
                 curr_packet_size);
         } else {
             // Fill header for fused unicast + atomic increment command when it is not the last packet
@@ -77,6 +80,7 @@ inline void dispatch_chip_uni_noc_uni_fused_sem_inc(
     uint64_t noc_remote_semaphore_address,
     int32_t size,
     uint16_t increment_value,
+    bool flush,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* metadata_packet_header) {
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
@@ -96,6 +100,7 @@ inline void dispatch_chip_uni_noc_uni_fused_sem_inc(
         noc_remote_semaphore_address,
         size,
         increment_value,
+        flush,
         fabric_connections[route],
         metadata_packet_header);
 }
@@ -111,6 +116,12 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 }
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
+
+bool has_wrap_around(Topology topology) { return topology == Topology::Ring || topology == Topology::Torus; }
+
+bool is_1d_topology(Topology topology) { return topology == Topology::Linear || topology == Topology::Ring; }
+
+bool is_2d_topology(Topology topology) { return topology == Topology::Mesh || topology == Topology::Torus; }
 
 }  // namespace detail
 
@@ -149,7 +160,7 @@ void kernel_main() {
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(25);
 
     constexpr uint32_t num_links = get_compile_time_arg_val(26);
-    constexpr bool is_ring_topology = (bool)get_compile_time_arg_val(27);
+    constexpr Topology topology = (Topology)get_compile_time_arg_val(27);
 
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(28);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(29);
@@ -303,6 +314,7 @@ void kernel_main() {
                         global_noc_semaphore_address,
                         (int)metadata_page_size,
                         1,
+                        true,
                         fabric_connections,
                         metadata_packet_header);
                 }
@@ -330,6 +342,7 @@ void kernel_main() {
                         global_noc_semaphore_address,
                         (int)indices_size,
                         1,
+                        true,
                         fabric_connections,
                         metadata_packet_header);
             }
