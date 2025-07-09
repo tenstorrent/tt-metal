@@ -19,6 +19,9 @@ target_sources(
         cumprod/cumprod.cpp
         cumprod/device/cumprod_device_operation.cpp
         cumprod/device/cumprod_program_factory.cpp
+        cumsum/cumsum.cpp
+        cumsum/device/cumsum_device_operation.cpp
+        cumsum/device/cumsum_program_factory.cpp
         sampling/device/sampling_op.cpp
         sampling/device/sampling_program_factory.cpp
         sampling/sampling.cpp

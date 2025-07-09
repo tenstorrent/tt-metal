@@ -10,9 +10,7 @@
 #include <functional>
 #include <map>
 #include <string>
-#include <utility>
 #include <variant>
-#include <vector>
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -67,7 +65,7 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
 
     // Check that the log file is empty.
     std::fstream log_file;
-    string file_name = fixture->dprint_file_name;
+    std::string file_name = fixture->dprint_file_name;
     EXPECT_TRUE(OpenFile(file_name, log_file, std::fstream::in));
     EXPECT_TRUE(log_file.peek() == std::ifstream::traits_type::eof());
 }

@@ -16,6 +16,7 @@
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -74,6 +75,7 @@ ResultWithOptions conv2d(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -98,6 +100,7 @@ ResultWithOptions conv2d(
                 padding,
                 dilation,
                 groups,
+                dtype,
                 bias_tensor,
                 conv_config_,
                 compute_config_,
@@ -122,6 +125,7 @@ ResultWithOptions conv2d(
                 padding,
                 dilation,
                 groups,
+                dtype,
                 bias_tensor,
                 conv_config_,
                 compute_config_,
@@ -156,12 +160,14 @@ Result conv2d_DRAM(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const Conv2dSliceConfig& dram_slice_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto [output_height, output_width] =
@@ -193,7 +199,9 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
-    TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
+    TT_FATAL(
+        !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),
+        "Conv output can't be in Row Major if output dtype is BFloat8_B.");
 
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -203,23 +211,34 @@ Result conv2d_DRAM(
         TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt_metal::TensorLayout(
-                conv_config.dtype,
-                tt_metal::PageConfig(tt_metal::Layout::ROW_MAJOR),
+                output_dtype,
+                tt_metal::PageConfig(conv_config.output_layout),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
                     BufferType::DRAM,
                 })),
         device);
 
+    uint32_t slice_rounding_value = 1;
+    if (conv_config.output_layout == tt_metal::Layout::TILE) {
+        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    }
+
     bool first_run = true;
-    const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
-    const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+    const uint32_t min_output_slice_size =
+        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+    const uint32_t output_slice_rem =
+        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
+    uint32_t additional_padded_width = 0;
+
     while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
-        const uint32_t output_slice_size = min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0);
+        const uint32_t output_slice_size =
+            slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
         const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
         const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
@@ -255,6 +274,7 @@ Result conv2d_DRAM(
             output_slice_height_end = output_height;
             output_slice_width_start = output_slice_dim_start;
             output_slice_width_end = output_slice_dim_end;
+
             input_slice_height_start = 0;
             input_slice_height_end = input_height;
             input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[2];
@@ -265,6 +285,7 @@ Result conv2d_DRAM(
             pad_bottom = padding_n4[1];
             pad_left = std::max<int>(0, -input_slice_width_start);
             pad_right = std::max<int>(0, input_slice_width_end - input_width);
+
             input_slice_width_start = std::max<int>(0, input_slice_width_start);
             input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
 
@@ -273,11 +294,47 @@ Result conv2d_DRAM(
             }
         }
 
-        const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
-        const uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        log_trace(
+            LogOp,
+            "Conv2d DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            output_slice_height_start,
+            output_slice_width_start,
+            output_slice_height_end,
+            output_slice_width_end);
+        log_trace(
+            LogOp,
+            "Conv2d DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            input_slice_height_start,
+            input_slice_width_start,
+            input_slice_height_end,
+            input_slice_width_end);
 
         const uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
         const uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+
+        const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
+
+        uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        if (output_slice_width % slice_rounding_value != 0) {
+            additional_padded_width = slice_rounding_value - (output_slice_width % slice_rounding_value);
+            log_trace(
+                LogOp,
+                "Conv2d DRAM Slicing: Slice {}: Additional padding of {} added to the right side.",
+                slice_index,
+                additional_padded_width);
+            pad_right += additional_padded_width * stride[1];
+            output_slice_width += additional_padded_width;
+        }
+
+        log_debug(
+            tt::LogOp,
+            "Input Slice : {} x {}, Output Slice {} x {}",
+            input_slice_height,
+            input_slice_width,
+            output_slice_height,
+            output_slice_width);
 
         if (!conv_config.shard_layout.has_value()) {
             if (!conv_config.weights_dtype.has_value()) {
@@ -297,12 +354,16 @@ Result conv2d_DRAM(
                 compute_grid_size,
                 input_tensor_on_device.layout(),
                 input_tensor_on_device.dtype(),
+                output_dtype,
                 std::make_optional(input_tensor_on_device.memory_config()),
                 kernel_size,
                 groups,
                 bias_tensor.has_value(),
                 compute_config);
         }
+
+        TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
+
         Tensor sliced_input_tensor;
         if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
             sliced_input_tensor = ttnn::slice(
@@ -336,6 +397,9 @@ Result conv2d_DRAM(
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
+        // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
+        conv_config_l1.output_layout = Layout::TILE;
+
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
@@ -356,16 +420,21 @@ Result conv2d_DRAM(
                 std::array<uint32_t, 4>({pad_top, pad_bottom, pad_left, pad_right}),
                 dilation,
                 groups,
+                output_dtype,
                 first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
                 conv_config_l1,
                 compute_config_,
                 memory_config_);
+
+        // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
+        // supported.
         if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
-            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED) {
+            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED &&
+            dram_output_tensor.layout() == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
-        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
+        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && conv_config.output_layout == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
@@ -415,11 +484,13 @@ Result conv2d_L1(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor_,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const DataType output_dtype = dtype.value_or(input_tensor_.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     auto input_tensor = input_tensor_;
     const auto& weight_tensor = weight_tensor_;
@@ -430,7 +501,7 @@ Result conv2d_L1(
     if (conv_config.enable_kernel_stride_folding) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
-        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
+        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
         if (conv_config.deallocate_activation) {
             Tensor input_tensor_pre_folded = input_tensor_;
             input_tensor_pre_folded.deallocate(true);
@@ -471,6 +542,7 @@ Result conv2d_L1(
             compute_grid_size,
             input_tensor.layout(),
             input_tensor.dtype(),
+            output_dtype,
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
@@ -656,7 +728,7 @@ Result conv2d_L1(
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             conv_out_memory_config,
-            conv_config.dtype,
+            output_dtype,
             {batch_size, input_height, input_width, in_channels},
             compute_config,
             conv_config.enable_act_double_buffer,
@@ -705,7 +777,7 @@ Result conv2d_L1(
             false,
             false,
             mm_output_memory_config,
-            conv_config.dtype,
+            output_dtype,
             program_config,
             activation,
             compute_config);
@@ -736,6 +808,7 @@ template ResultWithOptions conv2d<IDevice>(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -759,6 +832,7 @@ template ResultWithOptions conv2d<MeshDevice>(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -782,6 +856,7 @@ ResultWithOptions Conv2dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -804,6 +879,7 @@ ResultWithOptions Conv2dOperation::invoke(
         padding,
         dilation,
         groups,
+        std::move(dtype),
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
@@ -828,6 +904,7 @@ ResultWithOptions Conv2dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -850,6 +927,7 @@ ResultWithOptions Conv2dOperation::invoke(
         padding,
         dilation,
         groups,
+        std::move(dtype),
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
