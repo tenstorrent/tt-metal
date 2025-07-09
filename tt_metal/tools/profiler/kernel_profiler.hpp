@@ -33,7 +33,7 @@
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));
 
 #if defined(PROFILE_KERNEL) && \
-    (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
+    (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES)))
 namespace kernel_profiler {
 
 extern uint32_t wIndex;
@@ -46,6 +46,10 @@ constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_UINT32_SIZE = 4;
 constexpr uint32_t DISPATCH_PARENT_ZONE_MARKER_COUNT = 2;
+
+constexpr uint32_t TRACE_ID_SET_BIT = (1 << 31);
+constexpr uint32_t TRACE_ID_KERNEL_SET_BIT = (1 << 30);
+constexpr uint32_t TRACE_STARTED_BIT = (1 << 29);
 // Space has to be left in the buffer in order to guarantee
 // that the next dispatch command can make it fully populated
 // with its meta data (op id + command type)
@@ -63,18 +67,17 @@ volatile tt_l1_ptr uint32_t (*profiler_data_buffer)[kernel_profiler::PROFILER_L1
     reinterpret_cast<volatile tt_l1_ptr uint32_t (*)[kernel_profiler::PROFILER_L1_VECTOR_SIZE]>(
         GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
 
-#if defined(COMPILE_FOR_BRISC)
-constexpr uint32_t myRiscID = 0;
-#elif defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
+    defined(COMPILE_FOR_IDLE_ERISC)
 constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_NCRISC)
-constexpr uint32_t myRiscID = 0;
+constexpr uint32_t myRiscID = 1;
 #elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
-constexpr uint32_t myRiscID = 0;
+constexpr uint32_t myRiscID = 2;
 #elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
-constexpr uint32_t myRiscID = 0;
+constexpr uint32_t myRiscID = 3;
 #elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 2
-constexpr uint32_t myRiscID = 0;
+constexpr uint32_t myRiscID = 4;
 #endif
 
 constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
@@ -193,7 +196,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
 
-#if (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+#if (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
 // Saves several NoC register states that may be setup by dispatch kernels and restores them
 // when the NocDestinationStateSaver is destroyed
@@ -252,7 +255,7 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
-    bool do_noc = false;
+    bool do_noc = true;
     if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
         do_noc = false;
     }
@@ -428,12 +431,10 @@ struct profileScopeGuaranteed {
     static constexpr uint32_t start_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_1_H;
     static constexpr uint32_t end_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_2_H;
 
-    static constexpr uint32_t TRACE_ID_SET_BIT = (1 << 31);
-    static constexpr uint32_t TRACE_ID_KERNEL_SET_BIT = (1 << 30);
-    static constexpr uint32_t TRACE_STARTED_BIT = (1 << 29);
     static_assert(start_index < CUSTOM_MARKERS);
     static_assert(end_index < CUSTOM_MARKERS);
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY)
         if constexpr (index == 0) {
             if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_ID_SET_BIT) {
                 mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
@@ -446,11 +447,24 @@ struct profileScopeGuaranteed {
                 profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_STARTED_BIT;
             }
         }
+#else
+        if constexpr (index == 0) {
+            init_profiler();
+        }
+        mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
+#endif
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY)
         if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_STARTED_BIT) {
             mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
         }
+#else
+        mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
+        if constexpr (index == 0) {
+            finish_profiler();
+        }
+#endif
     }
 };
 
@@ -515,7 +529,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #define DeviceRecordEvent(event_id) kernel_profiler::recordEvent(event_id);
 
 // Dispatch and enabled
-#elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+#elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
 #define DeviceZoneScopedN(name)                                                         \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
@@ -555,9 +569,15 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
 
-#define DeviceZoneScopedSumN1(name)
+#define DeviceZoneScopedSumN1(name)                                            \
+    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>();
 
-#define DeviceZoneScopedSumN2(name)
+#define DeviceZoneScopedSumN2(name)                                            \
+    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
 
 #define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
 

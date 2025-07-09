@@ -92,6 +92,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_sync_enabled = false;
     profiler_mid_run_tracy_push = false;
     profiler_buffer_usage_enabled = false;
+    profiler_trace_profiler = false;
 #if defined(TRACY_ENABLE)
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
@@ -101,12 +102,16 @@ RunTimeOptions::RunTimeOptions() {
             profile_dispatch_cores = true;
         }
         const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
-        if (profiler_enabled && profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
+        if (profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
             profiler_sync_enabled = true;
         }
+        const char* profiler_trace_profiler_str = std::getenv("TT_METAL_TRACE_PROFILER");
+        if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
+            std::cout << "trace profiler" << std::endl;
+            profiler_trace_profiler = true;
+        }
         const char* profiler_force_push_enabled_str = std::getenv("TT_METAL_TRACY_MID_RUN_PUSH");
-        if (profiler_enabled && profiler_force_push_enabled_str != nullptr &&
-            profiler_force_push_enabled_str[0] == '1') {
+        if (profiler_force_push_enabled_str != nullptr && profiler_force_push_enabled_str[0] == '1') {
             profiler_mid_run_tracy_push = true;
         }
     }

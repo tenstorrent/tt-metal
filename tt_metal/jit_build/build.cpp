@@ -28,6 +28,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include "control_plane.hpp"
@@ -189,12 +190,15 @@ void JitBuildEnv::init(
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
     if (tt::tt_metal::getDeviceProfilerState()) {
+        uint32_t pofiler_options = 1;
         if (rtoptions.get_profiler_do_dispatch_cores()) {
-            // TODO(MO): Standard bit mask for device side profiler options
-            this->defines_ += "-DPROFILE_KERNEL=2 ";
-        } else {
-            this->defines_ += "-DPROFILE_KERNEL=1 ";
+            pofiler_options |= PROFILER_OPT_DO_DISPATCH_CORES;
         }
+        if (rtoptions.get_profiler_trace_profiler()) {
+            pofiler_options |= PROFILER_OPT_DO_TRACE_ONLY;
+        }
+        this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(pofiler_options) + " ";
+        std::cout << "-DPROFILE_KERNEL=" + std::to_string(pofiler_options) + " " << std::endl;
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled

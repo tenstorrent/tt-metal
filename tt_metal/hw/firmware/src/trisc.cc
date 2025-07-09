@@ -108,7 +108,6 @@ int main(int argc, char *argv[]) {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
 
-    // Cleanup profiler buffer incase we never get the go message
     kernel_profiler::init_profiler();
     while (1) {
         WAYPOINT("W");

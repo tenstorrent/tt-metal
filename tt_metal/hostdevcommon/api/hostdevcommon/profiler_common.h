@@ -6,7 +6,8 @@
 
 #include <cstdint>
 
-#define PROFILER_OPT_DO_DISPATCH_CORES 2
+#define PROFILER_OPT_DO_DISPATCH_CORES (1 << 1)
+#define PROFILER_OPT_DO_TRACE_ONLY (1 << 2)
 
 namespace kernel_profiler {
 
