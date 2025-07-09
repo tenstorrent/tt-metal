@@ -32,6 +32,15 @@ get_jobs_with_pagination_fallback() {
     local workflow_run_id=$2
     local attempt_number=$3
 
+    local jobs_json_file="workflow_jobs_${workflow_run_id}_${attempt_number}.json"
+
+    # Check if the jobs JSON file already exists
+    if [[ -f "$jobs_json_file" ]]; then
+        echo "[info] Using existing $jobs_json_file"
+        cat "$jobs_json_file"
+        return 0
+    fi
+
     # Try the original --paginate approach first, fall back to manual pagination if it fails
     set +e  # Disable exit on error
     paginated_output=$(gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate 2>&1)
@@ -40,7 +49,8 @@ get_jobs_with_pagination_fallback() {
 
     if [ $paginate_exit_code -eq 0 ]; then
         echo "Successfully fetched jobs using --paginate" >&2
-        echo "$paginated_output"
+        echo "$paginated_output" | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > "$jobs_json_file"
+        cat "$jobs_json_file"
     else
         echo "--paginate failed (exit code: $paginate_exit_code), falling back to manual pagination" >&2
         echo "Error output: $paginated_output" >&2
@@ -69,7 +79,8 @@ get_jobs_with_pagination_fallback() {
         done
 
         # Return the combined jobs in the expected format
-        echo "$all_jobs" | jq -s '{total_count: '$total_count', jobs: .[0]}'
+        echo "$all_jobs" | jq -s '{total_count: '$total_count', jobs: .[0]}' > "$jobs_json_file"
+        cat "$jobs_json_file"
     fi
 }
 
@@ -102,6 +113,9 @@ download_logs_for_all_jobs() {
 }
 
 main() {
+    # Default: only fetch jobs if flag is set
+    fetch_jobs_only=false
+
     # Parse the arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -116,6 +130,9 @@ main() {
             --repo)
                 repo=$2
                 shift
+                ;;
+            --fetch-jobs-only)
+                fetch_jobs_only=true
                 ;;
             *)
                 echo "Unknown option: $1"
@@ -136,6 +153,11 @@ main() {
     if [[ -z "$attempt_number" ]]; then
         echo "attempt_number is empty"
         exit 1
+    fi
+
+    if $fetch_jobs_only; then
+        get_jobs_with_pagination_fallback "$repo" "$workflow_run_id" "$attempt_number" > /dev/null
+        exit 0
     fi
 
     set_up_dirs "$workflow_run_id"
