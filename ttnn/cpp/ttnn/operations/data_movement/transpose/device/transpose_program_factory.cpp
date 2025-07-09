@@ -1219,7 +1219,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     }
 
     // defines
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     if (is_special_case) {
         reader_defines["USE_SPECIAL_CASE"] = "1";
     }
@@ -2137,7 +2137,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
         (std::uint32_t)pack_num_pages_last_row_col,
     };
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     compute_defines["SHARDED"] = "1";
 
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(

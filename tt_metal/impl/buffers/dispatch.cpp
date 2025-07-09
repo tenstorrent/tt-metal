@@ -414,7 +414,10 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                 src_address_offset += dispatch_params.data_size_to_copy;
             }
         } else {
-            command_sequence.add_data((char*)src + src_address_offset, data_size_bytes, data_size_bytes);
+            command_sequence.add_data(
+                (char*)src + src_address_offset,
+                dispatch_params.data_size_to_copy * dispatch_params.pages_per_txn,
+                data_size_bytes);
         }
     }
 }

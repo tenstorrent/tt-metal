@@ -38,7 +38,7 @@ TEST_F(DeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
 
         const uint32_t write_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
-        const std::map<string, string>& defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
+        const std::map<std::string, std::string>& defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
 
         const uint32_t num_compile_time_args = 20000;
         std::vector<uint32_t> compile_time_args(num_compile_time_args);
