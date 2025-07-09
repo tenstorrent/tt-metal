@@ -1484,6 +1484,7 @@ void DeviceProfiler::dumpResults(
     if (state == ProfilerDumpState::NORMAL && rtoptions.get_profiler_noc_events_enabled()) {
         serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id, routing_lookup);
         dumpClusterCoordinatesAsJson(std::filesystem::path(rpt_path) / "cluster_coordinates.json");
+        dumpRoutingInfo(std::filesystem::path(rpt_path) / "topology.json");
     }
 
     log_file_ofs.close();
