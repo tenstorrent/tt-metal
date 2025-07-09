@@ -136,3 +136,33 @@ def test_accuracy_sdxl(
         json.dump(data, f, indent=4)
 
     logger.info(f"Test results saved to {out_root}/{file_name}")
+
+
+def sdxl_get_prompts(
+    captions_path,
+    start_from,
+    num_prompts,
+):
+    assert (
+        0 <= start_from < 5000 and start_from + num_prompts <= 5000
+    ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
+
+    prompts = []
+
+    if not os.path.isfile(captions_path):
+        logger.info(f"File {captions_path} not found. Downloading...")
+        os.makedirs(os.path.dirname(captions_path), exist_ok=True)
+        urllib.request.urlretrieve(COCO_CAPTIONS_DOWNLOAD_PATH, captions_path)
+        logger.info("Download complete.")
+
+    with open(captions_path, "r") as tsv_file:
+        reader = csv.reader(tsv_file, delimiter="\t")
+        next(reader)
+        for index, row in enumerate(reader):
+            if index < start_from:
+                continue
+            if index >= start_from + num_prompts:
+                break
+            prompts.append(row[2])
+
+    return prompts
