@@ -265,14 +265,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
-            input_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,            // num_tiles_to_read
-            input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores it reads from
+            input_tensor.buffer()->address(),           // input tensor_address0
+            intermediate_tensor.buffer()->address(),    // output tensor_address0
+            input_tensor_shard_num_pages,               // num_tiles_per_core
+            worker_num_tiles_to_read,                   // num_tiles_to_read
+            input_first_core_tile_start_offset,         // first_core_tile_start_offset
+            intermediate_first_core_tile_start_offset,  // intermediate_first_core_tile_start_offset
+            input_tensor_cores_x.size(),                // num_cores it reads from
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
+        reader_rt_args.push_back(intermediate_tensor_cores_x.size());
+        reader_rt_args.insert(
+            reader_rt_args.end(), intermediate_tensor_cores_x.begin(), intermediate_tensor_cores_x.end());
+        reader_rt_args.insert(
+            reader_rt_args.end(), intermediate_tensor_cores_y.begin(), intermediate_tensor_cores_y.end());
         log_trace(tt::LogOp, "Reader Runtime Args:");
         for (const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);

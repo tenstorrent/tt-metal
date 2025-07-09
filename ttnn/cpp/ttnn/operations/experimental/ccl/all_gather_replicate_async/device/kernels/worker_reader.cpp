@@ -34,9 +34,11 @@ void kernel_main() {
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
+    address_t intermediate_tensor_address0 = get_arg_val<address_t>(arg_idx++);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t intermediate_first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
     DPRINT << "tensor_address0: " << tensor_address0 << ENDL();
     DPRINT << "num_tiles_per_core: " << num_tiles_per_core << ENDL();
@@ -48,6 +50,11 @@ void kernel_main() {
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
+    uint32_t num_cores_to_write_to = get_arg_val<uint32_t>(arg_idx++);
+    tt_l1_ptr uint32_t* core_noc_x_to_write_to = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_cores_to_write_to;
+    tt_l1_ptr uint32_t* core_noc_y_to_write_to = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_cores_to_write_to;
 
     // interleaved addrgen
 
@@ -75,4 +82,13 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     cb_push_back(cb0_id, num_tiles_to_read);
+    core_id = 0;
+    uint64_t noc0_dest_noc_addr = get_noc_addr(
+        core_noc_x_to_write_to[core_id], core_noc_y_to_write_to[core_id], intermediate_tensor_address0, 1 /*noc_id*/);
+    uint32_t l1_read_addr = get_read_ptr(cb0_id);
+    noc_async_write(
+        l1_read_addr,
+        noc0_dest_noc_addr + intermediate_first_core_tile_start_offset * tensor0_page_size,
+        num_tiles_to_read * tensor0_page_size);
+    noc_async_write_barrier();
 }

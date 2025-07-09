@@ -34,6 +34,7 @@ constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targe
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
+    return;
     DPRINT << "Kernel = worker_writer" << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
     DPRINT << "reserved_packet_header_cb_id: " << reserved_packet_header_cb_id << ENDL();

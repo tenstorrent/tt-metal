@@ -7,8 +7,8 @@
 #include "ckernel.h"
 
 void kernel_main() {
-    DPRINT << "Kernel = worker_receiver" << ENDL();
     return;
+    DPRINT << "Kernel = worker_receiver" << ENDL();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
