@@ -26,6 +26,11 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      version:
+        required: false
+        type: string
+        default: "22.04"
+        description: "Ubuntu version (e.g., 22.04, 24.04)"
 
   workflow_dispatch:
     inputs:
@@ -59,6 +64,14 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      version:
+        required: false
+        type: choice
+        options:
+          - "22.04"
+          - "24.04"
+        default: "22.04"
+        description: "Ubuntu version"
 
 jobs:
   ttnn:
@@ -151,8 +164,8 @@ jobs:
         if: always()
 
   ttnn-import-test:
-    name: ttnn import test ubuntu-22.04
-    runs-on: ubuntu-22.04
+    name: ttnn import test ubuntu-${{ inputs.version }}
+    runs-on: ubuntu-${{ inputs.version }}
     defaults:
       run:
         shell: bash
