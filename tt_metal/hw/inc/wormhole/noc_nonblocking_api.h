@@ -483,6 +483,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes);
 }
 
+inline constexpr uint32_t cycle_vc(uint32_t vc) {
+    return (vc + 1) & 0b11;  // Cycles between 0, 1, 2, 3
+}
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     uint32_t noc,
@@ -516,6 +520,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
             src_addr += NOC_MAX_BURST_SIZE;
             dest_addr += NOC_MAX_BURST_SIZE;
             len_bytes -= NOC_MAX_BURST_SIZE;
+            // vc = cycle_vc(vc);
         }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
