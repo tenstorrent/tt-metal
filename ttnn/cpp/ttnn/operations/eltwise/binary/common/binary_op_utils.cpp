@@ -30,7 +30,9 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
            (input == UINT16 && output == BFLOAT8_B) || (input == UINT16 && output == BFLOAT16) ||
            (input == UINT16 && output == FLOAT32) || (input == UINT16 && output == UINT32) ||
            (input == UINT32 && output == BFLOAT4_B) || (input == UINT32 && output == BFLOAT8_B) ||
-           (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32);
+           (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32) ||
+           (input == UINT16 && output == INT32) || (input == INT32 && output == UINT16) ||
+           (input == UINT32 && output == UINT16);
 }
 
 std::map<std::string, std::string> get_defines(
