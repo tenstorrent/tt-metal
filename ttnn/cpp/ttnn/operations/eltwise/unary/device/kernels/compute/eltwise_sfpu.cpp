@@ -7,6 +7,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -15,6 +16,7 @@ void MAIN {
 
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        DeviceZoneScopedN("TEST-SFPU1");
         cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();

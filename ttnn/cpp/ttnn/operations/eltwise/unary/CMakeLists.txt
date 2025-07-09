@@ -21,6 +21,10 @@ target_sources(
         tanh_accurate/device/tanh_accurate_pgm_factory.cpp
         tanh_accurate/device/tanh_accurate_sharded_pgm_factory.cpp
         tanh_accurate/tanh_accurate.cpp
+        i0_fpu/device/i0_fpu_device_operation.cpp
+        i0_fpu/device/i0_fpu_pgm_factory.cpp
+        i0_fpu/device/i0_fpu_sharded_pgm_factory.cpp
+        i0_fpu/i0_fpu.cpp
         unary.cpp
 )
 
