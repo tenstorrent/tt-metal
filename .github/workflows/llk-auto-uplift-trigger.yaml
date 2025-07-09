@@ -7,7 +7,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 180
+        default: 240
       skip_draft:
         description: 'Skip creating PR as draft'
         required: false
@@ -24,7 +24,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 180
+        default: 240
       skip_draft:
         description: 'Skip creating PR as draft'
         required: false
@@ -43,7 +43,7 @@ on:
 env:
   BRANCH_NAME: llk-submodule-uplift
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
-  WORKFLOW_TIMEOUT: 180
+  WORKFLOW_TIMEOUT: 240
   CHECK_INTERVAL: 180
   MAX_RETRIES: 3
 
@@ -331,33 +331,77 @@ jobs:
           echo "🚀 Triggering ${#WORKFLOWS_TO_RUN[@]} workflow(s)..."
 
           # Trigger all workflows in parallel and collect run IDs
+          # IMPORTANT: This section uses robust run identification to prevent picking up older runs
+          # - Records trigger timestamp for each workflow
+          # - Compares against existing runs before triggering
+          # - Only monitors runs created after the trigger timestamp
+          # - Uses both timestamp and run ID comparison to ensure accuracy
+          declare -A TRIGGER_TIMESTAMP
+          TRIGGER_START_TIME=$(date +%s)
+
           for workflow in "${WORKFLOWS_TO_RUN[@]}"; do
             echo "Triggering $workflow..."
 
-            # Get baseline run count
-            EXISTING_COUNT=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq 'length')
+            # Get existing run IDs before triggering to avoid confusion
+            EXISTING_RUN_IDS=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId --jq '[.[].databaseId]' --repo "${{ github.repository }}")
+            echo "Existing run IDs before trigger: $EXISTING_RUN_IDS"
+
+            # Record trigger time for this workflow
+            TRIGGER_TIMESTAMP["$workflow"]=$(date +%s)
 
             if gh workflow run "$workflow" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"; then
-              echo "✅ Successfully triggered $workflow"
+              echo "✅ Successfully triggered $workflow at $(date)"
 
-              # Wait for the new run to appear
+              # Wait for the new run to appear and ensure it's actually new
+              # Note: Runs might be queued for a long time if runners are busy
               RUN_ID=""
-              for i in {1..12}; do
+              for i in {1..30}; do
                 sleep 5
-                LATEST_RUN=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
 
-                if [ -n "$LATEST_RUN" ] && [ "$LATEST_RUN" != "null" ]; then
-                  RUN_ID="$LATEST_RUN"
-                  break
+                # Get current runs and find the newest one that wasn't in the existing list
+                CURRENT_RUNS=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt --repo "${{ github.repository }}")
+
+                # Find the newest run that was created after our trigger timestamp
+                WORKFLOW_TRIGGER_TIME="${TRIGGER_TIMESTAMP[$workflow]}"
+                NEW_RUN_ID=$(echo "$CURRENT_RUNS" | jq -r --argjson trigger_time "$WORKFLOW_TRIGGER_TIME" '
+                  map(select(
+                    (.createdAt | fromdateiso8601) >= $trigger_time
+                  )) |
+                  sort_by(.createdAt) |
+                  reverse |
+                  .[0].databaseId // empty
+                ')
+
+                if [ -n "$NEW_RUN_ID" ] && [ "$NEW_RUN_ID" != "null" ] && [ "$NEW_RUN_ID" != "empty" ]; then
+                  # Double-check this run ID wasn't in our existing list
+                  if ! echo "$EXISTING_RUN_IDS" | grep -q "$NEW_RUN_ID"; then
+                    # Also check the status to provide better feedback
+                    RUN_STATUS=$(echo "$CURRENT_RUNS" | jq -r --arg run_id "$NEW_RUN_ID" 'map(select(.databaseId == ($run_id | tonumber))) | .[0].status // "unknown"')
+                    RUN_ID="$NEW_RUN_ID"
+                    echo "✅ Found new run ID: $RUN_ID for workflow: $workflow (status: $RUN_STATUS)"
+                    if [ "$RUN_STATUS" = "queued" ]; then
+                      echo "⏳ Note: Run is queued - this is normal when runners are busy"
+                    fi
+                    break
+                  else
+                    echo "⚠️ Found run ID $NEW_RUN_ID but it was in existing list, continuing search..."
+                  fi
                 fi
-                echo "Attempt $i: Waiting for new workflow run to appear..."
+
+                if [ $i -le 10 ]; then
+                  echo "Attempt $i: Waiting for new workflow run to appear for $workflow..."
+                elif [ $i -le 20 ]; then
+                  echo "Attempt $i: Still waiting for $workflow (API might be slow)..."
+                else
+                  echo "Attempt $i: Extended wait for $workflow (runners might be busy)..."
+                fi
               done
 
               if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
                 RUN_IDS+=("$RUN_ID")
                 RUN_ID_TO_WORKFLOW["$RUN_ID"]="$workflow"
                 WORKFLOW_RETRY_COUNT["$workflow"]=0
-                echo "Monitoring run ID: $RUN_ID for workflow: $workflow"
+                echo "✅ Monitoring run ID: $RUN_ID for workflow: $workflow"
 
                 # Comment on PR with workflow link
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$RUN_ID"
@@ -365,6 +409,8 @@ jobs:
                 gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
                   --body "🚀 **$DISPLAY_NAME** triggered: [View run]($RUN_URL)" \
                   --repo "${{ github.repository }}"
+              else
+                echo "❌ Failed to find new run ID for $workflow after triggering"
               fi
             else
               echo "❌ Failed to trigger $workflow"
@@ -378,11 +424,12 @@ jobs:
 
           # Monitor all runs efficiently
           echo "⏳ Monitoring ${#RUN_IDS[@]} workflow run(s)..."
+          echo "ℹ️  Note: Runs may be queued initially if runners are busy - this is normal"
 
           START_TIME=$(date +%s)
           TIMEOUT_SECONDS=$((TIMEOUT_MINUTES * 60))
           ALL_SUCCESS=true
-          CHECK_INTERVAL=${{ env.CHECK_INTERVAL }}  # Check every 3 minutes instead of 5
+          CHECK_INTERVAL=${{ env.CHECK_INTERVAL }}  # Check every 3 minutes
 
           while [ ${#RUN_IDS[@]} -gt 0 ]; do
             # Check timeout
@@ -395,8 +442,17 @@ jobs:
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$run_id"
                 WORKFLOW_NAME="${RUN_ID_TO_WORKFLOW[$run_id]}"
                 DISPLAY_NAME="${WORKFLOW_DISPLAY_NAMES[$WORKFLOW_NAME]}"
+
+                # Check final status to provide better timeout message
+                FINAL_STATUS=$(gh run view "$run_id" --json status --jq '.status // "unknown"' 2>/dev/null || echo "unknown")
+                if [ "$FINAL_STATUS" = "queued" ]; then
+                  TIMEOUT_MESSAGE="⏰ **$DISPLAY_NAME** timed out after ${TIMEOUT_MINUTES} minutes (still queued - runners may be busy): [View run]($RUN_URL)"
+                else
+                  TIMEOUT_MESSAGE="⏰ **$DISPLAY_NAME** timed out after ${TIMEOUT_MINUTES} minutes (status: \`$FINAL_STATUS\`): [View run]($RUN_URL)"
+                fi
+
                 gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                  --body "⏰ **$DISPLAY_NAME** timed out after ${TIMEOUT_MINUTES} minutes: [View run]($RUN_URL)" \
+                  --body "$TIMEOUT_MESSAGE" \
                   --repo "${{ github.repository }}"
               done
               ALL_SUCCESS=false
@@ -436,10 +492,50 @@ jobs:
 
                     if gh run rerun "$run_id" --failed --repo "${{ github.repository }}"; then
                       echo "✅ Successfully triggered retry for $DISPLAY_NAME"
-                      sleep 30
+                      RETRY_TRIGGER_TIME=$(date +%s)
 
-                      # Find the new run ID
-                      NEW_RUN_ID=$(gh run list --workflow "$WORKFLOW_NAME" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq '.[0].databaseId')
+                      # Get existing run IDs before retry to avoid confusion
+                      RETRY_EXISTING_RUNS=$(gh run list --workflow "$WORKFLOW_NAME" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId --jq '[.[].databaseId]' --repo "${{ github.repository }}")
+
+                      # Wait for the new retry run to appear
+                      # Note: Retries might also be queued if runners are busy
+                      NEW_RUN_ID=""
+                      for j in {1..20}; do
+                        sleep 6
+
+                        # Get current runs and find the newest one created after retry trigger
+                        CURRENT_RETRY_RUNS=$(gh run list --workflow "$WORKFLOW_NAME" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt --repo "${{ github.repository }}")
+
+                        FOUND_RETRY_RUN=$(echo "$CURRENT_RETRY_RUNS" | jq -r --argjson trigger_time "$RETRY_TRIGGER_TIME" '
+                          map(select(
+                            (.createdAt | fromdateiso8601) >= $trigger_time
+                          )) |
+                          sort_by(.createdAt) |
+                          reverse |
+                          .[0].databaseId // empty
+                        ')
+
+                        if [ -n "$FOUND_RETRY_RUN" ] && [ "$FOUND_RETRY_RUN" != "null" ] && [ "$FOUND_RETRY_RUN" != "empty" ] && [ "$FOUND_RETRY_RUN" != "$run_id" ]; then
+                          # Double-check this run ID is actually new
+                          if ! echo "$RETRY_EXISTING_RUNS" | grep -q "$FOUND_RETRY_RUN"; then
+                            # Check the status of the retry run
+                            RETRY_STATUS=$(echo "$CURRENT_RETRY_RUNS" | jq -r --arg run_id "$FOUND_RETRY_RUN" 'map(select(.databaseId == ($run_id | tonumber))) | .[0].status // "unknown"')
+                            NEW_RUN_ID="$FOUND_RETRY_RUN"
+                            echo "✅ Found new retry run ID: $NEW_RUN_ID for workflow: $WORKFLOW_NAME (status: $RETRY_STATUS)"
+                            if [ "$RETRY_STATUS" = "queued" ]; then
+                              echo "⏳ Note: Retry run is queued - this is normal when runners are busy"
+                            fi
+                            break
+                          fi
+                        fi
+
+                        if [ $j -le 10 ]; then
+                          echo "Retry attempt $j: Waiting for new retry run to appear for $WORKFLOW_NAME..."
+                        else
+                          echo "Retry attempt $j: Extended wait for retry run (runners might be busy)..."
+                        fi
+                      done
+
                       if [ -n "$NEW_RUN_ID" ] && [ "$NEW_RUN_ID" != "$run_id" ]; then
                         RUN_IDS=("${RUN_IDS[@]/$run_id}")
                         RUN_IDS+=("$NEW_RUN_ID")
@@ -447,6 +543,8 @@ jobs:
                         unset RUN_ID_TO_WORKFLOW["$run_id"]
                         echo "📍 Now monitoring retry run ID: $NEW_RUN_ID"
                         continue
+                      else
+                        echo "❌ Failed to find new retry run ID for $WORKFLOW_NAME"
                       fi
                     fi
                   else
@@ -460,7 +558,13 @@ jobs:
               else
                 # Still running, keep monitoring
                 REMAINING_RUNS+=("$run_id")
-                echo "⌛ $DISPLAY_NAME (Run $run_id) status: $STATUS (${ELAPSED}s/${TIMEOUT_SECONDS}s)"
+                if [ "$STATUS" == "queued" ]; then
+                  echo "⏳ $DISPLAY_NAME (Run $run_id) is queued - waiting for available runner (${ELAPSED}s/${TIMEOUT_SECONDS}s)"
+                elif [ "$STATUS" == "in_progress" ]; then
+                  echo "⚙️ $DISPLAY_NAME (Run $run_id) is running (${ELAPSED}s/${TIMEOUT_SECONDS}s)"
+                else
+                  echo "⌛ $DISPLAY_NAME (Run $run_id) status: $STATUS (${ELAPSED}s/${TIMEOUT_SECONDS}s)"
+                fi
               fi
             done
 
@@ -580,6 +684,11 @@ jobs:
           echo "  - Should run Blackhole: $SHOULD_RUN_BLACKHOLE"
 
           # Check latest runs for workflows that should have been triggered
+          # IMPORTANT: This section uses improved run identification to prevent false positives
+          # - Gets runs created after PR creation time
+          # - Prioritizes completed runs over in-progress runs
+          # - Handles both completed and in-progress states appropriately
+          # - Provides detailed status information for debugging
           ALL_PASSED=true
           CHECKED_WORKFLOWS=0
           FAILED_WORKFLOWS=()
@@ -592,24 +701,45 @@ jobs:
             PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq '.createdAt' --repo "${{ github.repository }}")
             echo "PR created at: $PR_CREATED_AT"
 
-            # Get workflow runs created after PR creation time
-            LATEST_RUN_DATA=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json conclusion,databaseId,url,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}")
-            LATEST_CONCLUSION=$(echo "$LATEST_RUN_DATA" | jq -r '.conclusion // "none"')
+            # Get workflow runs created after PR creation time, sorted by creation time
+            WORKFLOW_RUNS_DATA=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 15 --json conclusion,databaseId,url,createdAt,status --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | sort_by(.createdAt) | reverse" --repo "${{ github.repository }}")
 
-            if [ "$LATEST_CONCLUSION" != "none" ]; then
+            # Find the most recent completed run, or the most recent run if none are completed
+            LATEST_RUN_DATA=$(echo "$WORKFLOW_RUNS_DATA" | jq -r '
+              (map(select(.status == "completed")) | .[0]) // .[0] // {}
+            ')
+
+            LATEST_CONCLUSION=$(echo "$LATEST_RUN_DATA" | jq -r '.conclusion // "none"')
+            LATEST_STATUS=$(echo "$LATEST_RUN_DATA" | jq -r '.status // "unknown"')
+
+            if [ "$LATEST_RUN_DATA" != "{}" ]; then
               CHECKED_WORKFLOWS=$((CHECKED_WORKFLOWS + 1))
               RUN_ID=$(echo "$LATEST_RUN_DATA" | jq -r '.databaseId // ""')
               RUN_URL=$(echo "$LATEST_RUN_DATA" | jq -r '.url // ""')
               RUN_CREATED_AT=$(echo "$LATEST_RUN_DATA" | jq -r '.createdAt // ""')
-              echo "Found WH run created at: $RUN_CREATED_AT"
+              echo "Found WH run created at: $RUN_CREATED_AT (status: $LATEST_STATUS, conclusion: $LATEST_CONCLUSION)"
 
-              if [ "$LATEST_CONCLUSION" != "success" ]; then
-                echo "❌ All Post Commit Workflows latest run: $LATEST_CONCLUSION"
-                FAILED_WORKFLOWS+=("**All Post Commit Workflows** (conclusion: \`$LATEST_CONCLUSION\`): [View run]($RUN_URL)")
-                ALL_PASSED=false
+              if [ "$LATEST_STATUS" == "completed" ]; then
+                if [ "$LATEST_CONCLUSION" != "success" ]; then
+                  echo "❌ All Post Commit Workflows latest run: $LATEST_CONCLUSION"
+                  FAILED_WORKFLOWS+=("**All Post Commit Workflows** (conclusion: \`$LATEST_CONCLUSION\`): [View run]($RUN_URL)")
+                  ALL_PASSED=false
+                else
+                  echo "✅ All Post Commit Workflows latest run: success"
+                  SUCCEEDED_WORKFLOWS+=("**All Post Commit Workflows**: [View run]($RUN_URL)")
+                fi
               else
-                echo "✅ All Post Commit Workflows latest run: success"
-                SUCCEEDED_WORKFLOWS+=("**All Post Commit Workflows**: [View run]($RUN_URL)")
+                if [ "$LATEST_STATUS" = "queued" ]; then
+                  echo "⏳ All Post Commit Workflows run is queued - waiting for available runner"
+                  FAILED_WORKFLOWS+=("**All Post Commit Workflows**: Queued (waiting for runner): [View run]($RUN_URL)")
+                elif [ "$LATEST_STATUS" = "in_progress" ]; then
+                  echo "⏳ All Post Commit Workflows run is in progress"
+                  FAILED_WORKFLOWS+=("**All Post Commit Workflows**: In progress: [View run]($RUN_URL)")
+                else
+                  echo "⏳ All Post Commit Workflows run is still in progress (status: $LATEST_STATUS)"
+                  FAILED_WORKFLOWS+=("**All Post Commit Workflows**: Still in progress (\`$LATEST_STATUS\`): [View run]($RUN_URL)")
+                fi
+                ALL_PASSED=false
               fi
             else
               echo "❌ All Post Commit Workflows should have run but no runs found after PR creation"
@@ -621,24 +751,45 @@ jobs:
           if [ "$SHOULD_RUN_BLACKHOLE" = true ]; then
             echo "🔍 Checking latest Blackhole Post Commit run..."
 
-            # Get workflow runs created after PR creation time
-            LATEST_RUN_DATA=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json conclusion,databaseId,url,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}")
-            LATEST_CONCLUSION=$(echo "$LATEST_RUN_DATA" | jq -r '.conclusion // "none"')
+            # Get workflow runs created after PR creation time, sorted by creation time
+            WORKFLOW_RUNS_DATA=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 15 --json conclusion,databaseId,url,createdAt,status --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | sort_by(.createdAt) | reverse" --repo "${{ github.repository }}")
 
-            if [ "$LATEST_CONCLUSION" != "none" ]; then
+            # Find the most recent completed run, or the most recent run if none are completed
+            LATEST_RUN_DATA=$(echo "$WORKFLOW_RUNS_DATA" | jq -r '
+              (map(select(.status == "completed")) | .[0]) // .[0] // {}
+            ')
+
+            LATEST_CONCLUSION=$(echo "$LATEST_RUN_DATA" | jq -r '.conclusion // "none"')
+            LATEST_STATUS=$(echo "$LATEST_RUN_DATA" | jq -r '.status // "unknown"')
+
+            if [ "$LATEST_RUN_DATA" != "{}" ]; then
               CHECKED_WORKFLOWS=$((CHECKED_WORKFLOWS + 1))
               RUN_ID=$(echo "$LATEST_RUN_DATA" | jq -r '.databaseId // ""')
               RUN_URL=$(echo "$LATEST_RUN_DATA" | jq -r '.url // ""')
               RUN_CREATED_AT=$(echo "$LATEST_RUN_DATA" | jq -r '.createdAt // ""')
-              echo "Found BH run created at: $RUN_CREATED_AT"
+              echo "Found BH run created at: $RUN_CREATED_AT (status: $LATEST_STATUS, conclusion: $LATEST_CONCLUSION)"
 
-              if [ "$LATEST_CONCLUSION" != "success" ]; then
-                echo "❌ Blackhole Post Commit latest run: $LATEST_CONCLUSION"
-                FAILED_WORKFLOWS+=("**Blackhole Post Commit** (conclusion: \`$LATEST_CONCLUSION\`): [View run]($RUN_URL)")
-                ALL_PASSED=false
+              if [ "$LATEST_STATUS" == "completed" ]; then
+                if [ "$LATEST_CONCLUSION" != "success" ]; then
+                  echo "❌ Blackhole Post Commit latest run: $LATEST_CONCLUSION"
+                  FAILED_WORKFLOWS+=("**Blackhole Post Commit** (conclusion: \`$LATEST_CONCLUSION\`): [View run]($RUN_URL)")
+                  ALL_PASSED=false
+                else
+                  echo "✅ Blackhole Post Commit latest run: success"
+                  SUCCEEDED_WORKFLOWS+=("**Blackhole Post Commit**: [View run]($RUN_URL)")
+                fi
               else
-                echo "✅ Blackhole Post Commit latest run: success"
-                SUCCEEDED_WORKFLOWS+=("**Blackhole Post Commit**: [View run]($RUN_URL)")
+                if [ "$LATEST_STATUS" = "queued" ]; then
+                  echo "⏳ Blackhole Post Commit run is queued - waiting for available runner"
+                  FAILED_WORKFLOWS+=("**Blackhole Post Commit**: Queued (waiting for runner): [View run]($RUN_URL)")
+                elif [ "$LATEST_STATUS" = "in_progress" ]; then
+                  echo "⏳ Blackhole Post Commit run is in progress"
+                  FAILED_WORKFLOWS+=("**Blackhole Post Commit**: In progress: [View run]($RUN_URL)")
+                else
+                  echo "⏳ Blackhole Post Commit run is still in progress (status: $LATEST_STATUS)"
+                  FAILED_WORKFLOWS+=("**Blackhole Post Commit**: Still in progress (\`$LATEST_STATUS\`): [View run]($RUN_URL)")
+                fi
+                ALL_PASSED=false
               fi
             else
               echo "❌ Blackhole Post Commit should have run but no runs found after PR creation"
@@ -764,24 +915,48 @@ jobs:
 
             # Get actual run results for workflows that should have run
             if [ "$SHOULD_RUN_WH" = "true" ]; then
-              WH_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
+              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 15 --json databaseId,url,conclusion,createdAt,status --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | sort_by(.createdAt) | reverse" --repo "${{ github.repository }}")
+              WH_RUN=$(echo "$WH_RUNS" | jq -r '(map(select(.status == "completed")) | .[0]) // .[0] // {}')
               WH_URL=$(echo "$WH_RUN" | jq -r '.url // ""')
               WH_CONCLUSION=$(echo "$WH_RUN" | jq -r '.conclusion // ""')
-              if [ "$WH_CONCLUSION" = "success" ]; then
-                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"
+              WH_STATUS=$(echo "$WH_RUN" | jq -r '.status // ""')
+              if [ "$WH_STATUS" = "completed" ]; then
+                if [ "$WH_CONCLUSION" = "success" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"
+                else
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **All Post Commit Workflows** failed (conclusion: \`$WH_CONCLUSION\`): [View run]($WH_URL)"
+                fi
               else
-                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **All Post Commit Workflows** failed (conclusion: \`$WH_CONCLUSION\`): [View run]($WH_URL)"
+                if [ "$WH_STATUS" = "queued" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **All Post Commit Workflows** queued (waiting for runner): [View run]($WH_URL)"
+                elif [ "$WH_STATUS" = "in_progress" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **All Post Commit Workflows** in progress: [View run]($WH_URL)"
+                else
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **All Post Commit Workflows** in progress (status: \`$WH_STATUS\`): [View run]($WH_URL)"
+                fi
               fi
             fi
 
             if [ "$SHOULD_RUN_BH" = "true" ]; then
-              BH_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 15 --json databaseId,url,conclusion,createdAt,status --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | sort_by(.createdAt) | reverse" --repo "${{ github.repository }}")
+              BH_RUN=$(echo "$BH_RUNS" | jq -r '(map(select(.status == "completed")) | .[0]) // .[0] // {}')
               BH_URL=$(echo "$BH_RUN" | jq -r '.url // ""')
               BH_CONCLUSION=$(echo "$BH_RUN" | jq -r '.conclusion // ""')
-              if [ "$BH_CONCLUSION" = "success" ]; then
-                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"
+              BH_STATUS=$(echo "$BH_RUN" | jq -r '.status // ""')
+              if [ "$BH_STATUS" = "completed" ]; then
+                if [ "$BH_CONCLUSION" = "success" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"
+                else
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **Blackhole Post Commit** failed (conclusion: \`$BH_CONCLUSION\`): [View run]($BH_URL)"
+                fi
               else
-                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **Blackhole Post Commit** failed (conclusion: \`$BH_CONCLUSION\`): [View run]($BH_URL)"
+                if [ "$BH_STATUS" = "queued" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **Blackhole Post Commit** queued (waiting for runner): [View run]($BH_URL)"
+                elif [ "$BH_STATUS" = "in_progress" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **Blackhole Post Commit** in progress: [View run]($BH_URL)"
+                else
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **Blackhole Post Commit** in progress (status: \`$BH_STATUS\`): [View run]($BH_URL)"
+                fi
               fi
             fi
 
@@ -797,24 +972,48 @@ jobs:
 
             # Post-commit jobs should have run, get their actual results
             if [ "${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}" = "true" ]; then
-              WH_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
+              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 15 --json databaseId,url,conclusion,createdAt,status --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | sort_by(.createdAt) | reverse" --repo "${{ github.repository }}")
+              WH_RUN=$(echo "$WH_RUNS" | jq -r '(map(select(.status == "completed")) | .[0]) // .[0] // {}')
               WH_URL=$(echo "$WH_RUN" | jq -r '.url // ""')
               WH_CONCLUSION=$(echo "$WH_RUN" | jq -r '.conclusion // ""')
-              if [ "$WH_CONCLUSION" = "success" ]; then
-                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"
+              WH_STATUS=$(echo "$WH_RUN" | jq -r '.status // ""')
+              if [ "$WH_STATUS" = "completed" ]; then
+                if [ "$WH_CONCLUSION" = "success" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"
+                else
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **All Post Commit Workflows** failed (conclusion: \`$WH_CONCLUSION\`): [View run]($WH_URL)"
+                fi
               else
-                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **All Post Commit Workflows** failed (conclusion: \`$WH_CONCLUSION\`): [View run]($WH_URL)"
+                if [ "$WH_STATUS" = "queued" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **All Post Commit Workflows** queued (waiting for runner): [View run]($WH_URL)"
+                elif [ "$WH_STATUS" = "in_progress" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **All Post Commit Workflows** in progress: [View run]($WH_URL)"
+                else
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **All Post Commit Workflows** in progress (status: \`$WH_STATUS\`): [View run]($WH_URL)"
+                fi
               fi
             fi
 
             if [ "${{ needs.llk-submodule-uplift.outputs.should-run-blackhole }}" = "true" ]; then
-              BH_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 15 --json databaseId,url,conclusion,createdAt,status --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | sort_by(.createdAt) | reverse" --repo "${{ github.repository }}")
+              BH_RUN=$(echo "$BH_RUNS" | jq -r '(map(select(.status == "completed")) | .[0]) // .[0] // {}')
               BH_URL=$(echo "$BH_RUN" | jq -r '.url // ""')
               BH_CONCLUSION=$(echo "$BH_RUN" | jq -r '.conclusion // ""')
-              if [ "$BH_CONCLUSION" = "success" ]; then
-                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"
+              BH_STATUS=$(echo "$BH_RUN" | jq -r '.status // ""')
+              if [ "$BH_STATUS" = "completed" ]; then
+                if [ "$BH_CONCLUSION" = "success" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"
+                else
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **Blackhole Post Commit** failed (conclusion: \`$BH_CONCLUSION\`): [View run]($BH_URL)"
+                fi
               else
-                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **Blackhole Post Commit** failed (conclusion: \`$BH_CONCLUSION\`): [View run]($BH_URL)"
+                if [ "$BH_STATUS" = "queued" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **Blackhole Post Commit** queued (waiting for runner): [View run]($BH_URL)"
+                elif [ "$BH_STATUS" = "in_progress" ]; then
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **Blackhole Post Commit** in progress: [View run]($BH_URL)"
+                else
+                  TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ⏳ **Blackhole Post Commit** in progress (status: \`$BH_STATUS\`): [View run]($BH_URL)"
+                fi
               fi
             fi
           fi
