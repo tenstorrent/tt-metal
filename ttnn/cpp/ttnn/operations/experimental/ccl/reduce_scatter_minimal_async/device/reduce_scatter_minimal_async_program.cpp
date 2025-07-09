@@ -258,8 +258,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
-    std::map<string, string> reader_compute_defines;
-    std::map<string, string> writer_compute_defines;
+    std::map<std::string, std::string> reader_compute_defines;
+    std::map<std::string, std::string> writer_compute_defines;
 
     if (input_is_sharded) {
         reader_compute_defines["INPUT_IS_SHARDED"] = "1";

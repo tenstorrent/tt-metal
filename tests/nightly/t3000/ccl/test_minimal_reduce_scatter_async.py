@@ -277,6 +277,9 @@ def test_reduce_scatter_async(
     ones_tensor,
     rs_topology,
 ):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3K!")
+
     run_reduce_scatter_impl(
         t3k_mesh_device,
         num_devices,
@@ -294,6 +297,8 @@ def test_reduce_scatter_async(
     )
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, rs_input_dtype",
     [
@@ -389,6 +394,9 @@ def test_reduce_scatter_async_sharded_to_sharded(
     ones_tensor,
     rs_topology,
 ):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3K!")
+
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
@@ -431,6 +439,8 @@ def test_reduce_scatter_async_sharded_to_sharded(
     )
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, rs_input_dtype",
     [
@@ -504,6 +514,9 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     ones_tensor,
     rs_topology,
 ):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3K!")
+
     intermediate_shard_spec = ttnn.ShardSpec(
         intermediate_shard_grid,
         intermediate_shard_shape,
@@ -539,6 +552,8 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     )
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, rs_input_dtype",
     [
@@ -603,6 +618,9 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     ones_tensor,
     rs_topology,
 ):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3K!")
+
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
