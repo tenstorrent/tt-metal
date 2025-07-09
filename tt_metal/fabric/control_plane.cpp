@@ -144,7 +144,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     this->router_port_directions_to_num_routing_planes_map_.clear();
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
-    size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
     auto apply_min =
         [this](
@@ -164,7 +163,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
         // Get mesh dimensions from the mesh graph descriptor
         auto mesh_ew_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[1];
-        auto mesh_ns_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[0];
 
         // Convert linear chip_id to 2D mesh coordinates
         auto coord_y = chip_id / mesh_ew_size;
@@ -1230,8 +1228,6 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
 
         std::tie(src_fabric_node_id, src_chan_id) =
             this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
-        auto connected_physical_chip_id =
-            this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         route.push_back({src_fabric_node_id, src_chan_id});
     }
 
