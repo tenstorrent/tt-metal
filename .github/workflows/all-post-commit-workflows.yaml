@@ -178,6 +178,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
+      version: ${{ inputs.version || '22.04' }}
   # FD Model Tests
   models-unit-tests:
     needs: [build-artifact, select-wheels]
