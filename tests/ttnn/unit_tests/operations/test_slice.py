@@ -416,6 +416,18 @@ def slice_test(
     return a_pt, a_ref, device.num_program_cache_entries()
 
 
+# from https://github.com/tenstorrent/tt-metal/issues/23237
+def test_slice_rm_program_cache_collison(device):
+    shape = (32, 64, 4096)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    for i in range(shape[-1]):
+        tt_out = tt_input[:, :, i : i + 1]
+        torch_out = torch_input[:, :, i : i + 1]
+        assert_with_pcc(torch_out, ttnn.to_torch(tt_out), 0.99)
+
+
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
