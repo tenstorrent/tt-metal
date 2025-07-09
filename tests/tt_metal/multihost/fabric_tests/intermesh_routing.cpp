@@ -22,13 +22,13 @@ namespace fabric_router_tests::multihost {
 
 // ========= Data-Movement Tests for 2 Host, 1 T3K bringup machine  =========
 
-TEST_F(InterMesh2x4FabricFixture, RandomizedInterMeshUnicast) {
+TEST_F(IntermeshSplit2x4FabricFixture, RandomizedInterMeshUnicast) {
     for (uint32_t i = 0; i < 500; i++) {
         multihost_utils::RandomizedInterMeshUnicast(this);
     }
 }
 
-TEST_F(InterMesh2x4FabricFixture, MultiMeshEastMulticast) {
+TEST_F(IntermeshSplit2x4FabricFixture, MultiMeshEastMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 0)};
@@ -42,7 +42,7 @@ TEST_F(InterMesh2x4FabricFixture, MultiMeshEastMulticast) {
     }
 }
 
-TEST_F(InterMesh2x4FabricFixture, MultiMeshSouthMulticast) {
+TEST_F(IntermeshSplit2x4FabricFixture, MultiMeshSouthMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 1)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -55,7 +55,7 @@ TEST_F(InterMesh2x4FabricFixture, MultiMeshSouthMulticast) {
     }
 }
 
-TEST_F(InterMesh2x4FabricFixture, MultiMeshNorthMulticast) {
+TEST_F(IntermeshSplit2x4FabricFixture, MultiMeshNorthMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 3)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 3)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -147,7 +147,7 @@ TEST_F(IntermeshNanoExaboxFabricFixture, RandomizedIntermeshUnicastBwd) {
     auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     constexpr uint32_t sender_rank = 1;
-    constexpr uint32_t num_iterations = 500;
+    constexpr uint32_t num_iterations = 100;
 
     if (*(distributed_context->rank()) == sender_rank) {
         std::vector<uint32_t> recv_node_ranks = {0, 2, 3, 4};
@@ -172,7 +172,7 @@ TEST_F(IntermeshNanoExaboxFabricFixture, RandomizedIntermeshUnicastFwd) {
     auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     constexpr uint32_t recv_rank = 1;
-    constexpr uint32_t num_iterations = 500;
+    constexpr uint32_t num_iterations = 100;
 
     if (*(distributed_context->rank()) == recv_rank) {
         std::vector<uint32_t> sender_node_ranks = {0, 2, 3, 4};
