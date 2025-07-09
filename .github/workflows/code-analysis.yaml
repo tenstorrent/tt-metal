@@ -96,8 +96,6 @@ jobs:
         id: update-submodule
         run: |
           cd ${{ env.SUBMODULE_PATH }}
-          # ✅ Override submodule remote URL to anonymous HTTPS
-          git remote set-url origin https://github.com/tenstorrent/tt-llk.git
           OLD_SHA=$(git rev-parse --short=7 HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
 
