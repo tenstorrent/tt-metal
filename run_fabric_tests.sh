@@ -2,8 +2,8 @@
 
 # Export TT Metal environment variables
 export ARCH_NAME=wormhole_b0
-export TT_METAL_HOME=/home/ttuser/git/tt-metal
-export PYTHONPATH=/home/ttuser/git/tt-metal
+export TT_METAL_HOME=/home/aho/tt-metal
+export PYTHONPATH=/home/aho/tt-metal
 export TT_METAL_ENV=dev
 export TT_HOST_RANK=0
 export TT_MESH_ID=1
@@ -21,4 +21,4 @@ echo "Date: $(date)"
 echo "============================================="
 
 # Run the fabric unit tests
-$TT_METAL_HOME/build/test/tt_metal/multi_host_fabric_tests |& tee log.txt
+$TT_METAL_HOME/build/test/ttnn/unit_tests_ttnn_multihost_ccl_ops --gtest_filter=*MeshDeviceNanoExaboxSendRecvFixture* |& tee log.txt
