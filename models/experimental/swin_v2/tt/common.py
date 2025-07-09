@@ -40,7 +40,6 @@ class Conv:
         )
         self.use_shallow_conv_variant = (use_shallow_conv_variant,)
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
