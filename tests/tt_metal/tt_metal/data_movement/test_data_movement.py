@@ -407,7 +407,10 @@ def gather_analysis_stats(file_path, verbose=False):
     # Gather test attributes
     for kernel in dm_stats.keys():
         attributes = dm_stats[kernel]["attributes"]
-        for event in stats["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"][kernel + "_events"]:
+        for event in stats["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"][
+            kernel + "_events"
+        ]:  ## FIGURE OUT WHY THIS IS OHNLY RETU*RNING INFORMATION FROM ONE KERNEL
+            # print(event)
             run_host_id = event[0]["run_host_id"]
             if run_host_id in attributes.keys():
                 attributes[run_host_id][event[0]["zone_name"]] = event[2]
@@ -539,15 +542,13 @@ def print_stats(dm_stats):
 
         logger.info(f"Run host id: {run_host_id}")
 
-        if riscv1_run:
-            logger.info(f'RISCV 1 duration: {riscv1_run["duration_cycles"]}')
+        for riscv, run in [("RISCV 1", riscv1_run), ("RISCV 0", riscv0_run)]:
+            if run:
+                logger.info(f'{riscv} duration: {run["duration_cycles"]}')
+                logger.info("Attributes:")
+                for attr, val in dm_stats[riscv.lower().replace(" ", "_")]["attributes"][run_host_id].items():
+                    logger.info(f"  {attr}: {val}")
 
-        if riscv0_run:
-            logger.info(f'RISCV 0 duration: {riscv0_run["duration_cycles"]}')
-
-        logger.info(f"Attributes:")
-        for attr, val in dm_stats["riscv_1" if riscv1_run else "riscv_0"]["attributes"][run_host_id].items():
-            logger.info(f"  {attr}: {val}")
         logger.info("")
 
 
