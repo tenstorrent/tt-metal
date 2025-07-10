@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-// #include "tt-metalium/assert.hpp"
+
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
