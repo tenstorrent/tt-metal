@@ -136,7 +136,11 @@ void kernel_main() {
                     noc_async_write_barrier();
                 } else {
                     const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
-                    dispatch_input_remote_device<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size_bytes>(
+                    fabric_send_chip_unicast_noc_unicast<
+                        src_chip_id,
+                        mesh_rows,
+                        mesh_cols,
+                        fabric_max_packet_size_bytes>(
                         fabric_connections,
                         packet_headers[0],
                         dest_chip_id,

@@ -186,7 +186,7 @@ void kernel_main() {
                         // if axis is specified then we only send to the devices that are along the axis
                         // if axis is not specified then we send to all devices
                         if (is_1d_topology(topology)) {
-                            dispatch_input_remote_device_1d<
+                            fabric_send_chip_unicast_noc_unicast_1d<
                                 linearized_mesh_coord,
                                 topology,
                                 mesh_rows,
@@ -200,7 +200,11 @@ void kernel_main() {
                                 (int)output_page_size,
                                 alignment);
                         } else {
-                            dispatch_input_remote_device<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
+                            fabric_send_chip_unicast_noc_unicast<
+                                src_chip_id,
+                                mesh_rows,
+                                mesh_cols,
+                                fabric_max_packet_size>(
                                 fabric_connections,
                                 unicast_packet_header,
                                 dest_chip_ids[d],
@@ -239,7 +243,7 @@ void kernel_main() {
                     // dispatch the metadata to the remote device and increment the remote device's copy of the
                     // semaphore
                     if (is_1d_topology(topology)) {
-                        dispatch_chip_uni_noc_uni_fused_sem_inc_1d<
+                        fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                             linearized_mesh_coord,
                             topology,
                             mesh_rows,
@@ -256,7 +260,7 @@ void kernel_main() {
                             1,
                             true);
                     } else {
-                        dispatch_chip_uni_noc_uni_fused_sem_inc<
+                        fabric_send_chip_unicast_noc_unicast_with_semaphore<
                             src_chip_id,
                             mesh_rows,
                             mesh_cols,
@@ -290,7 +294,7 @@ void kernel_main() {
                     global_noc_semaphore_address);
             } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
                 if (is_1d_topology(topology)) {
-                    dispatch_chip_uni_noc_uni_fused_sem_inc_1d<
+                    fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                         linearized_mesh_coord,
                         topology,
                         mesh_rows,
@@ -307,7 +311,11 @@ void kernel_main() {
                         1,
                         true);
                 } else {
-                    dispatch_chip_uni_noc_uni_fused_sem_inc<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
+                    fabric_send_chip_unicast_noc_unicast_with_semaphore<
+                        src_chip_id,
+                        mesh_rows,
+                        mesh_cols,
+                        fabric_max_packet_size>(
                         fabric_connections,
                         metadata_packet_header,
                         dest_chip_ids[d],
