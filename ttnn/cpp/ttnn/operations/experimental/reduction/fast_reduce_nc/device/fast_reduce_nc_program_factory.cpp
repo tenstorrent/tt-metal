@@ -19,11 +19,11 @@ using namespace tt::tt_metal;
 namespace {
 
 bool is_tensor_divisible_by_shard(const ttnn::Shape& tensor_shape, const ttnn::Shape& shard_shape) {
-    if (tensor_shape.size() != shard_shape.size()) {
-        return false;
-    }
-    for (int i = 0; i < tensor_shape.size(); i++) {
-        if (shard_shape[i] == 0 || tensor_shape[i] % shard_shape[i] != 0) {
+    // Only compare common (end) dimensions. Any extra front dimensions would be
+    // divisible by the implied 1 in the non-existent dimensions in shard_shape.
+    // Use negative dimensions to compare the end of both shapes.
+    for (int i = 1; i <= shard_shape.size(); i++) {
+        if (shard_shape[-i] == 0 || tensor_shape[-i] % shard_shape[-i] != 0) {
             return false;
         }
     }
