@@ -100,11 +100,103 @@
                 "files": [
                     "accuracy_results/results/pow_2-bfloat16-[1].csv",
                     "accuracy_results/results/pow_3-bfloat16-[1].csv",
-                    "accuracy_results/results/pow_10-bfloat16-[1].csv"
+                    "accuracy_results/results/pow_10-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f_2-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f_3-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f_10-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-100, 100],
-                    "xbase": 2
+                    "ylim": [0, 20],
+                    "xbase": 2,
+                    "yscale": "linear"
+                }
+            },
+            {
+                "id": "pow2-bfloat16-ulp",
+                "name": "pow",
+                "outputs": ["accuracy_results/plots/ulp/pow2-bfloat16.png"],
+                "files": [
+                    "accuracy_results/results/pow_2-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f_2-bfloat16-[1].csv"
+                ],
+                "plot_params": {
+                    "xlim": [-100, 100],
+                    "ylim": [0, 20],
+                    "xbase": 2,
+                    "yscale": "linear"
+                }
+            },
+            {
+                "id": "pow3-bfloat16-ulp",
+                "name": "pow",
+                "outputs": ["accuracy_results/plots/ulp/pow3-bfloat16.png"],
+                "files": [
+                    "accuracy_results/results/pow_3-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f_3-bfloat16-[1].csv"
+                ],
+                "plot_params": {
+                    "xlim": [-100, 100],
+                    "ylim": [0, 20],
+                    "xbase": 2,
+                    "yscale": "linear"
+                }
+            },
+            {
+                "id": "pow10-bfloat16-ulp",
+                "name": "pow",
+                "outputs": ["accuracy_results/plots/ulp/pow10-bfloat16.png"],
+                "files": [
+                    "accuracy_results/results/pow_10-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f_10-bfloat16-[1].csv"
+                ],
+                "plot_params": {
+                    "xlim": [-100, 100],
+                    "ylim": [0, 20],
+                    "xbase": 2,
+                    "yscale": "linear"
+                }
+            },
+            {
+                "id": "pow(x,0.5)-bfloat16-ulp",
+                "name": "pow",
+                "outputs": ["accuracy_results/plots/ulp/pow(x,0.5)-bfloat16.png"],
+                "files": [
+                    "accuracy_results/results/pow(x,0.5)-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f(x,0.5)-bfloat16-[1].csv"
+                ],
+                "plot_params": {
+                    "ylim": [0, 100],
+                    "xbase": 2,
+                    "yscale": "linear"
+                }
+            },
+            {
+                "id": "pow(x,2)-bfloat16-ulp",
+                "name": "pow",
+                "outputs": ["accuracy_results/plots/ulp/pow(x,2)-bfloat16.png"],
+                "files": [
+                    "accuracy_results/results/pow(x,2)-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f(x,2)-bfloat16-[1].csv"
+                ],
+                "plot_params": {
+                    "ylim": [0, 20],
+                    "xbase": 2,
+                    "yscale": "linear"
+                }
+            },
+            {
+                "id": "pow(x,10)-bfloat16-ulp",
+                "name": "pow",
+                "outputs": ["accuracy_results/plots/ulp/pow(x,10)-bfloat16.png"],
+                "files": [
+                    "accuracy_results/results/pow(x,10)-bfloat16-[1].csv",
+                    "accuracy_results/results/pow21f(x,10)-bfloat16-[1].csv"
+                ],
+                "plot_params": {
+                    "ylim": [0, 20],
+                    "xbase": 2,
+                    "yscale": "linear"
                 }
             },
             {

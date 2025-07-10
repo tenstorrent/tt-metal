@@ -270,10 +270,20 @@ def plot_all(plot_config, base_output_dir, last_hashes, current_hashes, force_re
                     do_replot = False
 
             last_modified = last_hashes["last_modified"]
+            entry_present = False
             for file in plot_entry["files"]:
+                if not os.path.exists(file):
+                    print(f"{RED}Skipping file {file}: measurements not found{RESET}")
+                    continue
+                else:
+                    entry_present = True
+
                 if os.path.getmtime(file) > last_modified:
                     do_replot = True
                     break
+
+            if not entry_present:
+                continue
 
             if force_replot:
                 do_replot = True
@@ -288,6 +298,9 @@ def plot_all(plot_config, base_output_dir, last_hashes, current_hashes, force_re
 
         # TODO: Cache data
         for series in data_series:
+            if not os.path.exists(series):
+                continue
+
             data_op = load_csv(series)
             list_all_data.append(data_op)
 

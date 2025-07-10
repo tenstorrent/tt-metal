@@ -1,7 +1,12 @@
 import numpy as np
 import torch
+import traceback
 
 import pytest
+
+TERM_RED = "\033[91m"
+TERM_GREEN = "\033[92m"
+TERM_RESET = "\033[0m"
 
 
 def all_bf16_tensor():
@@ -16,6 +21,68 @@ def all_bf16_tensor():
     return torch_values_bf16
 
 
+def generate_binary_tensors_bf16():
+    batch_size = 128
+    num_batches = 2**16 // batch_size
+
+    shape = [batch_size, 2**9, 2**7]
+
+    all_bf16 = all_bf16_tensor()
+    tensor_a = all_bf16.reshape([1, 2**9, 2**7]).expand(batch_size, -1, -1)
+
+    # each slice of tensor_b contains the same value
+    # tensor_b cotnains 128 slices. Each slice has a unique value.
+    # Value(slice[i]) = nextafter(Vallue(slice[i-1]))
+
+    tensor_b_i16 = torch.arange(-(2**16), -(2**16) + batch_size, dtype=torch.int16)
+    assert tensor_b_i16.shape == torch.Size([batch_size])
+
+    tensor_b_i16 = tensor_b_i16.reshape([batch_size, 1, 1]).repeat(1, 2**9, 2**7)
+    assert tensor_b_i16.shape == tensor_a.shape
+
+    increment = batch_size
+
+    for i in range(0, 2**16, batch_size):
+        tensor_b = tensor_b_i16.view(torch.bfloat16)
+
+        yield (tensor_a, tensor_b)
+
+        tensor_b_i16 += increment
+
+
+# Reduce tensor on first dimension
+# Return a dictionary with reduced tensors
+def reduce_tensor(tensor):
+    return {
+        "mean": tensor.mean(dim=0),
+        "median": tensor.median(dim=0),
+        "max": tensor.max(dim=0),
+        "min": tensor.min(dim=0),
+    }
+
+
+def execute_benchmarks(benchmark_fun, operations, dest_dir):
+    success_count = 0
+    successfull_operations = []
+    failed_operations = []
+
+    cnt = 0
+    total_operation_cnt = len(operations)
+    for operation in operations:
+        cnt += 1
+        print(f"Running operation {operation}  #{cnt} / {total_operation_cnt}", end="\r")
+        try:
+            benchmark_fun(operation, dest_dir)
+            success_count += 1
+            successfull_operations += [operation]
+        except Exception as e:
+            print(f"{TERM_RED}Could not run operation {operation}: {e}{TERM_RESET}")
+            print(f"{TERM_RED}{traceback.format_exc()}{TERM_RESET}")
+            failed_operations += [operation]
+
+    return (successfull_operations, failed_operations)
+
+
 def setsgn_bf16_(input_tensor, sign):
     input_tensor_i16 = input_tensor.view(torch.int16)
 
@@ -28,6 +95,7 @@ def setsgn_bf16_(input_tensor, sign):
     return input_tensor
 
 
+# Return exponent of each tensor
 def exexp_bf16(input_tensor):
     input_tensor_i16 = input_tensor.view(torch.int16)
 
@@ -149,3 +217,15 @@ def test_sexexp_bf16_():
     setexp_bf16_(all_inputs, 1)
 
     print(f"OUTPUT:\n\n{all_inputs}")
+
+
+def test_generate_binary_tensors_bf16():
+    i = 0
+    for tensor_a, tensor_b in generate_binary_tensors_bf16():
+        # print(f"tensor_a: ({tensor_a.size()}) \n{tensor_a}")
+        print(f"tensor_b: ({tensor_b.size()}) \n{tensor_b}")
+
+        # All elements of tensor_b must have same exponent
+        tensor_b_exp = exexp_bf16(tensor_b)
+        assert tensor_b_exp.unique().size() == torch.Size([1])
+        i += 1
