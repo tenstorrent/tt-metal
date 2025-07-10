@@ -366,14 +366,19 @@ class MoEGate(nn.Module):
         import torch.nn.init as init
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        self.e_score_correction_bias.data = torch.randperm(self.n_routed_experts).float() * 0.1
 
     def forward(self, hidden_states):
         bsz, seq_len, h = hidden_states.shape
         ### compute gating score
         hidden_states = hidden_states.view(-1, h)
         logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32), None)
+        # hardcode the scoring function to softmax for now
+        self.scoring_func = "softmax"
         if self.scoring_func == "sigmoid":
             scores = logits.sigmoid()
+        elif self.scoring_func == "softmax":
+            scores = logits.softmax(dim=-1)
         else:
             raise NotImplementedError(f"insupportable scoring function for MoE gating: {self.scoring_func}")
 
@@ -381,9 +386,9 @@ class MoEGate(nn.Module):
         if self.topk_method == "noaux_tc":
             scores_for_choice = scores.view(bsz * seq_len, -1) + self.e_score_correction_bias.unsqueeze(0)
             group_scores = (
-                scores_for_choice.view(bsz * seq_len, self.n_group, -1).topk(2, dim=-1)[0].sum(dim=-1)
+                scores_for_choice.view(bsz * seq_len, self.n_group, -1).topk(2, dim=-1, sorted=True)[0].sum(dim=-1)
             )  # [n, n_group]
-            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
+            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=True)[1]  # [n, top_k_group]
             group_mask = torch.zeros_like(group_scores)  # [n, n_group]
             group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
             score_mask = (
@@ -392,7 +397,7 @@ class MoEGate(nn.Module):
                 .reshape(bsz * seq_len, -1)
             )  # [n, e]
             tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), float("-inf"))  # [n, e]
-            _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
+            _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=True)
             topk_weight = scores.gather(1, topk_idx)
         else:
             raise NotImplementedError(f"insupportable TopK function for MoE gating: {self.topk_method}")
