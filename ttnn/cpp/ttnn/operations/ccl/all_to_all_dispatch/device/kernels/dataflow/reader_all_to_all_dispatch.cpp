@@ -9,6 +9,7 @@ void kernel_main() {
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr bool indices_is_dram = (bool)get_compile_time_arg_val(1);
     constexpr bool mapping_is_dram = (bool)get_compile_time_arg_val(2);
+    constexpr bool metadata_is_dram = (bool)get_compile_time_arg_val(4);
 
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(6);
@@ -21,6 +22,7 @@ void kernel_main() {
     constexpr uint32_t input_page_size = get_compile_time_arg_val(15);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(16);
     constexpr uint32_t mapping_page_size = get_compile_time_arg_val(17);
+    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(19);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(20);
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(25);
@@ -31,7 +33,13 @@ void kernel_main() {
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);  // ew_dim
 
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(33);
     constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(34);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(36);
+
+    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(39);
+
+    constexpr bool write_page_by_page = get_compile_time_arg_val(40);
 
 #ifdef AXIS
     constexpr int axis = AXIS;
@@ -54,9 +62,12 @@ void kernel_main() {
     const auto input_addr_gen = get_interleaved_addr_gen<input_is_dram, input_page_size>(input_tensor_address);
     const auto indices_addr_gen = get_interleaved_addr_gen<indices_is_dram, indices_page_size>(indices_tensor_address);
     const auto mapping_addr_gen = get_interleaved_addr_gen<mapping_is_dram, mapping_page_size>(mapping_tensor_address);
+    const auto metadata_addr_gen =
+        get_interleaved_addr_gen<metadata_is_dram, metadata_page_size>(metadata_tensor_address);
 
     // read the expert mapping table
     cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
+    uint32_t base_indices_addr = get_write_ptr(mapping_tensor_cb_id);
     for (uint32_t i = 0; i < mapping_pages; i++) {
         uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id) + i * aligned_mapping_page_size;
         noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
@@ -82,6 +93,22 @@ void kernel_main() {
     }
 
     // wait for all other devices to finish dispatching their input tokens and metadata
-    noc_semaphore_wait((uint32_t*)global_semaphore_address, tokens_per_device * dispatch_devices);
-    noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+    uint32_t my_device_offset = tokens_per_device * dispatch_index;
+    if constexpr (write_page_by_page) {
+        // if the writer is directly sending the metadata to its output buffer, we just wait for the semaphore to be set
+        noc_semaphore_wait((uint32_t*)global_semaphore_address, tokens_per_device * dispatch_devices);
+        noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+    } else {
+        // if the writer is sending the metadata to the intermediate buffer, we need to write our metadata to the final
+        // buffer
+        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
+        noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+
+        for (uint32_t i = 0; i < tokens_per_device * dispatch_devices; i++) {
+            uint32_t l1_write_addr = get_write_ptr(metadata_buffer_id) + i * aligned_indices_page_size;
+            uint64_t metadata_write_addr = get_noc_addr(i, metadata_addr_gen);
+            noc_async_write(l1_write_addr, metadata_write_addr, metadata_page_size);
+        }
+        noc_async_write_barrier();
+    }
 }

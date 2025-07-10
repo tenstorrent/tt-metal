@@ -31,6 +31,36 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     TT_FATAL(
         global_semaphore.has_value(),
         "Global semaphore is required for all_to_all_dispatch due to limitations in trace");
+    const auto [cb_sizes, cb_page_sizes] =
+        detail::get_cb_sizes(input_tensor, expert_indices_tensor, expert_mapping_tensor, axis);
+
+    AllToAllDispatchDeviceOperation::AllToAllTransferType impl =
+        AllToAllDispatchDeviceOperation::AllToAllTransferType::FullPacket;
+    uint32_t total_size_bytes = std::accumulate(cb_sizes.begin(), cb_sizes.end(), 0u);
+    if (optional_output_tensors.has_value()) {
+        auto output_tensors = optional_output_tensors.value();
+        auto output_tensor = output_tensors.at(0);
+        auto metadata_tensor = output_tensors.at(1);
+
+        if (output_tensor.buffer()->is_l1()) {
+            total_size_bytes += output_tensor.buffer()->aligned_size_per_bank();
+        }
+
+        if (metadata_tensor.buffer()->is_l1()) {
+            total_size_bytes += metadata_tensor.buffer()->aligned_size_per_bank();
+        }
+    }
+    uint32_t available_l1_space =
+        mesh_device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes;
+    if (available_l1_space < total_size_bytes) {
+        impl = AllToAllDispatchDeviceOperation::AllToAllTransferType::PageByPage;
+    }
+
+    log_debug(tt::LogOp, "remaining L1 space: {}", available_l1_space - total_size_bytes);
+    log_debug(
+        tt::LogOp,
+        "impl: {}",
+        impl == AllToAllDispatchDeviceOperation::AllToAllTransferType::PageByPage ? "PageByPage" : "FullPacket");
 
     return ttnn::prim::all_to_all_dispatch(
         input_tensor,
@@ -42,7 +72,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         topology,
         memory_config.value_or(input_tensor.memory_config()),
         sd_id,
-        global_semaphore);
+        global_semaphore,
+        impl);
 }
 
 }  // namespace ttnn::operations::ccl
