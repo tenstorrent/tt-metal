@@ -24,7 +24,10 @@ def run_nd_reshard_test(
     grid=None,
 ):
     if grid is None:
-        grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+        grid_size = device.compute_with_storage_grid_size()
+        grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+        )
 
     input_memory_config = ttnn.MemoryConfig(
         ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(input_shard_shape), grid, input_shard_orientation)
@@ -280,7 +283,7 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             (32, 64),
             ttnn.ShardOrientation.ROW_MAJOR,
-            None,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
         ),
         (
             [1, 3, 64, 64],
@@ -289,7 +292,7 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             (3, 64, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
-            None,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
         ),
         (
             [1, 1, 32, 64],
@@ -298,7 +301,7 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             (32, 64),
             ttnn.ShardOrientation.ROW_MAJOR,
-            None,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
         ),
         # ROW_MAJOR_LAYOUT test cases
         # Case below won't work since page size changes
@@ -584,7 +587,7 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             (32, 64),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
+            None,
         ),
         (
             [1, 3, 1024, 1024],
@@ -593,7 +596,7 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             (3, 32, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
+            None,
         ),
         (
             [3, 4, 1024, 1024],
@@ -602,7 +605,7 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             (3, 4, 32, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
+            None,
         ),
         (
             [2, 3, 4, 512, 512],
@@ -611,7 +614,7 @@ def test_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             (1, 3, 4, 32, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
+            None,
         ),
     ],
 )
