@@ -157,17 +157,17 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<em>*</em>) – The input tensor to be sorted.</p>
+<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor to be sorted.</p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>dim</strong> (<em>*</em>) – The dimension along which to sort. Defaults to -1 (last dimension).</p></li>
-<li><p><strong>descending</strong> (<em>*</em>) – If <cite>True</cite>, sorts in descending order. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>stable</strong> (<em>*</em>) – If <cite>True</cite>, ensures the original order of equal elements is preserved. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>*</em>) – Specifies the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>out</strong> (<em>*</em>) – Preallocated output tensors for the sorted values and indices. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – The dimension along which to sort. Defaults to <cite>-1</cite> (last dimension).</p></li>
+<li><p><strong>descending</strong> (<em>bool</em><em>, </em><em>optional</em>) – If <cite>True</cite>, sorts in descending order. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – If <cite>True</cite>, ensures the original order of equal elements is preserved. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Specifies the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>out</strong> (<em>tuple</em><em> of </em><em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensors for the sorted values and indices. Defaults to <cite>None</cite>. The index tensor must be of type uint16 or uint32.</p></li>
 </ul>
 </dd>
 </dl>
@@ -182,19 +182,24 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 <p>Example:</p>
 <div class="highlight-python notranslate">
 <div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
 <span class="c1"># Create a tensor</span>
-<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+
+<span class="c1"># Convert tensor to ttnn format</span>
+<span class="n">input_tensor_ttnn</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
 <span class="c1"># Sort the tensor in ascending order</span>
-<span class="n">sorted_tensor</span><span class="p">,</span> <span class="n">indices</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+<span class="n">sorted_tensor</span><span class="p">,</span> <span class="n">indices</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_ttnn</span><span class="p">)</span>
 
 <span class="c1"># Sort the tensor in descending order</span>
-<span class="n">sorted_tensor_desc</span><span class="p">,</span> <span class="n">indices_desc</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">sorted_tensor_desc</span><span class="p">,</span> <span class="n">indices_desc</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_tnn</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
 <span class="c1"># Sort along a specific dimension</span>
-<span class="n">input_tensor_2d</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">([[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">6</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">4</span><span class="p">]])</span>
-<span class="n">sorted_tensor_dim</span><span class="p">,</span> <span class="n">indices_dim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_2d</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">input_tensor_2d</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">([[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">6</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">4</span><span class="p">]])</span>
+<span class="n">input_tensor_2d_ttnn</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">input_tensor_2d</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">sorted_tensor_dim</span><span class="p">,</span> <span class="n">indices_dim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_2d_ttnn</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
 </dd>
