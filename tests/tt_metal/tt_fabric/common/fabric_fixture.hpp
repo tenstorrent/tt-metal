@@ -120,7 +120,19 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
+class NightlyFabric2DFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
 class Fabric2DDynamicFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class NightlyFabric2DDynamicFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
