@@ -2089,7 +2089,6 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            # use_position_embeddings = layer.__class__.__name__ == "Qwen3Attention"
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb 
             )
