@@ -169,7 +169,6 @@ def test_all_gather_6u_llama(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters,
@@ -207,7 +206,6 @@ def test_all_gather_6u_llama(
         input_dtype,
         layout,
         ttnn.BufferType.L1,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
@@ -522,7 +520,6 @@ def test_all_reduce_6U_llama(
     num_iters,
     warmup_iters,
     trace_mode,
-    use_program_cache,
     function_level_defaults,
 ):
     profiler = BenchmarkProfiler()

@@ -233,7 +233,6 @@ def run_multi_core_matmul_1d(
     warmup_iters = 10
     num_iters = 75
     warmup_iters = 10
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
     compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
@@ -787,7 +786,6 @@ def test_6U_matmul_1d_ring_llama_with_rs_perf(
     in1_is_dram_interleaved,
     untilize_out,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     shard_height,
     shard_width,

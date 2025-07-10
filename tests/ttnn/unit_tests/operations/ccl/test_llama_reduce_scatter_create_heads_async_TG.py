@@ -408,7 +408,7 @@ def run_reduce_scatter_test(
     ],
     indirect=True,
 )
-def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_cache):
+def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
