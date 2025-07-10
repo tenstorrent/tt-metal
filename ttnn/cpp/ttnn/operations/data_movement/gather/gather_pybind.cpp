@@ -8,7 +8,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 
-namespace ttnn::operations::experimental::gather::detail {
+namespace ttnn::operations::gather::detail {
 namespace py = pybind11;
 
 void bind_gather_operation(py::module& module) {
@@ -54,14 +54,14 @@ void bind_gather_operation(py::module& module) {
             index_tensor_ttnn = ttnn.from_torch(index_tensor, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
             # Perform the gather operation along dimension 1
-            gathered_tensor = ttnn.experimental.gather(input_tensor_ttnn, dim=1, index=index_tensor_ttnn)
+            gathered_tensor = ttnn.gather(input_tensor_ttnn, dim=1, index=index_tensor_ttnn)
             # Result: gathered_tensor = [[40, 10], [70, 60]]
     )doc";
 
-    using OperationType = decltype(ttnn::experimental::gather);
+    using OperationType = decltype(ttnn::gather);
     bind_registered_operation(
         module,
-        ttnn::experimental::gather,
+        ttnn::gather,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -91,4 +91,4 @@ void bind_gather_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::gather::detail
+}  // namespace ttnn::operations::gather::detail

@@ -11,7 +11,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::experimental::gather {
+namespace ttnn::operations::gather {
 
 struct GatherDeviceOperation {
     using operation_attributes_t = gather::operation_attributes_t;
@@ -39,11 +39,11 @@ struct GatherDeviceOperation {
         const std::optional<Tensor>& output_tensors);
 };
 
-}  // namespace ttnn::operations::experimental::gather
+}  // namespace ttnn::operations::gather
 
 namespace ttnn::prim {
 
 constexpr auto gather =
-    ttnn::register_operation<"ttnn::prim::gather", ttnn::operations::experimental::gather::GatherDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::gather", ttnn::operations::gather::GatherDeviceOperation>();
 
 }  // namespace ttnn::prim
