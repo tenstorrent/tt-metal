@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -21,6 +22,32 @@ inline uint32_t prng_next(uint32_t n) {
     x ^= x >> 17;
     x ^= x << 5;
     return x;
+}
+
+// Helper functions for writing test results
+inline void write_test_status(uint32_t result_buffer_base, uint32_t status) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_STATUS_INDEX] = status;
+}
+
+inline void write_test_cycles(uint32_t result_buffer_base, uint64_t cycles) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_CYCLES_INDEX] = static_cast<uint32_t>(cycles);
+    result_buffer[TT_FABRIC_CYCLES_INDEX + 1] = static_cast<uint32_t>(cycles >> 32);
+}
+
+inline void write_test_packets(uint32_t result_buffer_base, uint64_t packets) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_WORD_CNT_INDEX] = static_cast<uint32_t>(packets);
+    result_buffer[TT_FABRIC_WORD_CNT_INDEX + 1] = static_cast<uint32_t>(packets >> 32);
+}
+
+inline void clear_test_results(uint32_t result_buffer_base, uint32_t result_buffer_size) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    uint32_t num_words = result_buffer_size / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; i++) {
+        result_buffer[i] = 0;
+    }
 }
 
 struct SequentialDataPattern {
@@ -633,10 +660,27 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
         fields.write_fields.payload_size_bytes);
 }
 
-struct SenderKernelMemoryAllocator {
-    SenderKernelMemoryAllocator() {}
+struct CommonMemoryMap {
+    CommonMemoryMap() = default;
+    static CommonMemoryMap build_from_args(size_t& arg_idx) { return CommonMemoryMap(arg_idx); }
 
-    static SenderKernelMemoryAllocator build_from_args(size_t& arg_idx) { return SenderKernelMemoryAllocator(arg_idx); }
+    uint32_t result_buffer_base;
+    uint32_t result_buffer_size;
+
+private:
+    CommonMemoryMap(size_t& arg_idx) {
+        result_buffer_base = get_arg_val<uint32_t>(arg_idx++);
+        result_buffer_size = get_arg_val<uint32_t>(arg_idx++);
+    }
+};
+
+struct SenderKernelMemoryMap {
+    // Encapsulated common memory map
+    CommonMemoryMap common;
+
+    SenderKernelMemoryMap() {}
+
+    static SenderKernelMemoryMap build_from_args(size_t& arg_idx) { return SenderKernelMemoryMap(arg_idx); }
 
     uint32_t get_packet_header_address() {
         uint32_t addr = curr_packet_header_address_;
@@ -655,7 +699,10 @@ struct SenderKernelMemoryAllocator {
     }
 
 private:
-    SenderKernelMemoryAllocator(size_t& arg_idx) {
+    SenderKernelMemoryMap(size_t& arg_idx) {
+        // Parse all memory map arguments in unified call:
+        // [result_buffer_base, result_buffer_size, packet_header_base, payload_buffer_base, highest_usable_address]
+        common = CommonMemoryMap::build_from_args(arg_idx);  // Parses first 2 args
         packet_header_region_base_ = get_arg_val<uint32_t>(arg_idx++);
         payload_buffer_region_base_ = get_arg_val<uint32_t>(arg_idx++);
         highest_usable_address_ = get_arg_val<uint32_t>(arg_idx++);
@@ -673,7 +720,7 @@ private:
 };
 
 /* Layout for the run time args for sender
-1. Memory map args
+1. Memory map args (unified: common + sender-specific args parsed together)
 2. Fabric connection args
 3. Traffic config args
 3.1. TrafficConfigCommonFields
@@ -696,7 +743,7 @@ struct SenderKernelConfig {
         }
     }
 
-    SenderKernelMemoryAllocator memory_allocator;
+    SenderKernelMemoryMap memory_map;
     alignas(WorkerToFabricEdmSender)
         std::array<char, NUM_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> fabric_connections_storage;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
@@ -714,9 +761,14 @@ struct SenderKernelConfig {
     }
     SenderKernelTrafficConfig* get_traffic_config(uint8_t idx) { return traffic_config_ptrs[idx]; }
 
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return memory_map.common.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
+
 private:
     SenderKernelConfig(size_t& arg_idx) {
-        this->memory_allocator = SenderKernelMemoryAllocator::build_from_args(arg_idx);
+        // Parse unified memory map args (common + sender-specific in one call)
+        this->memory_map = SenderKernelMemoryMap::build_from_args(arg_idx);
 
         // Initialize fabric connections using placement new
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
@@ -738,7 +790,7 @@ private:
             const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
             ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
 
-            uint32_t packet_header_address = this->memory_allocator.get_packet_header_address();
+            uint32_t packet_header_address = this->memory_map.get_packet_header_address();
             // Get pointer to pre-allocated storage and initialize with placement new
             SenderKernelTrafficConfig* config_ptr = traffic_configs(i);
             traffic_config_ptrs[i] = config_ptr;
@@ -755,7 +807,7 @@ private:
             // on the sender side, the physical buffer will only be the size of the payload
             uint32_t payload_buffer_size = metadata.payload_buffer_size;
             uint32_t payload_buffer_address =
-                this->memory_allocator.get_payload_buffer_address(traffic_config_ptrs[i]->payload_size_bytes);
+                this->memory_map.get_payload_buffer_address(traffic_config_ptrs[i]->payload_size_bytes);
             traffic_config_ptrs[i]->setup_payload_buffer(payload_buffer_address, payload_buffer_size);
         }
     };
@@ -952,16 +1004,30 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     uint32_t expected_atomic_value;
 };
 
+/* Layout for the run time args for receiver
+1. Memory map args (unified: result buffer only, as receivers don't allocate memory)
+2. Traffic config args
+2.1. TrafficConfigCommonFields
+2.2. Noc send type fields
+*/
 template <uint8_t NUM_TRAFFIC_CONFIGS>
 struct ReceiverKernelConfig {
     static ReceiverKernelConfig build_from_args(size_t& arg_idx) { return ReceiverKernelConfig(arg_idx); }
 
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return common_memory_map.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return common_memory_map.result_buffer_size; }
+
+    CommonMemoryMap common_memory_map;
     alignas(TrafficValidationConfigBase)
         std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(WriteAtomicIncValidationConfig)> validation_configs_storage;
     std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs;
 
 private:
     ReceiverKernelConfig(size_t& arg_idx) {
+        // Parse unified memory map args (common only for receivers)
+        this->common_memory_map = CommonMemoryMap::build_from_args(arg_idx);
+
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_configs[i] = nullptr;
         }
