@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -17,14 +18,12 @@ namespace operations::conv {
 namespace conv2d {
 
 struct Conv2dConfig {
-    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
-
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
     // prepare_conv_bias needs this to always be set to the same dtype as the weights.
     std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
     // Either "relu" or ""
-    string activation = "";
+    std::string activation = "";
 
     // If user tensor will be deallocated if it's on device.
     bool deallocate_activation = false;
@@ -92,7 +91,6 @@ struct Conv2dConfig {
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
-        "dtype",
         "weights_dtype",
         "activation",
         "deallocate_activation",
@@ -113,7 +111,6 @@ struct Conv2dConfig {
         "enable_kernel_stride_folding");
     auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->dtype),
             std::cref(this->weights_dtype),
             std::cref(this->activation),
             std::cref(this->deallocate_activation),
@@ -197,7 +194,7 @@ struct OptimizedConvNew {
     const uint32_t output_channels;
     const uint32_t groups;
     bool untilize_out, has_bias;
-    string activation = "";
+    std::string activation = "";
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
@@ -213,7 +210,7 @@ struct OptimizedConvNew {
         uint32_t groups,
         bool untile_out,
         bool has_bias,
-        string activation,
+        std::string activation,
         const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         tt::tt_metal::MemoryConfig memory_config,
@@ -299,7 +296,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const string& activation,
+    const std::string& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
@@ -334,6 +331,7 @@ conv_op_l1_usage calculate_L1_usage(
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     tt::tt_metal::DataType input_datatype,
+    tt::tt_metal::DataType output_datatype,
     bool enable_bias,
     bool is_1d_depthwise_conv);
 

@@ -19,13 +19,13 @@ inline void llk_math_eltwise_unary_sfpu_logical_not_unary_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_logical_not_unary_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_logical_not_unary<sfpi::vFloat, float>, dst_index, static_cast<int>(VectorMode::RC));
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_logical_not_unary_op_int32(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_logical_not_unary<sfpi::vInt, int16_t>, dst_index, static_cast<int>(VectorMode::RC));
 }
 

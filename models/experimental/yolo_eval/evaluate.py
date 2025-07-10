@@ -497,7 +497,7 @@ def test_yolov8s_world(device, model_type, res, reset_seeds):
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov8x(device, model_type, res, reset_seeds):
-    from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
+    from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
 
     torch_model = YOLO("yolov8x.pt")
     torch_model = torch_model.model
@@ -509,11 +509,7 @@ def test_yolov8x(device, model_type, res, reset_seeds):
         model = torch_model.eval()
         logger.info("Inferencing using Torch Model")
     else:
-        model = Yolov8xTrace2CQ()
-        model.initialize_yolov8x_trace_2cqs_inference(
-            device,
-            1,
-        )
+        model = YOLOv8xPerformantRunner(device, device_batch_size=1)
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/demos/yolov8x/demo/runs"
@@ -663,7 +659,7 @@ def test_yolov8s(device, model_type, res, reset_seeds):
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov11n(device, model_type, res, reset_seeds):
-    from models.experimental.yolov11.runner.performant_runner import YOLOv11PerformantRunner
+    from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
 
     if model_type == "torch_model":
         model = YOLO("yolo11n.pt")
@@ -673,7 +669,7 @@ def test_yolov11n(device, model_type, res, reset_seeds):
         model._capture_yolov11_trace_2cqs()
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/experimental/yolov11/demo/runs"
+    save_dir = "models/demos/yolov11/demo/runs"
 
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT

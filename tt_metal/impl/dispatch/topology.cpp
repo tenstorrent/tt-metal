@@ -36,6 +36,8 @@
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
+#include "persistent_kernel_cache.hpp"
+#include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -44,7 +46,6 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
-#include "utils.hpp"
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -746,7 +747,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
 // clang-format on
 
 std::vector<FDKernel*> node_id_to_kernel;
-std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
+tt::tt_metal::detail::ProgramCompileGroup command_queue_compile_group;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> routing_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> empty_cores;
@@ -934,6 +935,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
             delete node_id_to_kernel[idx];
         }
         node_id_to_kernel.clear();
+        command_queue_compile_group.clear();
     }
 
     // Read the input table, create configs for each node + track mmio devices and number of cqs.
@@ -1025,9 +1027,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
         }
     }
     for (auto& mmio_device_id_and_kernels : mmio_device_id_to_kernels) {
-        chip_id_t mmio_device_id = mmio_device_id_and_kernels.first;
-        int prefetch_h_id = 0, dispatch_h_id = 0;
-        int demux_id = 0, router_id = 0, tunneler_id = 0;
+        int demux_id = 0, router_id = 0;
         for (auto fd_kernel : mmio_device_id_and_kernels.second) {
             if (auto demux_kernel = dynamic_cast<DemuxKernel*>(fd_kernel)) {
                 demux_kernel->SetPlacementCQID((demux_id++) % 3);
@@ -1112,18 +1112,17 @@ void populate_cq_static_args(IDevice* device) {
         }
     }
 
-    // Move program into the storage for create_and_compile_cq_program to be called later
-    command_queue_pgms[device->id()] = std::move(cq_program_ptr);
+    // Move program into the storage for later steps
+    command_queue_compile_group.add_program(device, std::move(cq_program_ptr));
 }
 
-std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
-    TT_ASSERT(
-        command_queue_pgms.contains(device->id()),
+void create_cq_program(IDevice* device) {
+    TT_FATAL(
+        command_queue_compile_group.contains(device),
         "Tried to create and compile CQ program on device {} without static args populated (need to run "
         "populate_cq_static_args())",
         device->id());
     empty_cores.clear();
-    std::unique_ptr<Program> cq_program = std::move(command_queue_pgms[device->id()]);
     // Third pass, populate dependent configs and create kernels for each node
     for (auto node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
@@ -1170,15 +1169,25 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
             termination_info[device->id()].insert(info.value());
         }
     }
+}
 
-    // Compile the program and return it so Device can register it
-    detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
+void compile_cq_programs() {
+    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
+        detail::EnablePersistentKernelCache();
+    }
+
+    command_queue_compile_group.compile_all(/*force_slow_dispatch=*/true);
+
     // Write runtime args to device
-    detail::WriteRuntimeArgsToDevice(device, *cq_program, /*force_slow_dispatch=*/true);
-    // Erase from map. Note: program in map is no longer valid
-    // It is returned from this function and the caller will take ownership of it
-    command_queue_pgms.erase(device->id());
-    return cq_program;
+    command_queue_compile_group.write_runtime_args(/*force_slow_dispatch=*/true);
+
+    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
+        detail::DisablePersistentKernelCache();
+    }
+}
+
+std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDevice* device) {
+    return command_queue_compile_group.remove_program(device);
 }
 
 void configure_dispatch_cores(IDevice* device) {
@@ -1574,7 +1583,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
         router_channels_mask += 0x1 << (uint32_t)router_chan;
     }
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     const auto topology = fabric_context.get_fabric_topology();
     if (topology == tt::tt_fabric::Topology::Mesh) {
         defines["FABRIC_2D"] = "";
@@ -1675,12 +1684,11 @@ void reset_topology_state() {
         delete node_id_to_kernel[idx];
     }
     node_id_to_kernel.clear();
-    command_queue_pgms.clear();
+    command_queue_compile_group.clear();
     dispatch_cores.clear();
     routing_cores.clear();
     empty_cores.clear();
     termination_info.clear();
 }
-
 
 }  // namespace tt::tt_metal

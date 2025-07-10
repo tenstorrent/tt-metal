@@ -11,6 +11,7 @@ from models.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
+from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
 from ttnn.operations.conv2d import get_torch_act_func_from_string
@@ -125,8 +126,6 @@ def run_conv(
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
-    if slice_config and output_dtype != ttnn.bfloat16:
-        pytest.xfail("Conv2d with DRAM Slicing only supports BFloat16 for activation dtype")
 
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -212,7 +211,6 @@ def run_conv(
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout if not auto_shard else None,
         deallocate_activation=deallocate_activation,
@@ -265,15 +263,16 @@ def run_conv(
         slice_config=slice_config,
         return_output_dim=True,
         return_weights_and_bias=True,
+        dtype=output_dtype,
     )
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
-            weight_tensor=tt_weight_tensor,
+            weight_tensor=d_w,
             in_channels=input_channels,
             out_channels=output_channels,
             device=device,
-            bias_tensor=tt_bias_tensor,
+            bias_tensor=d_b,
             kernel_size=(filter_height, filter_width),
             stride=(stride_h, stride_w),
             padding=(pad_top, pad_bottom, pad_left, pad_right),
@@ -288,7 +287,9 @@ def run_conv(
             slice_config=slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=output_dtype,
         )
+
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
     # out is in row major layout and NHWC shape
@@ -314,7 +315,7 @@ def run_conv(
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
-        if fp32_accum:
+        if fp32_accum and output_dtype != ttnn.bfloat8_b and input_dtype != ttnn.bfloat8_b:
             threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
         else:
             threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
@@ -422,7 +423,6 @@ def run_conv_with_split(
         split_weight_tensors[i] = torch.split(split_weight_tensors[i], split_input_channels, 1)
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout if not auto_shard else None,
     )
@@ -469,6 +469,7 @@ def run_conv_with_split(
                 conv_config=conv_config,
                 compute_config=compute_config,
                 return_output_dim=True,
+                dtype=output_dtype,
             )
             tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device, True)
@@ -678,6 +679,11 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
+@skip_for_blackhole("Not fully tested on Blackhole")
+@pytest.mark.parametrize(
+    "input_dtype, input_layout",
+    [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
@@ -693,25 +699,21 @@ SliceWidth = ttnn.Conv2dSliceWidth
         (56,    64,  1008,   256,   SliceWidth,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
         (64,   128,   992,   992,   SliceWidth,   50,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
         (128,  128,  1024,  1024,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (128,  3,   1024,  1024,  SliceWidth,     7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
+        (128,  3,   1024,  1024,  SliceWidth,     8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
         (16,   512,  128,    128,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
-        (256,  128,  1024,  1024,  SliceWidth,   31,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
+        (256,  128,  1024,  1024,  SliceWidth,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
         (256,  256,  1024,  1024,  SliceWidth,   37,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi  ),
         (256,  256,  512,   512,   SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
         (512,  512,  256,   256,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  256,  512,   512,   SliceWidth,    7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  512,  512,   512,   SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (56,    64,  1008,  1008,  SliceWidth,    5,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  256,  512,   512,   SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  512,  512,   512,   SliceWidth,    10,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (56,    64,  1008,  1008,  SliceWidth,    6,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
      )
     # fmt: on
 )
 @pytest.mark.parametrize(
     "has_bias, fp32_accum, packer_l1_acc",
     [[True, False, False]],
-)
-@pytest.mark.parametrize(
-    "input_dtype, input_layout",
-    [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
 )
 def test_conv_dram(
     device,
@@ -766,6 +768,7 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         input_dtype=input_dtype,
         input_layout=input_layout,
+        output_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
         run_twice=False,
         fast_compare=True,
@@ -893,7 +896,6 @@ def test_conv_ws(
             pytest.skip("Test is not supported on n300 (8,7) grid due to #13541")
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
         deallocate_activation=deallocate_activation,
@@ -928,6 +930,7 @@ def test_conv_ws(
         compute_config=compute_config,
         groups=groups,
         return_output_dim=True,
+        dtype=output_dtype,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -3281,6 +3284,7 @@ def test_conv2d_sdxl(
     ),
 )
 
+@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_conv2d_vae_sdxl(
     device,
@@ -3583,7 +3587,6 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_split_reader=enable_split_reader,
@@ -3603,6 +3606,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
         device=device,
         padding=(patch_size // 2, patch_size // 2),
         conv_config=conv_config,
+        dtype=ttnn.bfloat8_b,
     )
     ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
@@ -3611,11 +3615,24 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("input_channels", [3, 320])
-@pytest.mark.parametrize("output_channels", [32])
-@pytest.mark.parametrize("input_height,input_width", [(224, 224), (512, 672)])
-@pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
-@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width",
+    [
+        (3, 32, 224, 224, 16, 16, 16, 16),
+        (3, 32, 224, 224, 32, 32, 32, 32),
+        (3, 32, 224, 224, 16, 16, 2, 2),
+        (3, 32, 224, 224, 7, 7, 2, 2),
+        (3, 32, 224, 224, 6, 6, 2, 2),
+        (3, 32, 1280, 1280, 6, 6, 2, 2),
+        (3, 32, 512, 672, 16, 16, 16, 16),
+        (3, 32, 512, 672, 32, 32, 32, 32),
+        (320, 32, 224, 224, 16, 16, 16, 16),
+        (320, 32, 224, 224, 32, 32, 32, 32),
+        (320, 32, 512, 672, 16, 16, 16, 16),
+        (320, 32, 512, 672, 32, 32, 32, 32),
+    ]
+)
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
 def test_conv2d_with_fold(
     device,
@@ -3627,6 +3644,8 @@ def test_conv2d_with_fold(
     input_width,
     kernel_height,
     kernel_width,
+    stride_height,
+    stride_width,
     input_layout,
     has_bias,
 ):
@@ -3644,8 +3663,8 @@ def test_conv2d_with_fold(
         input_width=input_width,
         filter_height=kernel_height,
         filter_width=kernel_width,
-        stride_h=kernel_height,
-        stride_w=kernel_width,
+        stride_h=stride_height,
+        stride_w=stride_width,
         padding=(0, 0),
         config_override=None,
         input_layout=input_layout,
@@ -3863,7 +3882,6 @@ def test_conv2d_act_dealloc(
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         deallocate_activation=True,
         output_layout=output_layout,
@@ -3892,5 +3910,6 @@ def test_conv2d_act_dealloc(
         conv_config=conv_config,
         groups=groups,
         slice_config=slice_config,
+        dtype=output_dtype,
     )
     assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"

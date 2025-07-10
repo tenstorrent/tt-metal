@@ -105,12 +105,15 @@ void kernel_main() {
 
             if constexpr (!direction) {
                 uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-                tiles_read += backwards_offset;
-                pages_read_in_row += backwards_offset;
-                if (pages_read_in_row >= slice_Wt) {
-                    row_offset += stride_Wt;
-                    pages_read_in_row = pages_read_in_row - slice_Wt;
+                for (uint32_t k = 0; k < backwards_offset; ++k) {
+                    pages_read_in_row++;
+                    if (pages_read_in_row == slice_Wt) {
+                        row_offset += stride_Wt;
+                        pages_read_in_row = pages_read_in_row - slice_Wt;
+                    }
                 }
+
+                tiles_read += backwards_offset;
                 intermediate_pages_read_in_row = pages_read_in_row;
                 intermediate_row_offset = row_offset;
             }
@@ -121,10 +124,10 @@ void kernel_main() {
              * after ring_size-1 steps, we've transferred all tiles
              */
             if (do_reduce) {
-                while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) <= i - 1);
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), i);
                 if (i == (ring_size - 1)) {
                     // Reset the semaphore before the next batch
-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) = 0;
+                    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                 }
             }
             while (tiles_read < tiles_to_read) {
@@ -146,7 +149,7 @@ void kernel_main() {
                     tiles_read++;
 
                     pages_read_in_row++;
-                    if (pages_read_in_row >= slice_Wt) {
+                    if (pages_read_in_row == slice_Wt) {
                         row_offset += stride_Wt;
                         pages_read_in_row = 0;
                     }
@@ -164,7 +167,7 @@ void kernel_main() {
                         intermediate_l1_write_addr += input_tensor_page_size;
 
                         intermediate_pages_read_in_row++;
-                        if (intermediate_pages_read_in_row >= slice_Wt) {
+                        if (intermediate_pages_read_in_row == slice_Wt) {
                             intermediate_row_offset += stride_Wt;
                             intermediate_pages_read_in_row = 0;
                         }
@@ -186,12 +189,16 @@ void kernel_main() {
                     } else {
                         tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     }
-                    tiles_read += tiles_to_read_in_other_direction;
-                    pages_read_in_row += tiles_to_read_in_other_direction;
-                    if (pages_read_in_row >= slice_Wt) {
-                        row_offset += stride_Wt;
-                        pages_read_in_row = pages_read_in_row - slice_Wt;
+
+                    for (uint32_t k = 0; k < tiles_to_read_in_other_direction; ++k) {
+                        pages_read_in_row++;
+                        if (pages_read_in_row == slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = pages_read_in_row - slice_Wt;
+                        }
                     }
+
+                    tiles_read += tiles_to_read_in_other_direction;
                     intermediate_pages_read_in_row = pages_read_in_row;
                     intermediate_row_offset = row_offset;
                 }

@@ -28,7 +28,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -100,17 +99,17 @@ std::shared_ptr<Program> create_program_multi_core_rta(
         tt::align(base_addr + 4096 * sizeof(uint32_t), MetalContext::instance().hal().get_alignment(HalMemType::L1));
     uint32_t coord_base_dm1 = coord_base_dm0 + 1024 * sizeof(uint32_t);
 
-    std::map<string, string> dm_defines0 = {
+    std::map<std::string, std::string> dm_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm0)},
         {"COORDS_ADDR", std::to_string(coord_base_dm0)}};
-    std::map<string, string> dm_defines1 = {
+    std::map<std::string, std::string> dm_defines1 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm1)},
         {"COORDS_ADDR", std::to_string(coord_base_dm1)}};
-    std::map<string, string> compute_defines = {
+    std::map<std::string, std::string> compute_defines = {
         {"COMPUTE", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_compute)}};

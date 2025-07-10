@@ -288,6 +288,7 @@ class TtLlamaAttention(LightweightModule):
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             dim=3,
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+            use_optimal_ccl_for_llama=True,
         )
 
         # print("done create qkv heads")
@@ -384,6 +385,7 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=0,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            use_optimal_ccl_for_llama=True,
         )
         ttnn.deallocate(dense_out_ttnn)
 

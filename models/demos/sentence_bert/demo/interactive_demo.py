@@ -14,7 +14,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 import ttnn
-from models.demos.sentence_bert.demo.demo import mean_pooling
 from models.demos.sentence_bert.reference.sentence_bert import custom_extended_mask
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
@@ -48,17 +47,17 @@ def compute_ttnn_embeddings(sentences, model_name, device, batch_size=8):
                 device=device,
                 input_ids=input_ids,
                 extended_mask=extended_mask,
+                attention_mask=attention_mask,
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
             )
             sentence_bert_module._capture_sentencebert_trace_2cqs()
 
-        ttnn_output = sentence_bert_module.run(input_ids, token_type_ids, position_ids, extended_mask)
+        ttnn_output = sentence_bert_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
         logger.info("Running inference on TTNN model for current batch...")
-        ttnn_output = ttnn.to_torch(ttnn_output).squeeze(dim=1)
-        embeddings = mean_pooling(ttnn_output, attention_mask)
+        ttnn_output = ttnn.to_torch(ttnn_output)
         # Always slice to the original batch size (before padding)embeddings = embeddings[:orig_batch_size]
-        all_embeddings.append(embeddings)
+        all_embeddings.append(ttnn_output)
         all_sentences.extend(sentences[i : i + orig_batch_size])
     all_embeddings = torch.cat(all_embeddings, dim=0)
     logger.info("All embeddings computed.")
@@ -122,10 +121,9 @@ def test_interactive_demo_inference(device, model_name, sequence_length, batch_s
         extended_mask = custom_extended_mask(attention_mask, dtype=torch.bfloat16)
         token_type_ids = encoded_input["token_type_ids"]
         position_ids = torch.arange(0, input_ids.shape[-1], dtype=torch.int64).unsqueeze(dim=0)
-        ttnn_output = model_instance.run(input_ids, token_type_ids, position_ids, extended_mask)
+        ttnn_output = model_instance.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
         logger.info("Running inference on TTNN model for current batch...")
-        ttnn_output = ttnn.to_torch(ttnn_output).squeeze(dim=1)
-        query_embeddings = mean_pooling(ttnn_output, attention_mask)
+        query_embeddings = ttnn.to_torch(ttnn_output)
         logger.info("Computing cosine similarities...")
         similarities = cosine_similarity(query_embeddings.detach().cpu().numpy(), kb_embeddings.detach().cpu().numpy())[
             0

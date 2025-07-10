@@ -70,7 +70,6 @@ void RepeatAndInterleaveEltwiseMul::validate(const std::vector<Tensor>& input_te
 std::vector<ttnn::TensorSpec> RepeatAndInterleaveEltwiseMul::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
     const auto& shape_a = input_tensor_a.padded_shape();
     Shape output_shape({shape_a[0], shape_a[1], shape_a[2], tt::constants::TILE_WIDTH * HIDDEN_SIZE});
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};

@@ -455,7 +455,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
-    if (is_line_topology(new_shape)) {
+    if (new_shape.is_line_topology()) {
         return view_->get_line_devices();
     }
 
@@ -491,7 +491,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
 bool MeshDevice::close() {
     ZoneScoped;
-    log_info(tt::LogMetal, "Closing mesh device {}", this->id());
+    log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
     // We only dump profile results for mesh devices that don't have any submeshes as they have active mesh command
     // queues, whereas mesh devices with submeshes don't.
