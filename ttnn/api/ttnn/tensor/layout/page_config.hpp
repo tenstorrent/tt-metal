@@ -98,7 +98,13 @@ public:
 
     Layout get_layout() const;
 
+    /// Returns the minimum required alignment for the shard shape.
     Alignment get_required_shard_shape_alignment() const;
+
+    /// Returns the recommended alignment for the shard shape.
+    /// This takes into account device memory alignment requirements trying to optimize memory usage and read/write
+    /// performance. The exact device alignment requirements are dependent on device generation and BufferType, so the
+    /// maximum possible alignment is used.
     Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
 
     bool operator==(const PageConfig&) const = default;

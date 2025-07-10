@@ -27,6 +27,7 @@ size_t rm_element_size_bytes(DataType dtype) {
     }
 }
 
+// Maximum possible device memory alignment for all devices and buffer types.
 constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
