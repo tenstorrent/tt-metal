@@ -23,7 +23,8 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
-    runs-on: ubuntu-latest
+    runs-on:
+      - arch-blackhole
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
