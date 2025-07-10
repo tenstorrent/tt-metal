@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gather.hpp"
+#include <cstdint>
 
 #include "device/gather_device_operation.hpp"
 
@@ -14,9 +15,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
-#include <cstdint>
-
-namespace ttnn::operations::gather {
+namespace ttnn::operations::experimental::gather {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -155,4 +154,4 @@ Tensor ExecuteGather::invoke(
         input_index_tensor, gather_tensor, dim, input_index_tensor_is_dim_last_idx, original_index_tensor_lshape);
 }
 
-}  // namespace ttnn::operations::gather
+}  // namespace ttnn::operations::experimental::gather
