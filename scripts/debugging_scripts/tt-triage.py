@@ -403,7 +403,7 @@ def get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, p
     return launch_msg_rd_ptr, kernel_config_base, kernel_text_offset, watcher_kernel_id
 
 
-def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path):
+def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path, gdb_client, process_ids):
     printout_table = init_running_ops_table(enum_values)
 
     if printout_table is None:
@@ -418,6 +418,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
             row = [loc.to_str("logical")]
 
         for risc_name in block.risc_names:
+
             proc_name = risc_name.upper()
             proc_type = enum_values["ProcessorTypes"][proc_name]
             proc_class = enum_values["dispatch_core_processor_classes"][proc_name]
@@ -480,6 +481,13 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                     cs = top_callstack(
                         pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
                     )
+                if GDB_EN:
+                    f = open("callstack.output", "r")
+                    callstack_output = f.read()
+                    get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], kernel_path, kernel_config_base + kernel_text_offset)
+                    while callstack_output == f.read():
+                        time.sleep(0.01)
+                    f.close()
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
@@ -489,6 +497,10 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                         elf_cache[fw_elf_path] = parse_elf(fw_elf_path, context)
 
                     cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
+
+                    # if GDB_EN:
+                    #     get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], fw_elf_path, 0)
+                    #     time.sleep(1)    
 
             if VVERBOSE:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -523,7 +535,7 @@ def set_up_gdb(ui_state: UIState):
         raiseTTTriageError(f"Failed to start GDB server on port {PORT}. Error: {e}")
 
     # Start GDB process
-    return subprocess.Popen(
+    gdb_client = subprocess.Popen(
         ["../tt-exalens/build/sfpi/compiler/bin/riscv32-tt-elf-gdb", "--quiet"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -532,32 +544,60 @@ def set_up_gdb(ui_state: UIState):
         bufsize=1
     )
 
-def tear_down_gdb(gdb_process, ui_state: UIState):
-    # Stop GDB process
-    gdb_process.stdin.write("quit\n")
-    gdb_process.stdin.flush()
+    gdb_client.stdin.write(f"target extended-remote localhost:{PORT}\n")
+    gdb_client.stdin.flush()
+
+    gdb_client.stdin.write("shell > callstack.output\n")
+    gdb_client.stdin.flush()
+
+    return gdb_client
+
+def tear_down_gdb(gdb_client, ui_state: UIState):
+    # Stop GDB client
+    gdb_client.stdin.write("quit\n")
+    gdb_client.stdin.flush()
 
     # Stop GDB server
     ui_state.stop_gdb()
 
-def get_callstack_with_gdb(gdb_process, pid: int, elf_path: str, kernel_offset: int):
-
-    gdb_process.stdin.write(f"""\
-    target extended-remote localhost:{PORT}
+def get_callstack_with_gdb(gdb_client, pid: int, elf_path: str, kernel_offset: int):
+    gdb_client.stdin.write(f"""\
     attach {pid}
     add-symbol-file {elf_path} {kernel_offset}
+    set prompt 
+    set logging file callstack.output
+    set logging enabled on
+    printf "Process ID: {pid}\\n"
     backtrace
+    printf "\\n"
+    set logging enabled off
     detach
     """)
-    gdb_process.stdin.flush()
+    gdb_client.stdin.flush()
+
+    return True
 
 def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context: Context):
     """Print the running operations on the device."""
     title(dump_running_ops.__doc__)
 
+    gdb_client = None
+    process_ids = None
     if GDB_EN:
         ui_state = UIState(context)
         gdb_client = set_up_gdb(ui_state)
+
+        # Get mapping form risc location and name to process id
+        process_ids = {}
+        for pid, process in ui_state.gdb_server.available_processes.items():
+            loc = process.risc_debug.risc_location.location
+            risc_name = process.risc_debug.risc_location.risc_name
+
+            if loc in process_ids:
+                process_ids[loc][risc_name] = pid
+            else:
+                process_ids[loc] = {risc_name: pid}  
+
 
     if inspector_data is None:
         print(f"  {ORANGE}We don't have inspector data. We will skip running ops dump.{RST}")
@@ -635,9 +675,6 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
     if type(dev) == BlackholeDevice:
         enum_values_eth["ProcessorTypes"]["ERISC1"] = idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
 
-    if GDB_EN:
-        get_callstack_with_gdb(gdb_client, 333, "/home/adjordjevic/.cache/tt-metal-cache/474011dcd8/4098/kernels/erisc_print/8333010637973881611/idle_erisc/idle_erisc.elf", 29648)
-
     # Getting running ops tables
     running_ops_table_tensix = get_running_ops_table(
         dev,
@@ -648,6 +685,8 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
         brisc_elf,
         pcs_tensix,
         a_kernel_path,
+        gdb_client,
+        process_ids,
     )
     runinng_ops_table_idle_eth = get_running_ops_table(
         dev,
@@ -658,6 +697,8 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
         idle_erisc_elf,
         pcs_idle_eth,
         a_kernel_path,
+        gdb_client,
+        process_ids,
     )
 
     # Printing tables if verbose is True
@@ -671,8 +712,11 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
     if GDB_EN:
         tear_down_gdb(gdb_client, ui_state)
 
+        # Should be option to log to some file
         output, _ = gdb_client.communicate()
-        print(output)
+        metal_home = os.environ.get("TT_METAL_HOME", "")
+        with open(os.path.join(metal_home, "scripts", "debugging_scripts", "gdb_log.txt"), "w") as f:
+            f.write(output)
 
 
     # WIP:
