@@ -7,6 +7,7 @@
 
 #include "host_buffer.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -61,6 +62,33 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& device_tensor : device_tensors) {
         EXPECT_THAT(device_tensor.to_vector<float>(), ElementsAre(42.F, 13.F, -99.F));
+    }
+}
+
+TEST_F(TensorDistributionTest, SingleDeviceTensorTopology) {
+    Tensor input_tensor = Tensor::from_vector(
+        std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::Shape{1, 1, 1, 3}, DataType::FLOAT32));
+
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    EXPECT_THAT(replicated_tensor.topology_config().has_value(), true);
+    std::cout << mesh_device_->num_devices() << std::endl;
+    std::cout << mesh_device_->shape() << std::endl;
+    const auto topology_config = replicated_tensor.topology_config().value();
+
+    // Get the mesh shape from topology config
+    auto tensor_mesh_shape = topology_config.mesh_shape;
+    std::cout << "Mesh shape: " << tensor_mesh_shape << std::endl;
+
+    // Create a coordinate range to iterate through all coordinates in the mesh
+    distributed::MeshCoordinateRange coord_range(tensor_mesh_shape);
+
+    for (const auto& coord : coord_range) {
+        // Test neighbors in both dimensions
+        auto next_neighbor = topology_config.get_next_neighbor(coord, 0);
+        auto prev_neighbor = topology_config.get_prev_neighbor(coord, 0);
+        std::cout << "coord: " << coord << std::endl;
+        std::cout << "next_neighbor: " << next_neighbor << " prev_neighbor: " << prev_neighbor << std::endl;
     }
 }
 

@@ -24,6 +24,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
+#include "ttnn/distributed/topology_config.hpp"
 
 namespace ttnn::distributed {
 namespace {
@@ -129,6 +130,31 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
         /*device=*/nullptr,
         ttnn::DefaultQueueId,
         pad_value));
+}
+
+// TODO: Remove this once we use same Placement in TopologyConfig as in MeshMapperConfig
+// Converts MeshMapperConfig::Placement to TopologyConfig::Placement
+tt::stl::SmallVector<tt::tt_metal::TopologyConfig::Placement> convert_placements_to_topology_config(
+    const tt::stl::SmallVector<MeshMapperConfig::Placement>& placements) {
+    auto convert_placement =
+        [](const MeshMapperConfig::Placement& placement) -> tt::tt_metal::TopologyConfig::Placement {
+        return std::visit(
+            tt::stl::overloaded{
+                [](const MeshMapperConfig::Replicate& replicate) -> tt::tt_metal::TopologyConfig::Placement {
+                    return tt::tt_metal::TopologyConfig::Replicate{};
+                },
+                [](const MeshMapperConfig::Shard& shard) -> tt::tt_metal::TopologyConfig::Placement {
+                    return tt::tt_metal::TopologyConfig::Shard{.dim = shard.dim};
+                },
+            },
+            placement);
+    };
+
+    tt::stl::SmallVector<tt::tt_metal::TopologyConfig::Placement> topology_placements;
+    for (const auto& placement : placements) {
+        topology_placements.push_back(convert_placement(placement));
+    }
+    return topology_placements;
 }
 
 }  // namespace
@@ -258,10 +284,24 @@ public:
             auto distributed_buffer =
                 tt::tt_metal::DistributedHostBuffer::create(global_shape_, local_shape_, local_offset_);
             auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+            std::vector<MeshCoordinate> buffer_coords;
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
-                distributed_buffer.emplace_shard(remap_fn(coord), [&b = replicated_buffer]() { return b; });
+                const auto mapped_coord = remap_fn(coord);
+                buffer_coords.push_back(mapped_coord);
+                distributed_buffer.emplace_shard(mapped_coord, [&b = replicated_buffer]() { return b; });
             }
-            return Tensor(tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), tensor_spec, config());
+
+            std::cout << "distribution_shape_: " << distribution_shape_ << std::endl;
+            const auto topology_config = tt::tt_metal::TopologyConfig{
+                .mesh_shape = distribution_shape_,
+                .device_coords = buffer_coords,
+                .placements = convert_placements_to_topology_config(config_.placements)};
+
+            return Tensor(
+                tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)),
+                tensor_spec,
+                config(),
+                topology_config);
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -339,10 +379,13 @@ private:
         using XTensorViewKey = decltype(&sharded_xtensor_views.values().front()->get());
         std::unordered_map<XTensorViewKey, tt::tt_metal::HostBuffer> converted_buffers;
 
+        std::vector<MeshCoordinate> buffer_coords;
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
             if (xtensor_view.has_value()) {
+                const auto mapped_coord = remap_fn(coord);
+                buffer_coords.push_back(mapped_coord);
                 distributed_buffer.emplace_shard(
-                    remap_fn(coord), [&converted_buffers, &xtensor_view, &shard_spec, &coord, pad_value]() {
+                    mapped_coord, [&converted_buffers, &xtensor_view, &shard_spec, &coord, pad_value]() {
                         // The callable makes a copy from the strided xtensor view to a vector; on multi-host systems,
                         // executed only for shards that are local to this host.
 
@@ -365,7 +408,13 @@ private:
             }
         }
 
-        return Tensor(tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), shard_spec, config());
+        const auto topology_config = tt::tt_metal::TopologyConfig{
+            .mesh_shape = distribution_shape_,
+            .device_coords = buffer_coords,
+            .placements = convert_placements_to_topology_config(config_.placements)};
+
+        return Tensor(
+            tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), shard_spec, config(), topology_config);
     }
 
     // MeshDevice parameters.

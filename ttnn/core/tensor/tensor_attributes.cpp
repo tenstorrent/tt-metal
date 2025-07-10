@@ -14,10 +14,14 @@
 namespace tt::tt_metal {
 
 TensorAttributes::TensorAttributes(
-    Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) :
+    Storage storage,
+    TensorSpec tensor_spec,
+    DistributedTensorConfig distributed_tensor_config,
+    std::optional<TopologyConfig> topology_config) :
     storage_(std::move(storage)),
     tensor_spec_(std::move(tensor_spec)),
-    distributed_tensor_config_(std::move(distributed_tensor_config)) {
+    distributed_tensor_config_(std::move(distributed_tensor_config)),
+    topology_config_(std::move(topology_config)) {
     if (std::holds_alternative<HostStorage>(storage_)) {
         TT_FATAL(
             std::holds_alternative<ReplicateTensor>(distributed_tensor_config_),
@@ -31,5 +35,6 @@ const TensorSpec& TensorAttributes::get_tensor_spec() const { return tensor_spec
 const DistributedTensorConfig& TensorAttributes::get_distributed_tensor_config() const {
     return distributed_tensor_config_;
 }
+const std::optional<TopologyConfig>& TensorAttributes::get_topology_config() const { return topology_config_; }
 
 }  // namespace tt::tt_metal
