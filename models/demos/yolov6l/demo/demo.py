@@ -3,22 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import pytest
 from datetime import datetime
 
-
+import pytest
 import torch
-import ttnn
 
-from models.experimental.yolov6l.tt.model_preprocessing import load_torch_model_yolov6l
-from models.experimental.yolov6l.demo.demo_utils import *
+import ttnn
+from models.demos.yolov6l.demo.demo_utils import *
+from models.demos.yolov6l.demo.demo_utils import LoadImages, load_coco_class_names, preprocess
+from models.demos.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
+from models.demos.yolov6l.tt.model_preprocessing import load_torch_model_yolov6l
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.yolov6l.demo.demo_utils import (
-    LoadImages,
-    load_coco_class_names,
-    preprocess,
-)
-from models.experimental.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
 
 
 def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
@@ -65,7 +60,7 @@ from models.utility_functions import disable_persistent_kernel_cache
 @pytest.mark.parametrize(
     "source",
     [
-        "models/experimental/yolov6l/demo/images/bus.jpg",
+        "models/demos/yolov6l/demo/images/bus.jpg",
     ],
 )
 @pytest.mark.parametrize(
@@ -78,7 +73,7 @@ from models.utility_functions import disable_persistent_kernel_cache
 def test_yolov6l_demo(device, source, model_type, reset_seeds):
     disable_persistent_kernel_cache()
 
-    save_dir = "models/experimental/yolov6l/demo/runs"
+    save_dir = "models/demos/yolov6l/demo/runs"
 
     dataset = LoadImages(path=source)
 
