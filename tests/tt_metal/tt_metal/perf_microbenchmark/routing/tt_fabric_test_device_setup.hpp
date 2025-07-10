@@ -549,7 +549,8 @@ inline std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_directio
 
 inline void TestDevice::validate_sender_results() const {
     std::vector<CoreCoord> sender_cores;
-    for (const auto& [core, sender] : this->senders_) {
+    sender_cores.reserve(this->senders_.size());
+    for (const auto& [core, _] : this->senders_) {
         sender_cores.push_back(core);
     }
 
@@ -573,7 +574,8 @@ inline void TestDevice::validate_sender_results() const {
 
 inline void TestDevice::validate_receiver_results() const {
     std::vector<CoreCoord> receiver_cores;
-    for (const auto& [core, receiver] : this->receivers_) {
+    receiver_cores.reserve(this->receivers_.size());
+    for (const auto& [core, _] : this->receivers_) {
         receiver_cores.push_back(core);
     }
 
