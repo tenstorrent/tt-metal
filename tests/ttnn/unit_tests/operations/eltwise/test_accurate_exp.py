@@ -110,3 +110,42 @@ def test_pow_bf16(device):
     # assert_with_pcc(golden, result, 0.999)
     print("\ngolden:", golden, "\nTTNN:", result)
     assert_with_ulp(golden, result)
+
+
+def test_exp21f_op(device):
+    tor_a = torch.tensor(
+        [
+            [[0.6719]],
+            [[0.1836]],
+            [[0.4570]],
+            [[0.7500]],
+            [[0.2617]],
+            [[0.9805]],
+            [[0.7617]],
+            [[0.4023]],
+            [[0.0352]],
+            [[0.8242]],
+            [[0.0820]],
+            [[0.9453]],
+        ],
+        dtype=torch.bfloat16,
+    )
+
+    tor_res = torch.exp(tor_a)
+    mem = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.L1, shard_spec=None
+    )
+
+    tt_a = ttnn.from_torch(tor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+
+    result = ttnn.exp(tt_a)
+
+    tt_res = ttnn.to_torch(result)
+    print("tt_res", tt_res)
+    print("tor_res", tor_res)
+    print("abs_diff", torch.abs(tt_res - tor_res))
+
+    # pcc, pcc_msg = assert_with_pcc(tor_res, tt_res, 0.999)
+    # assert pcc
+
+    assert assert_with_ulp(tor_res, tt_res)
