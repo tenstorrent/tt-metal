@@ -42,7 +42,7 @@ tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNij
 tt_metal/graph/ @dmakoviichuk-tt @sminakov-tt
 tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @tt-dma # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
-tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
@@ -52,7 +52,7 @@ tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT 
 tt_metal/impl/allocator/ @abhullar-tt @tt-aho
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @omilyutin-tt @sminakov-tt @TT-BrianLiu
 tt_metal/impl/context/ @tt-dma @jbaumanTT @aliuTT @cfjchu @omilyutin-tt
-tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
+tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
 tt_metal/impl/debug/ @tt-dma @pgkeller
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @tt-dma @cfjchu @omilyutin-tt
 tt_metal/impl/dispatch/ @pgkeller @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
@@ -65,8 +65,8 @@ tt_metal/impl/profiler/ @mo-tenstorrent @sagarwalTT
 tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
-tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
-tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
+tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
+tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
 tt_metal/jit_build/ @pgkeller @abhullar-tt @nathan-TT @jbaumanTT
 tt_metal/jit_build/**/CMakeLists.txt @pgkeller @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-developers-infra
 tt_metal/kernels/ @abhullar-tt # these should go away or get moved to tests
@@ -93,7 +93,7 @@ tt_metal/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @pgkeller @ali
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
-tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT #does this actually do anything?
+tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT #does this actually do anything?
 
 # metal tests
 tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
@@ -219,7 +219,7 @@ models/demos/ttnn_falcon7b @cfjchu @uaydonat
 models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
 models/demos/wormhole @uaydonat @yieldthought @cglagovichTT
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT
-models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
+models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT
 models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
