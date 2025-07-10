@@ -220,6 +220,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         max_packet_size_bytes,
+        common::get_linearized_index(mesh_coordinate, mesh_view),
     };
 
     // fabric routing info

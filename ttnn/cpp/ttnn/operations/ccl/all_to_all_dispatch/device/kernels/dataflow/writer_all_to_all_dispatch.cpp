@@ -188,27 +188,27 @@ void kernel_main() {
                         if (is_1d_topology(topology)) {
                             dispatch_input_remote_device_1d<
                                 linearized_mesh_coord,
-                                mesh_cols,
+                                topology,
                                 mesh_rows,
-                                fabric_max_packet_size,
-                                topology>(
+                                mesh_cols,
+                                fabric_max_packet_size>(
+                                fabric_connections,
+                                unicast_packet_header,
                                 d,
-                                alignment,
-                                (int)output_page_size,
                                 input_token_read_addr,
                                 output_token_write_addr,
-                                fabric_connections,
-                                unicast_packet_header);
+                                (int)output_page_size,
+                                alignment);
                         } else {
-                            dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size>(
+                            dispatch_input_remote_device<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
+                                fabric_connections,
+                                unicast_packet_header,
                                 dest_chip_ids[d],
                                 dest_mesh_ids[d],
-                                alignment,
-                                (int)output_page_size,
                                 input_token_read_addr,
                                 output_token_write_addr,
-                                fabric_connections,
-                                unicast_packet_header);
+                                (int)output_page_size,
+                                alignment);
                         }
                     }
                 }
@@ -241,37 +241,37 @@ void kernel_main() {
                     if (is_1d_topology(topology)) {
                         dispatch_chip_uni_noc_uni_fused_sem_inc_1d<
                             linearized_mesh_coord,
-                            mesh_cols,
+                            topology,
                             mesh_rows,
-                            fabric_max_packet_size,
-                            topology>(
+                            mesh_cols,
+                            fabric_max_packet_size>(
+                            fabric_connections,
+                            metadata_packet_header,
                             d,
-                            alignment,
-                            (int)metadata_page_size,
                             token_indices_address,
                             metadata_write_addr,
                             global_noc_semaphore_address,
+                            (int)metadata_page_size,
+                            alignment,
                             1,
-                            true,
-                            fabric_connections,
-                            metadata_packet_header);
+                            true);
                     } else {
                         dispatch_chip_uni_noc_uni_fused_sem_inc<
                             src_chip_id,
-                            mesh_cols,
                             mesh_rows,
+                            mesh_cols,
                             fabric_max_packet_size>(
+                            fabric_connections,
+                            metadata_packet_header,
                             dest_chip_ids[d],
                             dest_mesh_ids[d],
                             token_indices_address,
                             metadata_write_addr,
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
+                            alignment,
                             1,
-                            true,
-                            fabric_connections,
-                            metadata_packet_header,
-                            alignment);
+                            true);
                     }
                 }
             }
@@ -292,33 +292,33 @@ void kernel_main() {
                 if (is_1d_topology(topology)) {
                     dispatch_chip_uni_noc_uni_fused_sem_inc_1d<
                         linearized_mesh_coord,
-                        mesh_cols,
+                        topology,
                         mesh_rows,
-                        fabric_max_packet_size,
-                        topology>(
+                        mesh_cols,
+                        fabric_max_packet_size>(
+                        fabric_connections,
+                        metadata_packet_header,
                         d,
-                        alignment,
-                        (int)indices_size,
                         base_indices_addr,
                         intermediate_metadata_write_addr + (dispatch_index * indices_size),
                         global_noc_semaphore_address,
+                        (int)indices_size,
+                        alignment,
                         1,
-                        true,
-                        fabric_connections,
-                        metadata_packet_header);
+                        true);
                 } else {
-                    dispatch_chip_uni_noc_uni_fused_sem_inc<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size>(
+                    dispatch_chip_uni_noc_uni_fused_sem_inc<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
+                        fabric_connections,
+                        metadata_packet_header,
                         dest_chip_ids[d],
                         dest_mesh_ids[d],
                         base_indices_addr,
                         intermediate_metadata_write_addr + (dispatch_index * indices_size),
                         global_noc_semaphore_address,
                         (int)indices_size,
+                        alignment,
                         1,
-                        true,
-                        fabric_connections,
-                        metadata_packet_header,
-                        alignment);
+                        true);
                 }
             }
         }

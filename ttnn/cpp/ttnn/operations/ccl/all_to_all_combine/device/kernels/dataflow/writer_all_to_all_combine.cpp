@@ -70,6 +70,7 @@ void kernel_main() {
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(13);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(14);  // ew_dim
     constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(16);
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -135,15 +136,15 @@ void kernel_main() {
                     noc_async_write_barrier();
                 } else {
                     const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
-                    dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
+                    dispatch_input_remote_device<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size_bytes>(
+                        fabric_connections,
+                        packet_headers[0],
                         dest_chip_id,
                         dest_mesh_id,
-                        alignment,
-                        data_size_bytes,
                         src_data_l1_ptr,
                         output_noc_addr,
-                        fabric_connections,
-                        packet_headers[0]);
+                        data_size_bytes,
+                        alignment);
                 }
                 cb_pop_front(data_cb_id,1);
             }
