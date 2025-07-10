@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 from typing import Union, Type, Tuple
 
@@ -12,7 +13,7 @@ from models.utility_functions import (
 from tt_lib.fallback_ops import fallback_ops
 
 
-def create_act_layer(name: Union[nn.Module, str], inplace=None, **kwargs):
+def create_act_layer(name: Union[LightweightModule, str], inplace=None, **kwargs):
     act_layer = get_act_layer(name)
     if act_layer is None:
         return None
@@ -25,7 +26,7 @@ def create_act_layer(name: Union[nn.Module, str], inplace=None, **kwargs):
         return act_layer(**kwargs)
 
 
-def get_act_layer(name: Union[Type[nn.Module], str] = "relu"):
+def get_act_layer(name: Union[Type[LightweightModule], str] = "relu"):
     """Activation Layer Factory
     Fetching activation layers by name with this function allows export or torch script friendly
     functions to be returned dynamically based on current config.
@@ -39,7 +40,7 @@ def get_act_layer(name: Union[Type[nn.Module], str] = "relu"):
 
 
 def create_act(act_layer, act_kwargs=None, inplace=False, apply_act=True):
-    act_layer = get_act_layer(act_layer)  # string -> nn.Module
+    act_layer = get_act_layer(act_layer)  # string -> LightweightModule
     act_kwargs = act_kwargs or {}
     if act_layer is not None and apply_act:
         if inplace:
@@ -74,9 +75,7 @@ def create_conv2d(in_channels, out_channels, kernel_size, **kwargs):
     Used extensively by EfficientNet, MobileNetv3 and related networks.
     """
     if isinstance(kernel_size, list):
-        assert (
-            "num_experts" not in kwargs
-        )  # MixNet + CondConv combo not supported currently
+        assert "num_experts" not in kwargs  # MixNet + CondConv combo not supported currently
         if "groups" in kwargs:
             groups = kwargs.pop("groups")
             if groups == in_channels:
@@ -87,9 +86,7 @@ def create_conv2d(in_channels, out_channels, kernel_size, **kwargs):
         depthwise = kwargs.pop("depthwise", False)
         # for DW out_channels must be multiple of in_channels as must have out_channels % groups == 0
         groups = in_channels if depthwise else kwargs.pop("groups", 1)
-        m = create_conv2d_pad(
-            in_channels, out_channels, kernel_size, groups=groups, **kwargs
-        )
+        m = create_conv2d_pad(in_channels, out_channels, kernel_size, groups=groups, **kwargs)
     return m
 
 
@@ -134,18 +131,10 @@ def get_padding(kernel_size: int, stride: int = 1, dilation: int = 1, **_) -> in
 
 
 def create_batchnorm(out_ch, state_dict, base_address: str, device=None):
-    weight = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.weight"], device, put_on_device=False
-    )
-    bias = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.bias"], device, put_on_device=False
-    )
-    running_mean = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.running_mean"], device, put_on_device=False
-    )
-    running_variance = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.running_var"], device, put_on_device=False
-    )
+    weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.weight"], device, put_on_device=False)
+    bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.bias"], device, put_on_device=False)
+    running_mean = torch_to_tt_tensor_rm(state_dict[f"{base_address}.running_mean"], device, put_on_device=False)
+    running_variance = torch_to_tt_tensor_rm(state_dict[f"{base_address}.running_var"], device, put_on_device=False)
     num_batches_tracked = torch_to_tt_tensor_rm(
         state_dict[f"{base_address}.num_batches_tracked"], device, put_on_device=False
     )

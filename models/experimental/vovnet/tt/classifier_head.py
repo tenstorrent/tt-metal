@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 import tt_lib.fallback_ops
 
@@ -16,7 +16,7 @@ from models.utility_functions import (
 )
 
 
-class TtClassifierHead(nn.Module):
+class TtClassifierHead(LightweightModule):
     """Classifier head w/ configurable global pooling."""
 
     def __init__(

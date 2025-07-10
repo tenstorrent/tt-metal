@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 from models.utility_functions import pad_by_zero
 
 import ttnn
 
 
-class TtT5LayerNorm(torch.nn.Module):
+class TtT5LayerNorm(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         """
         Construct a layernorm module in the T5 style. No bias and no subtraction of mean.
