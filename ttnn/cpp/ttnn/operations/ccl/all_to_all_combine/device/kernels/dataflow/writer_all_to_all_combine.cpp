@@ -182,7 +182,7 @@ void kernel_main() {
         if (device_idx == linearized_mesh_coord) {
             noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
             noc_async_atomic_barrier();
-        } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
+        } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
             const auto& dest_mesh_id = dest_mesh_ids[device_idx];
 
             packet_headers[1]->to_noc_unicast_atomic_inc(

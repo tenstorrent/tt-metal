@@ -39,24 +39,9 @@ enum class ReplicateGroup : int {
     COLS = 0,
 };
 
-template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
-bool is_configured_target(uint32_t dest_chip_id) {
-    // axis is the direction along which we are allowed to send packets
-    // axis = 1; means we are allowed to send packets in the row direction
-    // axis = 0; means we are allowed to send packets in the column direction
-    // axis = -1; means we are allowed to send packets in all directions
-    if constexpr (Axis == ReplicateGroup::COLS) {  // check if they're on the same column
-        return SrcChipId % MeshCols == dest_chip_id % MeshCols;
-    } else if constexpr (Axis == ReplicateGroup::ROWS) {  // check if they're on the same row
-        return SrcChipId / MeshCols == dest_chip_id / MeshCols;
-    } else {
-        return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
-                      // is all directions
-    }
-}
-
+// check if the target is along the same axis as the source if the axis is configured
 template <uint32_t LinearizedSrcMeshCoord, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
-bool is_configured_target_mesh(uint32_t linearized_dest_mesh_coord) {
+bool is_configured_target(uint32_t linearized_dest_mesh_coord) {
     // axis is the direction along which we are allowed to send packets
     // axis = 1; means we are allowed to send packets in the row direction
     // axis = 0; means we are allowed to send packets in the column direction
