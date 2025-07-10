@@ -182,7 +182,7 @@ class TtUNet2DConditionModel(nn.Module):
         temb_add = ttnn.to_layout(temb_add, ttnn.TILE_LAYOUT)
         temb_add = self.add_embedding.forward(temb_add)
 
-        temb = ttnn.add(temb, temb_add)
+        temb = ttnn.add(temb, temb_add, use_legacy=False)
         ttnn.deallocate(temb_add)
 
         [sample, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
