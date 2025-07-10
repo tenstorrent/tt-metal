@@ -147,9 +147,8 @@ def test_plot_binary_op_pow_looping_tensor():
 def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     if low > high:
         low, high = high, low
-    x = torch.arange(low, high, 0.1)
+    x = torch.arange(low, high, 0.1, dtype=torch.bfloat16)
 
-    # Handle scalar tensor input
     if isinstance(scalar, torch.Tensor):
         scalar = scalar.item()
 
@@ -158,23 +157,23 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     else:
         torch_out = torch_unary_op(x)
 
-    # Compute TTNN output
     ttnn_value = ttnn.from_torch(x.to(torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     if scalar is not None:
         ttnn_out = ttnn.to_torch(ttnn_op(ttnn_value, scalar))
     else:
         ttnn_out = ttnn.to_torch(ttnn_op(ttnn_value))
 
-    # Convert TTNN output to float32 for plotting
-    ttnn_out = ttnn_out.to(torch.float32)
     torch_label = f"torch.{torch_unary_op.__name__}"
     ttnn_label = f"{ttnn_op.__name__}"
     y_label = f"{torch_unary_op.__name__}(x)"
     title = f"Comparison: {torch_label} vs {ttnn_label}"
 
-    # Plot
-    plt.plot(x.numpy(), torch_out.numpy(), label=torch_label, linewidth=1)
-    plt.plot(x.numpy(), ttnn_out.numpy(), label=ttnn_label, linestyle="--", linewidth=1)
+    x_plot = x.to(torch.float32).numpy()
+    torch_out_plot = torch_out.to(torch.float32).numpy()
+    ttnn_out_plot = ttnn_out.to(torch.float32).numpy()
+
+    plt.plot(x_plot, torch_out_plot, label=torch_label, linewidth=1)
+    plt.plot(x_plot, ttnn_out_plot, label=ttnn_label, linestyle="--", linewidth=1)
     plt.title(title)
     plt.xlabel("x")
     plt.ylabel(y_label)
@@ -184,7 +183,6 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     plt.grid(True)
     plt.legend()
 
-    # Save plot
     plot_dir = "accuracy_results/plots/arange_comparison/"
     os.makedirs(plot_dir, exist_ok=True)
 
@@ -198,13 +196,12 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     print("\tfor range [-100,100]")
     print(f"\t\t\tTorch vs TTNN output graph saved to {os.path.abspath(save_path)}")
 
-    # Compute ULP Error
     ulp_spacing = util.ulp(torch_out.to(torch.bfloat16)).to(torch.float32)
-    ulp_error = torch.abs(torch_out - ttnn_out) / ulp_spacing
+    abs_diff = torch.abs(torch_out - ttnn_out)
+    ulp_error = abs_diff / ulp_spacing
 
-    # Plot ULP Error
-    plt.figure(figsize=(10, 5))
-    plt.plot(x.numpy(), ulp_error.numpy(), label="ULP Error", color="red", linewidth=1)
+    # ULP
+    plt.plot(x_plot, ulp_error.numpy(), label="ULP Error", color="red", linewidth=1)
     plt.title(f"ULP Error: {ttnn_op.__name__} vs Torch")
     plt.xlabel("x")
     plt.ylabel("ULP Error")
@@ -218,6 +215,19 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     plt.savefig(ulp_path)
     plt.close()
     print(f"\t\t\tULP error graph saved to {os.path.abspath(ulp_path)}")
+
+    # CSV
+    csv_data = {
+        "x": x_plot,
+        "ttnn_out": ttnn_out_plot,
+        "torch_out_bf16": torch_out_plot,
+        "abs_diff": abs_diff.to(torch.float32).numpy(),
+        "ulp_error": ulp_error.numpy(),
+    }
+    df = pd.DataFrame(csv_data)
+    csv_path = os.path.join(plot_dir, f"{ttnn_op.__name__}_bf16__{scalar_str}_results.csv")
+    df.to_csv(csv_path, index=False)
+    print(f"\t\t\tResults CSV saved to {os.path.abspath(csv_path)}")
 
 
 def plot_torch_vs_ttnn_outputs_full_range(
