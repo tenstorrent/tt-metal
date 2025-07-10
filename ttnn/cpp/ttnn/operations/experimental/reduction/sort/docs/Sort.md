@@ -65,7 +65,7 @@ std::vector<Tensor> sorted_tensors = ttnn::sort(queue_id, input_tensor, dim, des
 ### Usage Limitations
 
 - Supported index tensor types: `uint32`, `uint16`,
-- Supported value tensor types: `float32`, `bfloat32`, `bfloat16`,
+- Supported value tensor types: `uint16`, `bfloat16`,
 - `stable=True` is not supported in this implementation.
 
 ## Strategy Comparison Overview
