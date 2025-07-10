@@ -12,16 +12,11 @@
 #include <cstdio>
 #include <condition_variable>
 #include <filesystem>
-#include <functional>
-#include <initializer_list>
 #include <map>
 #include <mutex>
 #include <set>
 #include <stdexcept>
-#include <string_view>
 #include <thread>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "assert.hpp"
@@ -38,7 +33,6 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
-#include "utils.hpp"
 #include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
@@ -62,15 +56,15 @@ static std::mutex watch_mutex;
 static std::condition_variable enabled_cv;
 
 static std::map<chip_id_t, watcher::WatcherDeviceReader> devices;
-static string logfile_path = "generated/watcher/";
-static string logfile_name = "watcher.log";
+static std::string logfile_path = "generated/watcher/";
+static std::string logfile_name = "watcher.log";
 static FILE* logfile = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
-static std::vector<string> kernel_names;
+static std::vector<std::string> kernel_names;
 static FILE* kernel_file = nullptr;
-static string kernel_file_name = "kernel_names.txt";
+static std::string kernel_file_name = "kernel_names.txt";
 static FILE* kernel_elf_file = nullptr;
-static string kernel_elf_file_name = "kernel_elf_paths.txt";
+static std::string kernel_elf_file_name = "kernel_elf_paths.txt";
 
 // Flag to signal whether the watcher server has been killed due to a thrown exception.
 static std::atomic<bool> watcher_killed_due_to_error = false;
@@ -103,7 +97,7 @@ void create_log_file() {
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + watcher::logfile_path);
     std::filesystem::create_directories(output_dir);
-    string fname = output_dir.string() + watcher::logfile_name;
+    std::string fname = output_dir.string() + watcher::logfile_name;
     if (rtoptions.get_watcher_skip_logging()) {
         fname = "/dev/null";
     }
@@ -142,7 +136,7 @@ void create_kernel_file() {
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + watcher::logfile_path);
     std::filesystem::create_directories(output_dir);
-    string fname = output_dir.string() + watcher::kernel_file_name;
+    std::string fname = output_dir.string() + watcher::kernel_file_name;
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         TT_THROW("Watcher failed to create kernel name file\n");
     }
@@ -159,7 +153,7 @@ void create_kernel_elf_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_root_dir() + watcher::logfile_path);
     std::filesystem::create_directories(output_dir);
-    string fname = output_dir.string() + watcher::kernel_elf_file_name;
+    std::string fname = output_dir.string() + watcher::kernel_elf_file_name;
     if ((f = fopen(fname.c_str(), "w")) == nullptr) {
         TT_THROW("Watcher failed to create kernel ELF file\n");
     }
@@ -182,7 +176,7 @@ static void watcher_loop(std::chrono::microseconds sleep_duration) {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     // Print to the user which features are disabled via env vars.
-    string disabled_features = "";
+    std::string disabled_features = "";
     auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
         for (auto& feature : disabled_features_set) {
@@ -285,7 +279,6 @@ void watcher_init(chip_id_t device_id) {
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.
     std::vector<uint32_t> debug_ring_buf_init_val(sizeof(debug_ring_buf_msg_t) / sizeof(uint32_t), 0);
-    debug_ring_buf_msg_t* ring_buf_data = reinterpret_cast<debug_ring_buf_msg_t*>(&(debug_ring_buf_init_val[0]));
     data->debug_ring_buf.current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
     data->debug_ring_buf.wrapped = 0;
 
@@ -502,7 +495,7 @@ void watcher_detach(chip_id_t device_id) {
     }
 }
 
-int watcher_register_kernel(const string& name) {
+int watcher_register_kernel(const std::string& name) {
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
     if (!watcher::kernel_file) {
@@ -535,7 +528,7 @@ void watcher_server_set_error_flag(bool val) { watcher::watcher_killed_due_to_er
 
 void watcher_clear_log() { watcher::create_log_file(); }
 
-string watcher_get_log_file_name() {
+std::string watcher_get_log_file_name() {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + watcher::logfile_path +
            watcher::logfile_name;
 }
@@ -552,7 +545,7 @@ void watcher_dump() {
 void watcher_read_kernel_ids_from_file() {
     std::filesystem::path output_dir(
         tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + watcher::logfile_path);
-    string fname = output_dir.string() + watcher::kernel_file_name;
+    std::string fname = output_dir.string() + watcher::kernel_file_name;
     FILE* f;
     if ((f = fopen(fname.c_str(), "r")) == nullptr) {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
@@ -561,7 +554,7 @@ void watcher_read_kernel_ids_from_file() {
     char* line = nullptr;
     size_t len;
     while (getline(&line, &len, f) != -1) {
-        string s(line);
+        std::string s(line);
         s = s.substr(0, s.length() - 1);            // Strip newline
         int k_id = stoi(s.substr(0, s.find(":")));  // Format is {k_id}: {kernel}
         watcher::kernel_names.push_back(s.substr(s.find(":") + 2));

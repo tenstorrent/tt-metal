@@ -20,10 +20,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
-#include <string_view>
-#include <thread>
 #include <type_traits>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -625,11 +622,8 @@ void read_pages_to_host_helper(
 }
 
 void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
-    TensorMemoryLayout buffer_layout = buffer.buffer_layout();
-
     auto device = buffer.device();
 
-    auto total_pages = buffer.num_dev_pages();
     uint32_t page_size = buffer.page_size();
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
@@ -998,7 +992,7 @@ KernelHandle CreateDataMovementKernel(
         data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
-    string kernel_name;
+    std::string kernel_name;
     if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
         kernel_name = kernel_src.source_;
     } else {
@@ -1037,7 +1031,6 @@ KernelHandle CreateEthernetKernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_range_set,
     const EthernetConfig& config) {
-    KernelHandle kernel_handle;
     HalProgrammableCoreType eth_core_type =
         config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
     const DataMovementConfigStatus& data_movement_config_status =

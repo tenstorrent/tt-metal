@@ -295,14 +295,12 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 }
 
 class EarlyReturnFixture : public DispatchFixture {
-protected:
-    static void SetUpTestSuite() {
+    void SetUp() override {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
-        DispatchFixture::SetUpTestSuite();
+        DispatchFixture::SetUp();
     }
-
-    static void TearDownTestSuite() {
-        DispatchFixture::TearDownTestSuite();
+    void TearDown() override {
+        DispatchFixture::TearDown();
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
     }
 };
@@ -319,6 +317,34 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
         this->RunProgram(device, program);
+    }
+}
+
+TEST_F(DispatchFixture, TensixCircularBufferInitFunction) {
+    for (auto& device : devices_) {
+        for (bool use_assembly : {true, false}) {
+            for (uint32_t mask : {0xffffffffu, 0xaaaaaaaau}) {
+                CoreCoord core{0, 0};
+                Program program;
+                std::map<std::string, std::string> defines;
+                if (!use_assembly) {
+                    defines["DISABLE_CB_ASSEMBLY"] = "1";
+                }
+                KernelHandle kernel = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_init.cpp",
+                    core,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .defines = defines,
+                        .opt_level = KernelBuildOptLevel::O2});
+                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                std::vector<uint32_t> runtime_args{mask, l1_unreserved_base};
+                SetRuntimeArgs(program, kernel, core, runtime_args);
+                this->RunProgram(device, program);
+            }
+        }
     }
 }
 
