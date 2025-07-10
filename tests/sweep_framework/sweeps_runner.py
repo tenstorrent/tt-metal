@@ -134,7 +134,7 @@ def get_timeout(test_module):
     return timeout
 
 
-def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
+def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info):
     results = []
     input_queue = Queue()
     output_queue = Queue()
@@ -147,7 +147,9 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
         p = Process(target=run, args=(test_module, input_queue, output_queue))
         p.start()
 
-    for test_vector in test_vectors:
+    for i, test_vector in enumerate(test_vectors):
+        vector_id = header_info[i].get("vector_id", "N/A")
+        logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Vector ID='{vector_id}'")
         if DRY_RUN:
             print(f"Would have executed test for vector {test_vector}")
             continue
@@ -406,6 +408,7 @@ def initialize_postgres_database():
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
             name VARCHAR(255) NOT NULL,
+            device VARCHAR(255),
             start_time_ts TIMESTAMP NOT NULL,
             end_time_ts TIMESTAMP,
             status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
@@ -419,7 +422,6 @@ def initialize_postgres_database():
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
             name VARCHAR(255) NOT NULL,
-            device VARCHAR(255),
             host VARCHAR(255) NOT NULL,
             start_time_ts TIMESTAMP NOT NULL,
             end_time_ts TIMESTAMP,
@@ -448,6 +450,7 @@ def initialize_postgres_database():
 
         CREATE INDEX IF NOT EXISTS idx_tests_run_id ON tests(run_id);
         CREATE INDEX IF NOT EXISTS idx_tests_name ON tests(name);
+        CREATE INDEX IF NOT EXISTS idx_tests_device ON tests(device);
         CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);
         CREATE INDEX IF NOT EXISTS idx_tests_start_time_ts ON tests(start_time_ts);
 
@@ -556,22 +559,23 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
         cursor = conn.cursor()
         sweep_name = header_info[0]["sweep_name"]
         print("sweep_name: ", sweep_name)
+        device_name = test_results[0].get("device", None) if test_results else None
 
         test_insert_query = """
-        INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO tests (run_id, name, device, start_time_ts, end_time_ts, status)
+        VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING id
         """
-        cursor.execute(test_insert_query, (run_id, sweep_name, test_start_time, test_end_time, "success"))
+        cursor.execute(test_insert_query, (run_id, sweep_name, device_name, test_start_time, test_end_time, "success"))
         test_id = cursor.fetchone()[0]
         # Create testcase record
         testcase_insert_query = """
         INSERT INTO sweep_testcases (
-            test_id, name, device, host, start_time_ts, end_time_ts,
+            test_id, name, host, start_time_ts, end_time_ts,
             status, suite_name, test_vector, message, exception,
             e2e_perf, device_perf, error_signature
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         """
         test_statuses = []
@@ -586,7 +590,6 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
             testcase_values = (
                 test_id,
                 testcase_name,
-                result.get("device", None),
                 result.get("host", None),
                 result.get("start_time_ts", None),
                 result.get("end_time_ts", None),
@@ -706,7 +709,9 @@ def run_multiple_modules_json(module_names, suite_name):
                         test_module = importlib.import_module("sweeps." + module_name)
                         header_info, test_vectors = sanitize_inputs(vectors)
                         logger.info(f"Executing tests for module {module_name}, suite {suite}")
-                        results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                        results = execute_suite(
+                            test_module, test_vectors, pbar_manager, suite, module_name, header_info
+                        )
                         test_end_time = dt.datetime.now()
                         logger.info(f"Completed tests for module {module_name}, suite {suite}.")
                         logger.info(f"Tests Executed - {len(results)}")
@@ -764,12 +769,12 @@ def run_sweeps_json(module_names, suite_name):
                 test_module = importlib.import_module("sweeps." + module_name)
                 header_info, test_vectors = sanitize_inputs(vectors)
                 logger.info(f"Executing tests for module {module_name}, suite {suite}")
-                results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                results = execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
                 logger.info(f"Tests Executed - {len(results)}")
                 if DATABASE_BACKEND == "postgres":
                     logger.info("Dumping results to PostgreSQL database.")
-                    export_test_results_postgres(header_info, results)
+                    export_test_results_postgres(header_info, results, dt.datetime.now(), dt.datetime.now())
                 else:
                     logger.info("Dumping results to JSON file.")
                     export_test_results_json(header_info, results)
@@ -778,7 +783,7 @@ def run_sweeps_json(module_names, suite_name):
         run_multiple_modules_json(module_names, suite_name)
 
 
-def run_sweeps(module_name, suite_name, vector_id):
+def run_sweeps(module_name, suite_name, vector_id, skip_modules=None):
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     pbar_manager = enlighten.get_manager()
 
@@ -787,6 +792,9 @@ def run_sweeps(module_name, suite_name, vector_id):
     if not module_name:
         for file in sorted(sweeps_path.glob("**/*.py")):
             sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
+            if skip_modules and sweep_name in skip_modules:
+                logger.info(f"Skipping module {sweep_name} due to --skip-modules flag.")
+                continue
             test_module = importlib.import_module("sweeps." + sweep_name)
             vector_index = VECTOR_INDEX_PREFIX + sweep_name
             logger.info(f"Executing tests for module {sweep_name}...")
@@ -827,11 +835,11 @@ def run_sweeps(module_name, suite_name, vector_id):
                 for suite in suites:
                     logger.info(f"Executing tests for module {sweep_name}, suite {suite}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
-                    results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                    results = execute_suite(test_module, test_vectors, pbar_manager, suite, sweep_name, header_info)
                     logger.info(f"Completed tests for module {sweep_name}, suite {suite}.")
                     logger.info(f"Tests Executed - {len(results)}")
                     if DATABASE_BACKEND == "postgres":
-                        export_test_results_postgres(header_info, results)
+                        export_test_results_postgres(header_info, results, dt.datetime.now(), dt.datetime.now())
                     else:
                         export_test_results(header_info, results)
                     module_pbar.update()
@@ -855,7 +863,7 @@ def run_sweeps(module_name, suite_name, vector_id):
             test_vector = client.get(index=vector_index, id=vector_id)["_source"]
             test_vector["vector_id"] = vector_id
             header_info, test_vectors = sanitize_inputs([test_vector])
-            results = execute_suite(test_module, test_vectors, pbar_manager, "Single Vector")
+            results = execute_suite(test_module, test_vectors, pbar_manager, "Single Vector", module_name, header_info)
             export_test_results(header_info, results)
         else:
             try:
@@ -876,21 +884,25 @@ def run_sweeps(module_name, suite_name, vector_id):
                     for suite in suites:
                         logger.info(f"Executing tests for module {module_name}, suite {suite}.")
                         header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
-                        results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                        results = execute_suite(
+                            test_module, test_vectors, pbar_manager, suite, module_name, header_info
+                        )
                         logger.info(f"Completed tests for module {module_name}, suite {suite}.")
                         logger.info(f"Tests Executed - {len(results)}")
                         if DATABASE_BACKEND == "postgres":
-                            export_test_results_postgres(header_info, results)
+                            export_test_results_postgres(header_info, results, dt.datetime.now(), dt.datetime.now())
                         else:
                             export_test_results(header_info, results)
                 else:
                     logger.info(f"Executing tests for module {module_name}, suite {suite_name}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite_name)
-                    results = execute_suite(test_module, test_vectors, pbar_manager, suite_name)
+                    results = execute_suite(
+                        test_module, test_vectors, pbar_manager, suite_name, module_name, header_info
+                    )
                     logger.info(f"Completed tests for module {module_name}, suite {suite_name}.")
                     logger.info(f"Tests Executed - {len(results)}")
                     if DATABASE_BACKEND == "postgres":
-                        export_test_results_postgres(header_info, results)
+                        export_test_results_postgres(header_info, results, dt.datetime.now(), dt.datetime.now())
                     else:
                         export_test_results(header_info, results)
             except Exception as e:
@@ -990,7 +1002,7 @@ def map_test_status_to_db_status(test_status):
     return status_mapping.get(test_status, "error")
 
 
-def export_test_results_postgres(header_info, results, run_start_time, run_end_time, test_start_times, test_end_times):
+def export_test_results_postgres(header_info, results, run_start_time, run_end_time):
     """Export test results to PostgreSQL database"""
     if len(results) == 0:
         return
@@ -1045,28 +1057,27 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
         test_index = 0  # Track which test we're processing
 
         # Process each test module
-        for sweep_name, test_results in test_groups.items():
+        for sweep_name, test_results_group in test_groups.items():
             # Use the corresponding test start/end time from the lists
-            if test_index < len(test_start_times):
-                test_start_time = test_start_times[test_index]
-            else:
-                test_start_time = dt.datetime.now()  # Fallback
-
-            if test_index < len(test_end_times):
-                test_end_time = test_end_times[test_index]
-            else:
-                test_end_time = dt.datetime.now()  # Fallback
+            test_start_time = (
+                min(r.get("start_time_ts") for _, r in test_results_group) if test_results_group else dt.datetime.now()
+            )
+            test_end_time = (
+                max(r.get("end_time_ts") for _, r in test_results_group) if test_results_group else dt.datetime.now()
+            )
+            device_name = test_results_group[0][1].get("device") if test_results_group else None
 
             test_insert_query = """
             INSERT INTO tests (
-                run_id, name, start_time_ts, end_time_ts, status
-            ) VALUES (%s, %s, %s, %s, %s)
+                run_id, name, device, start_time_ts, end_time_ts, status
+            ) VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """
 
             test_values = (
                 run_id,
                 sweep_name,
+                device_name,
                 test_start_time,
                 test_end_time,
                 "success",  # Will be updated after processing all testcases
@@ -1078,7 +1089,7 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
             test_statuses = []
 
             # Process each test case within this test module
-            for idx, result in test_results:
+            for idx, result in test_results_group:
                 header = header_info[idx]
 
                 # Map test status to database status
@@ -1266,6 +1277,12 @@ if __name__ == "__main__":
         help="PostgreSQL environment configuration. Available options: ['dev', 'prod']",
     )
 
+    parser.add_argument(
+        "--skip-modules",
+        required=False,
+        help="Comma-separated list of modules to skip when running all modules.",
+    )
+
     args = parser.parse_args(sys.argv[1:])
     if not args.module_name and args.vector_id:
         parser.print_help()
@@ -1329,6 +1346,14 @@ if __name__ == "__main__":
     else:
         module_names = None
 
+    skip_modules_set = set()
+    if args.skip_modules:
+        if args.module_name:
+            logger.warning("--skip-modules is only supported when running all modules. Ignoring this flag.")
+        else:
+            skip_modules_set = {name.strip() for name in args.skip_modules.split(",")}
+            logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
+
     # Determine which execution path to take
     if READ_FILE:
         # Using explicit read-file argument
@@ -1338,15 +1363,20 @@ if __name__ == "__main__":
         run_sweeps_json(module_names, args.suite_name)
     elif DATABASE_BACKEND == "postgres" and not args.module_name:
         # Using PostgreSQL with no module names specified - use automatic file discovery
-        module_names = list(get_all_modules())
-        logger.info("Running all modules:")
+        all_module_names = list(get_all_modules())
+        if skip_modules_set:
+            module_names = [name for name in all_module_names if name not in skip_modules_set]
+        else:
+            module_names = all_module_names
+
+        logger.info("Running modules:")
         for module_name in module_names:
             logger.info(f"  {module_name}")
         run_sweeps_json(module_names, args.suite_name)
     else:
         # Exporting results to Elasticsearch
         logger.info(f"Exporting results to Elasticsearch")
-        run_sweeps(module_names, args.suite_name, args.vector_id)
+        run_sweeps(module_names, args.suite_name, args.vector_id, skip_modules_set)
 
     if args.watcher:
         disable_watcher()
