@@ -499,6 +499,10 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
 void MeshDevice::reshape(const MeshShape& new_shape) {
     TT_FATAL(
+        this->shape() == this->local_shape(),
+        "Cannot reshape a mesh that is not the same shape as the local shape");
+
+    TT_FATAL(
         new_shape.mesh_size() == this->num_devices(),
         "New shape must have the same number of devices as current shape");
 
