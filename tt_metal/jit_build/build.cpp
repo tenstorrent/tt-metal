@@ -210,6 +210,9 @@ void JitBuildEnv::init(
     if (rtoptions.get_watcher_noinline()) {
         this->defines_ += "-DWATCHER_NOINLINE ";
     }
+    if (rtoptions.get_watcher_noc_sanitize_linked_transaction()) {
+        this->defines_ += "-DWATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION ";
+    }
     for (auto& feature : rtoptions.get_watcher_disabled_features()) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }
