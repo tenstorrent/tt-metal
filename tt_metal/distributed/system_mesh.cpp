@@ -97,7 +97,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
     const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
     std::vector<chip_id_t> physical_device_ids;
 
-    const MeshShape& system_shape = this->get_shape();
+    const MeshShape& system_shape = this->shape();
     TT_FATAL(
         shape.mesh_size() <= system_shape.mesh_size(),
         "Requested mesh is too big: {}, SystemMesh {}",
