@@ -769,6 +769,10 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
 
 void FDMeshCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
+    for (auto device : mesh_device_->get_devices()) {
+        TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+    }
+    auto& sysmem_manager = this->reference_sysmem_manager();
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
