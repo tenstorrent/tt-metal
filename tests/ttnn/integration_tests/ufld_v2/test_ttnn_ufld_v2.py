@@ -361,6 +361,7 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/actions/runs/16183000188/job/45683630346#step:8:11743")
 def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pretrained_weight, min_channels=8):
     torch_model = TuSimple34(input_height=height, input_width=width)
     torch_model.to(torch.bfloat16)

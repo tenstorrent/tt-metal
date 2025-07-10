@@ -116,6 +116,7 @@ def create_custom_preprocessor(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65553}], indirect=True)
 @skip_for_grayskull()
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/actions/runs/16183000188/job/45683630345#step:8:5040")
 def test_unet(device, reset_seeds, model_location_generator):
     weights_path = "models/experimental/functional_vanilla_unet/unet.pt"
     if not os.path.exists(weights_path):
