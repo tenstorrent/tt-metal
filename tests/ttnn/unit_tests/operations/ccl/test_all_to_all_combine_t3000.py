@@ -305,7 +305,12 @@ def trace_all_to_all_combine(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "trace_region_size": 500000,
-        }
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 500000,
+        },
     ],
     indirect=True,
 )
@@ -511,7 +516,12 @@ def check_results(test_tensor, ref_tensor, data_map):
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "trace_region_size": 500000,
-        }
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 500000,
+        },
     ],
     indirect=True,
 )
@@ -577,7 +587,12 @@ def test_all_to_all_combine_no_trace(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "trace_region_size": 500000,
-        }
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 500000,
+        },
     ],
     indirect=True,
 )

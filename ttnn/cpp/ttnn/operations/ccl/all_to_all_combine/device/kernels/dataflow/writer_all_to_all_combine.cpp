@@ -201,7 +201,7 @@ void kernel_main() {
             } else {
                 uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
                 fabric_set_unicast_route(
-                    const_cast<LowLatencyMeshPacketHeader*>(packet_headers[1]),
+                    (LowLatencyMeshPacketHeader*)(packet_headers[1]),
                     static_cast<eth_chan_directions>(fabric_connections[route].direction),
                     src_chip_id,
                     dest_chip_id,
