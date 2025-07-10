@@ -25,7 +25,11 @@ on:
 jobs:
   ttnn:
     name: didt tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     container:
       image: ${{ inputs.docker-image }}
       env:
