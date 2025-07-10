@@ -283,3 +283,25 @@ def test_sort_indices(shape, dim, descending, device):
 
     assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
     assert torch.allclose(torch_sort_indices.to(torch.int64), torch_converted_indices)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending, input_dtype, prealocated_dtype",
+    [
+        ([32, 64], -1, False, ttnn.bfloat16, ttnn.uint16),
+        ([32, 64], -1, False, ttnn.uint16, ttnn.uint32),
+        ([32, 64], -1, False, ttnn.uint32, ttnn.uint16),
+    ],
+)
+def test_sort_raise_datatype_error(shape, dim, descending, input_dtype, prealocated_dtype, device):
+    torch.manual_seed(0)
+
+    input = torch.randn(shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(input, input_dtype, layout=ttnn.Layout.TILE, device=device)
+
+    ttnn_sort_values = ttnn.zeros_like(ttnn_input, dtype=prealocated_dtype)
+    ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+
+    with pytest.raises(Exception):
+        ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
