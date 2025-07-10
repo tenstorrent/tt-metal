@@ -8,6 +8,7 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
+from models.utility_functions import skip_for_blackhole
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_links):
@@ -208,7 +209,6 @@ def run_reduce_scatter_impl(
     t3k_mesh_device.clear_loaded_sub_device_manager()
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
@@ -298,7 +298,6 @@ def test_reduce_scatter_async(
     )
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, rs_input_dtype",
@@ -440,7 +439,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
     )
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, rs_input_dtype",
@@ -553,7 +551,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     )
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, layout, rs_input_dtype",
