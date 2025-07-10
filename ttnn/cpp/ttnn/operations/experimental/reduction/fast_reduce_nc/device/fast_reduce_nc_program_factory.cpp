@@ -29,22 +29,22 @@ bool is_tensor_divisible_by_shard(const ttnn::Shape& tensor_shape, const ttnn::S
     }
     return true;
 }
-std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t> extract_and_scale_spatial_dims(
-    const ttnn::Shape& shape, std::uint32_t dim) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
+    const ttnn::Shape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
-    std::uint32_t Wt = shape[-1] / TILE_WIDTH;
-    std::uint32_t Ht = shape[-2] / TILE_HEIGHT;
+    uint32_t Wt = shape[-1] / TILE_WIDTH;
+    uint32_t Ht = shape[-2] / TILE_HEIGHT;
 
-    std::uint32_t reduce_dim = shape[dim];
-    std::uint32_t inner_dims_product = 1;
+    uint32_t reduce_dim = shape[dim];
+    uint32_t inner_dims_product = 1;
     for (auto i = dim + 1; i < rank - 2; ++i) {
         inner_dims_product *= shape[i];
     }
 
-    std::uint32_t inner_tile_size = inner_dims_product * Ht * Wt;
-    std::uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
+    uint32_t inner_tile_size = inner_dims_product * Ht * Wt;
+    uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
 
     return {Wt, Ht, inner_tile_size, reduce_tile_size};
 }
@@ -72,14 +72,14 @@ operation::ProgramWithCallbacks reduce_nc_factory(
 
     const auto& input_shape = input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
-        extract_and_scale_spatial_dims(input_shape, static_cast<std::uint32_t>(dim));
+        extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];
     const auto num_output_tiles = output.physical_volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
     // Helps with locality and increases work unit for better performance.
-    std::uint32_t input_granularity;
+    uint32_t input_granularity;
     for (input_granularity = 8; input_granularity > 1; --input_granularity) {
         if (num_reduce_input_tile % input_granularity == 0) {
             break;
@@ -93,31 +93,30 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     const auto num_cores_x = grid.x;
     const auto num_cores_y = grid.y;
 
-    const std::uint32_t in0_t = input_granularity * 2;  // input
-    const std::uint32_t in1_t = 1;                      // zero
-    const std::uint32_t intermed0_t = 1;                // accumulated sum
-    const std::uint32_t out0_t = 2;                     // output
-    std::uint32_t shard_factor = 1;
+    const uint32_t in0_t = input_granularity * 2;  // input
+    const uint32_t in1_t = 1;                      // zero
+    const uint32_t intermed0_t = 1;                // accumulated sum
+    const uint32_t out0_t = 2;                     // output
+    uint32_t shard_factor = 1;
 
     // When dim=0, nd sharded, tensor shape divisible by shard, and number of
     // shards is larger than core count, divide the work by shards.
-    std::uint32_t input_shard_size = 1;
-    std::uint32_t output_shard_size = 1;
+    uint32_t input_shard_size = 1;
+    uint32_t output_shard_size = 1;
     auto input_tile = input.tensor_spec().tile().get_tile_shape();
     auto output_tile = output.tensor_spec().tile().get_tile_shape();
     bool nd_sharded = input.is_sharded() && input.nd_shard_spec().has_value() && output.nd_shard_spec().has_value() &&
                       input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
-    std::uint32_t units_to_divide = num_output_tiles;
+    uint32_t units_to_divide = num_output_tiles;
     bool divide_by_shards = false;
     if (nd_sharded && dim == 0) {
-        std::uint32_t tile_size = input_tile[0] * input_tile[1];
+        uint32_t tile_size = input_tile[0] * input_tile[1];
         NdShardSpec input_nd_shard_spec = input.nd_shard_spec().value();
         const Shape& input_shard_shape = input_nd_shard_spec.shard_shape;
         if (is_tensor_divisible_by_shard(input_shape, input_shard_shape)) {
-            NdShardSpec output_nd_shard_spec = output.nd_shard_spec().value();
-            std::uint32_t output_shard_volume = output_nd_shard_spec.shard_shape.volume();
-            output_shard_size = output_shard_volume / tile_size;
-            std::uint32_t num_output_shards = inner_tile_size / output_shard_size;
+            const auto& dspec = *output.buffer()->buffer_distribution_spec();
+            uint32_t num_output_shards = dspec.num_shards();
+            output_shard_size = dspec.get_shard_shape_in_pages().volume();
             bool more_shards_than_cores = num_output_shards > (num_cores_x * num_cores_y);
             if (more_shards_than_cores) {
                 divide_by_shards = true;
@@ -167,17 +166,10 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<std::uint32_t> reader_compile_time_args = {
-        static_cast<std::uint32_t>(input.memory_config().buffer_type() == BufferType::DRAM),
-        input_granularity,
-        shard_factor,
-        num_cores_to_be_used};
+    std::vector<uint32_t> reader_compile_time_args = {input_granularity, shard_factor, num_cores_to_be_used};
     TensorAccessorArgs(*input.buffer()).append_args(reader_compile_time_args);
 
-    std::vector<std::uint32_t> writer_compile_time_args = {
-        static_cast<std::uint32_t>(output.memory_config().buffer_type() == BufferType::DRAM),
-        shard_factor,
-        num_cores_to_be_used};
+    std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
     TensorAccessorArgs(*output.buffer()).append_args(writer_compile_time_args);
 
     const auto reader_kernel_file =
@@ -194,7 +186,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<std::uint32_t> compute_args_group_1 = {
+    const std::vector<uint32_t> compute_args_group_1 = {
         num_cols_per_core_group_1, num_reduce_input_tile, input_granularity};
     std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
@@ -215,7 +207,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
-        const std::vector<std::uint32_t> compute_args_group_2 = {
+        const std::vector<uint32_t> compute_args_group_2 = {
             num_cols_per_core_group_2, num_reduce_input_tile, input_granularity};
         compute_kernel_2_id = tt_metal::CreateKernel(
             program,
@@ -255,10 +247,10 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     // It is taken into account in the num_cols_per_core_group variables and
     // the tile_offset is incremented by it for the reader to adjust it's
     // reading pattern.
-    for (std::uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
+    for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
-        std::uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -275,7 +267,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
              num_reduce_input_tile,
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset,
-             static_cast<std::uint32_t>(dim),
+             static_cast<uint32_t>(dim),
              reduce_tile_size,
              inner_tile_size});
 
@@ -300,7 +292,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
         const auto* output_buffer = output_tensors.at(0).buffer();
         auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-        for (std::uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
             auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
             reader_kernel_args[0] = input_buffer->address();

@@ -11,12 +11,11 @@ inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_s
 
 void kernel_main() {
     // compile-time args
-    constexpr bool input_is_dram = (get_compile_time_arg_val(0) == 1);
-    constexpr uint32_t input_granularity = get_compile_time_arg_val(1);
-    constexpr uint32_t shard_factor = get_compile_time_arg_val(2);
-    constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(3);
+    constexpr uint32_t input_granularity = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_factor = get_compile_time_arg_val(1);
+    constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(2);
     constexpr uint32_t outer_id_increment = shard_factor * num_cores_to_be_used;
-    constexpr auto tensor_args = make_tensor_accessor_args<4>();
+    constexpr auto tensor_args = make_tensor_accessor_args<3>();
 
     // runtime args
     const auto input_addr = get_arg_val<uint32_t>(0);

@@ -6,11 +6,10 @@
 
 void kernel_main() {
     // compile-time args
-    constexpr bool output_is_dram = (get_compile_time_arg_val(0) == 1);
-    constexpr uint32_t shard_factor = get_compile_time_arg_val(1);
-    constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(2);
+    constexpr uint32_t shard_factor = get_compile_time_arg_val(0);
+    constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(1);
     constexpr uint32_t outer_id_increment = shard_factor * num_cores_to_be_used;
-    constexpr auto tensor_args = make_tensor_accessor_args<3>();
+    constexpr auto tensor_args = make_tensor_accessor_args<2>();
 
     // runtime args
     const auto output_addr = get_arg_val<uint32_t>(0);
