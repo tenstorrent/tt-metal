@@ -195,7 +195,7 @@ def run_all_gather_replicate_impl(
         memory_config=aggregated_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
-    breakpoint()
+    # breakpoint()
     # All Gather Replicate Golden
     output_tensor_goldens_list = []
     for i in range(num_iters):

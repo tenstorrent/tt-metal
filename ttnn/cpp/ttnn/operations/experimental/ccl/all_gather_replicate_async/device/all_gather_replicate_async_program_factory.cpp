@@ -81,6 +81,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     // Cannot have CCL workers on the same cores as the worker_receiver (for now!)
     auto sub_device_core_range_set = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
+    auto bbox = sub_device_core_range_set.bounding_box();
+    CoreRangeSet bbox_crs(bbox);
+    auto aggregated_tensor_cores = aggregated_tensor.memory_config().shard_spec()->grid;
+    log_info(tt::LogOp, "aggregated_tensor_cores: {}", aggregated_tensor_cores);
+    log_info(tt::LogOp, "bbox: {}", bbox);
+    log_info(tt::LogOp, "bbox_crs: {}", bbox_crs);
     log_info(
         tt::LogOp, "sub_device_core_range_set: {}", corerange_to_cores(sub_device_core_range_set, std::nullopt, true));
     auto intermediate_tensor_cores = intermediate_tensor.memory_config().shard_spec()->grid;
@@ -97,6 +103,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     const auto intermediate_tensor_shard_shape = intermediate_tensor.memory_config().shard_spec()->shape;
     const auto intermediate_tensor_shard_num_pages =
         intermediate_tensor_shard_shape[0] * intermediate_tensor_shard_shape[1] / TILE_HW;
+    const auto intermediate_tensor_page_size = intermediate_tensor.buffer()->page_size();
+
+    log_info(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
+    log_info(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
+    log_info(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
+    log_info(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
+    log_info(tt::LogOp, "intermediate_tensor_cores: {}", intermediate_tensor_cores);
+    log_info(tt::LogOp, "intermediate_tensor_shard_shape: {}", intermediate_tensor_shard_shape);
+    log_info(tt::LogOp, "intermediate_tensor_shard_num_pages: {}", intermediate_tensor_shard_num_pages);
+    log_info(tt::LogOp, "intermediate_tensor_page_size: {}", intermediate_tensor_page_size);
 
     log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
@@ -119,6 +135,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
     tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+
+    uint32_t inter_cb_index = tt::CB::c_in2;
+    tt::tt_metal::CircularBufferConfig cb_inter_config =
+        tt::tt_metal::CircularBufferConfig(
+            intermediate_tensor_shard_num_pages * intermediate_tensor_page_size, {{inter_cb_index, df}})
+            .set_page_size(inter_cb_index, intermediate_tensor_page_size)
+            .set_globally_allocated_address(*intermediate_tensor.buffer());
+    tt::tt_metal::CBHandle cb_inter_workers = CreateCircularBuffer(program, intermediate_tensor_cores, cb_inter_config);
+
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
@@ -178,6 +203,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     auto receiver_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     receiver_kernel_config.compile_args = {
         num_links,  // sem_wait_val
+        inter_cb_index,
     };
     auto worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -192,6 +218,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         {
             semaphore.address(),  // sem_address
             0,  // core id, corresponds to the id of which device it expect data from, will be reset later
+            aggregated_tensor.buffer()->address(),
         });
     // Kernel Runtime Args
 

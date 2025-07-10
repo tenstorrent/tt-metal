@@ -13,13 +13,16 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
     constexpr uint32_t sem_wait_val = get_compile_time_arg_val(0);
+    constexpr uint32_t inter_cb_index = get_compile_time_arg_val(1);
     DPRINT << "sem_wait_val: " << sem_wait_val << ENDL();
+    DPRINT << "inter_cb_index: " << inter_cb_index << ENDL();
 
     // runtime args
     size_t arg_idx = 0;
     const uint32_t signal_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_id = get_arg_val<uint32_t>(
         arg_idx++);  // core id, corresponds to the id of which device it expect data from, will be reset later
+    const uint32_t aggregated_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
     DPRINT << "core_id: " << core_id << ENDL();
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
