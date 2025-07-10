@@ -45,7 +45,7 @@ def test_gather_general(input_shape, index_shape, dim, device):
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
-    ttnn_gather = ttnn.experimental.gather(ttnn_input, dim, index=ttnn_index)
+    ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
@@ -75,7 +75,7 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
     ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
     ttnn_output = ttnn.from_torch(output, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
-    ttnn.experimental.gather(ttnn_input, dim, index=ttnn_index, out=ttnn_output)
+    ttnn.gather(ttnn_input, dim, index=ttnn_index, out=ttnn_output)
 
     assert ttnn_output.shape == index.shape
 
@@ -104,7 +104,7 @@ def test_gather_multicore_cases(input_shape, index_shape, dim, device):
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
-    ttnn_gather = ttnn.experimental.gather(ttnn_input, dim, index=ttnn_index)
+    ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
@@ -133,7 +133,7 @@ def test_gather_datatype_cases(
     ttnn_input = ttnn.from_torch(input, ttnn_input_datatype, layout=ttnn.Layout.TILE, device=device)
     ttnn_index = ttnn.from_torch(index, ttnn_index_datatype, layout=ttnn.Layout.TILE, device=device)
 
-    ttnn_gather = ttnn.experimental.gather(ttnn_input, dim, index=ttnn_index)
+    ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
@@ -165,7 +165,7 @@ def test_gather_long_tensor(input_shape, index_shape, dim, device):
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
 
-    ttnn_gather = ttnn.experimental.gather(ttnn_input, dim, index=ttnn_index)
+    ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))

@@ -436,7 +436,7 @@ Data Movement
    ttnn.untilize
    ttnn.untilize_with_unpadding
    ttnn.indexed_fill
-   ttnn.experimental.gather
+   ttnn.gather
 
 Normalization
 =============

@@ -6,7 +6,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::gather {
+namespace ttnn::operations::gather {
 
 constexpr uint32_t WT_THRESHOLD = 60;
 
@@ -135,4 +135,4 @@ GatherDeviceOperation::invoke(
         operation_attributes_t{dim, sparse_grad, output_memory_config},
         tensor_args_t{input_tensor, input_index_tensor, output_tensors}};
 }
-}  // namespace ttnn::operations::experimental::gather
+}  // namespace ttnn::operations::gather

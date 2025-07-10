@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-namespace ttnn::operations::experimental::gather::program {
+namespace ttnn::operations::gather::program {
 // Single row - single core
 GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySingleRowSingleCore::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -131,7 +131,8 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string gather_reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_reader_single_row_single_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/"
+        "gather_reader_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_reader_kernel_path,
@@ -158,7 +159,8 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string gather_writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_writer_single_row_single_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/"
+        "gather_writer_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_writer_kernel_path,
@@ -370,7 +372,7 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string gather_reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_reader_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_reader_kernel_path,
@@ -397,7 +399,7 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string gather_writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_writer_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_writer_kernel_path,
@@ -485,4 +487,4 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
         }  // core_x loop
     }  // core_y loop
 }
-}  // namespace ttnn::operations::experimental::gather::program
+}  // namespace ttnn::operations::gather::program
