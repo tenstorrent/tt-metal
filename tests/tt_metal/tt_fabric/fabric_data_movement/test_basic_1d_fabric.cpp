@@ -1195,7 +1195,7 @@ void RunTest2DMCastConnAPI(
         topology == Topology::Mesh,
         fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     defines["FABRIC_2D"] = "";
 
     // Create the sender program
