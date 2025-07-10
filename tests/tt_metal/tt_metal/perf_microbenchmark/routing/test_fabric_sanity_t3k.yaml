@@ -32,7 +32,7 @@ Tests:
 
   - name: "HalfRingMulticast"
     benchmark_mode: true
-    sync: false
+    sync: true
     fabric_setup:
       topology: Ring
 

@@ -96,6 +96,12 @@ private:
     bool benchmark_mode_ = false;  // Benchmark mode for current test
     bool global_sync_ = false;     // Line sync for current test
     uint32_t global_sync_val_ = 0;
+
+    void reset_local_variables() {
+        benchmark_mode_ = false;
+        global_sync_ = false;
+        global_sync_val_ = 0;
+    }
 };
 
 void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
@@ -205,6 +211,7 @@ void TestContext::reset_devices() {
     device_global_sync_cores_.clear();
     device_local_sync_cores_.clear();
     this->allocator_->reset();
+    reset_local_variables();
 }
 
 void TestContext::open_devices(Topology topology, RoutingType routing_type) {
@@ -225,16 +232,19 @@ void TestContext::initialize_sync_memory() {
     uint32_t local_sync_memory_size = this->get_local_sync_region_size();
 
     // clear the global sync cores in device_global_sync_cores_ using zero_out_buffer_on_cores
-    for (const auto& [device_id, sync_core] : device_global_sync_cores_) {
+    for (const auto& [device_id, global_sync_core] : device_global_sync_cores_) {
         const auto& device_coord = fixture_->get_device_coord(device_id);
-        std::vector<CoreCoord> cores = {sync_core};
+        std::vector<CoreCoord> cores = {global_sync_core};
+        // zero out the global sync address for global sync core
         fixture_->zero_out_buffer_on_cores(device_coord, cores, global_sync_address, global_sync_memory_size);
+        // also need to zero out the local sync address for global sync core
+        fixture_->zero_out_buffer_on_cores(device_coord, cores, local_sync_address, global_sync_memory_size);
     }
 
     // clear the local sync cores in device_local_sync_cores_ using zero_out_buffer_on_cores
-    for (const auto& [device_id, sync_cores] : device_local_sync_cores_) {
+    for (const auto& [device_id, local_sync_cores] : device_local_sync_cores_) {
         const auto& device_coord = fixture_->get_device_coord(device_id);
-        fixture_->zero_out_buffer_on_cores(device_coord, sync_cores, local_sync_address, local_sync_memory_size);
+        fixture_->zero_out_buffer_on_cores(device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
     }
 
     log_info(
@@ -282,7 +292,10 @@ void TestContext::process_traffic_config(TestConfig& config) {
     if (config.global_sync) {
         // set it only after the test_config is built since it needs set the sync value during expand the high-level
         // patterns.
+        this->set_global_sync(config.global_sync);
         this->set_global_sync_val(config.global_sync_val);
+
+        log_info(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
 
         for (const auto& sync_sender : config.global_sync_configs) {
             CoreCoord sync_core = sync_sender.core.value();
@@ -477,11 +490,10 @@ int main(int argc, char** argv) {
         test_context.open_devices(topology, routing_type);
 
         log_info(tt::LogTest, "Building tests");
+        auto built_tests = builder.build_tests({test_config});
+
         // Set benchmark mode and line sync for this test group
         test_context.set_benchmark_mode(test_config.benchmark_mode);
-        test_context.set_global_sync(test_config.global_sync);
-
-        auto built_tests = builder.build_tests({test_config});
 
         for (auto& built_test : built_tests) {
             log_info(tt::LogTest, "Running Test: {}", built_test.name);
