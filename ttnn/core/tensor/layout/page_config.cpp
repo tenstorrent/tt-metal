@@ -27,8 +27,7 @@ size_t rm_element_size_bytes(DataType dtype) {
     }
 }
 
-constexpr uint32_t RECOMMENDED_L1_ALIGNMENT_BYTES = 16;
-constexpr uint32_t RECOMMENDED_DRAM_ALIGNMENT_BYTES = 64;
+constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
@@ -90,10 +89,9 @@ Alignment PageConfig::get_required_shard_shape_alignment() const {
         [&](const auto& config) constexpr { return config.get_required_shard_shape_alignment(); }, config_);
 }
 
-Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype, BufferType buffer_type) const {
+Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
     return std::visit(
-        [&](const auto& config) constexpr { return config.get_recommended_shard_shape_alignment(dtype, buffer_type); },
-        config_);
+        [&](const auto& config) constexpr { return config.get_recommended_shard_shape_alignment(dtype); }, config_);
 }
 
 TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
@@ -142,7 +140,7 @@ size_t TilePageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType d
 
 const Tile& TilePageConfig::get_tile() const { return tile_; }
 
-Alignment TilePageConfig::get_recommended_shard_shape_alignment(DataType, BufferType) const {
+Alignment TilePageConfig::get_recommended_shard_shape_alignment(DataType) const {
     return get_required_shard_shape_alignment();
 }
 
@@ -226,21 +224,10 @@ const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
 
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 
-Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dtype, BufferType buffer_type) const {
-    uint32_t memory_alignment_bytes = 0;
-    switch (buffer_type) {
-        case BufferType::DRAM:
-        case BufferType::TRACE:
-            memory_alignment_bytes = CMAKE_UNIQUE_NAMESPACE::RECOMMENDED_DRAM_ALIGNMENT_BYTES;
-            break;
-        case BufferType::L1:
-        case BufferType::L1_SMALL:
-            memory_alignment_bytes = CMAKE_UNIQUE_NAMESPACE::RECOMMENDED_L1_ALIGNMENT_BYTES;
-            break;
-        default: TT_THROW("Unsupported buffer type!");
-    }
-    uint32_t element_size_bytes = CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
-    return Alignment({div_up(memory_alignment_bytes, element_size_bytes)});
+Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
+    return Alignment({div_up(
+        CMAKE_UNIQUE_NAMESPACE::RECOMMENDED_MEMORY_ALIGNMENT_BYTES,
+        CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype))});
 }
 
 }  // namespace tt::tt_metal

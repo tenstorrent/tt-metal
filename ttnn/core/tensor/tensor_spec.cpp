@@ -189,10 +189,9 @@ TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientatio
 
 TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment shard_alignment) const {
     if (shard_alignment != ShardShapeAlignment::None) {
-        auto alignment =
-            shard_alignment == ShardShapeAlignment::Required
-                ? page_config().get_required_shard_shape_alignment()
-                : page_config().get_recommended_shard_shape_alignment(data_type(), memory_config().buffer_type());
+        auto alignment = shard_alignment == ShardShapeAlignment::Required
+                             ? page_config().get_required_shard_shape_alignment()
+                             : page_config().get_recommended_shard_shape_alignment(data_type());
         auto& shard_shape = nd_shard_spec.shard_shape;
         for (int dim = 1; dim <= alignment.size(); dim++) {
             shard_shape[-dim] = round_up(shard_shape[-dim], alignment[-dim]);
