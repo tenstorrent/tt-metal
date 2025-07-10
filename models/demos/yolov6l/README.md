@@ -41,3 +41,10 @@ Use the following command to run the performant Model with Trace+2CQs:
 ```
 pytest --disable-warnings models/demos/yolov6l/tests/perf/test_perf_yolov6l.py::test_perf_yolov6l
 ```
+
+### Demo with Trace+2CQ
+
+- Use the following command to run the demo with Trace+2CQs :
+```
+pytest --disable-warnings models/demos/yolov6l/demo/demo.py::test_yolov6l_demo[tt_model-models/demos/yolov6l/demo/images/bus.jpg-device_params0]
+```
