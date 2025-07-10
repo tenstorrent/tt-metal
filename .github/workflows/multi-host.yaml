@@ -13,7 +13,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-      - name: Run mpirun command
+      - name: Run tt-smi via mpirun command
         run: |
           echo "Running mpirun command on multiple hosts"
-          mpirun -np 2 --rankfile /etc/rankfile /bin/ls
+          mpirun --rankfile /etc/rankfile --tag-output ./docker-run.sh tt-smi -ls
