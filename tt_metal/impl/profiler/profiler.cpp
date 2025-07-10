@@ -223,14 +223,6 @@ bool onlyProfileDispatchCores(const ProfilerDumpState state) {
            state == ProfilerDumpState::ONLY_DISPATCH_CORES;
 }
 
-void waitForDeviceCommandsToFinish(IDevice* device) {
-    if (auto mesh_device = device->get_mesh_device()) {
-        mesh_device->mesh_command_queue().finish();
-    } else {
-        Finish(device->command_queue());
-    }
-}
-
 bool isGalaxyMMIODevice(const IDevice* device) {
     return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable();
 }
@@ -260,7 +252,7 @@ void writeToCoreControlBuffer(
             const distributed::DeviceMemoryAddress address = {
                 device_coord, virtual_core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
             mesh_cq.enqueue_write_shard_to_core(
-                address, data.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, false);
+                address, data.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
         } else {
             dynamic_cast<HWCommandQueue&>(device->command_queue())
                 .enqueue_write_to_core(
@@ -268,7 +260,7 @@ void writeToCoreControlBuffer(
                     data.data(),
                     reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
                     kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    false);
+                    true);
         }
     } else {
         tt::llrt::write_hex_vec_to_core(
@@ -293,7 +285,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                         distributed::DeviceMemoryAddress{device_coord, dram_core, profiler_addr},
                         &(profile_buffer[profile_buffer_idx]),
                         profile_buffer_bank_size_bytes,
-                        false);
+                        true);
             } else {
                 dynamic_cast<HWCommandQueue&>(device->command_queue())
                     .enqueue_read_from_core(
@@ -301,7 +293,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                         &(profile_buffer[profile_buffer_idx]),
                         profiler_addr,
                         profile_buffer_bank_size_bytes,
-                        false);
+                        true);
             }
             profile_buffer_idx += profile_buffer_bank_size_bytes / sizeof(uint32_t);
         }
@@ -347,7 +339,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                     device_coord, worker_core, reinterpret_cast<DeviceAddr>(profiler_msg->buffer)},
                 core_l1_data_buffer.data(),
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
-                false);
+                true);
     } else {
         dynamic_cast<HWCommandQueue&>(device->command_queue())
             .enqueue_read_from_core(
@@ -355,7 +347,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                 core_l1_data_buffer.data(),
                 reinterpret_cast<DeviceAddr>(profiler_msg->buffer),
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
-                false);
+                true);
     }
 }
 
@@ -398,10 +390,6 @@ void DeviceProfiler::readL1DataBuffers(
         std::vector<uint32_t>& core_l1_data_buffer = core_l1_data_buffers[virtual_core];
         readL1DataBufferForCore(device, virtual_core, state, core_l1_data_buffer);
     }
-
-    if (useFastDispatchForDataBuffers(device, state)) {
-        waitForDeviceCommandsToFinish(device);
-    }
 }
 
 void DeviceProfiler::readControlBufferForCore(
@@ -422,7 +410,7 @@ void DeviceProfiler::readControlBufferForCore(
                 address,
                 core_control_buffers[virtual_core].data(),
                 kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                false);
+                true);
         } else {
             core_control_buffers[virtual_core].resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
             dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -431,7 +419,7 @@ void DeviceProfiler::readControlBufferForCore(
                     core_control_buffers[virtual_core].data(),
                     reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
                     kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    false);
+                    true);
         }
     } else {
         core_control_buffers[virtual_core] = tt::llrt::read_hex_vec_from_core(
@@ -447,10 +435,6 @@ void DeviceProfiler::readControlBuffers(
     ZoneScoped;
     for (const CoreCoord& virtual_core : virtual_cores) {
         readControlBufferForCore(device, virtual_core, state);
-    }
-
-    if (useFastDispatchForControlBuffers(device, state)) {
-        waitForDeviceCommandsToFinish(device);
     }
 }
 
@@ -473,17 +457,12 @@ void DeviceProfiler::resetControlBuffers(
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
         writeToCoreControlBuffer(device, virtual_core, state, control_buffer_reset);
     }
-
-    if (useFastDispatchForControlBuffers(device, state)) {
-        waitForDeviceCommandsToFinish(device);
-    }
 }
 
 void DeviceProfiler::readProfilerBuffer(IDevice* device, const ProfilerDumpState state) {
     ZoneScoped;
     if (useFastDispatchForDataBuffers(device, state)) {
         issueFastDispatchReadFromProfilerBuffer(device);
-        waitForDeviceCommandsToFinish(device);
     } else {
         issueSlowDispatchReadFromProfilerBuffer(device);
     }
