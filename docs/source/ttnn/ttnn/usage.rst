@@ -214,13 +214,7 @@ Run the code. i.e.:
 .. literalinclude:: ../../../../ttnn/ttnn/examples/usage/visualizer_example.py
    :language: python
 
-Open the visualizer by running the following command:
-
-.. code-block:: bash
-
-    python ttnn/visualizer/app.py
-
-
+Open the visualizer by following the instructions in the `ttnn-visualizer <https://github.com/tenstorrent/ttnn-visualizer>`_ repository.
 
 12. Register pre- and/or post-operation hooks
 ---------------------------------------------
