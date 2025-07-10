@@ -179,13 +179,9 @@ Imagine a 16x8 logical mesh divided among 4 hosts (ranks 0-3), where each host m
 |                                                            |
 +------------------------------------------------------------+
 
-  ^                           ^
-  |                           |
-All Hosts (Ranks 0-3) create the same GLOBAL specifications
-for Buffers & Workloads relative to the 16x8 Logical Mesh.
+All Hosts (Ranks 0-3) create the same GLOBAL specifications for Buffers & Workloads relative to the 16x8 Logical Mesh.
 
-Each Host only DISPATCHES commands to the 32 LOCAL Devices
-(and their DeviceCQs) within its owned 8x4 Sub-Mesh region.
+Each Host only DISPATCHES commands to the 32 LOCAL Devices (and their DeviceCQs) within its owned 8x4 Sub-Mesh region.
 
 ```
 
