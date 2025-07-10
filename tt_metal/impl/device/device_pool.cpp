@@ -277,7 +277,7 @@ void DevicePool::initialize(
         // Must open all devices in cluster to use fabric
         if (any_remote_devices) {
             device_ids_to_open.clear();
-            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+            for (int id = 0; id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); ++id) {
                 device_ids_to_open.push_back(id);
             }
         }
@@ -367,6 +367,7 @@ void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devic
                 return dev;
             } else {
                 // compile failure mostly come from Nebula (TG)
+                log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
                 return (tt_metal::IDevice*)nullptr;
             }
         }));
