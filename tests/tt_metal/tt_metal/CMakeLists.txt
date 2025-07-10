@@ -115,6 +115,7 @@ target_sources(
             test_kernels/dataflow/unit_tests/command_queue/random_program.cpp
             test_kernels/misc/add_two_ints.cpp
             test_kernels/misc/brisc_print.cpp
+            test_kernels/misc/circular_buffer/cb_init.cpp
             test_kernels/misc/circular_buffer/cb_non_blocking_master_test_kernel.cpp
             test_kernels/misc/circular_buffer/cb_non_blocking_subordinate_test_kernel.cpp
             test_kernels/misc/dprint_raise_wait_brisc.cpp
