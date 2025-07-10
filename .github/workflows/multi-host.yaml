@@ -13,7 +13,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-      - name: Run npirun command
+      - name: Run mpirun command
         run: |
-          echo "Running npirun command on multiple hosts"
+          echo "Running mpirun command on multiple hosts"
           mpirun -np 2 --rankfile rankfile /bin/ls
