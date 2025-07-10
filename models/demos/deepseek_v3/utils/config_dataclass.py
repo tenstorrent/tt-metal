@@ -67,7 +67,7 @@ class LinearConfig(OpConfigBase):
     input_tensor_b: ConfigWeight
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
-    program_config: ProgramConfig = None
+    program_config: ProgramConfig | None = None
 
 
 @dataclass
@@ -107,6 +107,27 @@ class AllGatherConfig(OpConfigBase):
 
     memory_config: ttnn.MemoryConfig
     mesh_device: ConfigDevice
+
+
+@dataclass
+class ReduceScatterConfig(OpConfigBase):
+    """Common parameters for a ttnn.reduce_scatter op"""
+
+    dim: int
+    math_op: ttnn.ReduceType
+    mesh_device: ConfigDevice | None = None
+    cluster_axis: int | None = None
+    memory_config: ttnn.MemoryConfig = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    num_links: int = 1
+
+
+@dataclass
+class ReshardConfig(OpConfigBase):
+    """Common parameters for a ttnn.to_memory_config op"""
+
+    memory_config: ttnn.MemoryConfig
+    dtype: ttnn.DataType | None = None
 
 
 @dataclass
