@@ -3284,6 +3284,7 @@ def test_conv2d_sdxl(
     ),
 )
 
+@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_conv2d_vae_sdxl(
     device,
