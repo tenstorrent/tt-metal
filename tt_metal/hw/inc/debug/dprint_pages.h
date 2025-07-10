@@ -6,11 +6,10 @@
 #pragma once
 #include "debug/dprint.h"
 
-#if (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)) && defined(DEBUG_PRINT_ENABLED) && \
-    !defined(FORCE_DPRINT_OFF)
-
 namespace tt::data_movement::common {
 
+#if (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)) && defined(DEBUG_PRINT_ENABLED) && \
+    !defined(FORCE_DPRINT_OFF)
 inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
     for (uint32_t page = 0; page < npages; ++page) {
@@ -44,6 +43,12 @@ inline void print_u8_pages(uint32_t l1_addr, uint32_t bytes_per_page, uint32_t n
         DPRINT << ENDL();
     }
 }
+#else
+
+inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {}
+inline void print_f32_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {}
+inline void print_u8_pages(uint32_t l1_addr, uint32_t bytes_per_page, uint32_t npages, uint32_t start = 0) {}
+#endif
 
 inline void print_u16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
@@ -58,12 +63,9 @@ inline void print_u16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t n
 
 }  // namespace tt::data_movement::common
 
-#endif
-
-#if defined(COMPILE_FOR_TRISC) && defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
-
 namespace tt::compute::common {
 
+#if defined(COMPILE_FOR_TRISC) && defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
 inline void print_tile_rows(uint32_t cb_id, uint32_t rows = 32, uint32_t tile_id = 0, bool untilize = false) {
     for (uint16_t r = 0; r < rows; ++r) {
         DPRINT << (uint)r << " :: "
@@ -102,7 +104,11 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
     }
     DPRINT << "++++++" << ENDL();
 }
+#else
+
+inline void print_tile_rows(uint32_t cb_id, uint32_t rows = 32, uint32_t tile_id = 0, bool untilize = false) {}
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {}
+#endif
 
 }  // namespace tt::compute::common
-
-#endif
