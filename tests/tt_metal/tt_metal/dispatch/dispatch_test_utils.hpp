@@ -15,6 +15,7 @@ struct TestBufferConfig {
     uint32_t num_pages;
     uint32_t page_size;
     BufferType buftype;
+    std::optional<BufferShardingArgs> sharding_args = std::nullopt;  // only used for sharded buffers
 };
 
 struct CoreCoordsL1 {
