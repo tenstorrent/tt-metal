@@ -20,13 +20,36 @@ pytest --disable-warnings models/demos/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::t
 ```
 
 ### Performant Model with Trace+2CQ
+
+#### Single Device (BS=1):
+- end-2-end perf is `285` FPS
+Use the following command to run the performant Model with Trace+2CQs:
+
 ```
-pytest --disable-warnings models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py
+pytest --disable-warnings models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant
+```
+#### Multi Device (DP=2, N300):
+- end-2-end perf is `572` FPS
+
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant_dp
+```
+### Performant Demo with Trace+2CQ
+
+#### Single Device (BS=1):
+Use the following command to run the performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/ufld_v2/demo/demo.py::test_ufld_v2_demo
 ```
 
-### Performant Demo with Trace+2CQ
+#### Multi Device (DP=2, N300):
+Use the following command to run the DP performant Demo with Trace+2CQs:
+
 ```
-pytest --disable-warnings models/demos/ufld_v2/demo/demo.py
+pytest --disable-warnings models/demos/ufld_v2/demo/demo.py::test_ufld_v2_demo_dp
 ```
 
 ### To run the demo on your data:
@@ -36,18 +59,13 @@ pytest --disable-warnings models/demos/ufld_v2/demo/demo.py
 
 ## Testing
 ### Performant Data Evaluation with Trace+2CQ
-- Use the following command to run the performant data evaluation with Trace+2CQs:
+- dataset source: [TuSimple](https://www.kaggle.com/datasets/manideep1108/tusimple)
+- Adjust the `num_of_images` parameter to control the number of dataset samples used during evaluation. (default number of images taken - 100)
+
+#### Single Device (BS=1):
+
+Use the following command to run the performant data evaluation with Trace+2CQs:
+
 ```
 pytest --disable-warnings models/demos/ufld_v2/demo/dataset_evaluation.py
 ```
-
-Dataset source: [TuSimple](https://www.kaggle.com/datasets/manideep1108/tusimple)
-
-Adjust the `num_of_images` parameter to control the number of dataset samples used during evaluation. (default number of images taken - 100)
-
-## Details
-- The entry point to the UFLD_v2 is located at:`models/demos/ufld_v2/ttnn/ttnn_ufld_v2.py`
-- The model picks up trained weights from the **tusimple_res34.pth** file located at:`models/demos/ufld_v2/reference/tusimple_res34.pth`
-- Batch Size :1
-- Supported Input Resolution - (320,800) (Height,Width)
-- End-2-end perf with Trace+2CQs is 255 FPS
