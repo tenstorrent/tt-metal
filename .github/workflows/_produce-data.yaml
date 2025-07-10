@@ -155,7 +155,7 @@ jobs:
             path: |
               pipelinecopy_*.json
               workflow.json
-              workflow_jobs_${{ steps.get-run-id-and-attempt.outputs.run-id }}_${{ steps.get-run-id-and-attempt.outputs.attempt-number }}.json
+              workflow_jobs.json
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
