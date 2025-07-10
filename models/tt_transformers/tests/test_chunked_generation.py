@@ -96,7 +96,6 @@ def test_chunked_prefill_single_user(
     }
     logger.info("Finished loading weights...")
 
-    # reference_model = ReferenceTransformer(model_args)
     reference_model = model_args.reference_transformer()
     reference_model.load_state_dict(reference_state_dict)
     embd = model_args.reference_embedding()
