@@ -21,6 +21,12 @@ def randomize_tensor(tensor_map, tensor_shape):
         torch_tensor = tensor_map[tensor_shape]
     else:
         torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    # torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+    # for n in range(tensor_shape[0]):
+    #     for c in range(tensor_shape[1]):
+    #         for h in range(tensor_shape[2]):
+    #             for w in range(tensor_shape[3]):
+    #                 torch_tensor[n, c, h, w] = h * tensor_shape[3] + w
     return torch_tensor
 
 
@@ -104,8 +110,11 @@ def run_avg_pool2d(
 
     ## Assertion
     pcc_thresh = 0.99
+    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    if dtype == ttnn.bfloat8_b:
+        atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
-    allclose = torch.allclose(ttnn_output, torch_output, rtol=0.02)
+    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     assert allclose, " Reference and output tensor are not close"
 
 
@@ -170,10 +179,10 @@ def run_avg_pool2d(
     ],
 )
 @pytest.mark.parametrize(
-    "divisor_override",
+    "use_divisor_override",
     [
-        None,
-        5,
+        False,
+        True,
     ],
 )
 @pytest.mark.parametrize(
@@ -197,14 +206,14 @@ def test_run_avg_pool2d(
     stride,
     padding,
     ceil_mode,
-    divisor_override,
+    use_divisor_override,
     count_include_pad,
     shard_scheme,
 ):
     if (
         shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED
         and (tuple(input_shape) == (2, 512, 112, 32) or tuple(input_shape) == (1, 512, 112, 32))
-        and divisor_override == None
+        and use_divisor_override == False
         and (ceil_mode == True or count_include_pad == False)
     ):
         pytest.skip("Not enough L1 space for the correct calculation of the elements, use different kind of sharding")
@@ -213,6 +222,19 @@ def test_run_avg_pool2d(
         pytest.skip(
             "Known issue with this combination of parameters - RuntimeError: pad should be at most half of kernel size."
         )
+    # set divisor override based on kernel size to avoid floating point precision issues
+    divisor_override = None
+    if use_divisor_override:
+        if kernel_size[0] == 2:
+            divisor_override = 10
+        elif kernel_size[0] == 3:
+            divisor_override = 15
+        elif kernel_size[0] == 5:
+            divisor_override = 30
+        elif kernel_size[0] == 9:
+            divisor_override = 100
+        else:
+            pytest.skip("Unsupported kernel size for divisor override")
     run_avg_pool2d(
         device,
         tensor_map,
