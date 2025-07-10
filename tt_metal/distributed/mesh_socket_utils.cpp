@@ -252,7 +252,9 @@ void write_socket_configs(
 
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 auto& md = config_data[idx];
+                md.bytes_acked = 0;
                 md.write_ptr = peer_descriptor.data_buffer_address;
+                md.bytes_sent = 0;
                 md.downstream_fifo_addr = peer_descriptor.data_buffer_address;
                 md.downstream_fifo_total_size = config.socket_mem_config.fifo_size;
                 md.downstream_mesh_id = *downstream_mesh_id;
@@ -282,6 +284,8 @@ void write_socket_configs(
 
                 uint32_t idx = core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];
+                md.bytes_sent = 0;
+                md.bytes_acked = 0;
                 md.read_ptr = local_descriptor.data_buffer_address;
                 md.fifo_addr = local_descriptor.data_buffer_address;
                 md.fifo_total_size = config.socket_mem_config.fifo_size;

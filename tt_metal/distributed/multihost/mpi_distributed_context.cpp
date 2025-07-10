@@ -227,6 +227,11 @@ void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     MPI_CHECK(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
+void MPIContext::ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+    check_size_fits_int(buf.size());
+    MPI_CHECK(MPI_Ssend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
+}
+
 void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));

@@ -48,6 +48,10 @@ void SingleHostContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) c
     TT_THROW("method send is unsupported for single-host distributed contexts.");
 }
 
+void SingleHostContext::ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+    TT_THROW("method ssend is unsupported for single-host distributed contexts.");
+}
+
 void SingleHostContext::recv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const {
     TT_THROW("method recv is unsupported for single-host distributed contexts.");
 }
