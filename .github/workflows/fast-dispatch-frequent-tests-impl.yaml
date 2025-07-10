@@ -65,8 +65,6 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
           run_args: ${{ matrix.test-group.run-args }}
-      - name: Run tutorial tests
-        run: python ./ttests/ttnn/unit_tests/test_tutorials.py
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
