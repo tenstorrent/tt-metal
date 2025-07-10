@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 import os
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+from conftest import is_6u
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -387,7 +387,7 @@ def run_reduce_scatter_test(
         assert eq, f"{first_failed_tensor_index} FAILED: {output_results}"
 
 
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -441,7 +441,7 @@ def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_ca
     )
 
 
-@pytest.mark.skipif(is_RING_6U, reason="This test is only for TG devices")
+@pytest.mark.skipif(is_6u(), reason="This test is only for TG devices")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -495,7 +495,7 @@ def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
     )
 
 
-@pytest.mark.skipif(is_RING_6U, reason="This test is only for TG devices")
+@pytest.mark.skipif(is_6u(), reason="This test is only for TG devices")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
