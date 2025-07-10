@@ -135,7 +135,7 @@ void dump_multi_device_host_storage(
     const DistributedTensorConfig& strategy,
     const TensorSpec& tensor_spec) {
     std::vector<HostBuffer> buffers;
-    storage.distributed_buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
+    storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
 
     uint64_t num_buffers = buffers.size();
     safe_fwrite(&num_buffers, sizeof(num_buffers), 1, output_file);
@@ -328,8 +328,9 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
 
     auto storage_type = [&]() {
         if (tensor.storage_type() == StorageType::HOST) {
-            const size_t size = tensor.host_storage().get_device_buffers().size();
-            return size > 1 ? SerializedStorageType::MULTI_DEVICE_HOST : SerializedStorageType::HOST;
+            return tensor.host_storage().buffer().shape() == distributed::MeshShape(1, 1)
+                       ? SerializedStorageType::HOST
+                       : SerializedStorageType::MULTI_DEVICE_HOST;
         } else {
             return SerializedStorageType::DEVICE;
         }
@@ -344,7 +345,8 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
 
     switch (storage_type) {
         case SerializedStorageType::HOST: {
-            const auto host_buffer = tensor_to_dump.host_storage().get_device_buffers().front();
+            const auto host_buffer =
+                *tensor_to_dump.host_storage().buffer().get_shard(distributed::MeshCoordinate(0, 0));
             dump_host_storage(output_file, host_buffer, tensor_to_dump.dtype());
             break;
         }

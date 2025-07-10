@@ -767,12 +767,14 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) 
                 const void* host_data = std::visit(
                     tt::stl::overloaded{
                         [](const HostStorage& host_storage) -> const void* {
-                            auto buffers = host_storage.get_device_buffers();
                             TT_FATAL(
-                                buffers.size() == 1,
+                                host_storage.buffer().shape() == distributed::MeshShape(1, 1),
                                 "Can't get a single buffer from host storage distributed over mesh shape {}",
-                                host_storage.distributed_buffer().shape());
-                            return buffers.front().view_bytes().data();
+                                host_storage.buffer().shape());
+                            return host_storage.buffer()
+                                .get_shard(distributed::MeshCoordinate(0, 0))
+                                ->view_bytes()
+                                .data();
                         },
                         [](auto&&) -> const void* { TT_THROW("Unreachable"); },
                     },

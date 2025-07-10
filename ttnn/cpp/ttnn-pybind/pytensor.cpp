@@ -449,13 +449,12 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     return convert_to_logical(std::visit(
         tt::stl::overloaded{
             [](const HostStorage& storage) {
-                std::vector<HostBuffer> buffers = storage.get_device_buffers();
                 TT_FATAL(
-                    buffers.size() == 1,
+                    storage.buffer().shape() == distributed::MeshShape(1, 1),
                     "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
                     "to concatenate multi-device shards.",
-                    storage.distributed_buffer().shape());
-                return buffers.front();
+                    storage.buffer().shape());
+                return *storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
             },
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(
@@ -1482,13 +1481,12 @@ void pytensor_module(py::module& m_tensor) {
                 return std::visit(
                     tt::stl::overloaded{
                         [](const HostStorage& s) -> HostBuffer {
-                            std::vector<HostBuffer> buffers = s.get_device_buffers();
                             TT_FATAL(
-                                buffers.size() == 1,
+                                s.buffer().shape() == distributed::MeshShape(1, 1),
                                 "Can't get a single buffer from host storage distributed over mesh shape {}. Did you "
                                 "forget to use mesh composer to concatenate tensor shards?",
-                                s.distributed_buffer().shape());
-                            return buffers.front();
+                                s.buffer().shape());
+                            return *s.buffer().get_shard(distributed::MeshCoordinate(0, 0));
                         },
                         [&](const DeviceStorage& s) -> HostBuffer {
                             TT_THROW(

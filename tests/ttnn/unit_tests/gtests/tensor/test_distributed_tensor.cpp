@@ -29,7 +29,7 @@ TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
 // Returns the number of unique buffers in host-side multi-device tensor.
 int count_unique_buffers(const Tensor& tensor) {
     std::unordered_set<const void*> buffer_addresses;
-    tensor.host_storage().distributed_buffer().apply(
+    tensor.host_storage().buffer().apply(
         [&buffer_addresses](const HostBuffer& buffer) { buffer_addresses.insert(buffer.view_bytes().data()); });
     return buffer_addresses.size();
 }

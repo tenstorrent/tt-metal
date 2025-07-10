@@ -17,19 +17,16 @@ namespace tt::tt_metal {
 
 class HostStorage {
 public:
-    // Creates HostStorage distributed over 1x1 mesh.
-    explicit HostStorage(HostBuffer buffer);
-
     // Creates HostStorage distributed over a mesh that matches `buffer` shape.
     explicit HostStorage(DistributedHostBuffer buffer);
 
+    // Creates HostStorage distributed over 1x1 mesh.
+    explicit HostStorage(HostBuffer buffer);
+
     // Returns the distributed host buffer.
-    const DistributedHostBuffer& distributed_buffer() const;
+    const DistributedHostBuffer& buffer() const;
 
-    // Returns a vector of individual device buffers.
-    std::vector<HostBuffer> get_device_buffers() const;
-
-    // Applies a function to each device buffer, returning a new HostStorage.
+    // Applies a transformation function to each device buffer in parallel, returning a new HostStorage.
     HostStorage transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple();

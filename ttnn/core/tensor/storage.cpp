@@ -17,13 +17,7 @@ HostStorage::HostStorage(HostBuffer buffer) :
 }
 HostStorage::HostStorage(DistributedHostBuffer buffer) : distributed_buffer_(std::move(buffer)) {}
 
-const DistributedHostBuffer& HostStorage::distributed_buffer() const { return distributed_buffer_; }
-
-std::vector<HostBuffer> HostStorage::get_device_buffers() const {
-    std::vector<HostBuffer> buffers;
-    distributed_buffer_.apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-    return buffers;
-}
+const DistributedHostBuffer& HostStorage::buffer() const { return distributed_buffer_; }
 
 HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
     return HostStorage(

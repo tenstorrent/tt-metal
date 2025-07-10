@@ -101,9 +101,9 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
     uint64_t next_buffer_offset = 0;
-    for (const auto& coord : host_storage.distributed_buffer().shard_coords()) {
+    for (const auto& coord : host_storage.buffer().shard_coords()) {
         // Iterate over local populated shards.
-        if (const auto& buffer = host_storage.distributed_buffer().get_shard(coord); buffer.has_value()) {
+        if (const auto& buffer = host_storage.buffer().get_shard(coord); buffer.has_value()) {
             const auto* buffer_address = buffer->view_bytes().data();
             const std::size_t buffer_size = buffer->view_bytes().size();
 
@@ -131,7 +131,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     }
     auto shards = builder.CreateVector(shards_vector);
 
-    auto mesh_shape_offset = to_flatbuffer(host_storage.distributed_buffer().shape(), builder);
+    auto mesh_shape_offset = to_flatbuffer(host_storage.buffer().shape(), builder);
 
     auto tensor_offset = ttnn::flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards);
 

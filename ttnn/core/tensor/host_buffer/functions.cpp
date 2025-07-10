@@ -18,11 +18,11 @@ HostBuffer get_host_buffer(const Tensor& tensor) {
         tt::stl::overloaded{
             [](const HostStorage& storage) {
                 std::vector<HostBuffer> buffers;
-                storage.distributed_buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                 TT_FATAL(
                     buffers.size() == 1,
                     "Can't get a single buffer from host storage distributed over mesh shape {}",
-                    storage.distributed_buffer().shape());
+                    storage.buffer().shape());
                 return buffers.front();
             },
             [](const auto&) -> HostBuffer { TT_THROW("Tensor must have HostStorage"); },

@@ -47,7 +47,7 @@ void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_de
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::HostStorage>(tensor.storage())) {
         std::vector<ttnn::Tensor> tensors;
-        const auto& distributed_buffer = tensor.host_storage().distributed_buffer();
+        const auto& distributed_buffer = tensor.host_storage().buffer();
         distributed_buffer.apply(
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.get_tensor_spec()}); });
         return tensors;
