@@ -24,8 +24,6 @@ class Yolov6l_Conv2D:
         use_shallow_conv_variant=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         auto_shard=False,
-        # is_nhw_c=False,
-        # is_nhwc=False,
         reshape=False,
         deallocate_activation=False,
         act_blocks=False,
