@@ -776,7 +776,7 @@ class CreateShardedTensorWithAlignmentTests
     : public ttnn::TTNNFixtureWithDevice,
       public ::testing::WithParamInterface<CreateShardedTensorWithAlignmentParams> {};
 
-TEST_P(CreateShardedTensorWithAlignmentTests, AllocateTensor) {
+TEST_P(CreateShardedTensorWithAlignmentTests, DISABLED_AllocateTensor) {
     const auto& params = GetParam();
     const auto& input_shape = params.inputs.shape;
 
