@@ -326,7 +326,7 @@ struct WorkerToFabricEdmSenderImpl {
     // for the read barrier to complete before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) open_finish().
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    template <bool mux_client = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
         *this->from_remote_buffer_free_slots_ptr = 0;
@@ -362,14 +362,13 @@ struct WorkerToFabricEdmSenderImpl {
                 edm_worker_location_info_addr +
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
         // write the address of our local copy of read counter (that EDM is supposed to update)
-        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            // TODO: Remove this. Still needed for mux kernel until it adjusts to build_from_arg based construction
+        if constexpr (mux_client) {
             noc_inline_dw_write<false, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(from_remote_buffer_free_slots_ptr),
                 0xf,
                 WORKER_HANDSHAKE_NOC);
-        } else {
+        } else if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             noc_inline_dw_write<false, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
@@ -427,9 +426,9 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    template <bool mux_client = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open() {
-        open_start<posted, WORKER_HANDSHAKE_NOC>();
+        open_start<mux_client, posted, WORKER_HANDSHAKE_NOC>();
         open_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 

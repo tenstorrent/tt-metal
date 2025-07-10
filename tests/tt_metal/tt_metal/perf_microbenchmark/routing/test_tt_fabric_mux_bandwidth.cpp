@@ -214,7 +214,9 @@ void create_drainer_kernel(
         drainer_kernel_config->get_connection_info_address(drainer_channel_type, 0),
         drainer_kernel_config->get_connection_handshake_address(drainer_channel_type, 0),
         drainer_kernel_config->get_flow_control_address(drainer_channel_type, 0),
-        drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0)};
+        drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),
+        drainer_logical_core.y,
+    };
     std::vector<uint32_t> drainer_rt_args = {};
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {std::make_pair(
