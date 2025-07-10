@@ -19,7 +19,7 @@ using DTypeConversionFunc =
  *
  * @param src_type The source DataType.
  * @param dst_type The destination DataType.
- * @return A std::function for the conversion, or an empty function if unsupported.
+ * @return A std::function for the conversion, or throw an exception if unsupported.
  */
 static DTypeConversionFunc get_dtype_conversion_function(DataType src_type, DataType dst_type) {
     auto get_dest_func = [&]<typename SrcCppType>() -> DTypeConversionFunc {
