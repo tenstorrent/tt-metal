@@ -61,7 +61,7 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
     return ttnn::Shape(std::move(new_shape));
 }
 
-int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides) {
+int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint64_t> strides) {
     int flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];
