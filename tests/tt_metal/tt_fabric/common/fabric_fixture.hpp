@@ -120,7 +120,19 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
+class NightlyFabric2DFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
 class Fabric2DDynamicFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class NightlyFabric2DDynamicFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
@@ -181,6 +193,13 @@ void RunTestMCastConnAPI(
     RoutingDirection bwd_dir = RoutingDirection::E,
     uint32_t bwd_hops = 1);
 
+void RunTest2DMCastConnAPI(
+    BaseFabricFixture* fixture,
+    RoutingDirection trunk_dir,
+    uint32_t trunk_hops,
+    uint32_t branch_east_hops,
+    uint32_t branch_west_hops);
+
 void RunTestChipMCast1D(
     BaseFabricFixture* fixture,
     RoutingDirection dir,
@@ -188,8 +207,7 @@ void RunTestChipMCast1D(
     uint32_t range,
     bool enable_fabric_tracing = false);
 
-void RunTestLineMcast(
-    BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);
+void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

@@ -119,11 +119,16 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 
 // Since we unicast to local, we must omit the packet header
 // This function only does reads, and within scope there are no modifications to the packet header
-__attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_to_local_chip(
-    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
-    uint16_t payload_size_bytes,
-    uint32_t transaction_id,
-    uint8_t rx_channel_id) {
+__attribute__((optimize("jump-tables")))
+#ifndef FABRIC_2D
+FORCE_INLINE
+#endif
+    void
+    execute_chip_unicast_to_local_chip(
+        tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+        uint16_t payload_size_bytes,
+        uint32_t transaction_id,
+        uint8_t rx_channel_id) {
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
@@ -251,6 +256,25 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = cached_routing_fields.value + 1;
 }
 
+template <uint8_t NUM_SENDER_BUFFERS>
+void update_packet_header_for_next_hop(
+    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
+#if defined(DYNAMIC_ROUTING_ENABLED)
+    tt::tt_fabric::MeshPacketHeader* packet_base = nullptr;
+    // Clear north/south when turning from trunk->branch
+    downstream_edm_interface.template update_edm_buffer_slot_word<false>(
+        reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::NORTH])),
+        0,
+        tt::tt_fabric::edm_to_downstream_noc);
+    std::uintptr_t offset =
+        reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::EAST]));
+#else
+    tt::tt_fabric::LowLatencyMeshPacketHeader* packet_base = nullptr;
+    std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
+#endif
+    downstream_edm_interface.template update_edm_buffer_slot_word(offset, value, tt::tt_fabric::edm_to_downstream_noc);
+}
+
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {}
@@ -265,8 +289,11 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
-template <bool enable_ring_support, bool stateful_api, uint8_t NUM_SENDER_BUFFERS>
-FORCE_INLINE void forward_payload_to_downstream_edm(
+template <bool enable_ring_support, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
+#ifndef FABRIC_2D
+FORCE_INLINE
+#endif
+void forward_payload_to_downstream_edm(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,
     ROUTING_FIELDS_TYPE cached_routing_fields,
@@ -277,10 +304,16 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
 
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
-    update_packet_header_for_next_hop(packet_header, cached_routing_fields);
+    if constexpr (increment_pointers) {
+        update_packet_header_for_next_hop(packet_header, cached_routing_fields);
+    }
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_ring_support,
         tt::tt_fabric::edm_to_downstream_noc,
-        stateful_api>(
+        stateful_api,
+        increment_pointers>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
+    if constexpr (!increment_pointers) {
+        update_packet_header_for_next_hop(downstream_edm_interface, cached_routing_fields.value);
+    }
 }
