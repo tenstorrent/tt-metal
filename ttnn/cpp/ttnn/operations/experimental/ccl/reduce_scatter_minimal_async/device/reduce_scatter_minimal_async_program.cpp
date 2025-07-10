@@ -101,7 +101,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<uint32_t>& cluster_axis) {
+    const std::optional<uint32_t> chunks_per_sync,
+    const std::optional<uint32_t> num_workers_per_link,
+    const std::optional<uint32_t> num_buffers_per_channel) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler> empty_fused_op_signaler;
 
@@ -121,7 +123,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
         semaphore,
         barrier_semaphore,
         sub_device_id,
-        empty_fused_op_signaler);
+        empty_fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helper(
@@ -141,6 +146,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
     if (topology == ccl::Topology::Ring) {
         return ring_reduce_scatter_minimal_async_helper(
@@ -178,7 +186,11 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             semaphore,
             barrier_semaphore,
             sub_device_id,
-            fused_op_signaler);
+            fused_op_signaler,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            core_grid_offset);
     }
 }
 
@@ -657,6 +669,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
     /**
      * Line Reduce Scatter
@@ -697,6 +712,11 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
 
+    // op hyperparams
+    uint32_t chunks_per_sync_val = chunks_per_sync.value_or(1);
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
+    uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
+
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -715,7 +735,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     // 2 senders (reader + core + writer) per direction (forward, backward) per link
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
-    uint32_t num_workers_per_direction = 2;
+    // uint32_t num_workers_per_direction = 2;
 
     uint32_t num_cores_per_link =
         num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
@@ -869,7 +889,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             auto num_full_size_channels = num_workers_per_direction;
             auto num_header_only_channels = 0;
             uint32_t payload_size_bytes = tiles_to_write_per_packet * op_config.get_page_size();
-            uint32_t num_buffers_full_size_channels = 2;
             size_t buffer_size_bytes_full_size_channel =
                 tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
             const uint32_t l1_unreserved_base_address =
@@ -965,6 +984,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     do_final_reduction,
                     num_total_reduction_steps,
                     sync_with_other_direction,
+                    chunks_per_sync_val,
                 };
 		if (input_is_sharded) {
 		  shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -1030,7 +1050,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     do_final_reduction,
                     num_total_reduction_steps,
                     sync_with_other_direction,
-                };		
+                    chunks_per_sync_val,
+                };
                 append_fabric_mux_connection_ct_args(
                     false,  // is_2d_fabric
                     true,   // terminate_from_kernel
