@@ -32,7 +32,7 @@ static DTypeConversionFunc get_dtype_conversion_function(DataType src_type, Data
             case DataType::UINT16: return &transform_type<SrcType, uint16_t>;
             case DataType::UINT32: return &transform_type<SrcType, uint32_t>;
             case DataType::INT32: return &transform_type<SrcType, int32_t>;
-            default: TT_FATAL(false, "Unsupported data type conversion requested. Destination type is invalid!");
+            default: TT_THROW("Unsupported data type conversion requested. Destination type is invalid!");
         }
     };
 
@@ -45,7 +45,7 @@ static DTypeConversionFunc get_dtype_conversion_function(DataType src_type, Data
         case DataType::UINT16: return get_dest_func.operator()<uint16_t>();
         case DataType::UINT32: return get_dest_func.operator()<uint32_t>();
         case DataType::INT32: return get_dest_func.operator()<int32_t>();
-        default: TT_FATAL(false, "Unsupported data type conversion requested. Source type is invalid!");
+        default: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
     }
 }
 
