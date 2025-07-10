@@ -7,6 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
@@ -139,8 +140,11 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
     CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
 
-    // scatter-write currently only supports 2 distinct noc addresses
-    uint32_t max_target_noc_addresses_per_packet = 2;
+    // scatter-write currently only supports 2 distinct noc addresses, and is only supported for wormhole
+    uint32_t max_target_noc_addresses_per_packet = 1;
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0) {
+        max_target_noc_addresses_per_packet = 2;
+    }
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
