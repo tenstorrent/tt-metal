@@ -405,6 +405,14 @@ inline void configure_pack(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_output_src_format);
 
+    // Config RELU
+    relu_config_u hw_relu_config;
+    hw_relu_config.r.STACC_RELU_ApplyRelu     = relu_config & 0xffff;
+    hw_relu_config.r.STACC_RELU_ReluThreshold = (relu_config >> 16) & 0xffff;
+
+    constexpr uint hw_relu_mask = STACC_RELU_ApplyRelu_MASK | STACC_RELU_ReluThreshold_MASK;
+    cfg_reg_rmw_tensix<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(hw_relu_config.val[0]);
+
     t6_mutex_release(mutex::REG_RMW);
 
     set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces, partial_face);
@@ -434,16 +442,6 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
-
-    relu_config_u hw_relu_config;
-    // Config RELU
-    uint32_t current_relu_val = reg_read((uint)&cfg[STACC_RELU_ApplyRelu_ADDR32]);
-    hw_relu_config.val[0]     = current_relu_val;
-
-    hw_relu_config.r.STACC_RELU_ApplyRelu     = relu_config & 0xffff;
-    hw_relu_config.r.STACC_RELU_ReluThreshold = (relu_config >> 16) & 0xffff;
-
-    cfg[STACC_RELU_ApplyRelu_ADDR32] = hw_relu_config.val[0];
 
     // In Blackhole, x_start/x_end must be within 1 row size (i.e. from 0 to 15)
     TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
