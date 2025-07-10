@@ -15,7 +15,9 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 | Loopback                    | 16         | Does a loopback operation where one cores writes to itself.                          |
 | Reshard Hardcoded           | 17-20      | Uses existing reshard tests to analyse their bandwidth and latency.                  |
 | Conv Hardcoded              | 21-23      | Uses existing conv tests to analyse their bandwidth and latency.                     |
-| Interleaved Tile Read/Write | 60-69      | Reads and writes tiles at a time between interleaved buffers and a Tensix core.      |
+| All to all                  | 60         | Write transactions from multiple cores to multiple cores.                            |
+| All from all                | 70         | Read transactions from multiple cores to multiple cores.                             |
+| Interleaved Tile Read/Write | 61-69, 71  | Reads and writes tiles at a time between interleaved buffers and a Tensix core.      |
 | Deinterleave                | 200-201    | Tests deinterleaving                                                                 |
 
 ## Running Tests
