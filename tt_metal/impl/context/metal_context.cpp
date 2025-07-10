@@ -25,6 +25,7 @@
 
 namespace tt::tt_metal {
 
+namespace {
 // Helper function to validate worker_l1_size, also updates it if it's 0.
 void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
     if (worker_l1_size == 0) {
@@ -39,6 +40,14 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
         worker_l1_size,
         max_worker_l1_size);
 }
+
+// Check for environment variable override for custom mesh graph descriptor path
+const char* get_custom_mesh_graph_desc_path() {
+    const char* custom_mesh_graph_desc_path = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    return custom_mesh_graph_desc_path;
+}
+
+}  // namespace
 
 void MetalContext::reinitialize() {
     force_reinit_ = true;
@@ -461,6 +470,19 @@ tt_metal::FabricConfig MetalContext::get_fabric_config() const {
 }
 
 void MetalContext::initialize_control_plane() {
+    if (auto* custom_mesh_graph_desc_path = get_custom_mesh_graph_desc_path(); custom_mesh_graph_desc_path != nullptr) {
+        std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path);
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Custom mesh graph descriptor file not found: {}",
+            mesh_graph_desc_path.string());
+
+        log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
+        global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
+            mesh_graph_desc_path.string());
+        return;
+    }
+
     // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
     // descriptors
     std::string mesh_graph_descriptor;
