@@ -221,6 +221,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mesh_view.num_cols(),
         max_packet_size_bytes,
         common::get_linearized_index(mesh_coordinate, mesh_view),
+        (uint32_t)tt::tt_fabric::get_fabric_topology(),
     };
 
     // fabric routing info

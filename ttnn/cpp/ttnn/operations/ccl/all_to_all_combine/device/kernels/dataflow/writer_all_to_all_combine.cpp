@@ -71,6 +71,7 @@ void kernel_main() {
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(14);  // ew_dim
     constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(16);
+    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(17));
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -131,7 +132,7 @@ void kernel_main() {
                     get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_rows, mesh_cols, replicate_axis>(b);
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
 
-                if (dest_chip_id == src_chip_id) {
+                if (dest_device_idx == linearized_mesh_coord) {
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
                     noc_async_write_barrier();
                 } else {
@@ -162,10 +163,10 @@ void kernel_main() {
     for(uint32_t device_idx=0;device_idx < num_devices;++device_idx){
         const auto & dest_chip_id = dest_chip_ids[device_idx];
 
-        if (dest_chip_id == src_chip_id) {
+        if (device_idx == linearized_mesh_coord) {
             noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
             noc_async_atomic_barrier();
-        } else if (is_configured_target<src_chip_id, mesh_rows, mesh_cols, replicate_axis>(dest_chip_id)) {
+        } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
             const auto & dest_mesh_id = dest_mesh_ids[device_idx];
             const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
