@@ -7,7 +7,6 @@
 #include <tt-metalium/constants.hpp>
 
 #include "split_program_factory.hpp"
-
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
