@@ -15,6 +15,7 @@
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -42,9 +43,6 @@ class MeshDeviceView {
 public:
     using DeviceView = std::vector<IDevice*>;
     using DeviceViews = std::vector<std::vector<IDevice*>>;
-
-    // Create a view of the entire mesh.
-    // MeshDeviceView(const MeshDevice& mesh_device);
 
     // // Create a view of a sub-region of the mesh defined by `range`.
     // MeshDeviceView(const std::vector<IDevice*>& devices, const MeshCoordinateRange& range);
@@ -104,7 +102,7 @@ public:
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
 private:
-    MeshContainer<IDevice*> devices_;
+    MeshContainer<MaybeRemote<IDevice*>> devices_;
     std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 
     // Set if the view is 2D to enable row/col APIs, otherwise nullopt.

@@ -16,6 +16,7 @@
 #include "mesh_coord.hpp"
 #include "shape2d.hpp"
 #include "shape_base.hpp"
+#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -33,12 +34,17 @@ std::vector<IDevice*> get_devices_from_coordinates(
 
 }  // namespace
 
-MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) : devices_(devices) {
+MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) : 
+    devices_(devices.shape(), MaybeRemoteDevice::remote()) {
     if (devices_.shape().dims() == 2) {
         shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
     }
-    for (const auto& [coord, device] : devices_) {
-        device_coordinates_.emplace(device->id(), coord);
+    // Convert plain IDevice* to MaybeRemote<IDevice*>
+    for (const auto& [coord, device] : devices) {
+        devices_.at(coord) = MaybeRemoteDevice::local(device);
+        if (device) {
+            device_coordinates_.emplace(device->id(), coord);
+        }
     }
 }
 
@@ -48,7 +54,8 @@ MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
 MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
     DeviceView devices_in_region;
     for (const auto& coord : range) {
-        devices_in_region.push_back(devices_.at(coord));
+        auto& maybe_device = devices_.at(coord);
+        devices_in_region.push_back(maybe_device.value());
     }
     return devices_in_region;
 }
@@ -63,7 +70,9 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_row(size_t row) const {
     std::vector<IDevice*> row_devices;
     row_devices.reserve(shape_2d_->width());
     for (int col = 0; col < shape_2d_->width(); ++col) {
-        row_devices.push_back(devices_.at(MeshCoordinate(row, col)));
+        const auto& coord = MeshCoordinate(row, col);
+        auto& maybe_device = devices_.at(coord);
+        row_devices.push_back(maybe_device.value());
     }
     return row_devices;
 }
@@ -74,7 +83,9 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
     std::vector<IDevice*> col_devices;
     col_devices.reserve(shape_2d_->height());
     for (int row = 0; row < shape_2d_->height(); ++row) {
-        col_devices.push_back(devices_.at(MeshCoordinate(row, col)));
+        const auto& coord = MeshCoordinate(row, col);
+        auto& maybe_device = devices_.at(coord);
+        col_devices.push_back(maybe_device.value());
     }
     return col_devices;
 }
@@ -106,10 +117,19 @@ bool MeshDeviceView::contains(const MeshCoordinate& coord) const noexcept {
 }
 
 IDevice* MeshDeviceView::get_device(const MeshCoordinate& coord) const {
-    return contains(coord) ? devices_.at(coord) : nullptr;
+    if (!contains(coord)) {
+        return nullptr;
+    }
+    auto& maybe_device = devices_.at(coord);
+    return maybe_device.value();
 }
 const IDevice* MeshDeviceView::at(const MeshCoordinate& coord) const noexcept {
-    return contains(coord) ? devices_.at(coord) : nullptr;
+    if (!contains(coord)) {
+        return nullptr;
+    }
+    const auto& maybe_device = devices_.at(coord);
+    auto opt_device = maybe_device.optional_value();
+    return opt_device.has_value() ? opt_device.value() : nullptr;
 }
 
 bool MeshDeviceView::operator==(const MeshDeviceView& other) const {
@@ -139,7 +159,8 @@ MeshCoordinate MeshDeviceView::find_device(chip_id_t device_id) const {
 
 chip_id_t MeshDeviceView::find_device_id(const MeshCoordinate& coord) const {
     TT_FATAL(contains(coord), "Coordinate {} not found in mesh {}", coord, devices_.shape());
-    return devices_.at(coord)->id();
+    auto& maybe_device = devices_.at(coord);
+    return maybe_device.value()->id();
 }
 
 bool MeshDeviceView::is_mesh_2d() const { return shape_2d_.has_value(); }
@@ -223,6 +244,8 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return this->devices_.values(); }
+MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { 
+    return extract_locals(devices_.values());
+}
 
 }  // namespace tt::tt_metal::distributed

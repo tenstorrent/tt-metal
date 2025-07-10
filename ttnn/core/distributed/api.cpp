@@ -18,6 +18,7 @@
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 
 using namespace tt::tt_metal;
 
@@ -125,11 +126,11 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
 std::vector<int> get_t3k_physical_device_ids_ring() {
     using namespace tt::tt_metal::distributed;
     auto& instance = SystemMesh::instance();
-    auto num_devices = instance.get_shape().mesh_size();
+    auto num_devices = instance.shape().mesh_size();
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
-    auto physical_device_ids = instance.get_mapped_physical_device_ids(MeshShape(1, 8));
-    return physical_device_ids;
+    auto maybe_device_ids = instance.get_mapped_physical_device_ids(MeshShape(1, 8));
+    return extract_locals(maybe_device_ids);
 }
 
 }  // namespace ttnn::distributed

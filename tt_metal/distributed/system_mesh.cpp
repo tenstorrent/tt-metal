@@ -30,7 +30,7 @@ namespace tt::tt_metal::distributed {
 
 class SystemMesh::Impl {
 private:
-    MeshContainer<PhysicalMeshCoordinate> physical_coordinates_;
+    MeshContainer<MaybeRemote<PhysicalMeshCoordinate>> physical_coordinates_;
     MeshShape global_shape_;
     MeshCoordinate local_offset_;
 
@@ -40,7 +40,7 @@ public:
     const MeshShape& shape() const;
     const MeshShape& local_shape() const;
     MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
-    std::vector<chip_id_t> get_mapped_physical_device_ids(
+    std::vector<MaybeRemoteDeviceId> get_mapped_physical_device_ids(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
     uint32_t get_physical_mesh_id(const MeshCoordinate& coord) const;
@@ -49,53 +49,80 @@ public:
 
 // Implementation of public methods
 SystemMesh::Impl::Impl() 
-    : physical_coordinates_(get_system_mesh_coordinate_translation_map()),
-      global_shape_(tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::GLOBAL)),
+    : global_shape_(tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::GLOBAL)),
+      physical_coordinates_(global_shape_, MaybeRemote<PhysicalMeshCoordinate>::remote()),  // Initialize all as remote
       local_offset_(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_offset()) {
+    // Get local physical coordinates
+    auto local_coordinates = get_system_mesh_coordinate_translation_map();
+    CoordinateTranslator translator(local_coordinates.shape(), local_offset_);
+    
+    // Map local coordinates to global mesh
+    for (const auto& [local_coord, physical_coord] : local_coordinates) {
+        auto global_coord = translator.local_to_global(local_coord);
+        if (physical_coordinates_.coord_range().contains(global_coord)) {
+            physical_coordinates_.at(global_coord) = MaybeRemote<PhysicalMeshCoordinate>::local(physical_coord);
+        }
+    }
 }
 
 bool SystemMesh::Impl::is_local_coordinate(const MeshCoordinate& coord) const {
-    CoordinateTranslator translator(physical_coordinates_.shape(), local_offset_);
-    return translator.is_local_coordinate(coord);
+    if (!physical_coordinates_.coord_range().contains(coord)) {
+        return false;
+    }
+    return physical_coordinates_.at(coord).is_local();
 }
 
 const MeshShape& SystemMesh::Impl::shape() const { return global_shape_; }
 
-const MeshShape& SystemMesh::Impl::local_shape() const { return physical_coordinates_.shape(); }
+const MeshShape& SystemMesh::Impl::local_shape() const { 
+    auto local_coordinates = get_system_mesh_coordinate_translation_map();
+    return local_coordinates.shape();
+}
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
-    CoordinateTranslator translator(physical_coordinates_.shape(), local_offset_);
-    auto local_coord = translator.global_to_local(coord);
-    if (local_coord.has_value()) {
-        auto physical_device_id = physical_coordinates_.at(*local_coord).chip_id();
-        log_debug(LogDistributed, "Translating global coordinate: {} to local coordinate: {}, physical device ID: {}", 
-                  coord, *local_coord, physical_device_id);
-        return physical_device_id;
+    if (!is_local_coordinate(coord)) {
+        TT_FATAL(false, "Coordinate {} is not in the local mesh", coord);
     }
-    TT_FATAL(false, "Coordinate {} is not in the local mesh", coord);
+    
+    const auto& maybe_physical = physical_coordinates_.at(coord);
+    if (maybe_physical.is_remote()) {
+        TT_FATAL(false, "Coordinate {} is marked as remote - this should not happen", coord);
+    }
+    
+    auto physical_device_id = maybe_physical.value().chip_id();
+    log_debug(LogDistributed, "Global coordinate: {} mapped to physical device ID: {}", 
+              coord, physical_device_id);
+    return physical_device_id;
 }
 
 uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
-    CoordinateTranslator translator(physical_coordinates_.shape(), local_offset_);
-    auto local_coord = translator.global_to_local(coord);
-    if (local_coord.has_value()) {
-        return *physical_coordinates_.at(*local_coord).mesh_id();
+    if (!is_local_coordinate(coord)) {
+        return 0;  // Return 0 for remote coordinates
     }
-    return 0;
+    
+    const auto& maybe_physical = physical_coordinates_.at(coord);
+    if (maybe_physical.is_remote()) {
+        return 0;
+    }
+    
+    return *maybe_physical.value().mesh_id();
 }
 
 MeshCoordinate SystemMesh::Impl::get_global_device_coordinate(int physical_device_id) const {
-    for (const auto& [logical_coordinate, physical_mesh_coordinate] : physical_coordinates_) {
-        if (physical_mesh_coordinate.chip_id() == physical_device_id) {
-            return logical_coordinate;
+    for (const auto& [global_coordinate, maybe_physical] : physical_coordinates_) {
+        if (maybe_physical.is_local()) {
+            const auto& physical_mesh_coordinate = maybe_physical.value();
+            if (physical_mesh_coordinate.chip_id() == physical_device_id) {
+                return global_coordinate;
+            }
         }
     }
     TT_THROW("Physical device ID {} not found in the system mesh", physical_device_id);
 }
 
-std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
+std::vector<MaybeRemoteDeviceId> SystemMesh::Impl::get_mapped_physical_device_ids(
     const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
-    std::vector<chip_id_t> physical_device_ids;
+    std::vector<MaybeRemoteDeviceId> physical_device_ids;
 
     const MeshShape& system_shape = this->shape();
     TT_FATAL(
@@ -133,11 +160,15 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
         auto line_length = shape.mesh_size();
         for (const auto& logical_coordinate :
              MeshDeviceView::get_line_coordinates(line_length, system_mesh_2d, system_offset_2d)) {
-            auto physical_device_id = get_physical_device_id(logical_coordinate);
-            physical_device_ids.push_back(physical_device_id);
-
-            log_debug(
-                LogMetal, "Logical coordinate: {}, Physical device ID: {}", logical_coordinate, physical_device_id);
+            if (is_local_coordinate(logical_coordinate)) {
+                auto physical_device_id = get_physical_device_id(logical_coordinate);
+                log_debug(
+                    LogDistributed, "Logical coordinate: {}, Physical device ID: {}", logical_coordinate, physical_device_id);
+                physical_device_ids.push_back(MaybeRemoteDeviceId::local(physical_device_id));
+            } else {
+                log_debug(LogDistributed, "Logical coordinate: {} is remote", logical_coordinate);
+                physical_device_ids.push_back(MaybeRemoteDeviceId::remote());
+            }
         }
         return physical_device_ids;
     }
@@ -187,16 +218,26 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
         for (int i = 0; i < shape[0]; i++) {
             for (int j = 0; j < shape[1]; j++) {
                 auto system_coord = MeshCoordinate(j, i);
-                auto physical_device_id = get_physical_device_id(system_coord);
-                physical_device_ids.push_back(physical_device_id);
-                log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
+                if (is_local_coordinate(system_coord)) {
+                    auto physical_device_id = get_physical_device_id(system_coord);
+                    log_debug(LogDistributed, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
+                    physical_device_ids.push_back(MaybeRemoteDeviceId::local(physical_device_id));
+                } else {
+                    log_debug(LogDistributed, "Logical coordinate: {} is remote", system_coord);
+                    physical_device_ids.push_back(MaybeRemoteDeviceId::remote());
+                }
             }
         }
     } else {
         for (const auto& system_coord : system_range) {
-            auto physical_device_id = get_physical_device_id(system_coord);
-            physical_device_ids.push_back(physical_device_id);
-            log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
+            if (is_local_coordinate(system_coord)) {
+                auto physical_device_id = get_physical_device_id(system_coord);
+                physical_device_ids.push_back(MaybeRemoteDeviceId::local(physical_device_id));
+                log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
+            } else {
+                physical_device_ids.push_back(MaybeRemoteDeviceId::remote());
+                log_debug(LogMetal, "Logical coordinate: {} is remote", system_coord);
+            }
         }
     }
 
@@ -226,7 +267,7 @@ MeshCoordinate SystemMesh::get_global_device_coordinate(int physical_device_id) 
     return pimpl_->get_global_device_coordinate(physical_device_id);
 }
 
-std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(
+std::vector<MaybeRemoteDeviceId> SystemMesh::get_mapped_physical_device_ids(
     const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
     return pimpl_->get_mapped_physical_device_ids(shape, offset);
 }

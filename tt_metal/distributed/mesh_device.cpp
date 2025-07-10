@@ -11,6 +11,7 @@
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include <system_mesh.hpp>
+#include <maybe_remote.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -128,7 +129,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
     const MeshDeviceConfig& config) :
     ScopedDevices(
         config.physical_device_ids().empty()
-            ? SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset())
+            ? extract_locals(SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset()))
             : config.physical_device_ids(),
         l1_small_size,
         trace_region_size,
@@ -495,7 +496,9 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
     auto new_physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(new_shape);
 
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
-        if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) ==
+        const auto& maybe_device_id = new_physical_device_ids[i];
+        chip_id_t device_id = maybe_device_id.value();
+        if (physical_device_id_to_linearized_index.find(device_id) ==
             physical_device_id_to_linearized_index.end()) {
             TT_THROW(
                 "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "
@@ -507,7 +510,9 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
     std::vector<IDevice*> new_device_order;
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
-        new_device_order.push_back(this->get_device(new_physical_device_ids[i]));
+        const auto& maybe_device_id = new_physical_device_ids[i];
+        chip_id_t device_id = maybe_device_id.value();
+        new_device_order.push_back(this->get_device(device_id));
     }
     return new_device_order;
 }
