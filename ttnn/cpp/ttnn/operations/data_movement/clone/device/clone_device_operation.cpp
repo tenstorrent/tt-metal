@@ -65,5 +65,4 @@ std::tuple<CloneOperation::operation_attributes_t, CloneOperation::tensor_args_t
         tensor_args_t{input},
     };
 }
-
 }  // namespace ttnn::operations::data_movement::clone
