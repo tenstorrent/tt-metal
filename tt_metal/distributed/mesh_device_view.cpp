@@ -63,9 +63,10 @@ MeshDeviceView::MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devic
     for (const auto& [coord, maybe_device] : devices) {
         devices_.at(coord) = maybe_device;
         
-        if (maybe_device.is_local()) {
-            device_coordinates_.emplace((*maybe_device)->id(), coord);
-        }
+        maybe_device.when(
+            [this, &coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); },
+            []() { /* skip remote devices */ }
+        );
     }
 }
 
@@ -75,11 +76,10 @@ MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
 MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
     DeviceView devices_in_region;
     for (const auto& coord : range) {
-        auto& maybe_device = devices_.at(coord);
-        // Skip remote devices
-        if (maybe_device.is_local()) {
-            devices_in_region.push_back(*maybe_device);
-        }
+        devices_.at(coord).when(
+            [&devices_in_region](const auto& device) { devices_in_region.push_back(device); },
+            []() { /* skip remote devices */ }
+        );
     }
     return devices_in_region;
 }
@@ -94,11 +94,10 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_row(size_t row) const {
     std::vector<IDevice*> row_devices;
     for (int col = 0; col < shape_2d_->width(); ++col) {
         const auto& coord = MeshCoordinate(row, col);
-        auto& maybe_device = devices_.at(coord);
-        // Skip remote devices
-        if (maybe_device.is_local()) {
-            row_devices.push_back(*maybe_device);
-        }
+        devices_.at(coord).when(
+            [&row_devices](const auto& device) { row_devices.push_back(device); },
+            []() { /* skip remote devices */ }
+        );
     }
     return row_devices;
 }
@@ -109,11 +108,10 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
     std::vector<IDevice*> col_devices;
     for (int row = 0; row < shape_2d_->height(); ++row) {
         const auto& coord = MeshCoordinate(row, col);
-        auto& maybe_device = devices_.at(coord);
-        // Skip remote devices
-        if (maybe_device.is_local()) {
-            col_devices.push_back(*maybe_device);
-        }
+        devices_.at(coord).when(
+            [&col_devices](const auto& device) { col_devices.push_back(device); },
+            []() { /* skip remote devices */ }
+        );
     }
     return col_devices;
 }
