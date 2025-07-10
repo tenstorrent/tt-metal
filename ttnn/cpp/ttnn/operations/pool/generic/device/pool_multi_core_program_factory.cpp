@@ -278,10 +278,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool is_large_kernel =
         is_partial_tile ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2 : kernel_size_hw > tt::constants::TILE_HEIGHT;
-    // avg pool, we need to use fp32 accumulation to avoid precision error buildup over multiple
+    // For large kernel avg pool, we need to use fp32 accumulation to avoid precision error buildup over multiple
     // reduction stages, so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles at a time.
-    // TODO do we actually need fp32 accumulation if there is only one reduction stage (small kernels)?
-    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool ? 4 : 8;
+    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool && is_large_kernel ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     // TODO: enable 32 sticks per tile for reduction for all cases, we can only support 16 row reductions for
@@ -335,10 +334,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_1, in_scalar_cb_pagesize, in_scalar_cb_npages);
     }
 
-    // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
-    uint32_t clear_value_cb_id = next_cb_index++;
-    tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
+    uint32_t clear_value_cb_id = 32;
+    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel ||
+        (is_wide_reduction && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0)) {
+        // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
+        // is needed only if we use more then 16 sticks per tile for reduction
+        // or if we use large kernel size.
+        clear_value_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
+    }
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -488,9 +493,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
     std::string reader_kernel_fname;
-    reader_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-        "reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
+    if (is_large_kernel) {
+        reader_kernel_fname =
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+            "reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
+    } else {
+        reader_kernel_fname =
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+            "reader_pool_2d_multi_core_sharded.cpp";
+    }
 
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -525,14 +536,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en = is_avg_pool,  // average pool requires fp32 accumulation to avoid
-                                          // precision error buildup over multiuple reduction stages
+        .fp32_dest_acc_en =
+            is_large_kernel && is_avg_pool,  // for large kernels average pool requires fp32 accumulation to avoid
+                                             // precision error buildup over multiuple reduction stages
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};
     std::string compute_kernel_fname;
-    compute_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core_large_kernel.cpp";
+    if (is_large_kernel) {
+        compute_kernel_fname =
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core_large_kernel.cpp";
+    } else {
+        // both regular and wide reductions
+        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp";
+    }
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
@@ -609,6 +626,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "split_reader: {}", split_reader);
         log_debug(tt::LogOp, "multi_buffering_factor: {}", multi_buffering_factor);
         log_debug(tt::LogOp, "is_wide_reduction: {}", is_wide_reduction);
+        log_debug(tt::LogOp, "is_large_kernel: {}", is_large_kernel);
         log_debug(tt::LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
         log_debug(tt::LogOp, "is_out_sharded: {}", output.memory_config().is_sharded());
     }
