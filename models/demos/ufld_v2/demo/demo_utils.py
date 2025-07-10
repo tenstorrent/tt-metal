@@ -15,6 +15,7 @@ from sklearn.linear_model import LinearRegression
 from tqdm import tqdm
 
 import ttnn
+from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import get_mesh_mappers
 
 
 def loader_func(path):
@@ -298,15 +299,26 @@ def run_test_tusimple(
     performant_runner = None
     for data in tqdm(loader, desc="Processing images", ncols=n_images):
         imgs, names = data
-        if exp_name == "reference_model_results" or exp_name == "reference_model_results_dataset":
+        if exp_name.startswith("reference_model"):
             with torch.no_grad():
                 out, pred = net(imgs)
         else:
             if performant_runner is None:
-                performant_runner = net(device=device, torch_input_tensor=imgs)
+                inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
+                performant_runner = net(
+                    device=device,
+                    torch_input_tensor=imgs,
+                    mesh_mapper=inputs_mesh_mapper,
+                    mesh_composer=output_mesh_composer,
+                    device_batch_size=batch_size,
+                )
                 performant_runner._capture_ufldv2_trace_2cqs()
             out = performant_runner.run(imgs)
-            out = ttnn.to_torch(out).squeeze(dim=0).squeeze(dim=0)
+            out = (
+                ttnn.to_torch(out, mesh_composer=performant_runner.runner_infra.output_mesh_composer)
+                .squeeze(dim=1)
+                .squeeze(dim=1)
+            )
             pred = {
                 "loc_row": out[:, :dim1].view(-1, num_grid_row, num_cls_row, num_lane_on_row),
                 "loc_col": out[:, dim1 : dim1 + dim2].view(-1, num_grid_col, num_cls_col, num_lane_on_col),
@@ -388,7 +400,12 @@ def run_test_tusimple(
             json_str = json.dumps(tmp_dict)
             fp.write(json_str + "\n")
             if is_overlay:
-                if exp_name == "reference_model_results" or exp_name == "ttnn_model_results":
+                if (
+                    exp_name == "reference_model_results"
+                    or exp_name == "ttnn_model_results"
+                    or exp_name == "reference_model_results_dp"
+                    or exp_name == "ttnn_model_results_dp"
+                ):
                     folder = "images"
                     full_path = os.path.join(data_root, f"{exp_name}", name)
                 else:
