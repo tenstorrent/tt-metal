@@ -850,6 +850,7 @@ void try_advance(command_context_t<Addrgen>& cmd_ctx) {
                 cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
                 DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
+                invalidate_l1_cache();
             }
             break;
 
