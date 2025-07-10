@@ -22,6 +22,9 @@ namespace multi_host_tests {
 
 TEST(MultiHost, TestBasicMPICluster) {
     tt::tt_metal::distributed::multihost::DistributedContext::create(0, nullptr);
+    auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+
+    ctx->barrier();
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& eth_connections = cluster.get_ethernet_connections();
@@ -54,12 +57,20 @@ TEST(MultiHost, TestBasicMPICluster) {
 }
 
 TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
-    // TODO: remove this when it's in the metal context
     const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
-    auto control_plane = std::make_unique<GlobalControlPlane>(dual_galaxy_mesh_graph_desc_path.string());
-    // control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    auto control_plane = std::make_unique<ControlPlane>(dual_galaxy_mesh_graph_desc_path.string());
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, TestDualGalaxyFabricSanity) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 }
 
 }  // namespace multi_host_tests

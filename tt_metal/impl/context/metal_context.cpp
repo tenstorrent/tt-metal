@@ -474,7 +474,8 @@ void MetalContext::initialize_control_plane() {
                 tt::tt_fabric::FabricType::TORUS_2D) {
                 mesh_graph_descriptor = "single_galaxy_torus_2d_graph_descriptor.yaml";
             } else {
-                mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
+                // TODO: use new infra to specify this
+                mesh_graph_descriptor = "dual_galaxy_mesh_graph_descriptor.yaml";
             }
             break;
         case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;

@@ -185,12 +185,15 @@ private:
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
+    // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
     // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
     IntermeshLinkTable intermesh_link_table_;
 
-    std::unordered_map<MeshId, std::map<EthChanDescriptor, EthChanDescriptor>> peer_intermesh_link_tables_;
+    std::unordered_map<MeshId, std::unordered_map<HostRankId, std::map<EthChanDescriptor, EthChanDescriptor>>>
+        peer_intermesh_link_tables_;
 
+    // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
 
     FabricNodeId get_fabric_node_id_from_mesh_coord(MeshId mesh_id, const MeshCoordinate& mesh_coord) const;
@@ -235,15 +238,18 @@ private:
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
 
+    // TODO: remove once UMD can provide all intermesh links
     // Populate the local intermesh link to remote intermesh link table
     void generate_local_intermesh_link_table();
 
     // All to All exchange of intermesh link tables between all hosts in the system
     void exchange_intermesh_link_tables();
 
+    // TODO: remove once UMD can provide all intermesh links
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
 
+    // TODO: remove once UMD can provide all intermesh links
     // Check if intermesh links are available by reading SPI ROM config from first chip
     bool is_intermesh_enabled() const;
 

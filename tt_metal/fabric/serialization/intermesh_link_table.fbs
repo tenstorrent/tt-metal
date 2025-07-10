@@ -4,6 +4,10 @@ table MeshId {
   value: uint32;
 }
 
+table HostRankId {
+  value: uint32;
+}
+
 table EthChanDescriptor {
     board_id: uint64;
     chan_id: uint32;
@@ -16,6 +20,7 @@ table EthernetLink {
 
 table IntermeshLinkTable {
   local_mesh_id: MeshId;
+  local_host_rank_id: HostRankId;
   intermesh_links: [EthernetLink];
 }
 
