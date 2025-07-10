@@ -199,6 +199,8 @@ public:
 
     ~FDMeshCommandQueue() override;
 
+    std::optional<MeshTraceId> trace_id() const override { return this->trace_id_; }
+
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
 
