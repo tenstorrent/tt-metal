@@ -137,6 +137,11 @@ RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && make install \
     && rm -rf /tmp/gdb-build
 
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
 #############################################################
 
 FROM base AS release
@@ -158,8 +163,3 @@ RUN mkdir -p /etc && \
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
 RUN pip3 install $WHEEL_FILENAME
-
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
