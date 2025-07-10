@@ -47,21 +47,21 @@ public:
 };
 
 // Implementation of public methods
-SystemMesh::Impl::Impl() 
+SystemMesh::Impl::Impl()
     : global_shape_(tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::GLOBAL)),
       physical_coordinates_(global_shape_),  // Use DistributedMeshContainer
       local_offset_(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_offset()) {
     // Get local physical coordinates
     auto local_coordinates = get_system_mesh_coordinate_translation_map();
     DistributedCoordinateSystem coord_system(global_shape_, local_coordinates.shape(), local_offset_);
-    
+
     // Extract physical coordinates in order for populate_local_region
     std::vector<PhysicalMeshCoordinate> ordered_physical_coords;
     ordered_physical_coords.reserve(local_coordinates.shape().mesh_size());
     for (auto local_coord : coord_system.local_range()) {
         ordered_physical_coords.push_back(local_coordinates.at(local_coord));
     }
-    
+
     // Use populate_local_region to set up the distributed container
     physical_coordinates_.populate_local_region(coord_system, ordered_physical_coords);
 }
@@ -69,17 +69,17 @@ SystemMesh::Impl::Impl()
 
 const MeshShape& SystemMesh::Impl::shape() const { return global_shape_; }
 
-const MeshShape& SystemMesh::Impl::local_shape() const { 
+const MeshShape& SystemMesh::Impl::local_shape() const {
     auto local_coordinates = get_system_mesh_coordinate_translation_map();
     return local_coordinates.shape();
 }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
     TT_FATAL(physical_coordinates_.is_local_at(coord), "Coordinate {} is not in the local mesh", coord);
-    
+
     const auto& maybe_physical = physical_coordinates_.at(coord);
     auto physical_device_id = maybe_physical->chip_id();
-    log_debug(LogDistributed, "Global coordinate: {} mapped to physical device ID: {}", 
+    log_debug(LogDistributed, "Global coordinate: {} mapped to physical device ID: {}",
               coord, physical_device_id);
     return physical_device_id;
 }

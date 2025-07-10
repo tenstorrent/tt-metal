@@ -24,7 +24,7 @@ namespace tt::tt_metal::distributed {
 
 /**
  * Empty marker type to represent a remote device or coordinate.
- * 
+ *
  * RemoteDevice is used in MaybeRemote to indicate that a device or coordinate
  * exists on a remote host and is not directly accessible from the current process.
  */
@@ -35,10 +35,10 @@ struct RemoteDevice {
 
 /**
  * Type-safe wrapper to distinguish between remote and local values.
- * 
- * MaybeRemote<T> provides compile-time type safety when dealing with values 
+ *
+ * MaybeRemote<T> provides compile-time type safety when dealing with values
  * that may exist on remote hosts in a distributed system.
- * 
+ *
  */
 template <typename T>
 class MaybeRemote {
@@ -58,38 +58,38 @@ private:
 public:
     // No default constructor - must be explicit about remote/local
     MaybeRemote() = delete;
-    
+
     // Named constructors for clarity
     static MaybeRemote local(T value);
     static MaybeRemote remote();
-    
+
     // Query methods
     [[nodiscard]] bool is_local() const noexcept;
     [[nodiscard]] bool is_remote() const noexcept;
-    
+
     // Access methods: throw if remote, return local value if local.
     [[nodiscard]] T& value() &;
     [[nodiscard]] const T& value() const&;
-    
+
     // Pointer-like operators for convenience
     [[nodiscard]] T& operator*() &;
     [[nodiscard]] const T& operator*() const&;
     [[nodiscard]] T* operator->();
     [[nodiscard]] const T* operator->() const;
-    
+
     // Optional-style access
     [[nodiscard]] std::optional<T> optional_value() const;
-    
+
     // Simple pattern matching for local/remote cases
     template <typename LocalFunc, typename RemoteFunc>
     [[nodiscard]] auto when(LocalFunc&& on_local, RemoteFunc&& on_remote) const -> decltype(auto);
-    
+
     // Equality operators
     bool operator==(const MaybeRemote& other) const = default;
-    
+
     // Debugging support
     [[nodiscard]] std::string to_string() const;
-    
+
 };
 
 // Type aliases for common use cases
@@ -195,7 +195,7 @@ auto MaybeRemote<T>::when(LocalFunc&& on_local, RemoteFunc&& on_remote) const ->
 template <typename T>
 std::string MaybeRemote<T>::to_string() const {
     return when(
-        [](const T& value) -> std::string { 
+        [](const T& value) -> std::string {
             std::ostringstream oss;
             oss << "MaybeRemote{" << value << "}";
             return oss.str();
@@ -210,10 +210,10 @@ std::string MaybeRemote<T>::to_string() const {
 
 /**
  * Extract all local values from a container of MaybeRemote objects.
- * 
+ *
  * This function filters out remote devices and returns only the local values
  * in a new vector.
- * 
+ *
  * @tparam Container Any container type whose value_type is MaybeRemote<T>
  * @param container The container of MaybeRemote objects
  * @return std::vector<T> containing only the local values
@@ -222,10 +222,10 @@ template <typename Container>
 [[nodiscard]] auto extract_locals(const Container& container) {
     using MaybeRemoteType = typename Container::value_type;
     using ValueType = typename MaybeRemoteType::value_type;
-    
+
     std::vector<ValueType> locals;
     locals.reserve(container.size());
-    
+
     for (const auto& maybe : container) {
         if (maybe.is_local()) {
             locals.push_back(maybe.value());

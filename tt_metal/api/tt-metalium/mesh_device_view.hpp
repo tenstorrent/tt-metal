@@ -106,11 +106,11 @@ public:
     // Returns the offset of this host's portion of the mesh within the global distributed mesh.
     // For single-host meshes, this returns (0, 0).
     [[nodiscard]] MeshCoordinate local_offset() const;
-    
+
     // Returns the shape of the mesh portion managed by this host.
     // For single-host meshes, this equals the global mesh shape.
     [[nodiscard]] MeshShape local_shape() const;
-    
+
     // Checks if a global coordinate is managed by this host.
     // Returns true if the coordinate falls within this host's local mesh bounds.
     [[nodiscard]] bool is_local_coordinate(const MeshCoordinate& coord) const;

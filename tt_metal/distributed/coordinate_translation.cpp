@@ -40,7 +40,7 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
 
         std::vector<PhysicalMeshCoordinate> physical_coordinates;
         physical_coordinates.reserve(local_mesh_shape.mesh_size());
-        
+
         for (const auto& coord : local_coord_range) {
             const auto logical_chip_id = coord.to_linear_index(control_plane.get_physical_mesh_shape(mesh_id, tt::tt_fabric::MeshScope::GLOBAL));
             // Query the control plane to get the physical chip id from logical chip id

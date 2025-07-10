@@ -35,34 +35,34 @@ std::vector<IDevice*> get_devices_from_coordinates(
 
 }  // namespace
 
-MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) : 
+MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) :
     devices_(devices.shape()) {
     if (devices_.shape().dims() == 2) {
         shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
     }
-    
+
     // Convert IDevice* to MaybeRemote<IDevice*> and populate
     for (const auto& [coord, device] : devices) {
-        auto maybe_device = device ? MaybeRemote<IDevice*>::local(device) 
+        auto maybe_device = device ? MaybeRemote<IDevice*>::local(device)
                                   : MaybeRemote<IDevice*>::remote();
         devices_.at(coord) = maybe_device;
-        
+
         if (device) {
             device_coordinates_.emplace(device->id(), coord);
         }
     }
 }
 
-MeshDeviceView::MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices) : 
+MeshDeviceView::MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices) :
     devices_(devices.shape()) {
     if (devices_.shape().dims() == 2) {
         shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
     }
-    
+
     // Copy the MaybeRemote values and build coordinate map
     for (const auto& [coord, maybe_device] : devices) {
         devices_.at(coord) = maybe_device;
-        
+
         maybe_device.when(
             [this, &coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); },
             []() { /* skip remote devices */ }
@@ -271,7 +271,7 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { 
+MeshDeviceView::DeviceView MeshDeviceView::get_devices() const {
     return extract_locals(devices_.values());
 }
 
@@ -285,7 +285,7 @@ MeshCoordinate MeshDeviceView::local_offset() const {
             }
         }
     }
-    
+
     // If no local devices, return (0, 0) - this shouldn't happen in practice
     return min_coord.value_or(MeshCoordinate(0, 0));
 }
@@ -293,7 +293,7 @@ MeshCoordinate MeshDeviceView::local_offset() const {
 MeshShape MeshDeviceView::local_shape() const {
     // Find the bounding box of all local devices
     std::optional<MeshCoordinate> min_coord, max_coord;
-    
+
     for (const auto& [coord, maybe_device] : devices_) {
         if (maybe_device.is_local()) {
             if (!min_coord.has_value() || coord < min_coord.value()) {
@@ -304,12 +304,12 @@ MeshShape MeshDeviceView::local_shape() const {
             }
         }
     }
-    
+
     if (!min_coord.has_value() || !max_coord.has_value()) {
         // No local devices - return empty shape
         return MeshShape(0, 0);
     }
-    
+
     // Calculate shape from bounding box
     return MeshShape(
         max_coord.value()[0] - min_coord.value()[0] + 1,

@@ -34,12 +34,12 @@ TEST(MaybeRemoteTest, LocalConstruction) {
     EXPECT_TRUE(local_int.is_local());
     EXPECT_FALSE(local_int.is_remote());
     EXPECT_EQ(local_int.value(), 42);
-    
+
     auto local_string = MaybeRemote<std::string>::local("hello");
     EXPECT_TRUE(local_string.is_local());
     EXPECT_FALSE(local_string.is_remote());
     EXPECT_EQ(local_string.value(), "hello");
-    
+
     auto local_test = MaybeRemote<TestType>::local({123});
     EXPECT_TRUE(local_test.is_local());
     EXPECT_FALSE(local_test.is_remote());
@@ -50,11 +50,11 @@ TEST(MaybeRemoteTest, RemoteConstruction) {
     auto remote_int = MaybeRemote<int>::remote();
     EXPECT_FALSE(remote_int.is_local());
     EXPECT_TRUE(remote_int.is_remote());
-    
+
     auto remote_string = MaybeRemote<std::string>::remote();
     EXPECT_FALSE(remote_string.is_local());
     EXPECT_TRUE(remote_string.is_remote());
-    
+
     auto remote_test = MaybeRemote<TestType>::remote();
     EXPECT_FALSE(remote_test.is_local());
     EXPECT_TRUE(remote_test.is_remote());
@@ -63,11 +63,11 @@ TEST(MaybeRemoteTest, RemoteConstruction) {
 TEST(MaybeRemoteTest, ValueAccess) {
     auto local = MaybeRemote<int>::local(42);
     EXPECT_EQ(local.value(), 42);
-    
+
     // Test mutable access
     local.value() = 100;
     EXPECT_EQ(local.value(), 100);
-    
+
     // Test const access
     const auto const_local = MaybeRemote<int>::local(200);
     EXPECT_EQ(const_local.value(), 200);
@@ -76,7 +76,7 @@ TEST(MaybeRemoteTest, ValueAccess) {
 TEST(MaybeRemoteTest, ValueAccessThrowsForRemote) {
     auto remote = MaybeRemote<int>::remote();
     EXPECT_THROW((void)remote.value(), std::exception);
-    
+
     const auto const_remote = MaybeRemote<std::string>::remote();
     EXPECT_THROW((void)const_remote.value(), std::exception);
 }
@@ -84,40 +84,40 @@ TEST(MaybeRemoteTest, ValueAccessThrowsForRemote) {
 TEST(MaybeRemoteTest, OptionalValue) {
     auto local = MaybeRemote<int>::local(42);
     EXPECT_THAT(local.optional_value(), Optional(42));
-    
+
     auto remote = MaybeRemote<int>::remote();
     EXPECT_EQ(remote.optional_value(), std::nullopt);
-    
+
     auto local_string = MaybeRemote<std::string>::local("test");
     EXPECT_THAT(local_string.optional_value(), Optional(std::string("test")));
-    
+
     auto remote_string = MaybeRemote<std::string>::remote();
     EXPECT_EQ(remote_string.optional_value(), std::nullopt);
 }
 
 TEST(MaybeRemoteTest, WhenPatternMatching) {
     auto local = MaybeRemote<int>::local(42);
-    
+
     int result = local.when(
         [](int value) { return value * 2; },
         []() { return -1; }
     );
     EXPECT_EQ(result, 84);
-    
+
     auto remote = MaybeRemote<int>::remote();
     result = remote.when(
         [](int value) { return value * 2; },
         []() { return -1; }
     );
     EXPECT_EQ(result, -1);
-    
+
     // Test with different return types
     std::string str_result = local.when(
         [](int value) { return std::to_string(value); },
         []() { return std::string("remote"); }
     );
     EXPECT_EQ(str_result, "42");
-    
+
     str_result = remote.when(
         [](int value) { return std::to_string(value); },
         []() { return std::string("remote"); }
@@ -131,17 +131,17 @@ TEST(MaybeRemoteTest, Equality) {
     auto local3 = MaybeRemote<int>::local(100);
     auto remote1 = MaybeRemote<int>::remote();
     auto remote2 = MaybeRemote<int>::remote();
-    
+
     EXPECT_EQ(local1, local2);
     EXPECT_NE(local1, local3);
     EXPECT_NE(local1, remote1);
     EXPECT_EQ(remote1, remote2);
-    
+
     // Test with custom types
     auto local_test1 = MaybeRemote<TestType>::local({123});
     auto local_test2 = MaybeRemote<TestType>::local({123});
     auto local_test3 = MaybeRemote<TestType>::local({456});
-    
+
     EXPECT_EQ(local_test1, local_test2);
     EXPECT_NE(local_test1, local_test3);
 }
@@ -149,13 +149,13 @@ TEST(MaybeRemoteTest, Equality) {
 TEST(MaybeRemoteTest, ToString) {
     auto local = MaybeRemote<int>::local(42);
     EXPECT_EQ(local.to_string(), "MaybeRemote{42}");
-    
+
     auto remote = MaybeRemote<int>::remote();
     EXPECT_EQ(remote.to_string(), "MaybeRemote{remote}");
-    
+
     auto local_string = MaybeRemote<std::string>::local("hello");
     EXPECT_EQ(local_string.to_string(), "MaybeRemote{hello}");
-    
+
     auto local_test = MaybeRemote<TestType>::local({789});
     EXPECT_EQ(local_test.to_string(), "MaybeRemote{TestType{789}}");
 }
@@ -169,27 +169,27 @@ TEST(MaybeRemoteTest, ExtractLocals) {
         MaybeRemote<int>::remote(),
         MaybeRemote<int>::local(4)
     };
-    
+
     auto locals = extract_locals(mixed_values);
     EXPECT_THAT(locals, ElementsAre(1, 2, 3, 4));
-    
+
     // Test with all remote
     std::vector<MaybeRemote<int>> all_remote = {
         MaybeRemote<int>::remote(),
         MaybeRemote<int>::remote(),
         MaybeRemote<int>::remote()
     };
-    
+
     auto no_locals = extract_locals(all_remote);
     EXPECT_TRUE(no_locals.empty());
-    
+
     // Test with all local
     std::vector<MaybeRemote<int>> all_local = {
         MaybeRemote<int>::local(10),
         MaybeRemote<int>::local(20),
         MaybeRemote<int>::local(30)
     };
-    
+
     auto all_locals = extract_locals(all_local);
     EXPECT_THAT(all_locals, ElementsAre(10, 20, 30));
 }
@@ -201,7 +201,7 @@ TEST(MaybeRemoteTest, ExtractLocalsWithCustomType) {
         MaybeRemote<TestType>::local({200}),
         MaybeRemote<TestType>::local({300})
     };
-    
+
     auto locals = extract_locals(mixed_values);
     EXPECT_EQ(locals.size(), 3);
     EXPECT_EQ(locals[0].value, 100);
@@ -214,10 +214,10 @@ TEST(MaybeRemoteTest, TypeAliases) {
     auto local_device_id = MaybeRemoteDeviceId::local(5);
     EXPECT_TRUE(local_device_id.is_local());
     EXPECT_EQ(local_device_id.value(), 5);
-    
+
     auto remote_device_id = MaybeRemoteDeviceId::remote();
     EXPECT_TRUE(remote_device_id.is_remote());
-    
+
     // Test MaybeRemoteDevice
     // Note: We can't actually create a real Device object in unit tests,
     // but we can test the type exists and basic operations work
@@ -229,12 +229,12 @@ TEST(MaybeRemoteTest, MoveSemantics) {
     // Test with movable type
     auto local_vec = MaybeRemote<std::vector<int>>::local({1, 2, 3, 4, 5});
     EXPECT_EQ(local_vec.value().size(), 5);
-    
+
     // Move construction
     auto moved_vec = std::move(local_vec);
     EXPECT_EQ(moved_vec.value().size(), 5);
     EXPECT_THAT(moved_vec.value(), ElementsAre(1, 2, 3, 4, 5));
-    
+
     // Move assignment
     auto another_vec = MaybeRemote<std::vector<int>>::local({10, 20});
     another_vec = std::move(moved_vec);
@@ -244,12 +244,12 @@ TEST(MaybeRemoteTest, MoveSemantics) {
 
 TEST(MaybeRemoteTest, CopySemantics) {
     auto local = MaybeRemote<int>::local(42);
-    
+
     // Copy construction
     auto copied = local;
     EXPECT_EQ(copied.value(), 42);
     EXPECT_EQ(local.value(), 42);  // Original still valid
-    
+
     // Copy assignment
     auto another = MaybeRemote<int>::local(100);
     another = local;
@@ -264,13 +264,13 @@ TEST(MaybeRemoteTest, ComplexScenarios) {
     EXPECT_TRUE(nested_local.is_local());
     EXPECT_TRUE(nested_local.value().is_local());
     EXPECT_EQ(nested_local.value().value(), 42);
-    
+
     // Test with container of MaybeRemote
     std::vector<MaybeRemote<std::string>> container;
     container.push_back(MaybeRemote<std::string>::local("first"));
     container.push_back(MaybeRemote<std::string>::remote());
     container.push_back(MaybeRemote<std::string>::local("third"));
-    
+
     int local_count = 0;
     int remote_count = 0;
     for (const auto& item : container) {
@@ -279,7 +279,7 @@ TEST(MaybeRemoteTest, ComplexScenarios) {
             [&]() { remote_count++; }
         );
     }
-    
+
     EXPECT_EQ(local_count, 2);
     EXPECT_EQ(remote_count, 1);
 }

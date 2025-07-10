@@ -22,7 +22,7 @@ void DistributedCoordinateSystem::validate_config() const {
     // Validate dimensions match
     TT_FATAL(local_offset_.dims() == global_shape_.dims() && local_offset_.dims() == local_shape_.dims(),
              "Dimension mismatch between global shape, local shape, and offset");
-    
+
     // Validate that local mesh fits within global mesh
     for (size_t dim = 0; dim < local_offset_.dims(); ++dim) {
         TT_FATAL(local_offset_[dim] + local_shape_[dim] <= global_shape_[dim],
@@ -33,7 +33,7 @@ void DistributedCoordinateSystem::validate_config() const {
 bool DistributedCoordinateSystem::is_local(const MeshCoordinate& global_coord) const {
     // Check if the coordinate falls within this host's local mesh bounds
     for (size_t dim = 0; dim < global_coord.dims(); ++dim) {
-        if (global_coord[dim] < local_offset_[dim] || 
+        if (global_coord[dim] < local_offset_[dim] ||
             global_coord[dim] >= local_offset_[dim] + local_shape_[dim]) {
             return false;
         }
@@ -44,7 +44,7 @@ bool DistributedCoordinateSystem::is_local(const MeshCoordinate& global_coord) c
 std::optional<MeshCoordinate> DistributedCoordinateSystem::global_to_local(const MeshCoordinate& global_coord) const {
     tt::stl::SmallVector<uint32_t> local_coord(global_coord.dims());
     for (size_t dim = 0; dim < global_coord.dims(); ++dim) {
-        if (global_coord[dim] < local_offset_[dim] || 
+        if (global_coord[dim] < local_offset_[dim] ||
             global_coord[dim] >= local_offset_[dim] + local_shape_[dim]) {
             return std::nullopt;
         }
@@ -58,14 +58,14 @@ MeshCoordinate DistributedCoordinateSystem::local_to_global(const MeshCoordinate
     TT_FATAL(local_coord.dims() == local_shape_.dims(),
              "Dimension mismatch: local_coord has {} dimensions, expected {}",
              local_coord.dims(), local_shape_.dims());
-    
+
     auto global_coord = local_coord;
     for (size_t dim = 0; dim < local_coord.dims(); ++dim) {
         // Validate local coordinate is within bounds
         TT_FATAL(local_coord[dim] < local_shape_[dim],
                  "Local coordinate[{}]={} exceeds local shape[{}]={}",
                  dim, local_coord[dim], dim, local_shape_[dim]);
-        
+
         global_coord[dim] += local_offset_[dim];
     }
     return MeshCoordinate(global_coord);
@@ -75,16 +75,16 @@ MeshCoordinate DistributedCoordinateSystem::local_to_global(const MeshCoordinate
 // Static factory method to create from control plane
 DistributedCoordinateSystem DistributedCoordinateSystem::from_control_plane(const MeshShape& global_shape) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    
+
     auto local_shape = control_plane.get_physical_mesh_shape(
-        control_plane.get_local_mesh_id_bindings()[0], 
+        control_plane.get_local_mesh_id_bindings()[0],
         tt::tt_fabric::MeshScope::LOCAL);
     auto local_offset = control_plane.get_local_mesh_offset();
-    
-    log_debug(LogDistributed, 
-              "[DistributedCoordinateSystem] Creating from control plane - Global shape: {}, Local shape: {}, Local offset: {}", 
+
+    log_debug(LogDistributed,
+              "[DistributedCoordinateSystem] Creating from control plane - Global shape: {}, Local shape: {}, Local offset: {}",
               global_shape, local_shape, local_offset);
-    
+
     return DistributedCoordinateSystem(global_shape, local_shape, local_offset);
 }
 

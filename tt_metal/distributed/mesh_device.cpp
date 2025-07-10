@@ -222,13 +222,13 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
-    
+
     auto coord_system = DistributedCoordinateSystem::from_control_plane(config.mesh_shape());
 
     // Create distributed mesh container and populate local devices
     DistributedMeshContainer<IDevice*> global_devices(config.mesh_shape());
     global_devices.populate_local_region(coord_system, root_devices);
-    
+
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(global_devices),

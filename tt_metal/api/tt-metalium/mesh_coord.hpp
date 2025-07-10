@@ -375,11 +375,11 @@ private:
 
 /**
  * A specialized MeshContainer where some values may be locally present and some are remote.
- * 
+ *
  * This container simplifies the creation and management of distributed mesh structures where some values may be remote
  * (on other hosts) and some are local. The values are wrapped in MaybeRemote<T> to allow for easy distinction between
  * local and remote values.
- * 
+ *
  * @tparam T The type of values stored (will be wrapped in MaybeRemote<T>)
  */
 template <typename T>
@@ -387,7 +387,7 @@ class DistributedMeshContainer : public MeshContainer<MaybeRemote<T>> {
 public:
     /**
      * Initialize a distributed mesh container with all remote values.
-     * 
+     *
      * @param global_shape The global shape of the mesh
      */
     explicit DistributedMeshContainer(const MeshShape& global_shape)
@@ -395,10 +395,10 @@ public:
 
     /**
      * Populate the local region of the mesh with local values.
-     * 
+     *
      * This method iterates through the local coordinates as defined by the
      * coordinate system and populates them with the provided local values.
-     * 
+     *
      * @param coord_sys The distributed coordinate system defining local/global mapping
      * @param local_values The values to populate in the local region (must match local shape size)
      */
@@ -407,7 +407,7 @@ public:
         TT_FATAL(local_values.size() == coord_sys.local_shape().mesh_size(),
                  "Number of local values {} doesn't match local mesh size {}",
                  local_values.size(), coord_sys.local_shape().mesh_size());
-        
+
         size_t idx = 0;
         for (auto local_coord : coord_sys.local_range()) {
             auto global_coord = coord_sys.local_to_global(local_coord);
@@ -417,7 +417,7 @@ public:
 
     /**
      * Get all local values from the container.
-     * 
+     *
      * @return A vector containing only the local values
      */
     std::vector<T> get_local_values() const {
@@ -426,7 +426,7 @@ public:
 
     /**
      * Check if a global coordinate contains a local value.
-     * 
+     *
      * @param coord The global coordinate to check
      * @return true if the coordinate contains a local value, false if remote
      */
