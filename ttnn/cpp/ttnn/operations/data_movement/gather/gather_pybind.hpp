@@ -6,9 +6,9 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::experimental::gather::detail {
+namespace ttnn::operations::gather::detail {
 namespace py = pybind11;
 
 void bind_gather_operation(py::module& module);
 
-}  // namespace ttnn::operations::experimental::gather::detail
+}  // namespace ttnn::operations::gather::detail

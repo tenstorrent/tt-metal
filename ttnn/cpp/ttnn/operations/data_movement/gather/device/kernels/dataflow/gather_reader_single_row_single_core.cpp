@@ -5,7 +5,6 @@
 #include "gather_common.hpp"
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include <tt-metalium/constants.hpp>
 
 #include <cstdint>
