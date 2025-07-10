@@ -110,7 +110,7 @@ TEST(MeshTensorHostTest, FromHostShards) {
         MeshShape(2));
 
     EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
-    EXPECT_EQ(tensor.storage_type(), StorageType::MULTI_DEVICE_HOST);
+    EXPECT_EQ(tensor.storage_type(), StorageType::HOST);
 
     auto tensors = get_device_tensors(tensor);
     ASSERT_THAT(tensors, SizeIs(2));
@@ -174,7 +174,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
 
     // Read the tensor back, and compare it with input data.
     Tensor output_host_tensor = tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);
-    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::HOST);
     EXPECT_EQ(output_host_tensor.tensor_spec().logical_shape(), shape);
 
     for (const auto& tensor : get_device_tensors(output_host_tensor)) {
@@ -309,7 +309,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
-    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::MULTI_DEVICE_HOST);
+    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::HOST);
     EXPECT_EQ(input_host_tensor_sharded.distributed_tensor_config(), mapper->config());
     EXPECT_EQ(input_host_tensor_sharded.tensor_spec().logical_shape(), sharded_shape);
 
