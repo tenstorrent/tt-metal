@@ -648,6 +648,8 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
             // Return primary to base FW
             erisc_send_exit_signal(device_id, virtual_eth_core, false /* is_idle_eth */);
+            // Ensure that the core has returned to base fw
+            llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
         }
     }
 }

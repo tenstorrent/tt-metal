@@ -73,6 +73,8 @@ enum class FWMailboxMsg : uint8_t {
     // Execute function from the core
     // arg0: L1 addr of function, arg1: unused, arg2: unused
     ETH_MSG_RELEASE_CORE,
+    // Heartbeat counter which indicates base firmware is running
+    HEARTBEAT,
     // Number of mailbox message types
     COUNT,
 };

@@ -383,6 +383,38 @@ void send_msg_to_eth_mailbox(
     }
 }
 
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
+    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
+    const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::HEARTBEAT);
+
+    uint32_t heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+    uint32_t previous_heartbeat_val = heartbeat_val;
+
+    while (heartbeat_val == previous_heartbeat_val) {
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+        previous_heartbeat_val = heartbeat_val;
+        heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+        if (timeout_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            timeout_ms -= 100;
+            if (timeout_ms <= 0) {
+                TT_THROW(
+                    "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} to become active again. Is "
+                    "the "
+                    "firmware updated? Minimum tt-firmware version is 18.2.0",
+                    device_id,
+                    timeout_ms,
+                    virtual_core.str());
+            }
+        }
+    }
+}
+
 }  // namespace internal_
 
 }  // namespace llrt
