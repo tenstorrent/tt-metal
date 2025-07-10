@@ -22,7 +22,6 @@
 #include "core_coord.hpp"
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dprint_server.hpp"
 #include "env_lib.hpp"
 #include "erisc_datamover_builder.hpp"
 #include "fabric_edm_packet_header.hpp"
@@ -31,9 +30,9 @@
 #include "hal.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_types.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -239,7 +238,7 @@ void DevicePool::initialize(
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
-        dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()});
+        dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -304,30 +303,26 @@ void DevicePool::initialize(
             tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
             // Need to reinitialize because FD Fabric setting has changed
             tt::tt_metal::MetalContext::instance().initialize(
-                dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()});
+                dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
         };
 
         if (all_devices_open && any_remote_devices) {
             FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-            if (tt::tt_fabric::is_2d_fabric_config(fabric_config) || hal::get_arch() == tt::ARCH::BLACKHOLE) {
-                // 2D Fabric config or Blackhole
+            if (hal::get_arch() == tt::ARCH::BLACKHOLE) {
                 fallback_to_tunneling();
-                log_debug(
-                    tt::LogMetal, "Cannot launch Dispatch on Fabric on unsupported configuration. Using tunneling.");
-            } else if (fabric_config == FabricConfig::DISABLED) {
-                tt::tt_metal::detail::SetFabricConfig(
-                    FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                // Previously disabled. Need to init
-                if (fabric_config == FabricConfig::DISABLED) {
-                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-                }
-                fabric_config = FabricConfig::FABRIC_1D;
-                log_info(tt::LogMetal, "Dispatch on 1D Fabric");
             } else {
-                // Use the same 1D mode
-                tt::tt_metal::detail::SetFabricConfig(
-                    fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                log_info(tt::LogMetal, "Dispatch on 1D Fabric");
+                if (fabric_config == FabricConfig::DISABLED) {
+                    tt::tt_metal::detail::SetFabricConfig(
+                        FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                    // Call initialize again because previously it was a no-op
+                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+                    fabric_config = FabricConfig::FABRIC_1D;
+                } else {
+                    // Use the same mode
+                    tt::tt_metal::detail::SetFabricConfig(
+                        fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                }
+                log_info(tt::LogMetal, "Dispatch on {} Fabric", fabric_config);
             }
         } else {
             fallback_to_tunneling();
@@ -340,8 +335,6 @@ void DevicePool::initialize(
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids);
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
-        true, target_mmio_ids);
     _inst->init_firmware_on_active_devices();
 }
 
@@ -362,29 +355,29 @@ void DevicePool::initialize_host(IDevice* dev) const {
         detail::DispatchStateCheck(false);
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
-
-    ClearNocData(dev->id());
-    DprintServerAttach(dev->id());
-    watcher_init(dev->id());
-
-    // TODO: as optimization, investigate removing all this call for already initialized devivces
-    if (!tt_metal::MetalContext::instance().rtoptions().get_skip_reset_cores_on_init()) {
-        dev->reset_cores();
-    }
-    dev->initialize_and_launch_firmware();
-
-    watcher_attach(dev->id());
 }
 
 void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
-    std::vector<std::shared_future<void>> events;
+    std::vector<std::shared_future<tt_metal::IDevice*>> events;
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         auto& dev = active_devices[i];
-        events.emplace_back(detail::async([dev]() { dev->init_fabric(); }));
+        events.emplace_back(detail::async([dev]() {
+            if (dev->compile_fabric()) {
+                return dev;
+            } else {
+                // compile failure mostly come from Nebula (TG)
+                return (tt_metal::IDevice*)nullptr;
+            }
+        }));
     }
+
+    // Sequentially execute fabric configuration on all devices
+    // Empirically TG hung when this is also parallelized
     for (const auto& event : events) {
-        // Wait for all fabric programs to be initialized
-        event.get();
+        auto dev = event.get();
+        if (dev) {
+            dev->configure_fabric();
+        }
     }
 }
 
@@ -395,12 +388,7 @@ void DevicePool::initialize_active_devices() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
-        if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-            // TODO: need to write routing tables for unified 2d fabric.
-            // write routing tables to all ethernet cores
-            tt::tt_metal::MetalContext::instance()
-                .get_control_plane().write_routing_tables_to_all_chips();
-        }
+        tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
 
         // Initialize fabric on mmio device
         init_fabric(active_devices);
@@ -461,6 +449,33 @@ void DevicePool::initialize_active_devices() const {
             }
         }
     }
+
+    // Create command queue programs
+    for (auto dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+
+        create_cq_program(dev);
+        auto tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        if (not this->skip_remote_devices) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    auto device = get_device(mmio_controlled_device_id);
+                    create_cq_program(device);
+                }
+            }
+        }
+    }
+
+    // Compile programs
+    compile_cq_programs();
 
     // Init command queue
     for (auto dev : active_devices) {
@@ -557,8 +572,8 @@ std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
     for (const auto& device : this->devices) {
         max_eth_core_count = std::max(
             MetalContext::instance()
-                .get_cluster()
-                .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
+                .get_control_plane()
+                .get_active_ethernet_cores(device->id(), /*skip_reserved_cores*/ true)
                 .size(),
             max_eth_core_count);
     }
@@ -566,7 +581,7 @@ std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
 }
 
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
-    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+    this->using_fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
     std::set<chip_id_t> devices_to_activate;
 
     if (this->skip_remote_devices) {
@@ -806,7 +821,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         if (mmio_devices_to_close.find(mmio_device_id) != mmio_devices_to_close.end()) {
             continue;
         }
-        auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         // iterate over all tunnels origination from this mmio device
@@ -896,8 +910,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     }
 
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
-
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {

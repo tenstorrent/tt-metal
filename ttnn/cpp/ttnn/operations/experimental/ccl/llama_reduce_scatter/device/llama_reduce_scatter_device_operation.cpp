@@ -21,7 +21,6 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    auto input_spec = input_tensor.tensor_spec();
 
     TT_FATAL(attributes.dim == 3, "dim must be 1, got {}", attributes.dim);
     TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);
@@ -70,7 +69,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     // tiles (3840). this should be changed to use unpadded output in the future.
     auto input_tensor = tensor_args.input_tensor;
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    auto input_spec = input_tensor.tensor_spec();
+    const auto& input_spec = input_tensor.tensor_spec();
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto input_grid = input_shard_spec.grid;
     auto input_shard_height = input_shard_spec.shape[0];
@@ -131,7 +130,8 @@ LlamaReduceScatterDeviceOperation::invoke(
     const uint32_t ring_devices,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    bool use_noc1_only) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
@@ -142,6 +142,7 @@ LlamaReduceScatterDeviceOperation::invoke(
             .ring_devices = ring_devices,
             .num_links = num_links,
             .topology = topology,
+            .use_noc1_only = use_noc1_only,
         },
         tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }

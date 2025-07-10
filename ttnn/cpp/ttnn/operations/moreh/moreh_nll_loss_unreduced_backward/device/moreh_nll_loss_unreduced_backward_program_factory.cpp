@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <optional>
+#include <string>
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_unreduced_backward_device_operation.hpp"
@@ -69,8 +70,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     if (weight_has_value) {
         reader_defines["WEIGHT"] = 1;
@@ -196,8 +197,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     if (weight_has_value) {
         reader_defines["WEIGHT"] = 1;
@@ -322,8 +323,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     if (weight_has_value) {
         reader_defines["WEIGHT"] = 1;
@@ -408,7 +409,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::create(
     const Tensor& input_grad = tensor_return_value;
 
     // split work
-    auto input_grad_shape = input_grad.logical_shape();
+    const auto& input_grad_shape = input_grad.logical_shape();
     auto input_grad_rank = input_grad_shape.rank();
 
     if (input_grad_rank == 2) {

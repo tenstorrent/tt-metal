@@ -63,9 +63,10 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 test_suite_bh_llmbox_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/test_system_health
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/unit_tests_eth
 }
 
 test_suite_bh_llmbox_llama_demo_tests() {
@@ -73,8 +74,6 @@ test_suite_bh_llmbox_llama_demo_tests() {
 
     verify_llama_dir_
 
-    # TODO: remove me once upgraded
-    pip3 install -r models/tt_transformers/requirements.txt
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4
 }
 
@@ -87,9 +86,9 @@ test_suite_wh_6u_metal_unit_tests() {
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 }
 
-test_suite_wh_6u_metal_2d_torus_health_check_tests() {
-    echo "[upstream-tests] Checking for 2D Torus topology on WH 6U"
-    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_2D
+test_suite_wh_6u_metal_torus_xy_health_check_tests() {
+    echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
+    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
 }
 
 test_suite_wh_6u_model_unit_tests() {
@@ -144,7 +143,7 @@ test_suite_bh_llmbox_llama_demo_tests"
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_unit_tests
-test_suite_wh_6u_metal_2d_torus_health_check_tests"
+test_suite_wh_6u_metal_torus_xy_health_check_tests"
 
 # Function to display help
 show_help() {

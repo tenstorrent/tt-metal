@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -31,8 +33,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    const auto input_shape = input.padded_shape();
-    const auto input_shape_without_padding = input.logical_shape();
+    const auto& input_shape = input.padded_shape();
 
     const auto N = input_shape[0];
     const auto C = input_shape[1];
@@ -111,7 +112,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
     const auto compute_kernel_1_id = ttnn::operations::CreateComputeKernel(

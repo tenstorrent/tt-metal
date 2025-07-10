@@ -21,13 +21,16 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
 #include "assert.hpp"
+
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "fabric_host_interface.h"
+#include "fabric_types.hpp"
 #include "hal_types.hpp"
+#include "intermesh_constants.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include "mesh_graph.hpp"
@@ -38,19 +41,9 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
 
 namespace tt::tt_fabric {
-
-namespace intermesh_constants {
-
-// Constants used to derive the intermesh ethernet links config
-constexpr uint32_t MULTI_MESH_ENABLED_VALUE = 0x2;
-constexpr uint32_t LINK_CONNECTED_MASK = 0x1;
-constexpr uint32_t MULTI_MESH_MODE_MASK = 0xFF;
-constexpr uint32_t INTERMESH_ETH_LINK_BITS_SHIFT = 8;
-constexpr uint32_t INTERMESH_ETH_LINK_BITS_MASK = 0xFFFF;
-
-}  // namespace intermesh_constants
 
 namespace {
 
@@ -69,55 +62,32 @@ std::vector<chan_id_t> extract_intermesh_eth_links(uint32_t config_value, chip_i
     return intermesh_eth_links;
 }
 
-}  // namespace
+// TODO: Support custom operator< for eth_coord_t to allow usage in std::set
+struct EthCoordComparator {
+    bool operator()(const eth_coord_t& eth_coord_a, const eth_coord_t& eth_coord_b) const {
+        if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
+            return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
+        }
+        if (eth_coord_a.x != eth_coord_b.x) {
+            return eth_coord_a.x < eth_coord_b.x;
+        }
+        if (eth_coord_a.y != eth_coord_b.y) {
+            return eth_coord_a.y < eth_coord_b.y;
+        }
+        if (eth_coord_a.rack != eth_coord_b.rack) {
+            return eth_coord_a.rack < eth_coord_b.rack;
+        }
+        return eth_coord_a.shelf < eth_coord_b.shelf;
+    }
+};
 
 // Get the physical chip ids for a mesh
 std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(chip_id_t chip_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(chip_id);
 }
 
-bool is_chip_on_edge_of_mesh(
-    chip_id_t physical_chip_id,
-    int num_ports_per_side,
-    const std::unordered_map<chip_id_t, std::vector<CoreCoord>>& ethernet_cores_grouped_by_connected_chips) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    // Chip is on edge if it does not have full connections to four sides
-    if (cluster.get_board_type(physical_chip_id) == BoardType::UBB) {
-        auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
-        return (ubb_asic_id >= 2) and (ubb_asic_id <= 5);
-    } else {
-        int i = 0;
-        for (const auto& [connected_chip_id, eth_ports] : ethernet_cores_grouped_by_connected_chips) {
-            if (eth_ports.size() == num_ports_per_side) {
-                i++;
-            }
-        }
-        return (i == 3);
-    }
-}
-
-bool is_chip_on_corner_of_mesh(
-    chip_id_t physical_chip_id,
-    int num_ports_per_side,
-    const std::unordered_map<chip_id_t, std::vector<CoreCoord>>& ethernet_cores_grouped_by_connected_chips) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster.get_board_type(physical_chip_id) == BoardType::UBB) {
-        auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
-        return (ubb_asic_id == 1);
-    } else {
-        // Chip is a corner if it has exactly 2 fully connected sides
-        int i = 0;
-        for (const auto& [connected_chip_id, eth_ports] : ethernet_cores_grouped_by_connected_chips) {
-            if (eth_ports.size() == num_ports_per_side) {
-                i++;
-            }
-        }
-        return (i < 3);
-    }
-}
-
 template <typename CONNECTIVITY_MAP_T>
-static void build_golden_link_counts(
+void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
     std::unordered_map<MeshId, std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>&
         golden_link_counts_out) {
@@ -138,15 +108,41 @@ static void build_golden_link_counts(
             }
         }
     }
-};
+}
+
+std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
+    chip_id_t chip_id, std::uint32_t num_ports_per_side) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto eth_links = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_id);
+    bool is_ubb = cluster.get_board_type(chip_id) == BoardType::UBB;
+    std::vector<chip_id_t> adjacent_chips;
+
+    for (const auto& [connected_chip_id, eth_ports] : eth_links) {
+        // Do not include any corner to corner links on UBB
+        if (is_ubb && cluster.is_external_cable(chip_id, eth_ports[0])) {
+            continue;
+        }
+        if (eth_ports.size() >= num_ports_per_side) {
+            adjacent_chips.push_back(connected_chip_id);
+        }
+    }
+
+    return adjacent_chips;
+}
+
+}  // namespace
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
-    const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
-    if (fabric_config == tt_metal::FabricConfig::CUSTOM) {
+    const IntraMeshConnectivity& intra_mesh_connectivity,
+    tt_metal::FabricConfig fabric_config,
+    tt_metal::FabricReliabilityMode reliability_mode) {
+    if (fabric_config == tt_metal::FabricConfig::CUSTOM || fabric_config == tt_metal::FabricConfig::DISABLED) {
         return;
     }
+
+    this->router_port_directions_to_num_routing_planes_map_.clear();
+
     auto topology = FabricContext::get_topology_from_config(fabric_config);
-    size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
     auto apply_min =
         [this](
@@ -166,7 +162,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
         // Get mesh dimensions from the mesh graph descriptor
         auto mesh_ew_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[1];
-        auto mesh_ns_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[0];
 
         // Convert linear chip_id to 2D mesh coordinates
         auto coord_y = chip_id / mesh_ew_size;
@@ -264,8 +259,67 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     }
 }
 
+LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
+    const char* mesh_id_str = std::getenv("TT_MESH_ID");
+    const char* host_rank_str = std::getenv("TT_HOST_RANK");
+    if (mesh_id_str == nullptr ^ host_rank_str == nullptr) {
+        TT_THROW("Both TT_MESH_ID and TT_HOST_RANK environment variables must be set together or both unset");
+    }
+
+    // If both TT_MESH_ID and TT_HOST_RANK are unset, we don't initialzie the local mesh binding.
+    // A nullopt here indicates that the host this ControlPlane is runnning on owns all Meshes in
+    // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
+    if (mesh_id_str == nullptr && host_rank_str == nullptr) {
+        auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context();
+        auto mpi_rank = *ctx.rank();
+        std::vector<MeshId> local_mesh_ids;
+        for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
+            for (const auto& [coord, rank] : host_ranks) {
+                if (mpi_rank == *rank) {
+                    local_mesh_ids.push_back(mesh_id);
+                }
+            }
+        }
+        TT_FATAL(local_mesh_ids.size() > 0, "No local meshes found for host rank {}", mpi_rank);
+        return LocalMeshBinding{.mesh_ids = std::move(local_mesh_ids), .host_rank = HostRankId{mpi_rank}};
+    }
+
+    // If both TT_MESH_ID and TT_HOST_RANK are set, we'll use the values from the environment variables.
+    auto local_mesh_binding = LocalMeshBinding{
+        .mesh_ids = {MeshId{std::stoi(mesh_id_str)}}, .host_rank = HostRankId{std::stoi(host_rank_str)}};
+
+    log_debug(
+        tt::LogDistributed,
+        "Local mesh binding: mesh_id: {}, host_rank: {}",
+        local_mesh_binding.mesh_ids[0],
+        local_mesh_binding.host_rank);
+
+    // Validate the local mesh binding exists in the mesh graph descriptor
+    auto mesh_ids = this->routing_table_generator_->mesh_graph->get_mesh_ids();
+    if (std::find(mesh_ids.begin(), mesh_ids.end(), local_mesh_binding.mesh_ids[0]) == mesh_ids.end()) {
+        TT_THROW(
+            "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
+            local_mesh_binding.mesh_ids[0]);
+    }
+
+    // Validate host rank (only if mesh_id is valid)
+    const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(local_mesh_binding.mesh_ids[0]);
+    bool is_valid_host_rank = std::find_if(host_ranks.begin(), host_ranks.end(), [&](const auto& coord_rank_pair) {
+                                  return coord_rank_pair.value() == local_mesh_binding.host_rank;
+                              }) != host_ranks.end();
+
+    TT_FATAL(
+        is_valid_host_rank,
+        "Invalid TT_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor",
+        local_mesh_binding.host_rank);
+
+    return local_mesh_binding;
+}
+
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
     // Printing, only enabled with log_debug
@@ -273,16 +327,18 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
 
     // Initialize the control plane routers based on mesh graph
     const auto& logical_mesh_chip_id_to_physical_chip_id_mapping =
-        this->get_physical_chip_mapping_from_mesh_graph_desc_file(mesh_graph_desc_file);
+        this->get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file);
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
     // Query and generate intermesh ethernet links per physical chip
     this->initialize_intermesh_eth_links();
+    this->generate_local_intermesh_link_table();
 }
 
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
     // Printing, only enabled with log_debug
@@ -292,6 +348,7 @@ ControlPlane::ControlPlane(
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
     // Query and generate intermesh ethernet links per physical chip
     this->initialize_intermesh_eth_links();
+    this->generate_local_intermesh_link_table();
 }
 
 void ControlPlane::load_physical_chip_mapping(
@@ -352,163 +409,58 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
 
 void ControlPlane::validate_mesh_connections() const {
     for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
-        this->validate_mesh_connections(mesh_id);
+        if (this->is_local_mesh(mesh_id)) {
+            this->validate_mesh_connections(mesh_id);
+        }
     }
 }
 
 std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
-    std::uint32_t mesh_ns_size,
-    std::uint32_t mesh_ew_size,
-    chip_id_t nw_chip_physical_chip_id) const {
+    const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
+    std::optional<chip_id_t> nw_corner_chip_id) const {
+    // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
+    std::set<chip_id_t> user_chip_ids;
+    for (const auto& [coord, chip_id] : mesh_container) {
+        user_chip_ids.insert(chip_id);
+    }
+
+    // Special case for 1x1 mesh
+    if (mesh_container.shape() == tt::tt_metal::distributed::MeshShape(1, 1)) {
+        std::vector<chip_id_t> physical_chip_ids(1);
+        physical_chip_ids[0] = *user_chip_ids.begin();
+        return physical_chip_ids;
+    }
+
+    // Build mesh adjacency map using BFS
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
+    auto topology_info = build_mesh_adjacency_map(
+        user_chip_ids,
+        mesh_container.shape(),
+        [num_ports_per_side](chip_id_t chip_id) {
+            return get_adjacent_chips_from_ethernet_connections(chip_id, num_ports_per_side);
+        },
+        nw_corner_chip_id);
 
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-    const auto user_chips = cluster.user_exposed_chip_ids();
-    std::set<chip_id_t> corner_chips;
-    std::set<chip_id_t> edge_chips;
-    // Check if user provided chip is on corner or edge of mesh
-    // Ideally we want to always enable an auto detected chip, but to preserve current pinning
-    // in MeshDevice, we pin a specific chip on the corner for TGs/T3ks
-    for (const auto& physical_chip_id : user_chips) {
-        const auto& connected_ethernet_cores = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
-        if (is_chip_on_corner_of_mesh(physical_chip_id, num_ports_per_side, connected_ethernet_cores)) {
-            corner_chips.insert(physical_chip_id);
-        } else if (is_chip_on_edge_of_mesh(nw_chip_physical_chip_id, num_ports_per_side, connected_ethernet_cores)) {
-            edge_chips.insert(physical_chip_id);
-        }
-    }
-    if (corner_chips.find(nw_chip_physical_chip_id) == corner_chips.end()) {
-        log_warning(
-            tt::LogFabric,
-            "NW chip {} is not on corner of mesh, using detected chip {}",
-            nw_chip_physical_chip_id,
-            *corner_chips.begin());
-        nw_chip_physical_chip_id = *corner_chips.begin();
+    // Handle 1D meshes (1xN or Nx1)
+    bool is_1d_mesh = (topology_info.ns_size == 1) || (topology_info.ew_size == 1);
+    if (is_1d_mesh) {
+        return convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
     }
 
-    // Get shortest paths to to all chips on edges
-    std::unordered_map<chip_id_t, std::vector<std::vector<chip_id_t>>> paths;
-    paths.insert({nw_chip_physical_chip_id, {{nw_chip_physical_chip_id}}});
-
-    std::unordered_map<chip_id_t, std::uint32_t> dist;
-    dist.insert({nw_chip_physical_chip_id, 0});
-
-    std::unordered_set<chip_id_t> visited_physical_chips;
-
-    std::queue<chip_id_t> q;
-    q.push(nw_chip_physical_chip_id);
-    visited_physical_chips.insert(nw_chip_physical_chip_id);
-    while (!q.empty()) {
-        chip_id_t current_chip_id = q.front();
-        q.pop();
-
-        auto eth_links = get_ethernet_cores_grouped_by_connected_chips(current_chip_id);
-        bool is_ubb = cluster.get_board_type(current_chip_id) == BoardType::UBB;
-        for (const auto& [connected_chip_id, eth_ports] : eth_links) {
-            // Do not include any corner to corner links on UBB
-            if (is_ubb && cluster.is_external_cable(current_chip_id, eth_ports[0])) {
-                continue;
-            }
-            if (eth_ports.size() >= num_ports_per_side) {
-                if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end()) {
-                    q.push(connected_chip_id);
-                    visited_physical_chips.insert(connected_chip_id);
-                    dist.insert({connected_chip_id, std::numeric_limits<std::uint32_t>::max()});
-                    paths.insert({connected_chip_id, {}});
-                }
-                if (dist.at(connected_chip_id) > dist.at(current_chip_id) + 1) {
-                    dist.at(connected_chip_id) = dist.at(current_chip_id) + 1;
-                    paths.at(connected_chip_id) = paths.at(current_chip_id);
-                    for (auto& path : paths.at(connected_chip_id)) {
-                        path.push_back(connected_chip_id);
-                    }
-                } else if (dist.at(connected_chip_id) == dist.at(current_chip_id) + 1) {
-                    // another possible path discovered
-                    for (auto& path : paths.at(current_chip_id)) {
-                        paths.at(connected_chip_id).push_back(path);
-                    }
-
-                    paths.at(connected_chip_id)[paths.at(connected_chip_id).size() - 1].push_back(connected_chip_id);
-                }
-            } else {
-                log_debug(
-                    tt::LogFabric,
-                    "Number of eth ports {} does not match num ports specified in Mesh graph descriptor {}",
-                    eth_ports.size(),
-                    num_ports_per_side);
-            }
-        }
-    }
-
-    std::vector<chip_id_t> physical_chip_ids;
-    // TODO: if square mesh, we might need to pin another corner chip, or potentially have multiple possible orientations
-    for (const auto& [dest_id, equal_dist_paths] : paths) {
-        // TODO: can change this to not check for corner?
-        // Look for size of equal dist paths == mesh_ew_size and num paths == 1
-        if (equal_dist_paths.size() == 1) {
-            auto dest_chip_id = equal_dist_paths[0].back();
-            bool is_corner = is_chip_on_corner_of_mesh(
-                dest_chip_id, num_ports_per_side, get_ethernet_cores_grouped_by_connected_chips(dest_chip_id));
-            if (is_corner and equal_dist_paths[0].size() == mesh_ew_size) {
-                physical_chip_ids = equal_dist_paths[0];
-                break;
-            }
-        }
-    }
-
-    TT_FATAL(
-        physical_chip_ids.size() == mesh_ew_size,
-        "Did not find edge with expected number of East-West chips {}",
-        mesh_ew_size);
-
-    // Loop over edge and populate entire mesh with physical chip ids
-    // reset and reuse the visited set of physical chip ids
-    visited_physical_chips = {};
-    visited_physical_chips.insert(physical_chip_ids.begin(), physical_chip_ids.end());
-    physical_chip_ids.resize(mesh_ns_size * mesh_ew_size);
-
-    for (int i = 1; i < mesh_ns_size; i++) {
-        for (int j = 0; j < mesh_ew_size; j++) {
-            chip_id_t physical_chip_id_from_north = physical_chip_ids[(i - 1) * mesh_ew_size + j];
-            auto eth_links_grouped_by_connected_chips =
-                get_ethernet_cores_grouped_by_connected_chips(physical_chip_id_from_north);
-            bool found_chip = false;
-            bool is_ubb = cluster.get_board_type(physical_chip_id_from_north) == BoardType::UBB;
-            for (const auto& [connected_chip_id, eth_ports] : eth_links_grouped_by_connected_chips) {
-                if (is_ubb && cluster.is_external_cable(physical_chip_id_from_north, eth_ports[0])) {
-                    continue;
-                }
-                if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end() and
-                    eth_ports.size() >= num_ports_per_side) {
-                    physical_chip_ids[i * mesh_ew_size + j] = connected_chip_id;
-                    visited_physical_chips.insert(connected_chip_id);
-                    found_chip = true;
-                    break;
-                }
-            }
-            TT_FATAL(found_chip, "Did not find chip for mesh row {} and column {}", i, j);
-        }
-    }
-
-    std::stringstream ss;
-    for (int i = 0; i < mesh_ns_size * mesh_ew_size; i++) {
-        if (i % mesh_ew_size == 0) {
-            ss << std::endl;
-        }
-        ss << " " << std::setfill('0') << std::setw(2) << physical_chip_ids[i];
-    }
-    log_debug(tt::LogFabric, "Control Plane: NW {} Physical Device Ids: {}", nw_chip_physical_chip_id, ss.str());
-    return physical_chip_ids;
+    // Handle 2D meshes
+    return convert_2d_mesh_adjacency_to_row_major_vector(topology_info, nw_corner_chip_id);
 }
 
-std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_mesh_graph_desc_file(
+std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping(
     const std::string& mesh_graph_desc_file) {
-    chip_id_t nw_chip_physical_id;
-    std::uint32_t mesh_ns_size, mesh_ew_size;
-    std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
     std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping;
+
+    std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
+
+    // NOTE: This is a special case for the TG mesh graph descriptor.
+    // It has to use Ethernet coordinates because ethernet coordinates must be mapped manually to physical chip IDs
+    // because the TG intermesh ethernet links could be inverted when mapped to physical chip IDs.
     if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
         // Add the N150 MMIO devices
         auto eth_coords_per_chip =
@@ -519,84 +471,68 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
                 eth_coord_y_for_gateway_chips[eth_coord.y] = chip_id;
             }
         }
-        logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{0}, 0), eth_coord_y_for_gateway_chips[3]});
-        logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{1}, 0), eth_coord_y_for_gateway_chips[2]});
-        logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{2}, 0), eth_coord_y_for_gateway_chips[1]});
-        logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{3}, 0), eth_coord_y_for_gateway_chips[0]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+            {FabricNodeId(MeshId{0}, 0), eth_coord_y_for_gateway_chips[3]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+            {FabricNodeId(MeshId{1}, 0), eth_coord_y_for_gateway_chips[2]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+            {FabricNodeId(MeshId{2}, 0), eth_coord_y_for_gateway_chips[1]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+            {FabricNodeId(MeshId{3}, 0), eth_coord_y_for_gateway_chips[0]});
 
-        nw_chip_physical_id =
+        auto nw_chip_physical_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
         auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{4});
-        mesh_ns_size = mesh_shape[0];
-        mesh_ew_size = mesh_shape[1];
         // Main board
-        const auto& physical_chip_ids =
-            this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id);
+        const auto& mesh_container = this->routing_table_generator_->mesh_graph->get_chip_ids(MeshId{4});
+        const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
         for (std::uint32_t i = 0; i < physical_chip_ids.size(); i++) {
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{4}, i), physical_chip_ids[i]});
         }
-    } else if (
-        mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "quanta_galaxy_torus_2d_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "dual_galaxy_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "p150_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "p150_x2_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "p150_x4_mesh_graph_descriptor.yaml") {
-        // TODO: update to pick out chip automatically
-        nw_chip_physical_id = 0;
-        auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0});
-        mesh_ns_size = mesh_shape[0];
-        mesh_ew_size = mesh_shape[1];
-        // Main board
-        const auto& physical_chip_ids =
-            this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id);
-        for (std::uint32_t i = 0; i < physical_chip_ids.size(); i++) {
-            logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{0}, i), physical_chip_ids[i]});
+        // This case can be depreciated once we have multi-host testing and validate it working
+    } else if (mesh_graph_desc_filename == "t3k_dual_host_mesh_graph_descriptor.yaml") {
+        // TODO(#24230): This path will soon be deprecated once we generalize logical mesh_chip_id to physical chip_id
+        // mapping
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto chip_eth_coords = cluster.get_user_chip_ethernet_coordinates();
+        std::vector<eth_coord_t> eth_coords;
+        eth_coords.reserve(chip_eth_coords.size());
+        for (const auto& [_, eth_coord] : chip_eth_coords) {
+            eth_coords.push_back(eth_coord);
         }
-    } else if (
-        mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "multihost_t3k_mesh_graph_descriptor.yaml") {
-        // Pick out the chip with the lowest ethernet coordinate (i.e. NW chip)
-        const auto& chip_eth_coords =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
-        TT_FATAL(!chip_eth_coords.empty(), "No chip ethernet coordinates found in ethernet coordinates map");
+        std::sort(eth_coords.begin(), eth_coords.end(), EthCoordComparator());
 
-        // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
-        const auto min_coord =
-            *std::min_element(chip_eth_coords.begin(), chip_eth_coords.end(), [](const auto& a, const auto& b) {
-                const auto& [chip_a, eth_coord_a] = a;
-                const auto& [chip_b, eth_coord_b] = b;
+        auto mesh_ids = this->get_local_mesh_id_bindings();
+        auto mesh_id = mesh_ids.at(0);  // Use the first mesh ID
+        auto host_rank_id = this->get_local_host_rank_id_binding();
+        auto fabric_chip_ids = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id).values();
 
-                if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
-                    return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
-                }
-                if (eth_coord_a.x != eth_coord_b.x) {
-                    return eth_coord_a.x < eth_coord_b.x;
-                }
-                if (eth_coord_a.y != eth_coord_b.y) {
-                    return eth_coord_a.y < eth_coord_b.y;
-                }
-                if (eth_coord_a.rack != eth_coord_b.rack) {
-                    return eth_coord_a.rack < eth_coord_b.rack;
-                }
-                return eth_coord_a.shelf < eth_coord_b.shelf;
-            });
-
-        nw_chip_physical_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(min_coord.second);
-        auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0});
-
-        const auto& physical_chip_ids =
-            this->get_mesh_physical_chip_ids(mesh_shape[0], mesh_shape[1], nw_chip_physical_id);
-        for (std::uint32_t i = 0; i < physical_chip_ids.size(); i++) {
-            logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{0}, i), physical_chip_ids[i]});
+        TT_FATAL(
+            fabric_chip_ids.size() == eth_coords.size(),
+            "Number of fabric chip ids {} does not match number of eth coords {}",
+            fabric_chip_ids.size(),
+            eth_coords.size());
+        for (std::uint32_t idx = 0; idx < fabric_chip_ids.size(); idx++) {
+            auto fabric_chip_id = fabric_chip_ids.at(idx);
+            auto eth_coord = eth_coords.at(idx);
+            logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+                {tt_fabric::FabricNodeId(mesh_id, fabric_chip_id),
+                 cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
         }
     } else {
-        TT_THROW("Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
+        // Iterate over every mesh defined in the mesh-graph descriptor and embed it on top of
+        // the physical cluster using the generic helper.
+        for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            const auto& mesh_container = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id);
+            const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container);
+
+            for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
+                logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(
+                    FabricNodeId(mesh_id, i), physical_chip_ids[i]);
+            }
+        }
     }
+
     return logical_mesh_chip_id_to_physical_chip_id_mapping;
 }
 
@@ -661,6 +597,9 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
     for (std::uint32_t mesh_id = 0; mesh_id < router_intra_mesh_routing_table.size(); mesh_id++) {
+        if (!this->is_local_mesh(MeshId{mesh_id})) {
+            continue;
+        }
         for (std::uint32_t src_chip_id = 0; src_chip_id < router_intra_mesh_routing_table[mesh_id].size();
              src_chip_id++) {
             FabricNodeId src_fabric_node_id{MeshId{mesh_id}, src_chip_id};
@@ -716,6 +655,9 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 
     const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
     for (std::uint32_t src_mesh_id = 0; src_mesh_id < router_inter_mesh_routing_table.size(); src_mesh_id++) {
+        if (!this->is_local_mesh(MeshId{src_mesh_id})) {
+            continue;
+        }
         for (std::uint32_t src_chip_id = 0; src_chip_id < router_inter_mesh_routing_table[src_mesh_id].size();
              src_chip_id++) {
             FabricNodeId src_fabric_node_id{MeshId{src_mesh_id}, src_chip_id};
@@ -862,36 +804,18 @@ size_t ControlPlane::get_num_live_routing_planes(
 
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
-void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_metal::FabricReliabilityMode reliability_mode) {
+void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
+    tt::tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
 
+    // When running multi-host workloads, have all hosts in the system exchange their local intermesh link tables
+    // with all other hosts in the system. This information is used to assign directions to intermesh links.
+    this->exchange_intermesh_link_tables();
+
     const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
-
-    auto add_ethernet_channel_to_router_mapping = [&](MeshId mesh_id,
-                                                      chip_id_t chip_id,
-                                                      const CoreCoord& eth_core,
-                                                      RoutingDirection direction) {
-        FabricNodeId fabric_node_id{mesh_id, chip_id};
-        auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
-        auto fabric_router_channels_on_chip =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
-        // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
-        auto chan_id = tt::tt_metal::MetalContext::instance()
-                           .get_cluster()
-                           .get_soc_desc(physical_chip_id)
-                           .logical_eth_core_to_chan_map.at(eth_core);
-        // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
-        if (fabric_router_channels_on_chip.contains(chan_id)) {
-            this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
-        } else {
-            log_debug(
-                tt::LogFabric, "Control Plane: Disabling router on M{}D{} eth channel {}", mesh_id, chip_id, chan_id);
-        }
-    };
-
     // Initialize the bookkeeping for mapping from mesh/chip/direction to physical ethernet channels
     for (const auto& [fabric_node_id, _] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         if (!this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
@@ -900,6 +824,9 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
     }
 
     for (std::uint32_t mesh_id = 0; mesh_id < intra_mesh_connectivity.size(); mesh_id++) {
+        if (!this->is_local_mesh(MeshId{mesh_id})) {
+            continue;
+        }
         for (std::uint32_t chip_id = 0; chip_id < intra_mesh_connectivity[mesh_id].size(); chip_id++) {
             const auto fabric_node_id = FabricNodeId(MeshId{mesh_id}, chip_id);
             auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
@@ -913,8 +840,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
                 bool connections_exist = connected_chips_and_eth_cores.find(physical_connected_chip_id) !=
                                          connected_chips_and_eth_cores.end();
                 TT_FATAL(
-                    connections_exist || reliability_mode !=
-                                             tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+                    connections_exist ||
+                        reliability_mode != tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                     "Expected connections to exist for M{}D{} to D{}",
                     mesh_id,
                     chip_id,
@@ -936,42 +863,27 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
                 for (const auto& eth_core : connected_eth_cores) {
                     // There could be an optimization here to create entry for both chips here, assuming links are
                     // bidirectional
-                    add_ethernet_channel_to_router_mapping(MeshId{mesh_id}, chip_id, eth_core, edge.port_direction);
-                }
-            }
-        }
-    }
-    for (std::uint32_t mesh_id = 0; mesh_id < inter_mesh_connectivity.size(); mesh_id++) {
-        for (std::uint32_t chip_id = 0; chip_id < inter_mesh_connectivity[mesh_id].size(); chip_id++) {
-            const auto fabric_node_id = FabricNodeId(MeshId{mesh_id}, chip_id);
-            auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
-            const auto& connected_chips_and_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
-                    physical_chip_id);
-            for (const auto& [connected_mesh_id, edge] : inter_mesh_connectivity[mesh_id][chip_id]) {
-                // Loop over edges connected chip ids, they could connect to different chips for intermesh traffic
-                // edge.connected_chip_ids is a vector of chip ids, that is populated per port. Since we push all
-                // connected ports into the map when we visit a chip id, we should skip if we have already visited this
-                // chip id
-                std::unordered_set<chip_id_t> visited_chip_ids;
-                for (const auto& logical_connected_chip_id : edge.connected_chip_ids) {
-                    if (visited_chip_ids.count(logical_connected_chip_id)) {
-                        continue;
-                    }
-                    visited_chip_ids.insert(logical_connected_chip_id);
-                    const auto& physical_connected_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(
-                        FabricNodeId(connected_mesh_id, logical_connected_chip_id));
-                    const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
-                    for (const auto& eth_core : connected_eth_cores) {
-                        add_ethernet_channel_to_router_mapping(MeshId{mesh_id}, chip_id, eth_core, edge.port_direction);
-                    }
+                    this->assign_direction_to_fabric_eth_core(fabric_node_id, eth_core, edge.port_direction);
                 }
             }
         }
     }
 
-    this->initialize_dynamic_routing_plane_counts(
-        intra_mesh_connectivity, tt::tt_metal::MetalContext::instance().get_fabric_config(), reliability_mode);
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    for (std::uint32_t mesh_id = 0; mesh_id < inter_mesh_connectivity.size(); mesh_id++) {
+        for (std::uint32_t chip_id = 0; chip_id < inter_mesh_connectivity[mesh_id].size(); chip_id++) {
+            if (this->is_local_mesh(MeshId{mesh_id})) {
+                const auto fabric_node_id = FabricNodeId(MeshId{mesh_id}, chip_id);
+                if (*(distributed_context.size()) > 1) {
+                    this->assign_intermesh_link_directions_to_remote_host(fabric_node_id);
+                } else {
+                    this->assign_intermesh_link_directions_to_local_host(fabric_node_id);
+                }
+            }
+        }
+    }
+
+    this->initialize_dynamic_routing_plane_counts(intra_mesh_connectivity, fabric_config, reliability_mode);
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.
@@ -980,11 +892,10 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
     // Trim the ethernet channels that don't map to live fabric routing planes.
     // NOTE: This MUST be called after ordering ethernet channels
     this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
-
     this->convert_fabric_routing_table_to_chip_routing_table();
 }
 
-void ControlPlane::write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const {
+void ControlPlane::write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const {
     FabricNodeId fabric_node_id{mesh_id, chip_id};
     const auto& chip_intra_mesh_routing_tables = this->intra_mesh_routing_tables_.at(fabric_node_id);
     const auto& chip_inter_mesh_routing_tables = this->inter_mesh_routing_tables_.at(fabric_node_id);
@@ -1162,9 +1073,9 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
     TT_THROW("Cannot Find Ethernet Channel Direction");
 }
 
-std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
+std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const {
-    std::vector<std::pair<chip_id_t, chan_id_t>> route;
+    std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
     // Find any eth chan on the plane id
     while (src_fabric_node_id != dst_fabric_node_id) {
@@ -1176,7 +1087,6 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
         if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
             return {};
         }
-        auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         chan_id_t next_chan_id = 0;
         if (src_mesh_id != dst_mesh_id) {
             // Inter-mesh routing
@@ -1191,14 +1101,12 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
         }
         if (src_chan_id != next_chan_id) {
             // Chan to chan within chip
-            route.push_back({physical_chip_id, next_chan_id});
+            route.push_back({src_fabric_node_id, next_chan_id});
         }
 
         std::tie(src_fabric_node_id, src_chan_id) =
             this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
-        auto connected_physical_chip_id =
-            this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
-        route.push_back({connected_physical_chip_id, src_chan_id});
+        route.push_back({src_fabric_node_id, src_chan_id});
     }
 
     return route;
@@ -1312,6 +1220,177 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction
     return {};
 }
 
+static void write_to_all_tensix_cores(
+    const void* data, size_t size, tt::tt_metal::HalL1MemAddrType addr_type, chip_id_t physical_chip_id) {
+    TT_FATAL(
+        size ==
+            tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type),
+        "ControlPlane: Tensix core data size mismatch expected {} but got {}",
+        size,
+        tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+    // Write to all Tensix cores
+    for (const auto& tensix_core : tensix_cores) {
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            data,
+            size,
+            tt_cxy_pair(physical_chip_id, CoreCoord{tensix_core.x, tensix_core.y}),
+            tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
+    }
+}
+
+// Write routing table to Tensix cores' L1 on a specific chip
+void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const {
+    FabricNodeId src_fabric_node_id{mesh_id, chip_id};
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
+
+    tensix_routing_l1_info_t tensix_routing_info = {};
+    tensix_routing_info.mesh_id = *mesh_id;
+    tensix_routing_info.device_id = chip_id;
+
+    // Build intra-mesh routing entries (chip-to-chip routing)
+    std::fill_n(
+        tensix_routing_info.intra_mesh_routing_table,
+        tt::tt_fabric::MAX_MESH_SIZE,
+        (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+    const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
+    TT_FATAL(
+        router_intra_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_MESH_SIZE,
+        "ControlPlane: Intra mesh routing table size exceeds maximum allowed size");
+    for (chip_id_t dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
+         dst_chip_id++) {
+        if (chip_id == dst_chip_id) {
+            tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
+                (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+            continue;
+        }
+        auto forwarding_direction = router_intra_mesh_routing_table[*mesh_id][chip_id][dst_chip_id];
+        tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
+            forwarding_direction != RoutingDirection::NONE
+                ? this->routing_direction_to_eth_direction(forwarding_direction)
+                : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+    }
+
+    // Build inter-mesh routing entries (mesh-to-mesh routing)
+    std::fill_n(
+        tensix_routing_info.inter_mesh_routing_table,
+        tt::tt_fabric::MAX_NUM_MESHES,
+        (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+    const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
+    TT_FATAL(
+        router_inter_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_NUM_MESHES,
+        "ControlPlane: Inter mesh routing table size exceeds maximum allowed size");
+    for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table[*mesh_id][chip_id].size();
+         dst_mesh_id++) {
+        if (*mesh_id == dst_mesh_id) {
+            tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
+                (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+            continue;
+        }
+        auto forwarding_direction = router_inter_mesh_routing_table[*mesh_id][chip_id][dst_mesh_id];
+        tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
+            forwarding_direction != RoutingDirection::NONE
+                ? this->routing_direction_to_eth_direction(forwarding_direction)
+                : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+    }
+
+    write_to_all_tensix_cores(
+        &tensix_routing_info,
+        sizeof(tensix_routing_l1_info_t),
+        tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_TABLE,
+        physical_chip_id);
+}
+
+// Write connection info to Tensix cores' L1 on a specific chip
+void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const {
+    if (this->fabric_context_ == nullptr) {
+        log_warning(
+            tt::LogFabric,
+            "ControlPlane: Fabric context is not set, cannot write fabric connections to Tensix cores for M%dD%d",
+            *mesh_id,
+            chip_id);
+        return;
+    }
+    FabricNodeId src_fabric_node_id{mesh_id, chip_id};
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
+
+    const auto& fabric_context = this->get_fabric_context();
+    const auto& edm_config = fabric_context.get_fabric_router_config();
+    const auto topology = fabric_context.get_fabric_topology();
+    const bool is_2d_fabric = topology == Topology::Mesh;
+
+    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
+
+    // Get all physically connected ethernet channels directly from the cluster
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+    const auto& connected_chips_and_eth_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
+
+    size_t num_eth_endpoint = 0;
+    for (const auto& [connected_chip_id, eth_cores] : connected_chips_and_eth_cores) {
+        // iterate all physically connected ethernet cores
+        for (const auto& eth_core : eth_cores) {
+            auto eth_channel_id = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
+            bool is_fabric_connected = false;
+            eth_chan_directions router_direction = eth_chan_directions::COUNT;
+            for (const auto& [direction, eth_chans] :
+                 this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+                // Check if the physically connected channel is part of fabric channel
+                if (std::find(eth_chans.begin(), eth_chans.end(), eth_channel_id) != eth_chans.end()) {
+                    is_fabric_connected = true;
+                    router_direction = this->routing_direction_to_eth_direction(direction);
+                    break;
+                }
+            }
+            if (!is_fabric_connected) {
+                continue;
+            }
+            if (num_eth_endpoint >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
+                log_warning(
+                    tt::LogFabric,
+                    "ControlPlane: Maximum number of fabric endpoints exceeded for M%dD%d, skipping further "
+                    "connections",
+                    *mesh_id,
+                    chip_id);
+                break;
+            }
+
+            CoreCoord fabric_router_virtual_core =
+                cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
+
+            // Populate connection info for fabric-routed channels
+            const auto sender_channel = is_2d_fabric ? router_direction : 0;
+            auto& connection_info = fabric_connections.connections[eth_channel_id];
+            connection_info.edm_direction = router_direction;
+            connection_info.edm_noc_xy =
+                tt::tt_fabric::WorkerXY(fabric_router_virtual_core.x, fabric_router_virtual_core.y).to_uint32();
+            connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
+            connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
+            connection_info.edm_l1_sem_addr =
+                edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
+            connection_info.edm_connection_handshake_addr =
+                edm_config.sender_channels_connection_semaphore_address[sender_channel];
+            connection_info.edm_worker_location_info_addr =
+                edm_config.sender_channels_worker_conn_info_base_address[sender_channel];
+            connection_info.buffer_size_bytes = edm_config.channel_buffer_size_bytes;
+            connection_info.buffer_index_semaphore_id =
+                edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
+
+            // Mark this connection as valid for fabric communication
+            fabric_connections.valid_connections_mask |= (1u << eth_channel_id);
+            num_eth_endpoint++;
+        }
+    }
+
+    write_to_all_tensix_cores(
+        &fabric_connections,
+        sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+        tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
+        physical_chip_id);
+}
+
 std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
     auto eth_chans = get_active_fabric_eth_channels_in_direction(fabric_node_id, routing_direction);
@@ -1320,7 +1399,14 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_dir
         this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).contains(routing_direction)) {
         num_routing_planes =
             this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
-        TT_FATAL(eth_chans.size() >= num_routing_planes, "Not enough active fabric eth channels in direction");
+        TT_FATAL(
+            eth_chans.size() >= num_routing_planes,
+            "Not enough active fabric eth channels for node {} in direction {}. Requested {} routing planes but only "
+            "have {} eth channels",
+            fabric_node_id,
+            routing_direction,
+            num_routing_planes,
+            eth_chans.size());
         eth_chans.resize(num_routing_planes);
     }
     return eth_chans;
@@ -1344,7 +1430,9 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
         TT_ASSERT(
             this->inter_mesh_routing_tables_.contains(fabric_node_id),
             "Intra mesh routing tables keys mismatch with inter mesh routing tables");
-        this->write_routing_tables_to_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        this->write_routing_tables_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
     }
 }
 
@@ -1362,9 +1450,11 @@ std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
     return physical_mesh_ids;
 }
 
-MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id) const {
-    return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
-};
+MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id, MeshScope scope) const {
+    std::optional<HostRankId> local_host_rank_id =
+        MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
+    return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id, local_host_rank_id);
+}
 
 void ControlPlane::print_routing_tables() const {
     this->print_ethernet_channels();
@@ -1428,9 +1518,8 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
 
 uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
-void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
+void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
-    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode);
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
 }
 
@@ -1458,7 +1547,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
             intermesh_eth_links_[chip_id] = {};
             continue;
         }
-
+        // Remote connections not visible to UMD
         // Read multi-mesh configuration from the first available eth core
         auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
         tt_cxy_pair virtual_eth_core(
@@ -1479,6 +1568,20 @@ void ControlPlane::initialize_intermesh_eth_links() {
             }
         }
 
+        // Remote connections visible to UMD
+        auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
+        if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
+            for (auto [link, _] : remote_connections->second) {
+                // Find the CoreCoord for this channel
+                for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
+                    if (channel == link) {
+                        intermesh_eth_links.push_back({core_coord, link});
+                        break;
+                    }
+                }
+            }
+        }
+
         intermesh_eth_links_[chip_id] = intermesh_eth_links;
     }
 }
@@ -1488,10 +1591,24 @@ bool ControlPlane::is_intermesh_enabled() const {
     if (not tt_metal::MetalContext::instance().hal().intermesh_eth_links_enabled()) {
         return false;
     }
-    std::vector<uint32_t> config_data(1, 0);
+
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto first_chip_id = *(cluster.all_pci_chip_ids().begin());
-    auto first_eth_core = cluster.get_soc_desc(first_chip_id).logical_eth_core_to_chan_map.begin()->first;
+
+    // Check if there are any ethernet cores available on the first chip
+    const auto& soc_desc = cluster.get_soc_desc(first_chip_id);
+    if (soc_desc.logical_eth_core_to_chan_map.empty()) {
+        return false;
+    }
+
+    // UMD Visible Intermesh Links
+    if (!cluster.get_ethernet_connections_to_remote_devices().empty()) {
+        return true;
+    }
+
+    // UMD Hidden Intermesh Links
+    std::vector<uint32_t> config_data(1, 0);
+    auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
     tt_cxy_pair virtual_eth_core(
         first_chip_id,
         cluster.get_virtual_coordinate_from_logical_coordinates(first_chip_id, first_eth_core, CoreType::ETH));
@@ -1544,10 +1661,328 @@ ControlPlane::get_all_intermesh_eth_links() const {
     return intermesh_eth_links_;
 }
 
+std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
+    chip_id_t chip_id, bool skip_reserved_cores) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    std::unordered_set<CoreCoord> active_ethernet_cores;
+    const auto& cluster_desc = cluster.get_cluster_desc();
+    const auto& soc_desc = cluster.get_soc_desc(chip_id);
+
+    // Check if there are any ethernet cores available on this chip
+    if (soc_desc.logical_eth_core_to_chan_map.empty()) {
+        return active_ethernet_cores;  // Return empty set if no ethernet cores
+    }
+
+    if (cluster.arch() == ARCH::BLACKHOLE) {
+        // Can't just use `get_ethernet_cores_grouped_by_connected_chips` because there are some active ethernet cores
+        // without links. Only risc1 on these cores is available for Metal and should not be classified as idle
+        // to ensure that Metal does not try to program both riscs.
+        std::set<uint32_t> logical_active_eth_channels = cluster_desc->get_active_eth_channels(chip_id);
+        for (auto logical_active_eth_channel : logical_active_eth_channels) {
+            tt::umd::CoreCoord logical_active_eth =
+                soc_desc.get_eth_core_for_channel(logical_active_eth_channel, CoordSystem::LOGICAL);
+            active_ethernet_cores.insert(CoreCoord(logical_active_eth.x, logical_active_eth.y));
+        }
+    } else {
+        std::set<uint32_t> logical_active_eth_channels = cluster_desc->get_active_eth_channels(chip_id);
+        const auto& freq_retrain_eth_cores = cluster.get_eth_cores_with_frequent_retraining(chip_id);
+        const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
+        for (const auto& eth_channel : logical_active_eth_channels) {
+            tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+            const auto& routing_info = eth_routing_info.at(eth_core);
+            if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER) and
+                skip_reserved_cores) {
+                continue;
+            }
+            if (freq_retrain_eth_cores.find(eth_core) != freq_retrain_eth_cores.end()) {
+                continue;
+            }
+
+            active_ethernet_cores.insert(eth_core);
+        }
+        // WH has a special case where mmio chips with remote connections must always have certain channels active
+        if (cluster.arch() == tt::ARCH::WORMHOLE_B0 && cluster_desc->is_chip_mmio_capable(chip_id) &&
+            cluster.get_tunnels_from_mmio_device(chip_id).size() > 0) {
+            // UMD routing FW uses these cores for base routing
+            // channel 15 is used by syseng tools
+            std::unordered_set<int> channels_to_skip = {};
+            if (cluster.is_galaxy_cluster()) {
+                // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
+                channels_to_skip = {0, 1, 2, 3, 15};
+            } else {
+                channels_to_skip = {15};
+            }
+            for (const auto& eth_channel : channels_to_skip) {
+                if (logical_active_eth_channels.find(eth_channel) == logical_active_eth_channels.end()) {
+                    tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                    active_ethernet_cores.insert(eth_core);
+                }
+            }
+        }
+
+        if (cluster.get_board_type(chip_id) != BoardType::UBB) {
+            // For Non-UBB Wormhole systems, intermesh links must also be marked as active ethernet cores
+            // These cores are not seen by UMD or the cluster descriptor as active. Control Plane is
+            // responsible for querying this information.
+            // Note: On UBB systems, intermesh links are already identified as active by UMD, so control
+            // plane does not need to do this.
+            auto intermesh_links = this->get_intermesh_eth_links(chip_id);
+            for (const auto& [eth_coord, eth_chan] : intermesh_links) {
+                active_ethernet_cores.insert(eth_coord);
+            }
+        }
+    }
+    return active_ethernet_cores;
+}
+
+std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(chip_id_t chip_id) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
+    std::unordered_set<CoreCoord> inactive_ethernet_cores;
+
+    for (const auto& [eth_core, chan] : cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
+        if (active_ethernet_cores.find(eth_core) == active_ethernet_cores.end()) {
+            inactive_ethernet_cores.insert(eth_core);
+        }
+    }
+    return inactive_ethernet_cores;
+}
+
+void ControlPlane::generate_local_intermesh_link_table() {
+    // Populate the local to remote mapping for all intermesh links
+    // This cannot be done by UMD, since it has no knowledge of links marked
+    // for intermesh routing (these links are hidden from UMD).
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
+    const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
+    for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
+        if (this->has_intermesh_links(chip_id)) {
+            for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
+                if (not this->is_intermesh_eth_link_trained(chip_id, eth_core)) {
+                    // Link is untrained/unusuable
+                    continue;
+                }
+                tt_cxy_pair virtual_eth_core(
+                    chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
+                uint64_t local_board_id = 0;
+                uint64_t remote_board_id = 0;
+                uint32_t remote_chan_id = 0;
+                cluster.read_core(
+                    &local_board_id,
+                    sizeof(uint64_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::LOCAL_BOARD_ID_OFFSET);
+                cluster.read_core(
+                    &remote_board_id,
+                    sizeof(uint64_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::REMOTE_BOARD_ID_OFFSET);
+                cluster.read_core(
+                    &remote_chan_id,
+                    sizeof(uint32_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::REMOTE_ETH_CHAN_ID_OFFSET);
+                auto local_eth_chan_desc = EthChanDescriptor{
+                    .board_id = local_board_id,
+                    .chan_id = chan_id,
+                };
+                auto remote_eth_chan_desc = EthChanDescriptor{
+                    .board_id = remote_board_id,
+                    .chan_id = remote_chan_id,
+                };
+                intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
+                chip_id_to_asic_id_[chip_id] = local_board_id;
+            }
+        } else if (cluster.arch() != ARCH::BLACKHOLE) {
+            // For chips without intermesh links, we still need to populate the asic IDs
+            // for consistency.
+            // Skip this on Blackhole for now.
+            if (this->get_active_ethernet_cores(chip_id).size() == 0) {
+                // No Active Ethernet Cores found. Not querying the board id off ethernet cores.
+                chip_id_to_asic_id_[chip_id] = chip_id;
+            } else {
+                auto first_eth_core = *(this->get_active_ethernet_cores(chip_id).begin());
+                tt_cxy_pair virtual_eth_core(
+                    chip_id,
+                    cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
+                uint64_t local_board_id = 0;
+                cluster.read_core(
+                    &local_board_id,
+                    sizeof(uint64_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::LOCAL_BOARD_ID_OFFSET);
+                chip_id_to_asic_id_[chip_id] = local_board_id;
+            }
+        }
+    }
+}
+
+void ControlPlane::exchange_intermesh_link_tables() {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    if (*distributed_context.size() == 1) {
+        // No need to exchange intermesh link tables when running a single process
+        return;
+    }
+    auto serialized_table = tt::tt_fabric::serialize_to_bytes(intermesh_link_table_);
+    std::vector<uint8_t> serialized_remote_table;
+    auto my_rank = *(distributed_context.rank());
+    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
+        if (my_rank == bcast_root) {
+            // Issue the broadcast from the current process to all other processes in the world
+            int local_table_size_bytes = serialized_table.size();  // Send txn size first
+            distributed_context.broadcast(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&local_table_size_bytes), sizeof(local_table_size_bytes)),
+                distributed_context.rank());
+
+            distributed_context.broadcast(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
+                distributed_context.rank());
+        } else {
+            // Acknowledge the broadcast issued by the root
+            int remote_table_size_bytes = 0;  // Receive the size of the serialized descriptor
+            distributed_context.broadcast(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&remote_table_size_bytes), sizeof(remote_table_size_bytes)),
+                tt::tt_metal::distributed::multihost::Rank{bcast_root});
+            serialized_remote_table.clear();
+            serialized_remote_table.resize(remote_table_size_bytes);
+            distributed_context.broadcast(
+                tt::stl::as_writable_bytes(
+                    tt::stl::Span<uint8_t>(serialized_remote_table.data(), serialized_remote_table.size())),
+                tt::tt_metal::distributed::multihost::Rank{bcast_root});
+            tt_fabric::IntermeshLinkTable deserialized_remote_table =
+                tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
+            peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id] =
+                std::move(deserialized_remote_table.intermesh_links);
+        }
+        // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
+        // root
+        distributed_context.barrier();
+    }
+}
+
+void ControlPlane::assign_direction_to_fabric_eth_core(
+    const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction) {
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    auto fabric_router_channels_on_chip =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
+    // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
+    auto chan_id = tt::tt_metal::MetalContext::instance()
+                       .get_cluster()
+                       .get_soc_desc(physical_chip_id)
+                       .logical_eth_core_to_chan_map.at(eth_core);
+    // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
+    if (fabric_router_channels_on_chip.contains(chan_id)) {
+        this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
+    } else {
+        log_debug(
+            tt::LogFabric,
+            "Control Plane: Disabling router on M{}D{} eth channel {}",
+            fabric_node_id.mesh_id,
+            fabric_node_id.chip_id,
+            chan_id);
+    }
+}
+
+void ControlPlane::assign_intermesh_link_directions_to_local_host(const FabricNodeId& fabric_node_id) {
+    const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    const auto& connected_chips_and_eth_cores =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+            physical_chip_id);
+
+    for (const auto& [connected_mesh_id, edge] :
+         inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
+        // Loop over edges connected chip ids, they could connect to different chips for intermesh traffic
+        // edge.connected_chip_ids is a vector of chip ids, that is populated per port. Since we push all
+        // connected ports into the map when we visit a chip id, we should skip if we have already visited this
+        // chip id
+        std::unordered_set<chip_id_t> visited_chip_ids;
+        for (const auto& logical_connected_chip_id : edge.connected_chip_ids) {
+            if (visited_chip_ids.count(logical_connected_chip_id)) {
+                continue;
+            }
+            visited_chip_ids.insert(logical_connected_chip_id);
+            const auto& physical_connected_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(
+                FabricNodeId(connected_mesh_id, logical_connected_chip_id));
+            const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
+            for (const auto& eth_core : connected_eth_cores) {
+                this->assign_direction_to_fabric_eth_core(fabric_node_id, eth_core, edge.port_direction);
+            }
+        }
+    }
+}
+
+void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricNodeId& fabric_node_id) {
+    const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    auto board_id = chip_id_to_asic_id_.at(physical_chip_id);
+    auto intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
+
+    // Used to track the number of directions that could be assigned to intermesh links on this node
+    uint32_t num_directions_assigned = 0;
+
+    for (const auto& [eth_core, eth_chan] : intermesh_links) {
+        auto intermesh_routing_direction = RoutingDirection::NONE;
+        auto curr_eth_chan_desc = EthChanDescriptor{.board_id = board_id, .chan_id = eth_chan};
+        const auto& remote_eth_chan_desc = intermesh_link_table_.intermesh_links.at(curr_eth_chan_desc);
+        for (const auto& [connected_mesh_id, edge] :
+             inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
+            bool connection_found = false;
+            for (const auto& [candidate_desc, candidate_peer_desc] : peer_intermesh_link_tables_[connected_mesh_id]) {
+                if (candidate_desc == remote_eth_chan_desc && candidate_peer_desc == curr_eth_chan_desc) {
+                    // Found the matching intermesh link
+                    num_directions_assigned++;
+                    intermesh_routing_direction = edge.port_direction;
+                    connection_found = true;
+                    break;
+                }
+            }
+            if (connection_found) {
+                break;  // No need to check other edges, we found the matching intermesh link
+            }
+        }
+        router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[intermesh_routing_direction].push_back(
+            eth_chan);
+    }
+    // Compute the number of intermesh links requsted by the user and ensure that they could be mapped to physical links
+    // on the fabric node
+    uint32_t num_links_requested_on_node = 0;
+    for (const auto& [connected_mesh_id, edge] :
+         inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
+        num_links_requested_on_node += edge.connected_chip_ids.size();
+    }
+    TT_FATAL(
+        num_directions_assigned == num_links_requested_on_node,
+        "Could not bind all edges in the Mesh Graph to an intermesh link.");
+}
+
+const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }
+
+uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const { return chip_id_to_asic_id_.at(chip_id); }
+
+std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const { return this->local_mesh_binding_.mesh_ids; }
+
+HostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
+
+MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scope) const {
+    std::optional<HostRankId> local_host_rank_id =
+        MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
+    return this->routing_table_generator_->mesh_graph->get_coord_range(mesh_id, local_host_rank_id);
+}
+
+bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
+    const auto& local_mesh_ids = local_mesh_binding_.mesh_ids;
+    return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+}
+
 ControlPlane::~ControlPlane() = default;
 
-GlobalControlPlane::GlobalControlPlane(
-    const std::string& mesh_graph_desc_file) {
+GlobalControlPlane::GlobalControlPlane(const std::string& mesh_graph_desc_file) {
     mesh_graph_desc_file_ = mesh_graph_desc_file;
     // Initialize host mappings
     this->initialize_host_mapping();
@@ -1559,8 +1994,8 @@ GlobalControlPlane::GlobalControlPlane(
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     mesh_graph_desc_file_ = mesh_graph_desc_file;
     this->initialize_host_mapping();
-    control_plane_ = std::make_unique<ControlPlane>(
-        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+    control_plane_ =
+        std::make_unique<ControlPlane>(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
 
 void GlobalControlPlane::initialize_host_mapping() {

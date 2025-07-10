@@ -96,23 +96,37 @@ public:
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
-    // The primary use case for this API is to interop with Python, where `on_creation_callback` and
-    // `on_destruction_callback` are specified to be called when the tensor storage is created and destroyed (when
-    // making copies of Tensor object):
+    // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the lifetime
+    // of the Python object that owns the underlying data. For example, in pybind11:
     //
     // py::object py_tensor = ...;
-    // auto on_creation_callback = [t = py_tensor] { t.inc_ref(); };
-    // auto on_destruction_callback = [t = py_tensor] { t.dec_ref(); };
+    // MemoryPin py_data_pin(std::make_shared<py::object>(py_tensor));
+    // Tensor tensor = Tensor::from_borrowed_data(buffer, shape, py_data_pin);
     //
-    // When working in C++, prefer creating owned tensors, and retaining a reference to the internal buffer, if
-    // necessary.
+    // This API can also be used to create file-backed Tensors by means of `mmap`:
+    //
+    // void* mmap_addr = mmap(...);
+    // MemoryPin memory_pin(std::shared_ptr<void>(mmap_addr, [](void* addr) { munmap(addr, ...); }));
+    // Tensor tensor = Tensor::from_borrowed_data(
+    //     tt::stl::Span<T>(reinterpret_cast<T*>(mmap_addr), buffer_size), shape, memory_pin);
+    //
+    template <typename T>
+    [[nodiscard]] static Tensor from_borrowed_data(
+        tt::stl::Span<T> buffer,
+        const ttnn::Shape& shape,
+        tt::tt_metal::MemoryPin buffer_pin,
+        const std::optional<Tile>& tile = std::nullopt);
+
+    // Overload that takes `on_creation_callback` and `on_destruction_callback` as separate arguments.
     template <typename T>
     [[nodiscard]] static Tensor from_borrowed_data(
         tt::stl::Span<T> buffer,
         const ttnn::Shape& shape,
         const std::function<void()>& on_creation_callback,
         const std::function<void()>& on_destruction_callback,
-        const std::optional<Tile>& tile = std::nullopt);
+        const std::optional<Tile>& tile = std::nullopt) {
+        return from_borrowed_data(buffer, shape, MemoryPin(on_creation_callback, on_destruction_callback), tile);
+    }
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
@@ -306,10 +320,15 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
-// Allocates a tensor on a mesh device through mesh buffer.
-Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+// Allocates a tensor on device.
+Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+// Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
+// shard.
+Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+
+// Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
+void write_tensor(const Tensor& src, Tensor& dst, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

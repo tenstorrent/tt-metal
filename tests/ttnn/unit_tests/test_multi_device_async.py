@@ -132,8 +132,8 @@ def test_multi_device_unary_binary_op_chain(pcie_mesh_device, program_cache, sha
     """Multidevice API test: Running tensor-parallel multi-device chain of eltwise ops"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
-    if program_cache:
-        pcie_mesh_device.enable_program_cache()
+    if not program_cache:
+        pcie_mesh_device.disable_and_clear_program_cache()
 
     torch_silu = torch.nn.SiLU()
     for i in range(50):
@@ -169,8 +169,8 @@ def test_multi_device_data_parallel_op_chain(pcie_mesh_device, program_cache, in
     """Multidevice API: Running data-parallel chain of ops with matmul"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
-    if program_cache:
-        pcie_mesh_device.enable_program_cache()
+    if not program_cache:
+        pcie_mesh_device.disable_and_clear_program_cache()
 
     torch_silu = torch.nn.SiLU()
     torch_mish = torch.nn.Mish()

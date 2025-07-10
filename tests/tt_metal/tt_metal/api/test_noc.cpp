@@ -6,10 +6,10 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <numeric>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <map>
 #include <memory>
 #include <string>
 #include <variant>
@@ -104,7 +104,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     log_info(tt::LogTest, "Logical -- Virtual Mapping");
     log_info(tt::LogTest, "[Logical <-> Virtual] Coordinates");
     for (int r = 0; r < logical_grid_size.y; r++) {
-        string output_row = "";
+        std::string output_row = "";
         for (int c = 0; c < logical_grid_size.x; c++) {
             const CoreCoord logical_coord(c, r);
             const auto noc_coord = device->worker_core_from_logical_core(logical_coord);
@@ -422,19 +422,17 @@ TEST_F(DeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
 
 // Both data movement riscs issue inline writes using the same noc
 TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
-    // #21082
-    auto arch = tt::get_arch_from_string(get_umd_arch_name());
-    if (arch == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP();
-    }
     CoreCoord writer_core{0, 0};
     CoreCoord receiver_core(0, 1);
     uint32_t value_to_write = 39;
+    uint32_t num_writes_per_risc = 2;
+    uint32_t num_writes_total = num_writes_per_risc * 2;
+    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     for (tt_metal::IDevice* device : this->devices_) {
         uint32_t receiver_addr0 = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-        uint32_t receiver_addr2 = receiver_addr0 + (2 * MetalContext::instance().hal().get_alignment(HalMemType::L1));
-        std::vector<uint32_t> readback(80 / sizeof(uint32_t), 0);
+        uint32_t receiver_addr2 = receiver_addr0 + (num_writes_per_risc * l1_alignment);
+        std::vector<uint32_t> readback(num_writes_total * l1_alignment / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, receiver_addr0, readback);
 
         CoreCoord virtual_receiver_core = device->worker_core_from_logical_core(receiver_core);
@@ -457,8 +455,8 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
              virtual_receiver_core.y,
              receiver_addr0,
              value_to_write,
-             2,
-             MetalContext::instance().hal().get_alignment(HalMemType::L1)});
+             num_writes_per_risc,
+             l1_alignment});
 
         tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
             program,
@@ -476,18 +474,23 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
             {virtual_receiver_core.x,
              virtual_receiver_core.y,
              receiver_addr2,
-             value_to_write + 2,
-             2,
-             MetalContext::instance().hal().get_alignment(HalMemType::L1)});
+             value_to_write + num_writes_per_risc,
+             num_writes_per_risc,
+             l1_alignment});
 
         tt_metal::detail::LaunchProgram(device, program);
 
-        tt_metal::detail::ReadFromDeviceL1(device, receiver_core, receiver_addr0, 64, readback);
-        uint32_t expected_value = value_to_write;
-        for (int i = 0; i < 4; i++) {
-            EXPECT_EQ(readback[i * 4], expected_value);
-            expected_value++;
+        tt_metal::detail::ReadFromDeviceL1(
+            device, receiver_core, receiver_addr0, readback.size() * sizeof(uint32_t), readback);
+        // Pack the sparse values for comparison with expected_values.
+        for (uint32_t i = 1; i < num_writes_total; i++) {
+            readback[i] = readback[i * l1_alignment / sizeof(uint32_t)];
         }
+        readback.resize(num_writes_total);
+
+        std::vector<uint32_t> expected_values(num_writes_total);
+        std::iota(expected_values.begin(), expected_values.end(), value_to_write);
+        EXPECT_EQ(readback, expected_values);
     }
 }
 

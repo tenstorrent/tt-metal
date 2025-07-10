@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -27,7 +29,6 @@ inline bool is_dram(const Tensor& input_tensor) {
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
@@ -96,7 +97,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     const uint32_t no_weights_max_size = 120;
     const uint32_t with_weights_max_size = 60;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
-    const auto shape = a.padded_shape();
+    const auto& shape = a.padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
     uint32_t NC = a.physical_volume() / HW;
@@ -315,8 +316,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                                       (std::uint32_t)block_size};
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    std::map<string, string> reader_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
     if (b) {
         reader_defines["FUSE_PRE_ADD"] = "1";
         compute_defines["FUSE_PRE_ADD"] = "1";
@@ -497,9 +498,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto src_a_dram_buffer = input_tensors.at(0).buffer();
-            const auto src_b_tensor = optional_input_tensors.at(0);
-            const auto gamma_tensor = optional_input_tensors.at(1);
-            const auto beta_tensor = optional_input_tensors.at(2);
+            const auto& src_b_tensor = optional_input_tensors.at(0);
+            const auto& gamma_tensor = optional_input_tensors.at(1);
+            const auto& beta_tensor = optional_input_tensors.at(2);
             const auto dst_dram_buffer = output_tensors.at(0).buffer();
 
             auto src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
@@ -619,7 +620,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
-    const auto shape = a.padded_shape();
+    const auto& shape = a.padded_shape();
     uint32_t M = a.physical_volume() / shape[-1];
     uint32_t K = shape[-1];
     uint32_t Mt = M / TILE_WIDTH;
@@ -978,8 +979,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_second_stage_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (b) {
         reader_mcast_sender_defines["FUSE_PRE_ADD"] = "1";
         reader_mcast_receiver_defines["FUSE_PRE_ADD"] = "1";
@@ -1115,7 +1116,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (rms_norm) {
         writer_defines["RMSNORM"] = 1;
     }
@@ -1227,7 +1228,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 .defines = writer_defines});
     }
     // defines
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (b) {
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
@@ -1831,10 +1832,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto src_buffer_a = input_tensors.at(0).buffer();
-            const auto b_tensor = optional_input_tensors.at(0);
-            const auto gamma_tensor = optional_input_tensors.at(1);
-            const auto beta_tensor = optional_input_tensors.at(2);
-            const auto stats_tensor = optional_input_tensors.at(3);
+            const auto& b_tensor = optional_input_tensors.at(0);
+            const auto& gamma_tensor = optional_input_tensors.at(1);
+            const auto& beta_tensor = optional_input_tensors.at(2);
+            const auto& stats_tensor = optional_input_tensors.at(3);
             const auto dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);

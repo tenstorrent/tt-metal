@@ -36,11 +36,9 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
     TT_ASSERT(input_tensors.size() == 2, "AllGatherMatmulAsync requires 2 input tensors: [input, weight]");
     auto& input_tensor = input_tensors[0];
     auto& weight_tensor = input_tensors[1];
-    auto& intermediate_tensor = output_tensors.at(0).value();
-    auto& all_gather_output_tensor = output_tensors.at(1).value();
+    auto& all_gather_output_tensor = output_tensors.at(0).value();
     // All Gather validate
-    this->all_gather_async_struct.validate_with_output_tensors(
-        {input_tensor}, {intermediate_tensor, all_gather_output_tensor});
+    this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
     // Matmul validate.
     this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
     // All Gather Matmul validate
@@ -84,7 +82,7 @@ std::vector<ttnn::TensorSpec> AllGatherMatmulAsync::compute_output_specs(
 
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs =
-        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]}, {})[0];
+        this->matmul_struct.compute_output_specs({input_tensors[0], input_tensors[1]}, {})[0];
 
     return {all_gather_output_shape, matmul_output_specs};
 }
@@ -92,14 +90,13 @@ std::vector<ttnn::TensorSpec> AllGatherMatmulAsync::compute_output_specs(
 std::vector<Tensor> AllGatherMatmulAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     // All Gather output tensor
-    auto& intermediate_tensor = optional_output_tensors.at(0).value();
-    auto& all_gather_output_tensor = optional_output_tensors.at(1).value();
+    auto& all_gather_output_tensor = optional_output_tensors.at(0).value();
 
     // Matmul output tensor
     ttnn::Tensor matmul_output_tensor =
         this->matmul_struct.create_output_tensors({all_gather_output_tensor, input_tensors[1]})[0];
 
-    return {intermediate_tensor, all_gather_output_tensor, matmul_output_tensor};
+    return {all_gather_output_tensor, matmul_output_tensor};
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherMatmulAsync::create_mesh_workload(
@@ -150,10 +147,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     // Return the AllGatherMatmulAsync program with callbacks
     return all_gather_matmul_async_multi_core_with_workers(
         input_tensors[0],   // input_tensor
-        output_tensors[0],  // persistent_intermediate_tensor
-        output_tensors[1],  // all_gather_output_tensor
+        output_tensors[0],  // all_gather_output_tensor
         input_tensors[1],   // weight_tensor
-        output_tensors[2],  // matmul_output_tensor
+        output_tensors[1],  // matmul_output_tensor
 
         /* All Gather Params */
         target_device,
@@ -208,7 +204,6 @@ namespace ccl {
 std::vector<ttnn::Tensor> all_gather_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -239,8 +234,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         optional_input_tensors.push_back(std::nullopt);
     }
 
-    std::vector<std::optional<Tensor>> optional_output_tensors = {
-        persistent_intermediate_buffer, persistent_output_buffer};
+    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     /* AllGather setup */
     ttnn::AllGatherAsync all_gather_async_struct = ttnn::AllGatherAsync(
@@ -252,11 +246,12 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         topology,
         multi_device_global_semaphore,
         sub_device_id,
-        /*cluster_axis=*/std::nullopt);
+        /*cluster_axis=*/std::nullopt,
+        false);
 
     // Create the all gather output tensor used as input (activation) to the matmul
     ttnn::Tensor all_gather_out_tensor =
-        all_gather_async_struct.create_output_tensors({input_tensor}, optional_output_tensors)[1];
+        all_gather_async_struct.create_output_tensors({input_tensor}, optional_output_tensors)[0];
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
@@ -284,7 +279,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
             /*output_tile=*/std::nullopt,
             /*global_cb=*/std::nullopt});
 
-    std::vector<ttnn::Tensor> full_output = tt::tt_metal::operation::run(
+    return tt::tt_metal::operation::run(
         ttnn::ccl::all_gather_matmul_async_detail::create_all_gather_matmul_async_struct(
             /* All Gather Params */
             all_gather_async_struct,
@@ -296,7 +291,6 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         {input_tensor, weight_tensor},
         optional_input_tensors,
         optional_output_tensors);
-    return std::vector<ttnn::Tensor>{full_output.at(1), full_output.at(2)};
 }
 
 }  // namespace ccl

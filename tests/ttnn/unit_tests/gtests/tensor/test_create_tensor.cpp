@@ -132,13 +132,6 @@ TEST_P(EmptyTensorTest, Combinations) {
     auto tensor_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
-    // Ignoring too large single bank allocations
-    if (memory_config.memory_layout() == TensorMemoryLayout::SINGLE_BANK) {
-        if (tensor_layout.compute_page_size_bytes(shape) >= 500 * 1024) {
-            GTEST_SKIP() << "Skipping test with page size exceeding single bank size of 500 kB!";
-        }
-    }
-
     auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
     EXPECT_EQ(tensor.logical_shape(), shape);
 
@@ -174,10 +167,6 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(tt::tt_metal::Layout::TILE, tt::tt_metal::Layout::ROW_MAJOR),
 
         ::testing::Values(
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::SINGLE_BANK, ttnn::BufferType::L1},
-
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::SINGLE_BANK, ttnn::BufferType::DRAM},
-
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1},
 
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}

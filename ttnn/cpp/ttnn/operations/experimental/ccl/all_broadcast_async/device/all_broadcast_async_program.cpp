@@ -119,7 +119,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -181,7 +181,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             dynamic_alternate,     // alternate
         };
     }
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
@@ -258,13 +258,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto forward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }

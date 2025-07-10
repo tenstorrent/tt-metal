@@ -503,7 +503,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     const CoreCoord& compute_with_storage_grid_size,
     const MemoryConfig& mem_config,
     const tt::tt_metal::DataType output_dtype) {
-    const auto &ashape = input_tensor_a.padded_shape(), bshape = input_tensor_b.padded_shape();
+    const auto& ashape = input_tensor_a.padded_shape();
+    const auto& bshape = input_tensor_b.padded_shape();
     uint32_t batch_size_a = get_batch_size(ashape);
     uint32_t num_output_tiles = batch_size_a * ashape[-2] * bshape[-1] / TILE_HW;  // Output M x N
 
@@ -669,8 +670,8 @@ MatmulProgramConfig create_matmul_program_config(
     uint32_t batch_size_b = get_batch_size(b_padded_shape);
     bool input_b_is_batched = batch_size_b > 1;
     bool any_size_within_tile = k_size <= ttnn::TILE_SIZE || m_size <= ttnn::TILE_SIZE || n_size <= ttnn::TILE_SIZE;
-    auto input_tensor_a_memory_config = input_tensor_a.memory_config();
-    auto input_tensor_b_memory_config = input_tensor_b.memory_config();
+    const auto& input_tensor_a_memory_config = input_tensor_a.memory_config();
+    const auto& input_tensor_b_memory_config = input_tensor_b.memory_config();
     bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
     bool a_is_sharded = input_tensor_a.is_sharded();
     TT_FATAL(inteneded_k_size_of_a == inteneded_k_size_of_b, "The k dimension does not match between tensors");
@@ -1249,8 +1250,8 @@ namespace operations {
 namespace matmul {
 
 ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    const auto input_shape_a = input_tensor_a.logical_shape();
-    const auto input_shape_b = input_tensor_b.logical_shape();
+    const auto& input_shape_a = input_tensor_a.logical_shape();
+    const auto& input_shape_b = input_tensor_b.logical_shape();
 
     const auto a_rank = input_shape_a.rank();
     const auto b_rank = input_shape_b.rank();
@@ -2233,9 +2234,18 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     uint32_t M =
                         input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
+                    uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
 
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
+                    uint32_t per_core_K = input_tensor_a.shard_spec().value().shape[1] / in0_tile_shape[1];
+
+                    TT_FATAL(
+                        K % per_core_K == 0,
+                        "in DRAM sharded Matmul we don't have support for un-even sharding currently. K: {}, "
+                        "per_core_K: {}.",
+                        K,
+                        per_core_K);
 
                     TT_FATAL(
                         per_core_N % tile_width_ratio == 0,
@@ -2244,8 +2254,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
                     uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
-                    auto end_core = input_tensor_a.shard_spec()->grid.bounding_box().end_coord;
-                    auto grid_size = CoreCoord{end_core.x + 1, end_core.y + 1};
+                    auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
                     CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid_size, true);
                     ShardSpec shard_spec = ShardSpec{
                         all_cores,

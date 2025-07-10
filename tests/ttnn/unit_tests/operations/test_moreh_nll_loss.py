@@ -190,7 +190,7 @@ def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, ttn
     ],
 )
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
-def test_moreh_nll_loss_callback(shape, reduction, device, use_program_cache):
+def test_moreh_nll_loss_callback(shape, reduction, device):
     torch.manual_seed(0)
     ignore_index = 0
 
@@ -271,7 +271,7 @@ def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weigh
     ],
 )
 @pytest.mark.parametrize("reduction_mean", [True, False])
-def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device, use_program_cache):
+def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device):
     torch.manual_seed(0)
 
     ignore_index = 0

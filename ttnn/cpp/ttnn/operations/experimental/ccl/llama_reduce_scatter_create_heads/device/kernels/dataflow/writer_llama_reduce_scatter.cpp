@@ -88,7 +88,7 @@ void kernel_main() {
         auto* sem_inc_packet_header =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
         const uint64_t sem_noc_addr =
-            get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
+            get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address, 0);
         sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             sem_noc_addr,
             static_cast<uint16_t>(1),  // increment 1
@@ -132,13 +132,13 @@ void kernel_main() {
 
                 const uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
                 const uint32_t receiver_core_y = packet_worker_cores[packet][y_index];
-                const uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset);
+                const uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset, 0);
 
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
 
                 const uint64_t sem_noc_addr =
-                    get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address);
+                    get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address, 0);
                 unicast_packet_header->to_noc_fused_unicast_write_atomic_inc(
                     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
                         noc0_dest_noc_addr, sem_noc_addr, 1, 32, flush),

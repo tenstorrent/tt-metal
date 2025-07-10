@@ -168,7 +168,6 @@ def run_distilbert_question_and_answering_inference(
 
 
 def run_distilbert_question_and_answering_inference_squad_v2(
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -322,15 +321,12 @@ def test_demo(input_loc, model_name, distilbert, batch_size, model_location_gene
     "n_iterations",
     ((3),),
 )
-def test_demo_squadv2(
-    model_name, distilbert, batch_size, n_iterations, model_location_generator, use_program_cache, mesh_device
-):
+def test_demo_squadv2(model_name, distilbert, batch_size, n_iterations, model_location_generator, mesh_device):
     disable_persistent_kernel_cache()
 
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
     return run_distilbert_question_and_answering_inference_squad_v2(
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=batch_size,
         sequence_size=384,

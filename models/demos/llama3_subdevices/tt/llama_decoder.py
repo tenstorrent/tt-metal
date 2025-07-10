@@ -89,6 +89,7 @@ class TtTransformerBlock(LightweightModule):
             args,
             TG=args.is_galaxy,
             tt_ccl=tt_ccl,
+            ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -107,6 +108,7 @@ class TtTransformerBlock(LightweightModule):
             args,
             TG=args.is_galaxy,
             tt_ccl=tt_ccl,
+            ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
 
     def prefetch(self, prefetcher_setup, tt_ccl):

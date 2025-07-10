@@ -5,9 +5,7 @@
 #include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <algorithm>
 #include <functional>
-#include <map>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -23,7 +21,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -34,22 +31,22 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
+void UpdateGoldenOutput(std::vector<std::string>& golden_output, const IDevice* device, const std::string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
-    const string& device_core_risc = std::to_string(device->id()) + ":(x=?,y=?):" + risc + ": ";
+    const std::string& device_core_risc = std::to_string(device->id()) + ":(x=?,y=?):" + risc + ": ";
 
-    const string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
+    const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
 
     if (risc != "ER") {
-        const string& output_line_risc = device_core_risc + "Printing on " + risc + ".";
+        const std::string& output_line_risc = device_core_risc + "Printing on " + risc + ".";
         golden_output.push_back(output_line_risc);
     }
 }
 
 void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_kernel = false) {
-    std::vector<string> golden_output;
+    std::vector<std::string> golden_output;
 
     CoreRange cores({0, 0}, {0, 1});
     Program program = Program();

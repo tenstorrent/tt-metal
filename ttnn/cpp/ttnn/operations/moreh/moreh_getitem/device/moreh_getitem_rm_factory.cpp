@@ -28,7 +28,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     auto input = tensor_args.input;
     auto index_tensors = tensor_args.index_tensors;
-    auto output = output_tensor;
+    const auto& output = output_tensor;
     auto index_dims = operation_attributes.index_dims;
     auto memory_config = operation_attributes.memory_config;
     // auto core_range = operation_attributes.core_range;
@@ -123,8 +123,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     auto src_is_dram = is_dram(input_5d);
     auto dst_is_dram = is_dram(output);
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
         program,

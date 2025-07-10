@@ -10,8 +10,6 @@ import time
 device_id = 0
 device = ttnn.open_device(device_id=device_id)
 
-device.enable_program_cache()
-
 torch_input_tensor = torch.rand(2, 4, dtype=torch.float32)
 input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 

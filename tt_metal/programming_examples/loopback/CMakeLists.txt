@@ -4,5 +4,7 @@ project(metal_example_loopback)
 add_executable(metal_example_loopback)
 target_sources(metal_example_loopback PRIVATE loopback.cpp)
 
-find_package(TT-Metalium REQUIRED)
+if(NOT TARGET TT::Metalium)
+    find_package(TT-Metalium REQUIRED)
+endif()
 target_link_libraries(metal_example_loopback PUBLIC TT::Metalium)

@@ -160,13 +160,11 @@ Checks: >
   -performance-avoid-endl,
   -performance-faster-string-find,
   -performance-inefficient-string-concatenation,
-  -performance-inefficient-vector-operation,
   -performance-move-const-arg,
   -performance-move-constructor-init,
   -performance-no-int-to-ptr,
   -performance-noexcept-move-constructor,
   -performance-noexcept-swap,
-  -performance-unnecessary-copy-initialization,
   -performance-unnecessary-value-param,
   -portability-simd-intrinsics,
   -readability-avoid-unconditional-preprocessor-if,
@@ -207,6 +205,8 @@ CheckOptions:
   # May enable later; for now activate the check with a lighter touch
   - key: readability-simplify-boolean-expr.SimplifyDeMorgan
     value: false
+  - key: performance-unnecessary-copy-initialization.AllowedTypes
+    value: "^MemoryPin$"
 
 FormatStyle: 'file'
 

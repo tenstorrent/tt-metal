@@ -73,6 +73,7 @@ public:
         bool d2h,
         int tunnel_index) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection), d2h_{d2h}, tunnel_id_{tunnel_index} {
+        TT_FATAL(tunnel_id_ >= 0, "Relay Mux Tunnel Index must be >= 0");
         kernel_type_ = FDKernelType::ROUTING;
     }
 

@@ -107,10 +107,10 @@ inline Tensor binary_impl(
         output_tensor = ttnn::lt_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::NE) {
         output_tensor = ttnn::ne_unary(queue_id, lhs, rhs, memory_config, output);
-    } else if (binary_op_type == BinaryOpType::GTE) {
-        output_tensor = ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
-    } else if (binary_op_type == BinaryOpType::LTE) {
-        output_tensor = ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+    } else if (binary_op_type == BinaryOpType::GE) {
+        output_tensor = ttnn::ge_unary(queue_id, lhs, rhs, memory_config, output);
+    } else if (binary_op_type == BinaryOpType::LE) {
+        output_tensor = ttnn::le_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::EQ) {
         output_tensor = ttnn::eq_unary(queue_id, lhs, rhs, memory_config, output);
     } else {
@@ -130,10 +130,10 @@ inline Tensor binary_impl(
     const ttnn::Tensor& rhs,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt) {
-    if (binary_op_type == BinaryOpType::GTE) {
+    if (binary_op_type == BinaryOpType::GE) {
         return ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
     }
-    if (binary_op_type == BinaryOpType::LTE) {
+    if (binary_op_type == BinaryOpType::LE) {
         return ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
     }
     if (binary_op_type == BinaryOpType::EQ) {
@@ -186,7 +186,6 @@ inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
 
     return false;
 }
-
 inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
     if (a.is_sharded() and is_block_format(a.get_dtype())) {
         return true;
@@ -220,19 +219,30 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
     return false;
 }
 
-inline auto any_non_height_sharded(const Tensor& a, const auto& b, const MemoryConfig& c) {
+inline auto is_w_bcast(const Tensor& a, const auto& b) {
+    if constexpr (requires { b.get_padded_shape(); }) {
+        const auto& shape_a = a.get_padded_shape();
+        const auto& shape_b = b.get_padded_shape();
+        return (shape_a[-1] == 1 and shape_b[-1] > 1) or (shape_b[-1] == 1 and shape_a[-1] > 1);
+    }
+    return false;
+}
+
+inline auto any_non_height_sharded_w_bcast(const Tensor& a, const auto& b, const MemoryConfig& c) {
+    // NOTE: currently with sharded tensor, broadcast is on w dimension only,
+    // so only check for w dimension, not all dimensions
     if (a.is_sharded()) {
-        return a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+        return a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
     }
 
     if constexpr (requires { b.is_sharded(); }) {
         if (b.is_sharded()) {
-            return b.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+            return b.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
         }
     }
 
     if (c.is_sharded()) {
-        return c.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+        return c.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
     }
 
     return false;
@@ -267,6 +277,45 @@ inline auto any_uneven(const Tensor& a, const auto& b, const std::optional<Tenso
     return false;
 }
 
+inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binary_op_type) {
+    if constexpr (requires {
+                      b.dtype();
+                      b.is_sharded();
+                      b.get_logical_shape();
+                  }) {
+        if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32 or a.dtype() == DataType::UINT32 or
+            b.dtype() == DataType::UINT32 or a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16 or
+            a.dtype() == DataType::UINT8 or b.dtype() == DataType::UINT8) {
+            return true;
+        }
+
+        if (any_row_broadcasted(a, b) and
+            (binary_op_type != BinaryOpType::ADD and binary_op_type != BinaryOpType::SUB and
+             binary_op_type != BinaryOpType::MUL)) {
+            return true;
+        }
+
+        if (a.get_logical_shape().rank() > 4 or b.get_logical_shape().rank() > 4) {
+            return true;
+        }
+
+        if (a.get_logical_shape()[-2] == 1 && b.get_logical_shape()[-2] > 1 && a.get_logical_shape()[-1] > 1 &&
+            b.get_logical_shape()[-1] == 1) {
+            return true;
+        }
+        if (b.get_logical_shape()[-2] == 1 && a.get_logical_shape()[-2] > 1 && b.get_logical_shape()[-1] > 1 &&
+            a.get_logical_shape()[-1] == 1) {
+            return true;
+        }
+
+        if (any_row_broadcasted(a, b) and (is_block_format(a.get_dtype()) or is_block_format(b.get_dtype()))) {
+            // TODO
+            // return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace detail
 
 bool is_legacy_only(
@@ -280,7 +329,7 @@ bool is_legacy_only(
 
     if (detail::any_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
         detail::any_subtile_broadcasted_block_format(lhs, rhs) or
-        detail::any_non_height_sharded(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output)) {
+        detail::any_non_height_sharded_w_bcast(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output)) {
         TT_FATAL(
             lhs_activations.size() <= 1,
             "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
@@ -334,7 +383,8 @@ inline auto invoke_binary_ng(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     if (use_legacy ? *use_legacy
-                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations)) {
+                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
+                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
         const std::vector activations(post_activations.begin(), post_activations.end());
         const std::optional lhs_activation =
             lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
@@ -513,8 +563,11 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     if (use_legacy ? *use_legacy
-                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations)) {
-        return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
+                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
+                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+        {
+            return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
+        }
     }
 
     return detail::invoke_binary_ng(
@@ -678,6 +731,32 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
         use_legacy);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationAddalpha<binary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    return BinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
+        queue_id, lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    return BinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
+        queue_id, lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
+}
+
 template struct BinaryOperation<BinaryOpType::ADD>;
 template struct InplaceBinaryOperation<BinaryOpType::ADD>;
 template struct BinaryOperation<BinaryOpType::SUB>;
@@ -709,15 +788,15 @@ template struct BinaryOperation<BinaryOpType::RIGHT_SHIFT>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;
-template struct RelationalBinary<BinaryOpType::GTE>;
+template struct RelationalBinary<BinaryOpType::GE>;
 template struct RelationalBinary<BinaryOpType::GT>;
-template struct RelationalBinary<BinaryOpType::LTE>;
+template struct RelationalBinary<BinaryOpType::LE>;
 template struct RelationalBinary<BinaryOpType::LT>;
 
 template struct InplaceRelationalBinary<BinaryOpType::GT>;
 template struct InplaceRelationalBinary<BinaryOpType::LT>;
-template struct InplaceRelationalBinary<BinaryOpType::GTE>;
-template struct InplaceRelationalBinary<BinaryOpType::LTE>;
+template struct InplaceRelationalBinary<BinaryOpType::GE>;
+template struct InplaceRelationalBinary<BinaryOpType::LE>;
 template struct InplaceRelationalBinary<BinaryOpType::EQ>;
 template struct InplaceRelationalBinary<BinaryOpType::NE>;
 
@@ -735,5 +814,8 @@ template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::MINIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::GCD>;
 template struct BinaryOperationSfpu<BinaryOpType::LCM>;
+
+template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
+template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
 
 }  // namespace ttnn::operations::binary

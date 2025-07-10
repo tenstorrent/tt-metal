@@ -32,7 +32,6 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& src_shape{src_tensor.logical_shape()};
     const uint32_t input_rank{input_shape.rank()};
     const uint32_t index_rank{index_shape.rank()};
-    const uint32_t src_rank{src_shape.rank()};
 
     TT_FATAL(
         index_shape == src_shape,
@@ -95,6 +94,27 @@ ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
     return {
         operation_attributes_t{dim, output_memory_config, opt_reduction},
         tensor_args_t{input_tensor, index_tensor, source_tensor}};
+}
+
+operation::Hash ScatterDeviceOperation::compute_program_hash(
+    const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
+    return operation::hash_operation<ScatterDeviceOperation>(
+        select_program_factory(op_args, tensor_args).index(),
+        op_args.dim,
+        op_args.opt_reduction,
+        op_args.output_memory_config,
+        tensor_args.input_tensor.logical_shape(),
+        tensor_args.index_tensor.logical_shape(),
+        tensor_args.src_tensor.logical_shape(),
+        tensor_args.input_tensor.dtype(),
+        tensor_args.index_tensor.dtype(),
+        tensor_args.src_tensor.dtype(),
+        tensor_args.input_tensor.memory_config(),
+        tensor_args.index_tensor.memory_config(),
+        tensor_args.src_tensor.memory_config(),
+        tensor_args.input_tensor.layout(),
+        tensor_args.index_tensor.layout(),
+        tensor_args.src_tensor.layout());
 }
 
 }  // namespace ttnn::operations::experimental::scatter

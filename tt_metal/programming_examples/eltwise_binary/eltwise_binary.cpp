@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
         // The hardware supports up to 16 circular buffers and they all act the same.
         constexpr uint32_t tiles_per_cb = 2;
         tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
-        CBHandle cb_src0 = CreateCircularBuffer(program, core, CircularBufferConfig(
+        CreateCircularBuffer(program, core, CircularBufferConfig(
             /*total_size=*/tiles_per_cb * tile_size_bytes,                    // The total size of the circular buffer in bytes
             /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
             .set_page_size(src0_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
@@ -97,12 +97,12 @@ int main(int argc, char** argv) {
                                                                               // total_size / page_size = tiles_per is the number of
                                                                               // entries in the circular buffer)
         tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
-        CBHandle cb_src1 = CreateCircularBuffer(program, core, CircularBufferConfig(
+        CreateCircularBuffer(program, core, CircularBufferConfig(
             /*total_size=*/tiles_per_cb * tile_size_bytes,
             /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, tile_size_bytes));
         tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
-        CBHandle cb_dst = CreateCircularBuffer(program, core, CircularBufferConfig(
+        CreateCircularBuffer(program, core, CircularBufferConfig(
             /*total_size=*/tiles_per_cb * tile_size_bytes,
             /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(dst_cb_index, tile_size_bytes));
@@ -162,22 +162,22 @@ int main(int argc, char** argv) {
 
             if (std::abs(expected - actual) > eps) {
                 pass = false;
-                log_error(tt::LogTest, "Result mismatch at index {}: expected {}, got {}", i, expected, actual);
+                fmt::print(stderr, "Result mismatch at index {}: expected {}, got {}\n", i, expected, actual);
             }
         }
 
         // Finally, we close the device.
         pass &= CloseDevice(device);
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
+        fmt::print(stderr, "Test failed with exception!\n");
+        fmt::print(stderr, "{}\n", e.what());
 
         throw;
     }
     // clang-format on
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

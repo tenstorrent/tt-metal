@@ -38,7 +38,6 @@ def test_transformer_2d_model_512x512(
     block_index,
     attention_index,
     reset_seeds,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]

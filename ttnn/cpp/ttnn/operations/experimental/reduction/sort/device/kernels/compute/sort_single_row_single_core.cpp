@@ -86,6 +86,7 @@ void MAIN {
         get_compile_time_arg_val(8);  // TODO: In the future change LLK to have the option or add additional step with
                                       // checking values and indexes after the sorting
                                       // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
+    constexpr uint32_t synchronization_cb_index = get_compile_time_arg_val(9);
 
     constexpr uint32_t one_tile = 1;
 
@@ -120,7 +121,11 @@ void MAIN {
             stages++;
         }
 
+        cb_reserve_back(synchronization_cb_index, one_tile);
+        cb_push_back(synchronization_cb_index, one_tile);
+
         for (uint32_t stage = 2; stage <= stages; stage++) {
+            const uint32_t m_iter = stage - 1;
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
                 for (uint32_t i = 0; i < Wt; i++) {
@@ -133,36 +138,13 @@ void MAIN {
                         // Get indexes of tiles to compare
                         const uint32_t left_tile_id = i;
                         const uint32_t right_tile_id = j;
-                        /**
-                         * Compute kernel for performing bitonic sort on tiles with synchronization caveats.
-                         *
-                         * Potential Bug: Unpacker and Packer Threads Synchronization Issue
-                         *
-                         * After migrating to the blackhole architecture, undefined behavior was observed, resulting in
-                         * incorrect results. The core of the issue lies in the synchronization between the unpacker
-                         * (reading tiles from CB to registers) and packer (writing tiles from registers back to CB)
-                         * threads.
-                         *
-                         * In the this loop, two tiles are read from a circular buffer (CB) into LLK registers, an LLK
-                         * operation is performed, and then the results are written back to the same CB. If there is
-                         * insufficient synchronization between the packer and unpacker threads, it is possible that the
-                         * packer thread does not have enough time to fully pack the tiles from the registers back to
-                         * the CB before the next loop iteration begins. As a result, the unpacker thread in the next
-                         * iteration may read tiles into registers before the previous packing operation is complete,
-                         * leading to data hazards and undefined behavior.
-                         *
-                         * Debugging revealed that inserting a delay between loop iterations resolved the issue,
-                         * suggesting a race condition between packing and unpacking. However, since there is no
-                         * semaphore or similar synchronization primitive available in the compute kernel, it is not
-                         * possible to enforce proper synchronization programmatically.
-                         *
-                         * As a temporary workaround, swapping the order of read and write operations helped mitigate
-                         * the issue, but this is not a robust or permanent solution. Proper synchronization between
-                         * packer and unpacker threads is required to ensure data integrity and correct results.
-                         *
-                         * See also: https://github.com/tenstorrent/tt-metal/pull/22340
-                         */
+
                         tile_regs_acquire();
+
+                        cb_wait_front(synchronization_cb_index, one_tile);
+                        cb_pop_front(synchronization_cb_index, one_tile);
+                        cb_reserve_back(synchronization_cb_index, one_tile);
+
                         copy_tile_to_dst_init_short_with_dt(
                             input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
                         copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
@@ -173,24 +155,48 @@ void MAIN {
                         copy_tile(input_tensor_transposed_cb_index, left_tile_id, input_dest_start);
                         copy_tile(input_tensor_transposed_cb_index, right_tile_id, input_dest_end);
 
-                        ckernel::topk_local_sort(0, (int)dir, 5);
+                        uint32_t tile_input_low = input_dest_start;
+                        uint32_t tile_input_high = input_dest_end;
+                        uint32_t tile_index_low = index_dest_start;
+                        uint32_t tile_index_high = index_dest_end;
+
+                        if (sub == 1) {
+                            // Use sort LLK only the last stage to sort the last pair of tiles - speed up
+                            ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                        } else {
+                            ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/64);
+
+                            // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
+                            // We swap their indices when using descending order
+                            if (dir) {
+                                tile_input_low = input_dest_end;
+                                tile_input_high = input_dest_start;
+                                tile_index_low = index_dest_end;
+                                tile_index_high = index_dest_start;
+                            }
+                        }
 
                         tile_regs_commit();
                         tile_regs_wait();
 
                         pack_reconfig_data_format(input_tensor_transposed_cb_index);
-                        pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
-                        pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
+                        pack_tile<true>(tile_input_low, input_tensor_transposed_cb_index, left_tile_id);
+                        pack_tile<true>(tile_input_high, input_tensor_transposed_cb_index, right_tile_id);
 
                         pack_reconfig_data_format(index_tensor_transposed_cb_index);
-                        pack_tile<true>(index_dest_start, index_tensor_transposed_cb_index, left_tile_id);
-                        pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
+                        pack_tile<true>(tile_index_low, index_tensor_transposed_cb_index, left_tile_id);
+                        pack_tile<true>(tile_index_high, index_tensor_transposed_cb_index, right_tile_id);
+
+                        cb_push_back(synchronization_cb_index, one_tile);
 
                         tile_regs_release();
                     }
                 }
             }
         }
+
+        cb_wait_front(synchronization_cb_index, one_tile);
+        cb_pop_front(synchronization_cb_index, one_tile);
 
         cb_reserve_back(input_tensor_transposed_cb_index, Wt);
         cb_reserve_back(index_tensor_transposed_cb_index, Wt);

@@ -24,6 +24,7 @@
 #include <unordered_set>
 
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include "metal_soc_descriptor.h"
@@ -103,9 +104,10 @@ tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoo
 
     // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
     if (is_eth_core) {
-        auto active_eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(chip_id);
+        auto active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
         auto inactive_eth_cores =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(chip_id);
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip_id);
         is_active_eth_core =
             active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
         is_inactive_eth_core =
@@ -173,7 +175,6 @@ bool test_load_write_read_risc_binary(
                                    .hal()
                                    .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
                                    .local_init_addr;
-    auto core_type = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type(core_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
@@ -203,17 +204,11 @@ void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const
     });
 }
 
-CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
-    return tt::tt_metal::MetalContext::instance()
-        .get_cluster()
-        .get_soc_desc(chip_id)
-        .get_preferred_worker_core_for_dram_view(dram_channel_id);
-}
-
 namespace internal_ {
 
 bool is_active_eth_core(chip_id_t chip_id, const CoreCoord& core) {
-    auto active_eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(chip_id);
+    auto active_eth_cores =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
     return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
 }
 

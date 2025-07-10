@@ -58,8 +58,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const auto cb_1_tile_size = tt_metal::detail::TileSize(cb_1_data_format);
 
-    const auto input_shape = input.padded_shape();
-    const auto input_shape_without_padding = input.logical_shape();
+    const auto& input_shape = input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];
@@ -141,7 +140,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1 = {
         num_cols_per_core_group_1, num_reduce_input_tile, input_granularity};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }

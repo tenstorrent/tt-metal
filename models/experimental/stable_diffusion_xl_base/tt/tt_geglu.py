@@ -9,7 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare
 
 
 class TtGEGLU(nn.Module):
-    def __init__(self, device, state_dict, module_path, model_config, weights_dtype=ttnn.bfloat16):
+    def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
 
         self.device = device
@@ -21,8 +21,8 @@ class TtGEGLU(nn.Module):
         w1 = w1.unsqueeze(0).unsqueeze(0)  # [1, 1, out_dim // 2, in_dim]
         w2 = w2.unsqueeze(0).unsqueeze(0)  # same
 
-        self.tt_weights_1, self.tt_bias_1 = prepare_linear_params(device, w1, b1, weights_dtype)
-        self.tt_weights_2, self.tt_bias_2 = prepare_linear_params(device, w2, b2, weights_dtype)
+        self.tt_weights_1, self.tt_bias_1 = prepare_linear_params(device, w1, b1, model_config.ff_weights_dtype)
+        self.tt_weights_2, self.tt_bias_2 = prepare_linear_params(device, w2, b2, model_config.ff_weights_dtype)
         self.program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split")
         self.program_config_gelu = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split.gelu")
         self.compute_config = model_config.get_mm_compute_config(f"{module_path}.proj")
@@ -63,5 +63,5 @@ class TtGEGLU(nn.Module):
             compute_kernel_config=self.compute_config,
         )
         ttnn.deallocate(input_tensor)
-        hidden_states = ttnn.mul_(hidden_states, gate)
+        hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False)
         return hidden_states

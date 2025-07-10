@@ -146,51 +146,71 @@ def num_to_core_range_set(x):
 @pytest.mark.parametrize(
     "dims, slice_size, cores",
     [
-        [[2, 256, 256, 64], 128, 16],
-        [[2, 256, 128, 32], 16, 8],
+        [[2, 256, 300, 64], 128, 22],
+        [[2, 256, 128, 32], 64, 8],
         [[2, 256, 256, 128], 64, 64],
         [[2, 256, 256, 9], 64, 64],
         [[2, 256, 256, 17], 64, 64],
         [[2, 1024, 1024, 3], 64, 64],
+        [[2, 313, 71, 32], 32, 7],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, layout, orientation):
-    core_grid = device.core_grid
+    core_grid = device.compute_with_storage_grid_size()
+
     if core_grid.x * core_grid.y < cores:
         pytest.skip("Device does not have enough cores")
 
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_input = torch.randint(-10, 10, dims)
+
     ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
-    core_range = num_to_core_range_set(cores)
-    num_slices = dims[slice_dim] // slice_size
+
+    core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
+    parallel_config = ttnn.SlidingWindowParallelConfig(
+        grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, shard_orientation=orientation
+    )
+    num_slices = round_up(dims[slice_dim], slice_size) // slice_size
+    padded_channels = round_up(dims[-1], 32)
+
+    padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
+
     for i in range(num_slices):
         begins = [0, 0, 0, 0]
-        ends = [dims[0], dims[1], dims[2], dims[3]]
+        ends = [dims[0], dims[1], dims[2], padded_channels]
         begins[slice_dim] = i * slice_size
-        ends[slice_dim] = (i + 1) * slice_size
-        memory_config = ttnn.create_sharded_memory_config_(
-            torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]].shape,
-            core_range,
-            ttnn.ShardStrategy.HEIGHT,
-            orientation,
-        )
+        if i == num_slices - 1:
+            ends[slice_dim] = dims[slice_dim]
+        else:
+            ends[slice_dim] = (i + 1) * slice_size
+        this_torch_input = padded_torch_input[
+            begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]
+        ]
+
         this_ttnn_input = ttnn.from_torch(
-            torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
-            device=device,
+            this_torch_input,
             layout=layout,
             dtype=ttnn.bfloat16,
-            memory_config=memory_config,
+        )
+        this_ttnn_input = ttnn.to_device(
+            this_ttnn_input,
+            device=device,
+        )
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, this_ttnn_input.padded_shape)
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
+        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            this_ttnn_input.shape,
+            parallel_config,
+            32 if layout == ttnn.TILE_LAYOUT else 1,
         )
 
-        # x = (i + 1)%num_slices
-        # begins[slice_dim] = (x) * slice_size
-        # ends[slice_dim] = (x + 1) * slice_size
+        this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
+        ends[-1] = ttnn_output.shape[-1]
         ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
@@ -198,12 +218,87 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
 
 
 @pytest.mark.parametrize(
-    "dims, slice_size, core_x, core_y",
-    [[[2, 256, 256, 64], 128, 8, 2], [[2, 256, 128, 32], 16, 4, 4], [[2, 32, 32, 128], 32, 2, 2]],
+    "dims, slice_size, cores",
+    [
+        [[2, 64, 64, 2048], 32, 64],
+        [[2, 48, 48, 2944], 32, 46],
+    ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, layout, orientation):
+    core_grid = device.compute_with_storage_grid_size()
+
+    if core_grid.x * core_grid.y < cores:
+        pytest.skip("Device does not have enough cores")
+
+    strides = [1, 1, 1, 1]
+    torch.manual_seed(2005)
+    torch_input = torch.randint(-10, 10, dims)
+
+    ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
+
+    core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
+    parallel_config = ttnn.SlidingWindowParallelConfig(
+        grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED, shard_orientation=orientation
+    )
+    num_slices = round_up(dims[slice_dim], slice_size) // slice_size
+    padded_channels = round_up(dims[-1], 32)
+
+    padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
+
+    for i in range(num_slices):
+        begins = [0, 0, 0, 0]
+        ends = [dims[0], dims[1], dims[2], padded_channels]
+        begins[slice_dim] = i * slice_size
+        if i == num_slices - 1:
+            ends[slice_dim] = dims[slice_dim]
+        else:
+            ends[slice_dim] = (i + 1) * slice_size
+        this_torch_input = padded_torch_input[
+            begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]
+        ]
+
+        this_ttnn_input = ttnn.from_torch(
+            this_torch_input,
+            layout=layout,
+            dtype=ttnn.bfloat16,
+        )
+        this_ttnn_input = ttnn.to_device(
+            this_ttnn_input,
+            device=device,
+        )
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, this_ttnn_input.padded_shape)
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
+        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            this_ttnn_input.shape,
+            parallel_config,
+            32 if layout == ttnn.TILE_LAYOUT else 1,
+        )
+
+        this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
+        ends[-1] = ttnn_output.shape[-1]
+        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_input, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "dims, slice_size, core_x, core_y, layout",
+    [
+        [[2, 256, 256, 64], 128, 8, 2, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 256, 128, 32], 16, 4, 4, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 32, 32, 128], 32, 2, 2, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 256, 256, 64], 64, 2, 4, ttnn.TILE_LAYOUT],
+        [[2, 256, 128, 128], 32, 4, 4, ttnn.TILE_LAYOUT],
+        [[2, 64, 64, 128], 32, 2, 2, ttnn.TILE_LAYOUT],
+    ],
+)
+@pytest.mark.parametrize("slice_dim", [1, 2])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, core_y, layout, orientation):
     core_grid = device.core_grid
     if core_grid.x < core_x or core_grid.y < core_y:
@@ -245,7 +340,7 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
-def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cache):
+def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
     for _ in range(2):
         run_slice_rm_sharded(device, n, c, h, w)
         # dummy tensor to change tensor alloc
@@ -321,6 +416,18 @@ def slice_test(
     return a_pt, a_ref, device.num_program_cache_entries()
 
 
+# from https://github.com/tenstorrent/tt-metal/issues/23237
+def test_slice_rm_program_cache_collison(device):
+    shape = (32, 64, 4096)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    for i in range(shape[-1]):
+        tt_out = tt_input[:, :, i : i + 1]
+        torch_out = torch_input[:, :, i : i + 1]
+        assert_with_pcc(torch_out, ttnn.to_torch(tt_out), 0.99)
+
+
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -364,7 +471,6 @@ def test_run_slice_test(
     in_mem_config,
     out_mem_config,
     dtype,
-    use_program_cache,
 ):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
@@ -1030,9 +1136,7 @@ def test_slice_index(device, input_shape, layout, input_memory_config, indices):
     "memory_config",
     (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 )
-def test_ttnn_slice_whisper(
-    input_shape, input_start, input_ends, input_steps, memory_config, layout, device, use_program_cache
-):
+def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, memory_config, layout, device):
     # A couple of slices in whisper that only work for "logical" slicing.
 
     for _ in range(3):
@@ -1150,6 +1254,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         [[2, 64, 64, 256], 32, 4, 4],
         [[2, 64, 64, 512], 16, 4, 4],
         [[2, 16, 16, 1024], 4, 4, 4],
+        [[2, 128, 128, 256], 32, 8, 4],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
