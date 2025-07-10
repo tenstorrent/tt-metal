@@ -5,6 +5,7 @@
 #include "sdpa_decode_program_factory.hpp"
 
 #include <optional>
+#include <string>
 
 #include <tt-metalium/buffer.hpp>
 #include "sdpa_decode_op.hpp"
@@ -35,7 +36,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
     const uint32_t k_chunk_size,
-    std::optional<bool> share_cache) {
+    std::optional<bool> share_cache,
+    bool use_mla,
+    uint32_t head_dim_v) {
     /*
     Q: 1 x B x PNH x DH
     K: B x NKV x S x DH
@@ -62,6 +65,27 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
 
+    bool is_q_sharded = input_tensor_q.is_sharded();
+    bool is_output_sharded = output_tensor.is_sharded();
+
+    // balance the number of cores to use based on batch
+    uint32_t q_heads_parallel_factor = 1;
+    if (is_q_sharded && use_mla) {
+        uint32_t q_shard_height = input_tensor_q.memory_config().shard_spec()->shape[0];
+        q_heads_parallel_factor = std::max((uint32_t)1, (num_q_heads + q_shard_height - 1) / q_shard_height);
+
+        if (q_heads_parallel_factor > 1) {
+            TT_FATAL(
+                num_kv_heads == 1,
+                "If parallelizing over Q num heads (with parallelization factor q_heads_parallel_factor: {}), then "
+                "num_kv_heads must be 1, but got num_kv_heads: {}",
+                q_heads_parallel_factor,
+                num_kv_heads);
+        }
+
+        B *= q_heads_parallel_factor;  // adjust batch size to account for Q sharding
+    }
+
     if (is_paged_attention) {
         uint32_t block_size = k_shape[2];
         page_block_size_t = block_size / TILE_HEIGHT;
@@ -71,12 +95,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t Bkv = k_shape[0];
     uint32_t St = S / TILE_HEIGHT;
     uint32_t DHt = DH / TILE_WIDTH;
-    uint32_t PNHt = PNH / TILE_HEIGHT;
+    uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
+    uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
 
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
 
-    bool is_q_sharded = input_tensor_q.is_sharded();
-    bool is_output_sharded = output_tensor.is_sharded();
     if (!share_cache.has_value()) {
         // default share_cache to false
         share_cache = false;
@@ -94,6 +117,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug(tt::LogOp, "Bkv: {}", Bkv);
     log_debug(tt::LogOp, "St: {}", St);
     log_debug(tt::LogOp, "DHt: {}", DHt);
+    log_debug(tt::LogOp, "vDHt: {}", vDHt);
     log_debug(tt::LogOp, "PNHt: {}", PNHt);
     log_debug(tt::LogOp, "Sk_chunk_t: {}", Sk_chunk_t);
     log_debug(tt::LogOp, "k_chunk_size: {}", k_chunk_size);
@@ -249,10 +273,10 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     uint32_t q_tiles = PNHt * DHt;
     uint32_t k_tiles = Sk_chunk_t_cb_size * DHt * 2;  // double buffer
-    uint32_t v_tiles = Sk_chunk_t_cb_size * DHt * 2;  // double buffer
+    uint32_t v_tiles = Sk_chunk_t_cb_size * vDHt * 2;  // double buffer
     uint32_t qk_tiles = PNHt * Sk_chunk_t_cb_size;
-    uint32_t out_im_tiles = PNHt * DHt;
-    uint32_t out0_t = PNHt * DHt;
+    uint32_t out_im_tiles = PNHt * vDHt;
+    uint32_t out0_t = PNHt * vDHt;
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = PNHt;  // Single column of values in each iteration
 
@@ -292,12 +316,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         out_num_blocks = Sk_chunk_t / out_in0_block_w;
     }
 
-    const uint32_t out_out_subblock_w = std::min(DHt, dst_size);
+    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
     const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == DHt) ? (std::min(PNHt, dst_size / out_out_subblock_w)) : 1;
+        (out_out_subblock_w == vDHt) ? (std::min(PNHt, dst_size / out_out_subblock_w)) : 1;
 
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
-    const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
+    const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -618,6 +642,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         PNHt,
         St,
         DHt,
+        vDHt,
         Sk_chunk_t,
         num_active_cores,
         is_q_sharded,
@@ -628,6 +653,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_kv_heads,
         page_block_size_t,
         Bkv,
+        q_heads_parallel_factor,
         num_cores_per_head,
         num_heads_per_core,
         num_output_cores,
@@ -635,6 +661,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         use_attention_mask,
         max_dynamic_chunk_size,
         tilize_q,
+        (uint32_t)use_mla,
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
@@ -642,6 +669,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         PNHt,
         St,
         DHt,
+        vDHt,
         Sk_chunk_t,
         packed_identity_scalar,
         scale_union.u,
@@ -660,11 +688,13 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         output_tensor.element_size(),
         is_causal,
         max_dynamic_chunk_size,
+        q_heads_parallel_factor,
     };
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
         DHt,
+        vDHt,
         PNHt,
         Sk_chunk_t,
         qk_in0_block_w,
@@ -687,10 +717,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         use_attention_mask,
         max_dynamic_chunk_size,
         tilize_q,
+        q_heads_parallel_factor,
     };
 
     // Determine granularity for compute loops
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (Sk_chunk_t > 0) {
         const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
         const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
@@ -762,7 +793,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t core_num_in_reduce = i % num_cores_per_head;
         uint32_t core_num_in_output = i % num_cores_per_batch;
 
-        uint32_t cur_pos = (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at(cur_batch);
+        uint32_t cur_pos =
+            (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
 
         log_debug(tt::LogOp, "---- core_id: {}, coord: {} ----", i, core);
         log_debug(tt::LogOp, "worker_id_for_reduce: {}", worker_id_for_reduce);
@@ -849,10 +881,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
          is_output_sharded,
          cb_out4_id,
          B,
+         q_heads_parallel_factor,
          use_cur_pos_tensor,
          use_attention_mask,
          is_paged_attention,
-         is_causal](
+         is_causal,
+         use_mla](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -863,7 +897,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
             auto q_buffer = input_tensors.at(0).buffer();
             auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
+            auto v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
 
             auto out0_buffer = output_tensors.at(0).buffer();
             uint32_t q_addr = q_buffer->address();
@@ -892,7 +926,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                 uint32_t cur_batch = i / num_cores_per_batch;
                 uint32_t core_num_in_reduce = (num_cores_per_head == 0) ? 0 : i % num_cores_per_head;
                 uint32_t core_num_in_output = i % num_cores_per_batch;
-                uint32_t cur_pos = (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at(cur_batch);
+                uint32_t cur_pos = (use_cur_pos_tensor || !is_causal)
+                                       ? -1
+                                       : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
 
                 auto& reader_args = reader_args_by_core[core.x][core.y];
                 auto& writer_args = writer_args_by_core[core.x][core.y];

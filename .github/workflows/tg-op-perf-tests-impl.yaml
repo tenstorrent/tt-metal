@@ -1,0 +1,80 @@
+name: "[internal] TG op perf tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+
+jobs:
+  tg-op-perf-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: "TG Op Perf Unit Tests",
+            arch: wormhole_b0,
+            cmd: 'pytest -k TG tests/ttnn/multidevice_perf_tests/',
+            timeout: 5,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+          },
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      PYTHONPATH: ${{ github.workspace }}
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Enable performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
+      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name || 'build artifact not specified' }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name || 'wheel artifact not specified' }}
+      - name: Run op perf regression tests
+        timeout-minutes: 10
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+          install_wheel: true
+          run_args: |
+            ${{ matrix.test-group.cmd }}
+      - name: Disable performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand

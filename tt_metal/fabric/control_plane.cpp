@@ -62,6 +62,25 @@ std::vector<chan_id_t> extract_intermesh_eth_links(uint32_t config_value, chip_i
     return intermesh_eth_links;
 }
 
+// TODO: Support custom operator< for eth_coord_t to allow usage in std::set
+struct EthCoordComparator {
+    bool operator()(const eth_coord_t& eth_coord_a, const eth_coord_t& eth_coord_b) const {
+        if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
+            return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
+        }
+        if (eth_coord_a.x != eth_coord_b.x) {
+            return eth_coord_a.x < eth_coord_b.x;
+        }
+        if (eth_coord_a.y != eth_coord_b.y) {
+            return eth_coord_a.y < eth_coord_b.y;
+        }
+        if (eth_coord_a.rack != eth_coord_b.rack) {
+            return eth_coord_a.rack < eth_coord_b.rack;
+        }
+        return eth_coord_a.shelf < eth_coord_b.shelf;
+    }
+};
+
 }  // namespace
 
 // Get the physical chip ids for a mesh
@@ -144,7 +163,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     this->router_port_directions_to_num_routing_planes_map_.clear();
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
-    size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
     auto apply_min =
         [this](
@@ -164,7 +182,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
         // Get mesh dimensions from the mesh graph descriptor
         auto mesh_ew_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[1];
-        auto mesh_ns_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[0];
 
         // Convert linear chip_id to 2D mesh coordinates
         auto coord_y = chip_id / mesh_ew_size;
@@ -596,7 +613,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
         }
     } else if (
         mesh_graph_desc_filename == "single_galaxy_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "single_galaxy_torus_2d_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "single_galaxy_torus_xy_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "dual_galaxy_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p150_mesh_graph_descriptor.yaml" ||
@@ -624,25 +641,11 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
             tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
         TT_FATAL(!chip_eth_coords.empty(), "No chip ethernet coordinates found in ethernet coordinates map");
 
-        // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
         const auto min_coord =
             *std::min_element(chip_eth_coords.begin(), chip_eth_coords.end(), [](const auto& a, const auto& b) {
                 const auto& [chip_a, eth_coord_a] = a;
                 const auto& [chip_b, eth_coord_b] = b;
-
-                if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
-                    return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
-                }
-                if (eth_coord_a.x != eth_coord_b.x) {
-                    return eth_coord_a.x < eth_coord_b.x;
-                }
-                if (eth_coord_a.y != eth_coord_b.y) {
-                    return eth_coord_a.y < eth_coord_b.y;
-                }
-                if (eth_coord_a.rack != eth_coord_b.rack) {
-                    return eth_coord_a.rack < eth_coord_b.rack;
-                }
-                return eth_coord_a.shelf < eth_coord_b.shelf;
+                return EthCoordComparator()(eth_coord_a, eth_coord_b);
             });
 
         nw_chip_physical_id =
@@ -653,6 +656,31 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
             this->get_mesh_physical_chip_ids(mesh_shape[0], mesh_shape[1], nw_chip_physical_id);
         for (std::uint32_t i = 0; i < physical_chip_ids.size(); i++) {
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{0}, i), physical_chip_ids[i]});
+        }
+    } else if (mesh_graph_desc_filename == "t3k_dual_host_mesh_graph_descriptor.yaml") {
+        // TODO(#24230): This path will soon be deprecated once we generalize logical mesh_chip_id to physical chip_id mapping
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto chip_eth_coords = cluster.get_user_chip_ethernet_coordinates();
+        std::vector<eth_coord_t> eth_coords;
+        eth_coords.reserve(chip_eth_coords.size());
+        for (const auto& [_, eth_coord] : chip_eth_coords) {
+            eth_coords.push_back(eth_coord);
+        }
+        std::sort(eth_coords.begin(), eth_coords.end(), EthCoordComparator());
+
+        auto mesh_ids = this->get_local_mesh_id_bindings();
+        auto mesh_id = mesh_ids.at(0);  // Use the first mesh ID
+        auto host_rank_id = this->get_local_host_rank_id_binding();
+        auto fabric_chip_ids = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id).values();
+
+        TT_FATAL(fabric_chip_ids.size() == eth_coords.size(),
+            "Number of fabric chip ids {} does not match number of eth coords {}", fabric_chip_ids.size(), eth_coords.size());
+        for (std::uint32_t idx = 0; idx < fabric_chip_ids.size(); idx++) {
+            auto fabric_chip_id = fabric_chip_ids.at(idx);
+            auto eth_coord = eth_coords.at(idx);
+            logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+                {tt_fabric::FabricNodeId(mesh_id, fabric_chip_id),
+                cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
         }
     } else {
         TT_THROW("Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
@@ -1230,8 +1258,6 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
 
         std::tie(src_fabric_node_id, src_chan_id) =
             this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
-        auto connected_physical_chip_id =
-            this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         route.push_back({src_fabric_node_id, src_chan_id});
     }
 
@@ -1673,7 +1699,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
             intermesh_eth_links_[chip_id] = {};
             continue;
         }
-
+        // Remote connections not visible to UMD
         // Read multi-mesh configuration from the first available eth core
         auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
         tt_cxy_pair virtual_eth_core(
@@ -1690,6 +1716,20 @@ void ControlPlane::initialize_intermesh_eth_links() {
                 if (channel == link) {
                     intermesh_eth_links.push_back({core_coord, link});
                     break;
+                }
+            }
+        }
+
+        // Remote connections visible to UMD
+        auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
+        if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
+            for (auto [link, _] : remote_connections->second) {
+                // Find the CoreCoord for this channel
+                for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
+                    if (channel == link) {
+                        intermesh_eth_links.push_back({core_coord, link});
+                        break;
+                    }
                 }
             }
         }
@@ -1713,6 +1753,12 @@ bool ControlPlane::is_intermesh_enabled() const {
         return false;
     }
 
+    // UMD Visible Intermesh Links
+    if (!cluster.get_ethernet_connections_to_remote_devices().empty()) {
+        return true;
+    }
+
+    // UMD Hidden Intermesh Links
     std::vector<uint32_t> config_data(1, 0);
     auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
     tt_cxy_pair virtual_eth_core(

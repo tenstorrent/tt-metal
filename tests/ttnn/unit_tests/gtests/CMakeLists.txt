@@ -143,6 +143,7 @@ add_executable(unit_tests_ttnn_accessor)
 target_sources(
     unit_tests_ttnn_accessor
     PRIVATE
+        accessor/common.cpp
         accessor/test_accessor_benchmarks.cpp
         accessor/test_tensor_accessor.cpp
         accessor/test_tensor_accessor_on_device.cpp
@@ -167,6 +168,7 @@ target_sources(
         tensor/test_tensor_serialization.cpp
         tensor/test_tensor_sharding.cpp
         tensor/test_vector_conversion.cpp
+        tensor/test_xtensor_adapter.cpp
         tensor/test_xtensor_conversion.cpp
 )
 setup_ttnn_test_target(unit_tests_ttnn_tensor)

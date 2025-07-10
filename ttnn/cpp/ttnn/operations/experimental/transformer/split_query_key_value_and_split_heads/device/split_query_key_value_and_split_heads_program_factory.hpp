@@ -17,8 +17,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 
-    tt_metal::IDevice* device = a.device();
-
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -124,7 +122,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 
     // Dummy compute kernel
     std::vector<uint32_t> compute_args = {num_tiles_per_tensor};
-    auto compute_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
         all_cores,
@@ -142,17 +140,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     tt_metal::CircularBufferConfig cb_out_config =
         tt_metal::CircularBufferConfig(out_cb_tiles * single_tile_size, {{out_cb_index, cb_data_format}})
             .set_page_size(out_cb_index, single_tile_size);
-    auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
@@ -251,8 +249,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::IDevice* device = a.device();
-
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -276,7 +272,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         (std::uint32_t)out_block_wt * single_tile_size,
         (std::uint32_t)num_tiles_per_tensor,
         (std::uint32_t)block_wt * single_tile_size / num_tensors};
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
         "dataflow/reader_tm_tile_layout_create_qkv_heads_sharded.cpp",
@@ -292,7 +288,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         (std::uint32_t)out_block_wt * single_tile_size,
         (std::uint32_t)num_tiles_per_tensor,
         (std::uint32_t)block_wt * single_tile_size / num_tensors};
-    auto writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
         "dataflow/writer_tm_tile_layout_create_qkv_heads_sharded.cpp",
@@ -300,7 +296,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     // compute kernel
     std::vector<uint32_t> compute_args = {num_tiles_per_tensor};
-    auto compute_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
         "compute/transpose_wh_sharded.cpp",
@@ -316,7 +312,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     // im
     auto c_im0_config = CircularBufferConfig(im0_CB_size, {{CBIndex::c_24, cb_data_format}})
                             .set_page_size(CBIndex::c_24, single_tile_size);
-    auto cb_im0_id = CreateCircularBuffer(program, all_cores, c_im0_config);
+    CreateCircularBuffer(program, all_cores, c_im0_config);
     // q sharded
     auto c_out0_config = CircularBufferConfig(out_CB_size, {{CBIndex::c_16, cb_data_format}})
                              .set_page_size(CBIndex::c_16, single_tile_size)
