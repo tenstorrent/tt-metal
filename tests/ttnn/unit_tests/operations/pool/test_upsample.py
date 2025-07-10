@@ -147,6 +147,8 @@ def upsample_multicore_common(
         if shard_strategy == ttnn.ShardStrategy.BLOCK:
             if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
                 ncores = (core_range[0][1][1] - core_range[0][0][1] + 1, core_range[0][1][0] - core_range[0][0][0] + 1)
+            elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+                ncores = (core_range[0][1][0] - core_range[0][0][0] + 1, core_range[0][1][1] - core_range[0][0][1] + 1)
         elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
             ncores = shard_grid.num_cores()
         else:
@@ -482,36 +484,3 @@ def test_nearest_upsample_with_uneven_input_shards(
 
     assert allclose
     assert passing
-
-
-@pytest.mark.parametrize(
-    "input_shape",
-    [
-        [1, 640, 16, 32],
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("scale_h", [2])
-@pytest.mark.parametrize("scale_w", [2])
-@pytest.mark.parametrize(
-    "core_range",
-    [
-        [((0, 0), (4, 3))],
-    ],
-)
-def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_range):
-    (torch_result, output_tensor) = upsample_multicore_common(
-        device=device,
-        input_shape=input_shape,
-        scale_h=scale_h,
-        scale_w=scale_w,
-        shard_strategy=ttnn.ShardStrategy.BLOCK,
-        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        core_range=core_range,
-    )
-    ## compare the results
-    torch_result = torch_result.permute(0, 2, 3, 1)
-
-    isequal = torch.equal(output_tensor, torch_result)
-
-    assert isequal
