@@ -10,12 +10,13 @@ import traceback
 import scipy
 
 import utils
-
+from operations import UNARY_OPERATIONS
 
 device_id = 0
 device = ttnn.open_device(device_id=device_id)
 
 EPSILON = 2**-9
+
 
 # ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
 
@@ -46,6 +47,11 @@ datatypes_parameters = {
         "tensor_height": 2**3,
     },
 }
+
+
+TERM_RED = "\033[91m"
+TERM_GREEN = "\033[92m"
+TERM_RESET = "\033[0m"
 
 
 def exp_regression_0p5_to_1(tensor_input):
@@ -144,175 +150,45 @@ def test_exp_accurate_python():
     print(f"ttnn_output =\n{ttnn_output_torch}")
 
 
-operations_dict = {
-    # Exponential functions
-    "exp": (torch.exp, ttnn.exp, math.exp, "exp"),
-    "exp_approx": (
-        torch.exp,
-        lambda x, output_tensor: ttnn.exp(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
-        None,
-        "exp",
-    ),
-    "exp_cond": (
-        torch.exp,
-        ttnn.exp,
-        None,
-        "exp",
-    ),
-    "exp_approx0": (
-        torch.exp,
-        ttnn.exp,
-        None,
-        "exp",
-    ),
-    "exp_approx_21f": (
-        torch.exp,
-        ttnn.exp,
-        None,
-        "exp",
-    ),
-    "exp_hybrid": (
-        torch.exp,
-        ttnn.exp,
-        None,
-        "exp",
-    ),
-    "exp_accurate_python": (
-        torch.exp,
-        exp_accurate_python,
-        None,
-        "exp",
-    ),
-    "exp_python_alt1": (
-        torch.exp,
-        lambda x, output_tensor: exp_accurate_python(x, output_tensor, exp_regression=exp_regression_0p5_to_1_alt1),
-        None,
-        "exp",
-    ),
-    "tanh": (
-        torch.tanh,
-        ttnn.tanh,
-        math.tanh,
-        "tanh",
-    ),  # ttnn.tanh() does not support output_tensor ?
-    "tanh_accurate": (
-        torch.tanh,
-        lambda x, output_tensor: ttnn.tanh(x, accuracy=True, output_tensor=output_tensor),
-        math.tanh,
-        "tanh",
-    ),
-    "cosh": (
-        torch.cosh,
-        lambda x, output_tensor: ttnn.cosh(x),
-        math.cosh,
-        "cosh",
-    ),  # ttnn.cosh() does not support output_tensor ?
-    "sinh": (
-        torch.sinh,
-        lambda x, output_tensor: ttnn.sinh(x),
-        math.sinh,
-        "sinh",
-    ),  # ttnn.sinh() does not support output_tensor ?
-    # Logarithmic functions
-    "log": (torch.log, ttnn.log, math.log, "log"),
-    "log10": (torch.log10, ttnn.log10, math.log10, "log10"),
-    "log2": (torch.log2, ttnn.log2, math.log2, "log2"),
-    "log1p": (torch.log1p, ttnn.log1p, math.log1p, "log1p"),
-    "logaddexp": (torch.logaddexp, ttnn.logaddexp, None, "logaddexp"),
-    "logaddexp2": (torch.logaddexp2, ttnn.logaddexp2, None, "logaddexp2"),
-    # Activation functions
-    "silu": (lambda x, out: torch.nn.SiLU()(x), ttnn.silu, None, "silu"),
-    "gelu": (lambda x, out: torch.nn.GELU()(x), ttnn.gelu, None, "gelu"),
-    "gelu_approx": (
-        lambda x, out: torch.nn.GELU()(x),
-        lambda x, output_tensor: ttnn.gelu(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
-        None,
-        "gelu",
-    ),
-    "logit": (
-        torch.logit,
-        lambda x, output_tensor: ttnn.logit(x),
-        None,
-        "logit",
-    ),  # ttnn.logit does not support output_tensor ?
-    "swish": (
-        lambda x, out: torch.nn.SiLU()(x),
-        lambda x, output_tensor: ttnn.swish(x),
-        None,
-        "swish",
-    ),  # ttnn.swish does not support output_tensor ?
-    "mish": (lambda x, out: torch.nn.Mish()(x), ttnn.mish, None, "mish"),
-    "elu": (
-        lambda x, out: torch.nn.ELU()(x),
-        lambda x, output_tensor: ttnn.elu(x, output_tensor=output_tensor, alpha=1.0),
-        None,
-        "elu",
-    ),  # Unlike torch, ttnn.elu does not use alpha=1 by default
-    "selu": (
-        lambda x, out: torch.nn.SELU()(x),
-        lambda x, output_tensor: ttnn.selu(x),
-        None,
-        "selu",
-    ),  # ttnn.selu does not support output_tensor ?
-    "softplus": (lambda x, out: torch.nn.Softplus()(x), ttnn.softplus, None, "softplus"),
-    "softsign": (
-        lambda x, out: torch.nn.Softsign()(x),
-        lambda x, output_tensor: ttnn.softsign(x),
-        None,
-        "softsign",
-    ),  # ttnn.softsign does not support output_tensor ?
-    # Trigonometric functions
-    "tan": (torch.tan, ttnn.tan, math.tan, "tan"),
-    "atan": (torch.atan, ttnn.atan, math.atan, "atan"),
-    "atan2": (torch.atan2, ttnn.atan2, math.atan2, "atan2"),
-    "sin": (torch.sin, ttnn.sin, math.sin, "sin"),
-    "cos": (torch.cos, ttnn.cos, math.cos, "cos"),
-    # Miscellaneous functions
-    "sqrt": (torch.sqrt, ttnn.sqrt, math.sqrt, "sqrt"),
-    "rsqrt": (
-        torch.rsqrt,
-        lambda x, output_tensor: ttnn.rsqrt(x, fast_and_approximate_mode=False, output_tensor=output_tensor),
-        None,
-        "rsqrt",
-    ),
-    "rsqrt_approx": (
-        torch.rsqrt,
-        lambda x, output_tensor: ttnn.rsqrt(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
-        None,
-        "rsqrt",
-    ),
-    "reciprocal": (
-        torch.reciprocal,
-        ttnn.reciprocal,
-        None,
-        "reciprocal",
-    ),
-    "digamma": (
-        torch.digamma,
-        lambda x, output_tensor: ttnn.digamma(x),
-        None,
-        "digamma",
-    ),  # ttnn.digamma does not support output_tensor ?
-    "lgamma": (
-        torch.lgamma,
-        lambda x, output_tensor: ttnn.lgamma(x),
-        math.lgamma,
-        "lgamma",
-    ),  # ttnn.lgamma does not support output_tensor ?
-    "tanhshrink": (
-        lambda x, out: torch.nn.Tanhshrink()(x),
-        lambda x, output_tensor: ttnn.tanhshrink(x),
-        None,
-        "tanhshrink",
-    ),  # ttnn.tan
-}
-
 # Add powers of [-1, 2, 3, 4, 5, 6, 7, 8, 9, 10] into dictionary
-powers = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+exponents = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+operations_dict = UNARY_OPERATIONS
+
+# a**x functions
+for exponent in exponents:
+    operations_dict[f"pow_{exponent}"] = (
+        lambda x, out, e=exponent: torch.pow(e, x),
+        lambda x, output_tensor, e=exponent: ttnn.pow(e, x, output_tensor=output_tensor),
+        None,
+        "pow",
+    )
+    operations_dict[f"pow21f_{exponent}"] = (
+        lambda x, out, e=exponent: torch.pow(e, x),
+        lambda x, output_tensor, e=exponent: ttnn.pow(e, x, output_tensor=output_tensor),
+        None,
+        "pow",
+    )
+
+operations_dict["pow21f_tiny"] = (
+    lambda x, out, e=0.000001: torch.pow(e, x),
+    lambda x, output_tensor, e=0.000001: ttnn.pow(e, x, output_tensor=output_tensor),
+    None,
+    "pow",
+)
+
+# x**a functions
+powers = [0, 0.5, 1, 2, 5, 7, 10]
 for power in powers:
-    operations_dict[f"pow_{power}"] = (
-        lambda x, out, p=power: torch.pow(p, x),
-        lambda x, output_tensor, p=power: ttnn.pow(p, x, output_tensor=output_tensor),
+    operations_dict[f"pow(x,{power})"] = (
+        lambda x, out, p=power: torch.pow(x, p),
+        lambda x, output_tensor, p=power: ttnn.pow(x, p, output_tensor=output_tensor),
+        None,
+        "pow",
+    )
+    operations_dict[f"pow21f(x,{power})"] = (
+        lambda x, out, p=power: torch.pow(x, p),
+        lambda x, output_tensor, p=power: ttnn.pow(x, p, output_tensor=output_tensor),
         None,
         "pow",
     )
@@ -724,6 +600,29 @@ def main(args):
         # "pow_3",
         # "pow_5",
         # "pow_10",
+        "pow21f_tiny",
+        # "pow21f_2",
+        # "pow21f_3",
+        # "pow21f_5",
+        # "pow21f_10",
+        # "pow(x,-10)",
+        # "pow(x,-2)",
+        # "pow(x,-1)",
+        # "pow(x,0)",
+        # "pow(x,2)",
+        # "pow(x,5)",
+        # "pow(x,10)",
+        # "pow(x,0)",
+        # "pow(x,0.5)",
+        # "pow(x,2)",
+        # "pow(x,5)",
+        # "pow(x,10)",
+        # "pow21f(x,0)",
+        # "pow21f(x,0)",
+        # "pow21f(x,0.5)",
+        # "pow21f(x,2)",
+        # "pow21f(x,5)",
+        # "pow21f(x,10)",
         # "log",
         # "tanh",
         # "tanh_accurate",
@@ -759,15 +658,37 @@ def main(args):
         # "exp_hybrid",
         # "exp",
         # "exp_cond",
-        "exp_approx_21f",
+        # "exp_approx_21f",
         # "exp_approx",
         # "exp_approx0",
         # "exp_accurate_python",
         # "exp_python_alt1",
+        "pow21f_tiny",
         # "pow_2",
         # "pow_3",
         # "pow_5",
         # "pow_10",
+        # "pow21f_2",
+        # "pow21f_3",
+        # "pow21f_5",
+        # "pow21f_10",
+        # "pow(x,-10)",
+        # "pow(x,-2)",
+        # "pow(x,-1)",
+        # "pow(x,0)",
+        # "pow(x,2)",
+        # "pow(x,5)",
+        # "pow(x,10)",
+        # "pow(x,0)",
+        # "pow(x,0.5)",
+        # "pow(x,2)",
+        # "pow(x,5)",
+        # "pow(x,10)",
+        # "pow21f(x,0)",
+        # "pow21f(x,0.5)",
+        # "pow21f(x,2)",
+        # "pow21f(x,5)",
+        # "pow21f(x,10)",
         # "log",
         # "log10",
         # "log2",
@@ -805,9 +726,6 @@ def main(args):
     success_count = 0
     successfull_operations = []
     failed_operations = []
-    RED = "\033[91m"
-    GREEN = "\033[92m"
-    RESET = "\033[0m"
 
     cnt = 0
     total_operation_cnt = len(all_operations) + len(highres_operations)
@@ -819,8 +737,8 @@ def main(args):
             success_count += 1
             successfull_operations += [operation]
         except Exception as e:
-            print(f"{RED}Could not run operation {operation}: {e}{RESET}")
-            print(f"{RED}{traceback.format_exc()}{RESET}")
+            print(f"{TERM_RED}Could not run operation {operation}: {e}{TERM_RESET}")
+            print(f"{TERM_RED}{traceback.format_exc()}{TERM_RESET}")
             failed_operations += [operation]
 
     print(f"Now measuring high-resolution operations")
@@ -832,13 +750,13 @@ def main(args):
             success_count += 1
             successfull_operations += [f"{operation}[highres]"]
         except Exception as e:
-            print(f"{RED}Could not run operation {operation}: {e}{RESET}")
-            print(f"{RED}{traceback.format_exc()}{RESET}")
+            print(f"{TERM_RED}Could not run operation {operation}: {e}{TERM_RESET}")
+            print(f"{TERM_RED}{traceback.format_exc()}{TERM_RESET}")
             failed_operations += [f"{operation}[highres]"]
 
     print(f"Sucessfully ran {success_count} / {len(all_operations)} operations")
-    print(f"{GREEN}SUCCESS: {successfull_operations}{RESET}")
-    print(f"{RED}FAILED: {failed_operations}{RESET}")
+    print(f"{TERM_GREEN}SUCCESS: {successfull_operations}{TERM_RESET}")
+    print(f"{TERM_RED}FAILED: {failed_operations}{TERM_RESET}")
 
 
 args = sys.argv
