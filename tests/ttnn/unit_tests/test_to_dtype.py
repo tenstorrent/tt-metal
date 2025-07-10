@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+bfloat4_pcc = 0.960
+
 
 def is_ttnn_float_type(tt_dtype) -> bool:
     match tt_dtype:
@@ -43,9 +45,8 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
     else:
         assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
-    # How to estimate pcc for conversion loss? No guarantee that we almost hit 0.960 target which could break CI
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor, 0.960 if to_dtype == ttnn.bfloat4_b else 0.9999)
+    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
 
 
 @pytest.mark.parametrize("height", [32])
@@ -68,7 +69,7 @@ def test_to_float_dtype(height, width, from_dtype, to_dtype):
         assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor, 0.960 if to_dtype == ttnn.bfloat4_b else 0.9999)
+    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
 
 
 @pytest.mark.parametrize("height", [36])
@@ -95,9 +96,8 @@ def test_to_dtype_unaligned_shape(height, width, from_dtype, to_dtype):
     assert tuple(output_tensor.shape) == (height, width)
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
-    # How to estimate pcc for conversion loss? No guarantee that we almost hit 0.960 target which could break CI
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor, 0.960 if to_dtype == ttnn.bfloat4_b else 0.9999)
+    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
 
 
 @pytest.mark.parametrize("height", [32])
@@ -116,6 +116,5 @@ def test_to_dtype_with_tile_layout(height, width, from_dtype, to_dtype):
     assert tuple(output_tensor.shape) == (height, width)
     assert output_tensor.layout == ttnn.TILE_LAYOUT
 
-    # How to estimate pcc for conversion loss? No guarantee that we almost hit 0.960 target which could break CI
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor, 0.960 if to_dtype == ttnn.bfloat4_b else 0.9999)
+    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
