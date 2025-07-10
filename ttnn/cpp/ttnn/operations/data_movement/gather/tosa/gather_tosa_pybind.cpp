@@ -8,7 +8,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 
-namespace ttnn::operations::experimental::tosa::gather::detail {
+namespace ttnn::operations::tosa::gather::detail {
 namespace py = pybind11;
 
 void bind_gather_tosa_operation(py::module& module) {
@@ -58,15 +58,15 @@ void bind_gather_tosa_operation(py::module& module) {
             index_tensor_ttnn = ttnn.from_torch(index_tensor, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
             # Perform the gather operation
-            gathered_tensor = ttnn.experimental.tosa_gather(input_tensor_ttnn, index_tensor_ttnn)
+            gathered_tensor = ttnn.tosa_gather(input_tensor_ttnn, index_tensor_ttnn)
 
             # Equivalent to PyTorch: gathered_tensor = torch.gather(input_tensor, dim=1, index=indices.unsqueeze(-1).expand(-1, -1, C))
     )doc";
 
-    using OperationType = decltype(ttnn::experimental::tosa::gather);
+    using OperationType = decltype(ttnn::tosa::gather);
     bind_registered_operation(
         module,
-        ttnn::experimental::tosa::gather,
+        ttnn::tosa::gather,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -80,4 +80,4 @@ void bind_gather_tosa_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
-}  // namespace ttnn::operations::experimental::tosa::gather::detail
+}  // namespace ttnn::operations::tosa::gather::detail

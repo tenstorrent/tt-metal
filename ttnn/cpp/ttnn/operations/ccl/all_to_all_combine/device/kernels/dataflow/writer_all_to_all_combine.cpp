@@ -49,7 +49,8 @@ inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const ui
 
     const uint32_t batch_per_device = BatchSize / batch_devices;
     const uint32_t bidx= b % batch_per_device;
-    return k * batch_per_device *SeqSize + bidx*SeqSize+s;
+
+    return k * batch_per_device * SeqSize + bidx * SeqSize + s;
 }
 }  // namespace detail
 
@@ -72,6 +73,7 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(16);
     constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(17));
+    constexpr uint32_t locally_reduced = get_compile_time_arg_val(18);
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -168,6 +170,10 @@ void kernel_main() {
                     }
                 }
                 cb_pop_front(data_cb_id,1);
+
+                if constexpr (locally_reduced) {
+                    break;
+                }
             }
         }
         cb_pop_front(metadata_cb_id, 1);
