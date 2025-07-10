@@ -10,9 +10,9 @@
 #include <string>
 #include <optional>
 #include <string_view>
+#include <sstream>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/mesh_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -71,6 +71,12 @@ public:
     [[nodiscard]] T& value() &;
     [[nodiscard]] const T& value() const&;
     
+    // Pointer-like operators for convenience
+    [[nodiscard]] T& operator*() &;
+    [[nodiscard]] const T& operator*() const&;
+    [[nodiscard]] T* operator->();
+    [[nodiscard]] const T* operator->() const;
+    
     // Optional-style access
     [[nodiscard]] std::optional<T> optional_value() const;
     
@@ -87,7 +93,7 @@ public:
 };
 
 // Type aliases for common use cases
-using MaybeRemoteDeviceId = MaybeRemote<chip_id_t>;
+using MaybeRemoteDeviceId = MaybeRemote<int>;
 using MaybeRemoteDevice = MaybeRemote<IDevice*>;
 
 // ============================================================================
@@ -142,6 +148,32 @@ const T& MaybeRemote<T>::value() const& {
 }
 
 template <typename T>
+T& MaybeRemote<T>::operator*() & {
+    return value();
+}
+
+template <typename T>
+const T& MaybeRemote<T>::operator*() const& {
+    return value();
+}
+
+template <typename T>
+T* MaybeRemote<T>::operator->() {
+    if (is_remote()) {
+        throw_remote_access_error();
+    }
+    return &std::get<T>(value_);
+}
+
+template <typename T>
+const T* MaybeRemote<T>::operator->() const {
+    if (is_remote()) {
+        throw_remote_access_error();
+    }
+    return &std::get<T>(value_);
+}
+
+template <typename T>
 std::optional<T> MaybeRemote<T>::optional_value() const {
     if (is_local()) {
         return std::get<T>(value_);
@@ -164,14 +196,11 @@ template <typename T>
 std::string MaybeRemote<T>::to_string() const {
     return when(
         [](const T& value) -> std::string { 
-            if constexpr (std::is_pointer_v<T>) {
-                return std::string("MaybeRemote<local:") + 
-                       (value ? "valid_ptr>" : "nullptr>");
-            } else {
-                return "MaybeRemote<local:value>";
-            }
+            std::ostringstream oss;
+            oss << "MaybeRemote{" << value << "}";
+            return oss.str();
         },
-        []() -> std::string { return "MaybeRemote<remote>"; }
+        []() -> std::string { return "MaybeRemote{remote}"; }
     );
 }
 

@@ -116,7 +116,7 @@ public:
     [[nodiscard]] bool is_local_coordinate(const MeshCoordinate& coord) const;
 
 private:
-    MeshContainer<MaybeRemote<IDevice*>> devices_;
+    DistributedMeshContainer<IDevice*> devices_;
     std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 
     // Set if the view is 2D to enable row/col APIs, otherwise nullopt.

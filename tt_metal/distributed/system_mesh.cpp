@@ -21,7 +21,7 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/distributed/coordinate_translation.hpp"
-#include "tt_metal/distributed/coordinate_translator.hpp"
+#include "tt_metal/distributed/distributed_coordinate_system.hpp"
 
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
@@ -31,7 +31,7 @@ namespace tt::tt_metal::distributed {
 class SystemMesh::Impl {
 private:
     MeshShape global_shape_;
-    MeshContainer<MaybeRemote<PhysicalMeshCoordinate>> physical_coordinates_;
+    DistributedMeshContainer<PhysicalMeshCoordinate> physical_coordinates_;
     MeshCoordinate local_offset_;
 
 public:
@@ -50,20 +50,21 @@ public:
 // Implementation of public methods
 SystemMesh::Impl::Impl() 
     : global_shape_(tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::GLOBAL)),
-      physical_coordinates_(global_shape_, MaybeRemote<PhysicalMeshCoordinate>::remote()),  // Initialize all as remote
+      physical_coordinates_(global_shape_),  // Use DistributedMeshContainer
       local_offset_(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_offset()) {
     // Get local physical coordinates
     auto local_coordinates = get_system_mesh_coordinate_translation_map();
-    CoordinateTranslator translator(local_coordinates.shape(), local_offset_);
+    DistributedCoordinateSystem coord_system(global_shape_, local_coordinates.shape(), local_offset_);
     
-    // Map local coordinates to global mesh
-    for (const auto& [local_coord, physical_coord] : local_coordinates) {
-        auto global_coord = translator.local_to_global(local_coord);
-        auto& coord_range = physical_coordinates_.coord_range();
-        if (coord_range.contains(global_coord)) {
-            physical_coordinates_.at(global_coord) = MaybeRemote<PhysicalMeshCoordinate>::local(physical_coord);
-        }
+    // Extract physical coordinates in order for populate_local_region
+    std::vector<PhysicalMeshCoordinate> ordered_physical_coords;
+    ordered_physical_coords.reserve(local_coordinates.shape().mesh_size());
+    for (auto local_coord : coord_system.local_range()) {
+        ordered_physical_coords.push_back(local_coordinates.at(local_coord));
     }
+    
+    // Use populate_local_region to set up the distributed container
+    physical_coordinates_.populate_local_region(coord_system, ordered_physical_coords);
 }
 
 bool SystemMesh::Impl::is_local_coordinate(const MeshCoordinate& coord) const {
@@ -84,7 +85,7 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
     TT_FATAL(is_local_coordinate(coord), "Coordinate {} is not in the local mesh", coord);
     
     const auto& maybe_physical = physical_coordinates_.at(coord);
-    auto physical_device_id = maybe_physical.value().chip_id();
+    auto physical_device_id = maybe_physical->chip_id();
     log_debug(LogDistributed, "Global coordinate: {} mapped to physical device ID: {}", 
               coord, physical_device_id);
     return physical_device_id;
@@ -93,14 +94,13 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
 uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
     TT_FATAL(is_local_coordinate(coord), "Coordinate {} is not in the local mesh", coord);
     const auto& maybe_physical = physical_coordinates_.at(coord);
-    return *maybe_physical.value().mesh_id();
+    return *maybe_physical->mesh_id();
 }
 
 MeshCoordinate SystemMesh::Impl::get_global_device_coordinate(int physical_device_id) const {
     for (const auto& [global_coordinate, maybe_physical] : physical_coordinates_) {
         if (maybe_physical.is_local()) {
-            const auto& physical_mesh_coordinate = maybe_physical.value();
-            if (physical_mesh_coordinate.chip_id() == physical_device_id) {
+            if (maybe_physical->chip_id() == physical_device_id) {
                 return global_coordinate;
             }
         }

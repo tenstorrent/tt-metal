@@ -42,7 +42,7 @@
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "tt_metal/distributed/distributed_mesh_config_factory.hpp"
+#include "tt_metal/distributed/distributed_coordinate_system.hpp"
 
 #include "llrt/hal.hpp"
 #include <env_lib.hpp>
@@ -115,7 +115,6 @@ decltype(auto) validate_and_get_reference_value(
     }
     return reference_value;
 }
-
 
 }  // namespace
 
@@ -220,29 +219,15 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
     
-    // Get distributed configuration from factory
-    auto distributed_config = DistributedMeshConfigFactory::create_from_control_plane(config);
+    auto coord_system = DistributedCoordinateSystem::from_control_plane(config.mesh_shape());
 
-    // Create global view with MaybeRemote
-    MeshContainer<MaybeRemote<IDevice*>> global_devices(config.mesh_shape(), MaybeRemote<IDevice*>::remote());
-    
-    // Populate local devices at their global positions
-    size_t device_idx = 0;
-    for (size_t row = 0; row < distributed_config.local_shape_[0]; row++) {
-        for (size_t col = 0; col < distributed_config.local_shape_[1]; col++) {
-            MeshCoordinate global_coord(
-                row + distributed_config.local_offset_[0], 
-                col + distributed_config.local_offset_[1]
-            );
-            global_devices.at(global_coord) = MaybeRemote<IDevice*>::local(root_devices[device_idx++]);
-        }
-    }
-    // All other positions remain MaybeRemote::remote() by default
+    // Create distributed mesh container and populate local devices
+    DistributedMeshContainer<IDevice*> global_devices(config.mesh_shape());
+    global_devices.populate_local_region(coord_system, root_devices);
     
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
@@ -275,7 +260,6 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     auto scoped_devices = std::make_shared<ScopedDevices>(
         device_ids, l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config);
     MeshContainer<IDevice*> devices(MeshShape(1, device_ids.size()), scoped_devices->root_devices());
-
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
@@ -354,7 +338,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 
     MeshContainer<IDevice*> submesh_devices_container(
         submesh_shape, view_->get_devices(MeshCoordinateRange{offset_coord, end_coordinate}));
-    
+
     auto submesh = std::make_shared<MeshDevice>(
         scoped_devices_, std::make_unique<MeshDeviceView>(submesh_devices_container), shared_from_this());
     const auto& allocator_config = reference_device()->allocator()->get_config();
@@ -492,7 +476,8 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
         const auto& maybe_device_id = new_physical_device_ids[i];
-        chip_id_t device_id = maybe_device_id.value();
+        TT_FATAL(maybe_device_id.is_local(), "Device at index {} is remote, cannot reshape with remote devices", i);
+        chip_id_t device_id = *maybe_device_id;
         if (physical_device_id_to_linearized_index.find(device_id) ==
             physical_device_id_to_linearized_index.end()) {
             TT_THROW(
@@ -506,7 +491,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
     std::vector<IDevice*> new_device_order;
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
         const auto& maybe_device_id = new_physical_device_ids[i];
-        chip_id_t device_id = maybe_device_id.value();
+        chip_id_t device_id = *maybe_device_id;
         new_device_order.push_back(this->get_device(device_id));
     }
     return new_device_order;
