@@ -334,16 +334,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_1, in_scalar_cb_pagesize, in_scalar_cb_npages);
     }
 
-    uint32_t clear_value_cb_id = 32;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel ||
-        (is_wide_reduction && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0)) {
-        // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
-        // is needed only if we use more then 16 sticks per tile for reduction
-        // or if we use large kernel size.
-        clear_value_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
-    }
+    // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
+    uint32_t clear_value_cb_id = next_cb_index++;
+    tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
+    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -493,15 +487,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
     std::string reader_kernel_fname;
-    if (is_large_kernel) {
-        reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
-    } else {
-        reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_pool_2d_multi_core_sharded.cpp";
-    }
+    reader_kernel_fname =
+        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+        "reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
 
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -543,13 +531,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};
     std::string compute_kernel_fname;
-    if (is_large_kernel) {
-        compute_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core_large_kernel.cpp";
-    } else {
-        // both regular and wide reductions
-        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp";
-    }
+    compute_kernel_fname =
+        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core_large_kernel.cpp";
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 

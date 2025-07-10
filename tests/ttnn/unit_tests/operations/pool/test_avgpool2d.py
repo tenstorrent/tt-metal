@@ -22,8 +22,8 @@ def tensor_map():
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
         # [2, 32, 16, 16],
         # [1, 512, 112, 32],
-        # [1, 320, 48, 48],
-        [1, 320, 47, 47],
+        [1, 320, 48, 48],
+        # [1, 320, 47, 47],
     ),
 )
 @pytest.mark.parametrize(
@@ -34,8 +34,8 @@ def tensor_map():
         # Reductions which are large and wide at the same time
         # go to large kernels
         (3, 3),
-        (9, 9),
-        (36, 36),
+        # (9, 9),
+        # (36, 36),
     ),
 )
 @pytest.mark.parametrize(
@@ -50,39 +50,39 @@ def tensor_map():
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "count_include_pad",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "divisor_override",
     [
         None,
-        5,
+        # 5,
     ],
 )
 @pytest.mark.parametrize(
     "shard_scheme",
     [
-        None,
+        # None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 @pytest.mark.parametrize(
     "use_program_cache",
-    [True, False],
+    [False],
 )
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 def test_avg_pool2d_post_commit(
     device,

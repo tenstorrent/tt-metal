@@ -177,7 +177,7 @@ void kernel_main() {
     constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multi_buffering_factor;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
-    // fill the clear cb
+    // fill the clear cb - TODO we don't need the clear CB for small kernels
     if constexpr (need_to_initialize_in_cb || is_avg_pool) {
         if constexpr (reader_id == 0) {
             fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
@@ -186,9 +186,7 @@ void kernel_main() {
         if constexpr (reader_id == 1) {
             cb_wait_front(clear_value_cb_id, 1);
         }
-        if (!is_avg_pool) {  // for avg pool clear_out_tiles runs in loop, no need to initialize
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
-        }
+        clear_out_tiles<in_cb_id, clear_value_cb_id>();
     }
 
     // initialize the scalar CB
