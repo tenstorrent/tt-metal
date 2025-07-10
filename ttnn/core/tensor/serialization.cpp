@@ -38,6 +38,12 @@ using MeshDevice = distributed::MeshDevice;
 
 namespace {
 
+enum class SerializedStorageType {
+    HOST = 0,
+    DEVICE = 1,
+    MULTI_DEVICE_HOST = 4,
+};
+
 void validate_version(uint8_t version_id) {
     TT_FATAL(
         version_id >= 5,
@@ -98,7 +104,7 @@ TensorSpec load_tensor_spec(FILE* input_file) {
     return ttnn::from_flatbuffer(spec);
 }
 
-void dump_host_storage(FILE* output_file, const HostStorage& storage, DataType dtype) {
+void dump_host_storage(FILE* output_file, const HostBuffer& buffer, DataType dtype) {
     // TODO: #16067 - When dumping storage, we should not care about dtype.
     // We should dump the `size` of raw bytes, not the size of logical elements.
     const size_t element_size = [dtype]() {
@@ -117,7 +123,7 @@ void dump_host_storage(FILE* output_file, const HostStorage& storage, DataType d
         TT_THROW("Unreachable");
     }();
 
-    auto raw_bytes = storage.buffer.view_bytes();
+    auto raw_bytes = buffer.view_bytes();
     uint64_t size = raw_bytes.size() / element_size;
     safe_fwrite(&size, sizeof(size), 1, output_file);
     safe_fwrite(raw_bytes.data(), raw_bytes.size(), 1, output_file);
@@ -125,11 +131,11 @@ void dump_host_storage(FILE* output_file, const HostStorage& storage, DataType d
 
 void dump_multi_device_host_storage(
     FILE* output_file,
-    const MultiDeviceHostStorage& storage,
+    const HostStorage& storage,
     const DistributedTensorConfig& strategy,
     const TensorSpec& tensor_spec) {
     std::vector<HostBuffer> buffers;
-    storage.distributed_buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
+    storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
 
     uint64_t num_buffers = buffers.size();
     safe_fwrite(&num_buffers, sizeof(num_buffers), 1, output_file);
@@ -157,7 +163,7 @@ HostStorage load_host_storage(FILE* input_file) {
     std::vector<T> data(size);
     safe_fread(data.data(), sizeof(T) * size, 1, input_file);
     auto buffer = HostBuffer(std::move(data));
-    return {buffer};
+    return HostStorage(std::move(buffer));
 }
 
 // Helper type to bundle storage and strategy together.
@@ -220,7 +226,7 @@ DistributedStorage load_multi_device_host_storage(
         distributed_host_buffer.emplace_shard(*dst_coord_it, [b = buffers[i]]() { return b; });
     }
 
-    return {MultiDeviceHostStorage{std::move(distributed_host_buffer)}, strategy};
+    return {HostStorage{std::move(distributed_host_buffer)}, strategy};
 }
 
 HostStorage load_host_storage(FILE* input_file, DataType data_type) {
@@ -267,8 +273,8 @@ DistributedStorage load_multi_device_host_storage(
 }
 
 DistributedStorage load_storage(
-    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, MeshDevice* device) {
-    if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
+    FILE* input_file, DataType data_type, Layout layout, SerializedStorageType storage_type, MeshDevice* device) {
+    if (storage_type == SerializedStorageType::MULTI_DEVICE_HOST || storage_type == SerializedStorageType::DEVICE) {
         // TODO: #22262 - Migrate to the new serialization format that embeds the required information into the tensor
         // file.
         TT_FATAL(device != nullptr, "MeshDevice is required for loading multi-device host storage");
@@ -298,7 +304,7 @@ Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     validate_version(version_id);
 
     auto spec = load_tensor_spec(input_file);
-    StorageType storage_type = StorageType::HOST;
+    SerializedStorageType storage_type = SerializedStorageType::HOST;
     safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
     auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device);
     Tensor tensor(std::move(storage.storage), spec, storage.strategy);
@@ -320,7 +326,15 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
 
     dump_tensor_spec(tensor.tensor_spec(), output_file);
 
-    auto storage_type = tensor.storage_type();
+    auto storage_type = [&]() {
+        if (tensor.storage_type() == StorageType::HOST) {
+            return tensor.host_storage().buffer().shape() == distributed::MeshShape(1, 1)
+                       ? SerializedStorageType::HOST
+                       : SerializedStorageType::MULTI_DEVICE_HOST;
+        } else {
+            return SerializedStorageType::DEVICE;
+        }
+    }();
     safe_fwrite(&storage_type, sizeof(storage_type), 1, output_file);
 
     bool is_on_device = is_device_tensor(tensor);
@@ -329,20 +343,23 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
         tensor_to_dump = tensor_to_dump.cpu();
     }
 
-    std::visit(
-        tt::stl::overloaded{
-            [output_file, dtype = tensor.dtype()](const HostStorage& storage) {
-                dump_host_storage(output_file, storage, dtype);
-            },
-            [output_file, dtype = tensor.dtype()](const DeviceStorage& storage) {
-                TT_THROW("Device storage isn't supported");
-            },
-            [output_file, &tensor](const MultiDeviceHostStorage& storage) {
-                dump_multi_device_host_storage(
-                    output_file, storage, tensor.distributed_tensor_config(), tensor.tensor_spec());
-            },
-        },
-        tensor_to_dump.storage());
+    switch (storage_type) {
+        case SerializedStorageType::HOST: {
+            const auto host_buffer =
+                *tensor_to_dump.host_storage().buffer().get_shard(distributed::MeshCoordinate(0, 0));
+            dump_host_storage(output_file, host_buffer, tensor_to_dump.dtype());
+            break;
+        }
+        case SerializedStorageType::DEVICE:
+        case SerializedStorageType::MULTI_DEVICE_HOST: {
+            dump_multi_device_host_storage(
+                output_file,
+                tensor_to_dump.host_storage(),
+                tensor_to_dump.distributed_tensor_config(),
+                tensor_to_dump.tensor_spec());
+            break;
+        }
+    }
 }
 
 void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
