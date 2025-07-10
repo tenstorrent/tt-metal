@@ -306,14 +306,33 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
-    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api>
+    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api, bool increment_poiners>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
             EDM_IO_BLOCKING_MODE::NON_BLOCKING,
             enable_ring_support,
             EDM_TO_DOWNSTREAM_NOC,
-            stateful_api>(source_address, size_bytes, trid);
+            stateful_api,
+            increment_poiners>(source_address, size_bytes, trid);
+    }
+
+    template <bool inc_pointers = true>
+    FORCE_INLINE void update_edm_buffer_slot_word(uint32_t offset, uint32_t data, uint8_t noc = noc_index) {
+        uint64_t noc_addr;
+        if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+            noc_addr = get_noc_addr(
+                this->edm_noc_x,
+                this->edm_noc_y,
+                this->edm_buffer_slot_addrs[this->get_buffer_slot_index()] + offset,
+                noc);
+        } else {
+            noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr + offset, noc);
+        }
+        noc_inline_dw_write(noc_addr, data, 0xf, noc);
+        if constexpr (inc_pointers) {
+            post_send_payload_increment_pointers(noc);
+        }
     }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
@@ -607,7 +626,8 @@ private:
         EDM_IO_BLOCKING_MODE blocking_mode,
         bool enable_ring_support,
         uint8_t EDM_TO_DOWNSTREAM_NOC,
-        bool stateful_api>
+        bool stateful_api,
+        bool increment_pointers>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
@@ -634,7 +654,9 @@ private:
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         }
-        post_send_payload_increment_pointers<stateful_api, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
+        if constexpr (increment_pointers) {
+            post_send_payload_increment_pointers<stateful_api, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
+        }
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>
