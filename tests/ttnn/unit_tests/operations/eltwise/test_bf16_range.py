@@ -25,6 +25,82 @@ EPSILON = 2**-9
 # ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
 
 
+def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
+    if low > high:
+        low, high = high, low
+    x = torch.arange(low, high, 0.1)
+
+    # Handle scalar tensor input
+    if isinstance(scalar, torch.Tensor):
+        scalar = scalar.item()
+
+    if scalar is not None:
+        torch_out = torch_unary_op(x, alpha=scalar)
+    else:
+        torch_out = torch_unary_op(x)
+
+    # Compute TTNN output
+    ttnn_value = ttnn.from_torch(x.to(torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    if scalar is not None:
+        ttnn_out = ttnn.to_torch(ttnn_op(ttnn_value, scalar))
+    else:
+        ttnn_out = ttnn.to_torch(ttnn_op(ttnn_value))
+
+    # Convert TTNN output to float32 for plotting
+    ttnn_out = ttnn_out.to(torch.float32)
+    torch_label = f"torch.{torch_unary_op.__name__}"
+    ttnn_label = f"{ttnn_op.__name__}"
+    y_label = f"{torch_unary_op.__name__}(x)"
+    title = f"Comparison: {torch_label} vs {ttnn_label}"
+
+    # Plot
+    plt.plot(x.numpy(), torch_out.numpy(), label=torch_label, linewidth=1)
+    plt.plot(x.numpy(), ttnn_out.numpy(), label=ttnn_label, linestyle="--", linewidth=1)
+    plt.title(title)
+    plt.xlabel("x")
+    plt.ylabel(y_label)
+    if torch_unary_op.__name__ in ["exp", "expm1", "log", "log1p"]:
+        plt.yscale("log")
+
+    plt.grid(True)
+    plt.legend()
+
+    # Save plot
+    plot_dir = "accuracy_results/plots/arange_comparison/"
+    os.makedirs(plot_dir, exist_ok=True)
+
+    scalar_str = f"{scalar}" if scalar is not None else "noscalar"
+    range_str = f"{int(low)}_{int(high)}"
+    filename = f"{ttnn_op.__name__}_bf16_range_{range_str}_{scalar_str}.png"
+
+    save_path = os.path.join(plot_dir, filename)
+    plt.savefig(save_path)
+    plt.close()
+    print("\tfor range [-100,100]")
+    print(f"\t\t\tTorch vs TTNN output graph saved to {os.path.abspath(save_path)}")
+
+    # Compute ULP Error
+    ulp_spacing = util.ulp(torch_out.to(torch.bfloat16)).to(torch.float32)
+    ulp_error = torch.abs(torch_out - ttnn_out) / ulp_spacing
+
+    # Plot ULP Error
+    plt.figure(figsize=(10, 5))
+    plt.plot(x.numpy(), ulp_error.numpy(), label="ULP Error", color="red", linewidth=1)
+    plt.title(f"ULP Error: {ttnn_op.__name__} vs Torch")
+    plt.xlabel("x")
+    plt.ylabel("ULP Error")
+    plt.grid(True)
+    plt.legend()
+
+    ulp_dir = "accuracy_results/plots/arange_comparison/"
+    os.makedirs(ulp_dir, exist_ok=True)
+    filename = f"{ttnn_op.__name__}_bf16_range_{range_str}_{scalar_str}_ulp.png"
+    ulp_path = os.path.join(ulp_dir, filename)
+    plt.savefig(ulp_path)
+    plt.close()
+    print(f"\t\t\tULP error graph saved to {os.path.abspath(ulp_path)}")
+
+
 def plot_torch_vs_ttnn_outputs_full_range(
     torch_output, ttnn_output, torch_input_bf16, operation_name, scalar=None, value_range=None
 ):
@@ -161,7 +237,7 @@ operations_dict = {
         torch.nn.functional.elu,
         ttnn.elu,
         None,
-        [0.5, 1.0],
+        [1.0],
         "elu",
     ),
     "selu": (
@@ -361,12 +437,24 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         )
         if operation_name == "elu":
             plot_torch_vs_ttnn_outputs_full_range(
-                torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "elu", value_range=(-10.0, 10.0)
+                torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "elu", value_range=(-100.0, 100.0)
             )
+            plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=scalar, low=-100, high=100)
         elif operation_name == "selu":
             plot_torch_vs_ttnn_outputs_full_range(
-                torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "selu", value_range=(-10.0, 10.0)
+                torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "selu", value_range=(-100.0, 100.0)
             )
+            plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=-100, high=100)
+        elif operation_name == "exp":
+            plot_torch_vs_ttnn_outputs_full_range(
+                torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "exp", value_range=(-100.0, 100.0)
+            )
+            plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=-100, high=100)
+        elif operation_name == "expm1":
+            plot_torch_vs_ttnn_outputs_full_range(
+                torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "expm1", value_range=(-100.0, 100.0)
+            )
+            plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=-100, high=100)
 
         # Compute errors
         np_golden_f64 = torch_golden_f64.flatten().numpy()
@@ -553,12 +641,12 @@ def main(args):
 
     #   Ops that require equal check
     equal_check_operations = [
-        "maximum",
-        "minimum",
+        # "maximum",
+        # "minimum",
     ]
 
     all_operations = [
-        "deg2rad",
+        # "deg2rad",
         "exp",
         "expm1",
         "elu",
