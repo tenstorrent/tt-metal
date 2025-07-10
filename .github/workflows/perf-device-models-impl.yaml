@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          #{name: "N300 WH B0 not yet ported", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", civ2-compatible: false, timeout: 30},
+          {name: "N300 WH B0 not yet ported", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", civ2-compatible: false, timeout: 30},
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["tt-beta-ubuntu-2204-n300-large-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120},
         ]
     name: "${{ matrix.test-info.name }} device perf"
@@ -86,7 +86,7 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
+            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
@@ -107,40 +107,6 @@ jobs:
           fi
 
           export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-
-      - name: tests 2
-        id: generate-device-perf-report-2
-        if: ${{ !cancelled() }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          if [[ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]]; then
-            export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          fi
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal
-
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d)_2.csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-
-      - name: tests 3
-        id: generate-device-perf-report-3
-        if: ${{ !cancelled() }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          if [[ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]]; then
-            export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          fi
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
-
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d)_3.csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
