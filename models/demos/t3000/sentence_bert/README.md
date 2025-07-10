@@ -2,9 +2,9 @@
 
 ### Platforms:
 
-Wormhole N150, N300
+LoudBox/QuietBox T3K
 
-**Note:** On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
+**Note:** On T3K, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
 
 Or, make sure to set the following environment variable in the terminal:
 ```
