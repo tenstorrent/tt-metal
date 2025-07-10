@@ -264,6 +264,37 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
         flush);
 }
 
+// Fabric send for NOC unicast semaphore increment only (no payload)
+template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols>
+inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t dest_chip_id,
+    uint32_t dest_mesh_id,
+    uint64_t noc_remote_semaphore_address,
+    uint16_t increment_value,
+    bool flush) {
+    // Set up packet header for semaphore increment
+    packet_header->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, 32, flush});
+
+    uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
+
+    // Populate packet header with routing information
+    fabric_set_unicast_route(
+        (LowLatencyMeshPacketHeader*)packet_header,
+        static_cast<eth_chan_directions>(fabric_connections[route].direction),
+        SrcChipId,
+        dest_chip_id,
+        dest_mesh_id,
+        MeshCols);
+
+    // Send only the packet header (for semaphore increment)
+    fabric_connections[route].wait_for_empty_write_slot();
+    fabric_connections[route].send_payload_flush_blocking_from_address(
+        reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+}
+
 template <
     uint32_t LinearizedSrcMeshCoord,
     tt::tt_fabric::Topology Topology,
@@ -319,6 +350,31 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
         alignment,
         increment_value,
         flush);
+}
+
+// Fabric send for NOC unicast semaphore increment only in 1D topology (no payload)
+template <uint32_t LinearizedSrcMeshCoord, tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
+inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    const uint32_t linearized_dest_mesh_coord,
+    uint64_t noc_remote_semaphore_address,
+    uint16_t increment_value,
+    bool flush) {
+    // Set up packet header for semaphore increment
+    packet_header->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, 32, flush});
+
+    uint32_t distance =
+        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    packet_header->to_chip_unicast(distance);
+
+    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+
+    // Send only the packet header (for semaphore increment)
+    fabric_connections[route].wait_for_empty_write_slot();
+    fabric_connections[route].send_payload_flush_blocking_from_address(
+        reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 }
 
 }  // namespace ttnn::operations::ccl::common

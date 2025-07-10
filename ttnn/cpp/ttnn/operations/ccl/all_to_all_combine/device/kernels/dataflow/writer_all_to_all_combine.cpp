@@ -185,31 +185,22 @@ void kernel_main() {
         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
             const auto& dest_mesh_id = dest_mesh_ids[device_idx];
 
-            packet_headers[1]->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{global_noc_semaphore_addr, 1, 32, true});
-
             if (is_1d_topology(topology)) {
-                uint32_t distance =
-                    manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, device_idx);
-                packet_headers[1]->to_chip_unicast(distance);
-
-                uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, device_idx);
-                fabric_connections[route].wait_for_empty_write_slot();
-                fabric_connections[route].send_payload_flush_blocking_from_address(
-                    reinterpret_cast<uint32_t>(packet_headers[1]), sizeof(PACKET_HEADER_TYPE));
-
+                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                    linearized_mesh_coord,
+                    topology,
+                    mesh_rows,
+                    mesh_cols>(fabric_connections, packet_headers[1], device_idx, global_noc_semaphore_addr, 1, true);
             } else {
-                uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
-                fabric_set_unicast_route(
-                    (LowLatencyMeshPacketHeader*)(packet_headers[1]),
-                    static_cast<eth_chan_directions>(fabric_connections[route].direction),
-                    src_chip_id,
+                const auto& dest_chip_id = dest_chip_ids[device_idx];
+                fabric_send_chip_unicast_noc_unicast_semaphore_only<src_chip_id, mesh_rows, mesh_cols>(
+                    fabric_connections,
+                    packet_headers[1],
                     dest_chip_id,
                     dest_mesh_id,
-                    mesh_cols);
-                fabric_connections[route].wait_for_empty_write_slot();
-                fabric_connections[route].send_payload_flush_blocking_from_address(
-                    reinterpret_cast<uint32_t>(packet_headers[1]), sizeof(PACKET_HEADER_TYPE));
+                    global_noc_semaphore_addr,
+                    1,
+                    true);
             }
         }
     }
