@@ -842,7 +842,7 @@ TEST_F(Fabric2DFixture, DISABLED_TestAsyncRawWriteAtomicInc) {
     RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true);
 }
 
-// 1D Routing Unicast Test
+// 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
 
 // 2D Dynamic Routing Unicast Tests
