@@ -183,7 +183,9 @@ void kernel_main() {
             fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             cb_push_back(clear_value_cb_id, 1);
         }
-        cb_wait_front(clear_value_cb_id, 1);
+        if constexpr (reader_id == 1) {
+            cb_wait_front(clear_value_cb_id, 1);
+        }
         if (!is_avg_pool) {  // for avg pool clear_out_tiles runs in loop, no need to initialize
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
         }
