@@ -16,4 +16,4 @@ jobs:
       - name: Run npirun command
         run: |
           echo "Running npirun command on multiple hosts"
-          npirun -np 2 --rankfile rankfile /bin/ls
+          mpirun -np 2 --rankfile rankfile /bin/ls
