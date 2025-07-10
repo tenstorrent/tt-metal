@@ -342,9 +342,6 @@ inline constexpr int constexpr_strlen(const char* str) { return *str ? 1 + const
 constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
 constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = constexpr_strlen(TENSOR_TYPE_STRING) + 1;
 
-static constexpr auto TAB = "    ";
-static constexpr auto TAB_MINUS_1 = "   ";
-
 template <typename BufferType>
 void to_string_row_major(
     std::stringstream& ss,
@@ -429,7 +426,6 @@ std::string to_string(
 template <typename T>
 std::string to_string(
     const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
-    const auto tile = tensor.tensor_spec().tile();
     const auto& shape = tensor.logical_shape();
     const auto dtype = original_dtype.value_or(tensor.dtype());
     const auto layout = original_layout.value_or(tensor.layout());
@@ -1338,10 +1334,9 @@ Tensor pad(
         input_padded_shape = input_padded_shape.to_rank(2);
     }
     const auto input_strides = tensor.strides();
-    const auto input_data_type = tensor.dtype();
 
     auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](const auto& input_buffer) {
-        const int rank = input_padded_shape.rank();
+        const size_t rank = input_padded_shape.rank();
 
         auto output_buffer = std::vector<T>(output_padded_shape.volume());
         std::fill(output_buffer.begin(), output_buffer.end(), pad_value_);
@@ -1352,7 +1347,9 @@ Tensor pad(
 
         if (rank == 1) {
             std::memcpy(
-                output_buffer.data() + input_tensor_start[0], input_buffer.begin(), input_padded_shape[0] * sizeof(T));
+                output_buffer.data() + input_tensor_start[0],
+                input_buffer.begin(),
+                static_cast<size_t>(input_padded_shape[0]) * sizeof(T));
             return output_buffer;
         }
 
@@ -1371,17 +1368,17 @@ Tensor pad(
 
             for (int i = 0; i < rank - 1; ++i) {
                 input_idx += coords[i] * input_strides[i];
-                output_idx += (coords[i] + input_tensor_start[i]) * output_strides[i];
+                output_idx += (coords[i] + static_cast<size_t>(input_tensor_start[i])) * output_strides[i];
             }
 
             // Add offset (left padding) for the innermost dimension
-            output_idx += input_tensor_start[rank - 1] * output_strides[rank - 1];
+            output_idx += static_cast<size_t>(input_tensor_start[rank - 1]) * output_strides[rank - 1];
 
             // Copy entire input row with memcpy
             std::memcpy(
                 output_buffer.data() + output_idx,
                 input_buffer.begin() + input_idx,
-                input_padded_shape[rank - 1] * sizeof(T));
+                static_cast<size_t>(input_padded_shape[rank - 1]) * sizeof(T));
 
             // Increment coordinates (from right to left), ignore last dimension
             processed_all_coords = true;

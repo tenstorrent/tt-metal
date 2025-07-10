@@ -132,7 +132,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         {"SAMPLE_COUNT", std::to_string(sampleCount)},
     };
 
-    tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         sync_program,
         "tt_metal/tools/profiler/sync/sync_kernel.cpp",
         logical_core,
@@ -148,8 +148,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
     std::ofstream log_file;
-
-    int64_t writeSum = 0;
 
     constexpr int millisecond_wait = 10;
 
@@ -180,11 +178,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         smallestHostime[device_id] = hostStartTime;
     }
 
-    for (auto writeTime : writeTimes) {
-        writeSum += writeTime;
-    }
-    double writeOverhead = (double)writeSum / sampleCount;
-
     constexpr uint32_t briscIndex = 0;
     uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
 
@@ -195,7 +188,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     uint32_t preHostTime = 0;
     bool firstSample = true;
 
-    uint64_t deviceStartTime = (uint64_t(sync_times[0] & 0xFFF) << 32) | sync_times[1];
     uint32_t deviceStartTime_H = sync_times[0] & 0xFFF;
     uint32_t deviceStartTime_L = sync_times[1];
     preDeviceTime = deviceStartTime_L;
@@ -402,13 +394,13 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         Program program_sender;
         Program program_receiver;
 
-        auto local_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program_sender,
             "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
             eth_sender_core,
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto remote_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program_receiver,
             "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
             eth_receiver_core,
