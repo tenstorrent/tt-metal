@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 // TODO: move routing table here
 namespace tt::tt_fabric {
@@ -108,7 +109,12 @@ struct fabric_connection_info_t {
     uint32_t buffer_size_bytes;
     uint32_t buffer_index_semaphore_id;
     uint32_t worker_flow_control_semaphore;
-} __attribute__((aligned(4)));
+};
+
+// Ensure worker_flow_control_semaphore is properly aligned for pointer access
+static_assert(
+    offsetof(fabric_connection_info_t, worker_flow_control_semaphore) % 4 == 0,
+    "worker_flow_control_semaphore must be 4-byte aligned for safe pointer access");
 
 // Fabric connection metadata stored in worker L1
 // 16 for WH, 12 for BH
@@ -119,6 +125,11 @@ struct tensix_fabric_connections_l1_info_t {
     uint32_t valid_connections_mask;  // bit mask indicating which connections are valid
     uint8_t padding[12];              // pad to cache line alignment
 };
+
+// Ensure the struct size is a multiple of 4 bytes to maintain alignment in connections array
+static_assert(
+    sizeof(fabric_connection_info_t) % 4 == 0,
+    "fabric_connection_info_t size must be a multiple of 4 bytes to maintain alignment in arrays");
 
 static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 656, "Struct size mismatch!");
 
