@@ -167,7 +167,11 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
     // Only need fabric routers in the same tunnel for dispatch
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+    bool is_galaxy = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     auto skip_direction = [&](const FabricNodeId& node_id, const RoutingDirection direction) -> bool {
+        if (!is_galaxy) {
+            return false;
+        }
         const auto& neighbors = this->get_chip_neighbors(node_id, direction);
         if (neighbors.empty()) {
             return false;
