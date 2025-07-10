@@ -12,6 +12,8 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.modeling_utils import no_init_weights
 
+from models.demos.deepseek_v3.utils.config_helpers import dequantize
+
 
 def load_tokenizer(model_path: str):
     return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -53,19 +55,10 @@ def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Call
         loaded_weight = weights_dict[name]
         if loaded_weight.dtype == torch.float8_e4m3fn:
             loaded_weight_scale = weights_dict[f"{name}_scale_inv"]
-            assert (
-                len(loaded_weight.shape) == 2
-                and len(loaded_weight_scale.shape) == 2
-                and loaded_weight.shape[0] % loaded_weight_scale.shape[0] == 0
-                and loaded_weight.shape[1] % loaded_weight_scale.shape[1] == 0
-            )
-            loaded_weight = loaded_weight.bfloat16() * loaded_weight_scale.bfloat16().repeat_interleave(
-                loaded_weight.shape[0] // loaded_weight_scale.shape[0], dim=0
-            ).repeat_interleave(loaded_weight.shape[1] // loaded_weight_scale.shape[1], dim=1)
-        assert (
-            loaded_weight.shape == tensor.shape
-        ), f"Shape mismatch for {name}: {loaded_weight.shape} vs {tensor.shape}"
-        tensor.copy_(loaded_weight)
+            loaded_weight = dequantize(loaded_weight, loaded_weight_scale, (128, 128))
+            del loaded_weight_scale
+        tensor.data = loaded_weight
+        del loaded_weight
         return tensor
 
     return load_weight
@@ -78,7 +71,7 @@ def unload_weight_from_weights_dict(
     def unload_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         if name not in weights_dict:
             return tensor
-        tensor.copy_(torch.empty_like(tensor))
+        tensor.data = torch.empty(0)
         return tensor
 
     return unload_weight
