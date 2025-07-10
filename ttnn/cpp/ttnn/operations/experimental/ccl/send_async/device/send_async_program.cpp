@@ -37,8 +37,11 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     auto aligned_page_size = input_tensor.buffer()->aligned_page_size();
     auto num_pages = input_tensor.buffer()->num_pages();
-    auto fabric_max_payload_size =
-        tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), input_tensor.buffer()->alignment());
+    auto fabric_max_payload_size = tt::round_down(
+        std::min(
+            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+            static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),
+        input_tensor.buffer()->alignment());
     auto num_pages_per_packet = fabric_max_payload_size / aligned_page_size;
     uint32_t num_whole_packets = 0, num_pages_remainder = 0, num_whole_packets_per_page = 0, partial_packet_size = 0;
     if (num_pages_per_packet > 0) {

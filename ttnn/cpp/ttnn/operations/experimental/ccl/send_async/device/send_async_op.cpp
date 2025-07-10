@@ -20,6 +20,12 @@ void SendAsync::validate(const std::vector<Tensor>& input_tensors) const {
         "send_async op requires a sender socket");
     const auto* socket_mesh_device = this->mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = this->mesh_socket.get_config().socket_connection_config;
+    TT_FATAL(
+        this->mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::L1,
+        "send_async op requires L1 socket storage type");
+    TT_FATAL(
+        this->mesh_socket.get_config().socket_mem_config.fifo_size >= input_tensor.buffer()->aligned_page_size(),
+        "send_async op requires a fifo size greater than or equal to the input tensor page size");
 
     auto device_ids = input_tensor.mesh_device()->get_device_ids();
     for (const auto& connection : socket_connection_config) {
