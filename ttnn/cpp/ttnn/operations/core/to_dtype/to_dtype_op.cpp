@@ -22,16 +22,16 @@ using DTypeConversionFunc =
  * @return A std::function for the conversion, or throw an exception if unsupported.
  */
 static DTypeConversionFunc get_dtype_conversion_function(DataType src_type, DataType dst_type) {
-    auto get_dest_func = [&]<typename SrcCppType>() -> DTypeConversionFunc {
+    auto get_dest_func = [&]<typename SrcType>() -> DTypeConversionFunc {
         switch (dst_type) {
-            case DataType::BFLOAT4_B: return &transform_type<SrcCppType, bfloat4_b>;
-            case DataType::BFLOAT8_B: return &transform_type<SrcCppType, bfloat8_b>;
-            case DataType::BFLOAT16: return &transform_type<SrcCppType, bfloat16>;
-            case DataType::FLOAT32: return &transform_type<SrcCppType, float>;
-            case DataType::UINT8: return &transform_type<SrcCppType, uint8_t>;
-            case DataType::UINT16: return &transform_type<SrcCppType, uint16_t>;
-            case DataType::UINT32: return &transform_type<SrcCppType, uint32_t>;
-            case DataType::INT32: return &transform_type<SrcCppType, int32_t>;
+            case DataType::BFLOAT4_B: return &transform_type<SrcType, bfloat4_b>;
+            case DataType::BFLOAT8_B: return &transform_type<SrcType, bfloat8_b>;
+            case DataType::BFLOAT16: return &transform_type<SrcType, bfloat16>;
+            case DataType::FLOAT32: return &transform_type<SrcType, float>;
+            case DataType::UINT8: return &transform_type<SrcType, uint8_t>;
+            case DataType::UINT16: return &transform_type<SrcType, uint16_t>;
+            case DataType::UINT32: return &transform_type<SrcType, uint32_t>;
+            case DataType::INT32: return &transform_type<SrcType, int32_t>;
             default: TT_FATAL(false, "Unsupported data type conversion requested. Destination type is invalid!");
         }
     };
