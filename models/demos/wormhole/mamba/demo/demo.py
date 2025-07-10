@@ -376,8 +376,7 @@ def run_mamba_demo(
     targets = {
         "prefill_t/s": chunk_size_to_prefill_targets_tok_per_s[prefill_chunk_size],
         "decode_t/s": 346.0,
-        "decode_t/s/u": 10.8,
-    }
+        "decode_t/s/u": 10.8,    }
     warmup_iterations = {"inference_prefill": 0, "inference_decode": 0}
 
     # Save benchmark data (will only save if running in CI environment)
