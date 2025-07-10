@@ -15,7 +15,7 @@ namespace detail{
 // (experts // devices, batch, seq, hidden_size)
 template <uint32_t Batch, uint32_t Seq>
 inline uint32_t get_input_data_page_idx(const uint32_t e, const uint32_t bs) {
-    return e * Batch * Seq + bs;
+    return e * Batch*Seq + bs;
 }
 
 template <uint32_t DeviceIdx, uint32_t NumMappingPages, uint32_t MappingPageSizeBytes, bool MappingIsDram>
@@ -47,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t num_local_experts = get_compile_time_arg_val(4);
     constexpr uint32_t batch_size = get_compile_time_arg_val(5);
     constexpr uint32_t seq_size = get_compile_time_arg_val(6);
-    constexpr uint32_t num_mapping_pages = get_compile_time_arg_val(7);
+    constexpr uint32_t num_mapping_pages= get_compile_time_arg_val(7);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(8);
     constexpr uint32_t data_size_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(10);
@@ -82,7 +82,7 @@ void kernel_main() {
         mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
     cb_push_back(local_experts_cb_id,1);
 
-    for (uint32_t bs = 0; bs < batch_size * seq_size; ++bs) {
+    for(uint32_t bs=0;bs<batch_size*seq_size;++bs){
         cb_reserve_back(metadata_cb_id,1);
         const uint32_t metadata_l1_addr = get_read_ptr(metadata_cb_id);
         const uint64_t metadata_noc_addr = get_noc_addr(bs, metadata_addrgen);
@@ -93,9 +93,9 @@ void kernel_main() {
 
         for (uint32_t e = 0; e < num_local_experts; ++e) {
             const auto & expert_idx = local_experts_ptr[e];
-            const auto [found, k] = detail::find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
+            const auto[found, k] = detail::find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
             if (found) {
-                const uint32_t input_data_page_idx = detail::get_input_data_page_idx<batch_size, seq_size>(e, bs);
+                const uint32_t input_data_page_idx = detail::get_input_data_page_idx<batch_size,seq_size>(e, bs);
 
                 cb_reserve_back(data_cb_id,1);
                 const uint32_t data_l1_addr=get_write_ptr(data_cb_id);

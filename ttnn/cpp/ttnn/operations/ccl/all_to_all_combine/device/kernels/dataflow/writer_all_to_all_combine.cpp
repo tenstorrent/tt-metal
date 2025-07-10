@@ -48,8 +48,8 @@ inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const ui
     }
 
     const uint32_t batch_per_device = BatchSize / batch_devices;
-    const uint32_t bidx = b % batch_per_device;
-    return k * batch_per_device * SeqSize + bidx * SeqSize + s;
+    const uint32_t bidx= b % batch_per_device;
+    return k * batch_per_device *SeqSize + bidx*SeqSize+s;
 }
 }  // namespace detail
 
@@ -106,51 +106,49 @@ void kernel_main() {
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
 
-    for (uint32_t b = 0; b < batch_size; ++b) {
-        for (uint32_t s = 0; s < seq_size; ++s) {
-            cb_wait_front(metadata_cb_id, 1);
-            const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
-            auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
+    for (uint32_t b = 0; b < batch_size; ++b)
+    for (uint32_t s = 0; s <seq_size; ++s){
+        cb_wait_front(metadata_cb_id, 1);
+        const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
+        auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
 
-            for (uint32_t e = 0; e < num_local_experts; ++e) {
-                const auto& expert_idx = local_experts_ptr[e];
-                const auto [found, k] = detail::find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
+        for (uint32_t e = 0; e < num_local_experts; ++e) {
+            const auto & expert_idx = local_experts_ptr[e];
+            const auto [found, k] = detail::find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
 
-                if (found) {
-                    cb_wait_front(data_cb_id, 1);
-                    const uint32_t src_data_l1_ptr = get_read_ptr(data_cb_id);
+            if (found) {
+                cb_wait_front(data_cb_id,1);
+                const uint32_t src_data_l1_ptr = get_read_ptr(data_cb_id);
 
-                    // figure out output page index, noc address.
-                    const uint32_t output_page_idx =
-                        detail::get_output_page_idx<batch_size, seq_size, mesh_cols, mesh_rows, replicate_axis>(
-                            b, s, k);
-                    const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
+                // figure out output page index, noc address.
+                const uint32_t output_page_idx =
+                    detail::get_output_page_idx<batch_size, seq_size, mesh_cols, mesh_rows, replicate_axis>(b,s,k);
+                const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
 
-                    // figure out which device to send data to and routing
-                    const auto dest_device_idx = detail::
-                        get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_cols, mesh_rows, replicate_axis>(b);
-                    const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
+                // figure out which device to send data to and routing
+                const auto dest_device_idx = detail::
+                    get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_cols, mesh_rows, replicate_axis>(b);
+                const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
 
-                    if (dest_chip_id == src_chip_id) {
-                        noc_async_write(src_data_l1_ptr, output_noc_addr, data_size_bytes);
-                        noc_async_write_barrier();
-                    } else {
-                        const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
-                        dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
-                            dest_chip_id,
-                            dest_mesh_id,
-                            alignment,
-                            data_size_bytes,
-                            src_data_l1_ptr,
-                            output_noc_addr,
-                            fabric_connections,
-                            packet_headers[0]);
-                    }
-                    cb_pop_front(data_cb_id, 1);
+                if (dest_chip_id == src_chip_id) {
+                    noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
+                    noc_async_write_barrier();
+                } else {
+                    const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
+                    dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
+                        dest_chip_id,
+                        dest_mesh_id,
+                        alignment,
+                        data_size_bytes,
+                        src_data_l1_ptr,
+                        output_noc_addr,
+                        fabric_connections,
+                        packet_headers[0]);
                 }
+                cb_pop_front(data_cb_id,1);
+            }
         }
         cb_pop_front(metadata_cb_id, 1);
-        }
     }
     cb_pop_front(local_experts_cb_id, 1);
 
