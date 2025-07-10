@@ -14,65 +14,45 @@ class TtSppf:
             device=device,
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
-            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            # auto_shard=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             activation="silu",
-            is_nhwc=True,
+            deallocate_activation=True,
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             activation="silu",
-            is_nhwc=True,
+            reshape=True,
         )
 
     def __call__(self, x):
         conv1 = self.cv1(x)
-        conv1 = ttnn.to_memory_config(conv1, ttnn.L1_MEMORY_CONFIG)
-        conv1 = ttnn.sharded_to_interleaved(conv1, ttnn.L1_MEMORY_CONFIG)
-        m1 = ttnn.max_pool2d(
-            conv1,
-            batch_size=1,
-            input_h=20,
-            input_w=15,
-            channels=512,
-            kernel_size=[5, 5],
-            stride=[1, 1],
-            padding=[2, 2],
-            dilation=[1, 1],
-        )
-        m2 = ttnn.max_pool2d(
-            m1,
-            batch_size=1,
-            input_h=20,
-            input_w=15,
-            channels=512,
-            kernel_size=[5, 5],
-            stride=[1, 1],
-            padding=[2, 2],
-            dilation=[1, 1],
-        )
-        m3 = ttnn.max_pool2d(
-            m2,
-            batch_size=1,
-            input_h=20,
-            input_w=15,
-            channels=512,
-            kernel_size=[5, 5],
-            stride=[1, 1],
-            padding=[2, 2],
-            dilation=[1, 1],
-        )
+        y = [conv1]
+        for i in range(3):
+            output = ttnn.max_pool2d(
+                input_tensor=(y[-1] if y[-1].is_sharded() else y[-1]),
+                batch_size=1,
+                input_h=20,
+                input_w=20,
+                channels=y[-1].shape[-1],
+                kernel_size=[5, 5],
+                stride=[1, 1],
+                padding=[2, 2],
+                dilation=[1, 1],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                applied_shard_scheme=None if y[-1].is_sharded() else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            )
+            y.append(output)
 
-        conv1 = ttnn.to_layout(conv1, ttnn.ROW_MAJOR_LAYOUT)
-        m1 = ttnn.sharded_to_interleaved(m1, ttnn.L1_MEMORY_CONFIG)
-        m2 = ttnn.sharded_to_interleaved(m2, ttnn.L1_MEMORY_CONFIG)
-        m3 = ttnn.sharded_to_interleaved(m3, ttnn.L1_MEMORY_CONFIG)
-        concat_output = ttnn.concat([conv1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        for i in range(len(y)):
+            y[i] = ttnn.sharded_to_interleaved(y[i])
+            y[i] = ttnn.to_layout(y[i], ttnn.ROW_MAJOR_LAYOUT)
+        concat_output = ttnn.concat(y, dim=-1)
+
+        for i in range(len(y)):
+            ttnn.deallocate(y[i])
 
         conv2 = self.cv2(concat_output)
-        conv2 = ttnn.reshape(conv2, (1, 20, 15, 1024), memory_config=ttnn.L1_MEMORY_CONFIG)
         return conv2

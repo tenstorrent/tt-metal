@@ -24,13 +24,13 @@ class Yolov6l_Conv2D:
         use_shallow_conv_variant=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         auto_shard=False,
-        is_nhw_c=False,
-        is_nhwc=False,
         reshape=False,
         deallocate_activation=False,
+        act_blocks=False,
+        act_block_h=None,
+        batch_size=1,
+        return_height_width=False,
     ):
-        self.is_nhw_c = is_nhw_c
-        self.is_nhwc = is_nhwc
         self.conv = conv
         self.device = device
         self.in_channels = conv.in_channels
@@ -49,6 +49,8 @@ class Yolov6l_Conv2D:
             packer_l1_acc=True,
             math_approx_mode=True,
         )
+        self.batch_size = batch_size
+        self.return_height_width = return_height_width
 
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
@@ -60,10 +62,11 @@ class Yolov6l_Conv2D:
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
+        if self.in_channels == 3:
+            self.conv_config.act_block_h_override = 64
         self.reshape = reshape
-        config_override = None
-        if config_override and "act_block_h" in config_override and not auto_shard:
-            self.conv_config.act_block_h_override = config_override["act_block_h"]
+        if act_block_h:
+            self.conv_config.act_block_h_override = act_blocks
 
         if "bias" in conv_pth:
             bias = ttnn.from_device(conv_pth.bias)
@@ -75,20 +78,14 @@ class Yolov6l_Conv2D:
         self.weight = weight
 
     def __call__(self, x):
-        if self.is_nhw_c:
-            input_height = int(math.sqrt(x.shape[2]))
-            input_width = int(math.sqrt(x.shape[2]))
-            batch_size = x.shape[0]
-        elif self.is_nhwc:
+        if x.shape[1] != 1:
             input_height = x.shape[1]
             input_width = x.shape[2]
-            batch_size = x.shape[0]
         else:
-            batch_size = x.shape[0]
-            input_height = self.conv.input_height
-            input_width = self.conv.input_width
+            input_height = int(math.sqrt(x.shape[2]) // self.batch_size)
+            input_width = int(math.sqrt(x.shape[2]) // self.batch_size)
 
-        [output, [output_height, output_width]] = ttnn.conv2d(
+        [output, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -97,7 +94,7 @@ class Yolov6l_Conv2D:
             out_channels=self.out_channels,
             input_height=input_height,
             input_width=input_width,
-            batch_size=batch_size,
+            batch_size=self.batch_size,
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
@@ -105,8 +102,7 @@ class Yolov6l_Conv2D:
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
-            return_weights_and_bias=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            return_weights_and_bias=True,
             dtype=self.activation_dtype,
         )
 
@@ -116,6 +112,8 @@ class Yolov6l_Conv2D:
             output = ttnn.reshape(
                 output, (x.shape[0], output_height, output_width, output.shape[3]), memory_config=ttnn.L1_MEMORY_CONFIG
             )
+        if self.return_height_width:
+            return output, output_height, output_width
         return output
 
 
@@ -159,8 +157,10 @@ class Yolov6x_Conv_T_2D:
         auto_shard=False,
         use_shallow_conv_variant=False,
         config_override=None,
+        batch_size=1,
         reshape=False,
     ):
+        self.batch_size = batch_size
         self.input_channels = conv.in_channels
         self.output_channels = conv.out_channels
         self.kernel_size = conv.kernel_size
@@ -202,11 +202,14 @@ class Yolov6x_Conv_T_2D:
         self.weight = ttnn.from_device(conv_pth.conv_t.weight)
 
     def __call__(self, x):
-        input_height = x.shape[1]
-        input_width = x.shape[2]
-        batch_size = x.shape[0]
+        if x.shape[1] != 1:
+            input_height = x.shape[1]
+            input_width = x.shape[2]
+        else:
+            input_height = int(math.sqrt(x.shape[2]) // self.batch_size)
+            input_width = int(math.sqrt(x.shape[2]) // self.batch_size)
 
-        [tt_output_tensor, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv_transpose2d(
+        [tt_output_tensor, [out_height, out_width], [self.weight, self.bias]] = ttnn.conv_transpose2d(
             input_tensor=x,
             weight_tensor=self.weight,
             in_channels=self.input_channels,
@@ -218,7 +221,7 @@ class Yolov6x_Conv_T_2D:
             padding=(0, 0),
             output_padding=(0, 0),
             dilation=(1, 1),
-            batch_size=batch_size,
+            batch_size=self.batch_size,
             input_height=input_height,
             input_width=input_width,
             conv_config=self.conv_config,
