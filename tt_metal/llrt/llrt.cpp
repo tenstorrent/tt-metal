@@ -41,7 +41,8 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loading loading) {
+const ll_api::memory& get_risc_binary(
+    std::string_view path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
@@ -50,15 +51,19 @@ const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loa
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(std::string(path));
-    ll_api::memory const* ptr = nullptr;
+    const ll_api::memory* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      ptr = new ll_api::memory(path, loading);
+      ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
+      if (update_callback) {
+          update_callback(*mutable_ptr);
+      }
 
       lock.lock();
       // maps have iterator stability, so SLOT is still valid.
-      slot->second = decltype(slot->second)(ptr);
+      slot->second = decltype(slot->second)(mutable_ptr);
+      ptr = mutable_ptr;
       // We can't wake just those waiting on this slot, so wake them
       // all. Should be a rare event anyway.
       cache.cvar.notify_all();
