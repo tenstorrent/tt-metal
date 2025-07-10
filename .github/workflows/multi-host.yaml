@@ -16,4 +16,4 @@ jobs:
       - name: Run tt-smi via mpirun command
         run: |
           echo "Running mpirun command on multiple hosts"
-          mpirun --rankfile /etc/rankfile --tag-output ./docker-run.sh tt-smi -ls
+          mpirun --rankfile /etc/rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
