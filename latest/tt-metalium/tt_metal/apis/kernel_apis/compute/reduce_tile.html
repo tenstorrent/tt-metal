@@ -190,8 +190,8 @@
 <h1>reduce_tile<a class="headerlink" href="#reduce-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_8PoolType_9ReduceDimEN7ckernel11reduce_initEv8uint32_t8uint32_t8uint32_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">PoolType</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reduce_type</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">REDUCE_OP</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">ReduceDim</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reduce_dim</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">REDUCE_DIM</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a4b64af7acb5bf739ee4d51d665cbdd19"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">reduce_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb_scaler</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_8PoolType_9ReduceDimEN7ckernel11reduce_initEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_8PoolType_9ReduceDim_bEN7ckernel11reduce_initEv8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">PoolType</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reduce_type</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">REDUCE_OP</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">ReduceDim</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reduce_dim</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">REDUCE_DIM</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fp32_transpose</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1adc81367634cfb164961edb368774a004"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">reduce_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb_scaler</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_8PoolType_9ReduceDim_bEN7ckernel11reduce_initEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs the necessary hardware and software initialization for reduce operation for provided circular buffer identifiers (CB IDs). In order for reduce operation to be performed, this function call must be followed by a call to <code class="docutils literal notranslate"><span class="pre">reduce_tile</span></code> or <code class="docutils literal notranslate"><span class="pre">reduce_tile_math</span></code>. If another reduce op is needed which uses different CB IDs, then another reduce_init needs to be called as a part of that reduce operation.</p>
@@ -234,6 +234,14 @@
 <td><p>True    </p></td>
 </tr>
 <tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>fp32_transpose   </p></td>
+<td><p>Enable accumulation of reduction in full FP32 precision   </p></td>
+<td><p>bool   </p></td>
+<td><p>{true, false}   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
 <td><p>Function   </p></td>
 <td><p>icb   </p></td>
 <td><p>The identifier of the circular buffer (CB) containing operand A   </p></td>
@@ -241,7 +249,7 @@
 <td><p>0 to 31   </p></td>
 <td><p>True    </p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p>Function   </p></td>
 <td><p>icb_scaler   </p></td>
 <td><p>CB holding scaling factors (see above)   </p></td>
@@ -249,7 +257,7 @@
 <td><p>0 to 31   </p></td>
 <td><p>True    </p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p>Function   </p></td>
 <td><p>ocb   </p></td>
 <td><p>The identifier of the output circular buffer (CB)   </p></td>
@@ -264,8 +272,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_8PoolType_9ReduceDimEN7ckernel11reduce_tileEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">PoolType</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reduce_type</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">REDUCE_OP</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">ReduceDim</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reduce_dim</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">REDUCE_DIM</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1adf06e32ab3103eeba4aadbb717e75f01"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">reduce_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb_scaler</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile_sclaer</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_8PoolType_9ReduceDimEN7ckernel11reduce_tileEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_8PoolType_9ReduceDim_bEN7ckernel11reduce_tileEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">PoolType</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reduce_type</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">REDUCE_OP</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">ReduceDim</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reduce_dim</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">REDUCE_DIM</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fp32_transpose</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ae5c72eb9d4023ec4fbd6bf955a173a6f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">reduce_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb_scaler</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile_sclaer</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_8PoolType_9ReduceDim_bEN7ckernel11reduce_tileEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs a reduction operation <em>B = reduce(A)</em> using reduce_func for dimension reduction on a tile in the CB at a given index and writes the result to the DST register at index <em>dst_tile_index</em>. Reduction can be of type <em>Reduce::R</em>, <em>Reduce::C</em>, or <em>Reduce::RC</em>, identifying the dimension(s) to be reduced in size to 1. The DST register buffer must be in acquired state via <em>acquire_dst</em> call.</p>
@@ -308,6 +316,14 @@
 <td><p>True    </p></td>
 </tr>
 <tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>fp32_transpose   </p></td>
+<td><p>Enable accumulation of reduction in full FP32 precision   </p></td>
+<td><p>bool   </p></td>
+<td><p>{true, false}   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
 <td><p>Function   </p></td>
 <td><p>icb   </p></td>
 <td><p>The identifier of the circular buffer (CB) containing operand A   </p></td>
@@ -315,7 +331,7 @@
 <td><p>0 to 31   </p></td>
 <td><p>True    </p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p>Function   </p></td>
 <td><p>icb_scaler   </p></td>
 <td><p>CB holding scaling factors (see above)   </p></td>
@@ -323,7 +339,7 @@
 <td><p>0 to 31   </p></td>
 <td><p>True    </p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p>Function   </p></td>
 <td><p>itile   </p></td>
 <td><p>The index of the tile within the first CB   </p></td>
@@ -331,7 +347,7 @@
 <td><p>Must be less than the size of the CB   </p></td>
 <td><p>True    </p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p>Function   </p></td>
 <td><p>itile_sclaer   </p></td>
 <td><p>The index of the tile within the scaling factor CB.   </p></td>
@@ -339,7 +355,7 @@
 <td><p>Must be less than the size of the CB   </p></td>
 <td><p>True    </p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p>Function   </p></td>
 <td><p>idst   </p></td>
 <td><p>The index of the tile in DST REG for the result   </p></td>
