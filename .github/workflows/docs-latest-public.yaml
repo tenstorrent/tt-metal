@@ -23,21 +23,17 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
-    runs-on:
-      - arch-blackhole
+    runs-on: ubuntu-latest
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
