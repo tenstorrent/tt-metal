@@ -28,7 +28,7 @@ EPSILON = 2**-9
 def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     if low > high:
         low, high = high, low
-    x = torch.arange(low, high, 0.1)
+    x = torch.arange(low, high, 0.1, dtype=torch.bfloat16)
 
     # Handle scalar tensor input
     if isinstance(scalar, torch.Tensor):
@@ -46,16 +46,18 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     else:
         ttnn_out = ttnn.to_torch(ttnn_op(ttnn_value))
 
-    # Convert TTNN output to float32 for plotting
-    ttnn_out = ttnn_out.to(torch.float32)
     torch_label = f"torch.{torch_unary_op.__name__}"
     ttnn_label = f"{ttnn_op.__name__}"
     y_label = f"{torch_unary_op.__name__}(x)"
     title = f"Comparison: {torch_label} vs {ttnn_label}"
 
     # Plot
-    plt.plot(x.numpy(), torch_out.numpy(), label=torch_label, linewidth=1)
-    plt.plot(x.numpy(), ttnn_out.numpy(), label=ttnn_label, linestyle="--", linewidth=1)
+    x_plot = x.to(torch.float32).numpy()
+    torch_out_plot = torch_out.to(torch.float32).numpy()
+    ttnn_out_plot = ttnn_out.to(torch.float32).numpy()
+
+    plt.plot(x_plot, torch_out_plot, label=torch_label, linewidth=1)
+    plt.plot(x_plot, ttnn_out_plot, label=ttnn_label, linestyle="--", linewidth=1)
     plt.title(title)
     plt.xlabel("x")
     plt.ylabel(y_label)
@@ -85,8 +87,7 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     ulp_error = abs_diff / ulp_spacing
 
     # Plot ULP Error
-    plt.figure(figsize=(10, 5))
-    plt.plot(x.numpy(), ulp_error.numpy(), label="ULP Error", color="red", linewidth=1)
+    plt.plot(x_plot, ulp_error.numpy(), label="ULP Error", color="red", linewidth=1)
     plt.title(f"ULP Error: {ttnn_op.__name__} vs Torch")
     plt.xlabel("x")
     plt.ylabel("ULP Error")
@@ -103,10 +104,10 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
 
     # Save results to CSV
     csv_data = {
-        "x": x.numpy(),
-        "ttnn_out": ttnn_out.numpy(),
-        "torch_out_bf16": torch_out.numpy(),
-        "abs_diff": abs_diff.numpy(),
+        "x": x_plot,
+        "ttnn_out": ttnn_out_plot,
+        "torch_out_bf16": torch_out_plot,
+        "abs_diff": abs_diff.to(torch.float32).numpy(),
         "ulp_error": ulp_error.numpy(),
     }
     df = pd.DataFrame(csv_data)
@@ -655,12 +656,12 @@ def main(args):
 
     #   Ops that require equal check
     equal_check_operations = [
-        "maximum",
-        "minimum",
+        # "maximum",
+        # "minimum",
     ]
 
     all_operations = [
-        "deg2rad",
+        # "deg2rad",
         "exp",
         "expm1",
         "elu",
