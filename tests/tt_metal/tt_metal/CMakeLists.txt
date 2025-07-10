@@ -159,5 +159,5 @@ install(
     jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
-        COMPONENT metalium-runtime
+        COMPONENT metalium-validation
 )
