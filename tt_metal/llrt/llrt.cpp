@@ -322,7 +322,7 @@ void send_msg_to_eth_mailbox(
     const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
 
     auto wait_for_mailbox = [&](std::function<bool(uint32_t)> cond) {
-        constexpr auto k_sleep_time = std::chrono::milliseconds{5};
+        constexpr auto k_sleep_time = std::chrono::milliseconds{1};
         const auto start = std::chrono::high_resolution_clock::now();
 
         while (true) {
@@ -396,12 +396,13 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
     uint32_t previous_heartbeat_val = heartbeat_val;
 
     while (heartbeat_val == previous_heartbeat_val) {
+        constexpr auto k_sleep_time = std::chrono::milliseconds{1};
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
         previous_heartbeat_val = heartbeat_val;
         heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
         if (timeout_ms > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            timeout_ms -= 5;
+            std::this_thread::sleep_for(std::chrono::milliseconds(k_sleep_time));
+            timeout_ms -= 1;
             if (timeout_ms <= 0) {
                 TT_THROW(
                     "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} to become active again. Is "
