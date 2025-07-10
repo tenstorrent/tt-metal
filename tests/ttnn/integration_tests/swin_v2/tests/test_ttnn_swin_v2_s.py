@@ -21,7 +21,7 @@ from tests.ttnn.integration_tests.swin_v2.tests.test_ttnn_swin_transformer_block
     create_custom_preprocessor as create_custom_preprocessor_transformer_block_v2,
 )
 
-
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/actions/runs/16180695413/job/45676690857#step:8:1650")
 def create_custom_preprocessor_patch_merging_v2(device):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}

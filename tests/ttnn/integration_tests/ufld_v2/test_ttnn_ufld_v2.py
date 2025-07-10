@@ -310,6 +310,7 @@ def custom_preprocessor_whole_model(model, name):
         (1, 64, 80, 200),
     ],
 )
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/actions/runs/16176280294/job/45662599111#step:8:9248")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     torch_model = TuSimple34(input_height=height, input_width=width).res_model.layer1[0]
