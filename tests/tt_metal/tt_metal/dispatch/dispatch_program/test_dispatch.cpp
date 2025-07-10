@@ -229,9 +229,9 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
             eth_core,
             tt::tt_metal::EthernetConfig{
                 .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER, .processor = dm_processor});
-
-        this->RunProgram(device, program);
     }
+
+    this->RunProgram(device, program);
 }
 
 TEST_F(DispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
