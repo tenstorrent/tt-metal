@@ -9,19 +9,13 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import (
-    FromWeightConfig,
-    ModelDecodeConfig,
-    ModelPrefillConfig,
-    RMSNormConfig,
-    WeightConfig,
-)
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, RMSNormConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     NORM_CATEGORIES,
-    TILE_SIZE,
     save_and_get_path,
 )
+from models.demos.deepseek_v3.utils.run_config import ModelDecodeConfig, ModelPrefillConfig, WeightConfig
 
 
 class RMSNorm(AbstractModule):
@@ -56,7 +50,7 @@ class RMSNorm(AbstractModule):
 
         # Convert to TTNN tensor with 1D sharded across columns of mesh device
         # Reshape to tile width sticks for optimal performance
-        torch_weight = torch_weight.reshape([1, 1, torch_weight.shape[-1] // TILE_SIZE, TILE_SIZE])
+        torch_weight = torch_weight.reshape([1, 1, torch_weight.shape[-1] // ttnn.TILE_SIZE, ttnn.TILE_SIZE])
         ttnn_weight = ttnn.as_tensor(
             torch_weight,
             device=mesh_device,
@@ -97,14 +91,14 @@ class RMSNorm(AbstractModule):
             is_distributed = True
             output_memcfg = None
             stats_memcfg = ttnn.create_sharded_memory_config(
-                shape=[1, 1, TILE_SIZE, TILE_SIZE * list(mesh_device.shape)[0]],
+                shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * list(mesh_device.shape)[0]],
                 core_grid=ttnn.CoreGrid(y=1, x=1),
                 strategy=ttnn.ShardStrategy.WIDTH,
             )
 
         # RMSNorm configuration for decode mode
         return RMSNormConfig(
-            weight=FromWeightConfig(),
+            weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
             epsilon=hf_config.rms_norm_eps,
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             is_distributed=is_distributed,
@@ -142,8 +136,8 @@ class RMSNorm(AbstractModule):
             program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(grid_size_x, grid_size_y),
                 subblock_w=1,
-                block_h=shard_shape[0] // TILE_SIZE,
-                block_w=shard_shape[1] // TILE_SIZE,
+                block_h=shard_shape[0] // ttnn.TILE_SIZE,
+                block_w=shard_shape[1] // ttnn.TILE_SIZE,
                 inplace=False,
             )
 

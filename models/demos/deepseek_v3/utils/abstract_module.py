@@ -171,7 +171,7 @@ class AbstractModule(ABC):  # TODO: update the doc
         raise NotImplementedError(f"Subclasses of {AbstractModule.__name__} must implement the convert_weights method")
 
     @classmethod
-    def create_state(cls, hf_config: PretrainedConfig, **kwargs) -> ModelState:
+    def create_state(cls, hf_config: PretrainedConfig, *args, **kwargs) -> ModelState:
         """Create a new state for the module.
         Subclasses may override this method to initialize the state of the module, which is typically used to
         store persistent model state that is not part of the model configuration or weights.
@@ -183,7 +183,7 @@ class AbstractModule(ABC):  # TODO: update the doc
         Returns:
             A new object initializing the state of the module
         """
-        return cls._create_state_impl(**kwargs)
+        return cls._create_state_impl(*args, **kwargs)
 
     @final
     @classmethod
