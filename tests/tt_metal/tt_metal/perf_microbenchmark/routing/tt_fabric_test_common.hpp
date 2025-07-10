@@ -220,100 +220,16 @@ public:
      */
     std::vector<FabricNodeId> get_wrap_around_mesh_ring_topology_dst_node_ids(
         const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
+        // Use the common ring traversal helper
+        auto ring_path = trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, total_hops);
+
         std::vector<FabricNodeId> ring_destinations;
         ring_destinations.reserve(total_hops);
 
-        // Get starting coordinate
-        MeshCoordinate current_coord = get_device_coord(src_node_id);
-        RoutingDirection current_direction = initial_direction;
-
-        for (uint32_t hop = 0; hop < total_hops; ++hop) {
-            // Try to move in current direction
-            MeshCoordinate next_coord = current_coord;
-            bool can_move = true;
-
-            switch (current_direction) {
-                case RoutingDirection::N:
-                    if (current_coord[NS_DIM] == 0) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::S:
-                    if (current_coord[NS_DIM] == mesh_shape_[NS_DIM] - 1) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::E:
-                    if (current_coord[EW_DIM] == mesh_shape_[EW_DIM] - 1) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
-                    }
-                    break;
-                case RoutingDirection::W:
-                    if (current_coord[EW_DIM] == 0) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
-                    }
-                    break;
-                default: TT_THROW("routing direciton not supported: {}", current_direction);
-            }
-
-            // If we hit a boundary, determine next direction based on current position
-            if (!can_move) {
-                if (current_direction == RoutingDirection::E) {
-                    // Hit east boundary - direction depends on current row
-                    if (current_coord[NS_DIM] == 0) {
-                        current_direction = RoutingDirection::S;
-                    } else {
-                        current_direction = RoutingDirection::N;
-                    }
-                } else if (current_direction == RoutingDirection::W) {
-                    if (current_coord[NS_DIM] == 0) {
-                        current_direction = RoutingDirection::S;
-                    } else {
-                        current_direction = RoutingDirection::N;
-                    }
-                } else if (current_direction == RoutingDirection::S) {
-                    if (current_coord[EW_DIM] == 0) {
-                        current_direction = RoutingDirection::E;
-                    } else {
-                        current_direction = RoutingDirection::W;
-                    }
-                } else if (current_direction == RoutingDirection::N) {
-                    if (current_coord[EW_DIM] == 0) {
-                        current_direction = RoutingDirection::E;
-                    } else {
-                        current_direction = RoutingDirection::W;
-                    }
-                }
-
-                // Try again with new direction
-                switch (current_direction) {
-                    case RoutingDirection::N:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
-                        break;
-                    case RoutingDirection::S:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
-                        break;
-                    case RoutingDirection::E:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
-                        break;
-                    case RoutingDirection::W:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
-                        break;
-                    default: TT_THROW("routing direciton not supported: {}", current_direction);
-                }
-            }
-
-            // Move to next coordinate and add to destinations
-            current_coord = next_coord;
-            ring_destinations.push_back(get_fabric_node_id(current_coord));
+        // Extract destination nodes (skip the source node, get the next nodes in path)
+        for (const auto& [current_node, direction] : ring_path) {
+            // Get the next node in this direction
+            ring_destinations.push_back(current_node);
         }
 
         log_debug(
@@ -641,7 +557,7 @@ public:
         }
 
         // Calculate ring neighbors based on position on perimeter
-        // Ring goes clockwise: top row (L->R), right col (T->B), bottom row (R->L), left col (B->T)
+        // forward always try to go right/up first, backward always try to go left/down first
         chip_id_t forward_chip_id, backward_chip_id;
 
         if (row == 0 && col == 0) {
@@ -653,25 +569,25 @@ public:
             forward_chip_id = src_node.chip_id + mesh_width;
             backward_chip_id = src_node.chip_id - 1;
         } else if (row == mesh_height - 1 && col == mesh_width - 1) {
-            // Bottom-right corner (15): forward=14, backward=11
-            forward_chip_id = src_node.chip_id - 1;
-            backward_chip_id = src_node.chip_id - mesh_width;
-        } else if (row == mesh_height - 1 && col == 0) {
-            // Bottom-left corner (12): forward=8, backward=13
+            // Bottom-right corner (15): forward=11, backward=14
             forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id + 1;
+            backward_chip_id = src_node.chip_id - 1;
+        } else if (row == mesh_height - 1 && col == 0) {
+            // Bottom-left corner (12): forward=13, backward=8
+            forward_chip_id = src_node.chip_id + 1;
+            backward_chip_id = src_node.chip_id - mesh_width;
         } else if (row == 0) {
             // Top row (not corners): forward=right, backward=left
             forward_chip_id = src_node.chip_id + 1;
             backward_chip_id = src_node.chip_id - 1;
         } else if (col == mesh_width - 1) {
-            // Right column (not corners): forward=down, backward=up
-            forward_chip_id = src_node.chip_id + mesh_width;
-            backward_chip_id = src_node.chip_id - mesh_width;
+            // Right column (not corners): forward=up, backward=down
+            forward_chip_id = src_node.chip_id - mesh_width;
+            backward_chip_id = src_node.chip_id + mesh_width;
         } else if (row == mesh_height - 1) {
-            // Bottom row (not corners): forward=left, backward=right
-            forward_chip_id = src_node.chip_id - 1;
-            backward_chip_id = src_node.chip_id + 1;
+            // Bottom row (not corners): forward=right, backward=left
+            forward_chip_id = src_node.chip_id + 1;
+            backward_chip_id = src_node.chip_id - 1;
         } else if (col == 0) {
             // Left column (not corners): forward=up, backward=down
             forward_chip_id = src_node.chip_id - mesh_width;
@@ -794,6 +710,8 @@ public:
 
     MeshShape get_mesh_shape() const override { return mesh_shape_; }
 
+    Topology get_topology() const { return topology_; }
+
     RoutingDirection get_forwarding_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
         auto forwarding_direction = control_plane_ptr_->get_forwarding_direction(src_node_id, dst_node_id);
@@ -897,6 +815,116 @@ public:
         }
 
         return {std::move(multi_directional_hops), global_sync_val};
+    }
+
+    // Helper function to trace ring path with boundary turning logic
+    std::vector<std::pair<FabricNodeId, RoutingDirection>> trace_wrap_around_mesh_ring_path(
+        const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
+        std::vector<std::pair<FabricNodeId, RoutingDirection>> path;
+        path.reserve(total_hops);
+
+        // Get starting coordinate
+        MeshCoordinate current_coord = get_device_coord(src_node_id);
+        RoutingDirection current_direction = initial_direction;
+        FabricNodeId current_node = src_node_id;
+
+        for (uint32_t hop = 0; hop < total_hops; ++hop) {
+            // Try to move in current direction
+            MeshCoordinate next_coord = current_coord;
+            bool can_move = true;
+
+            switch (current_direction) {
+                case RoutingDirection::N:
+                    if (current_coord[NS_DIM] == 0) {
+                        can_move = false;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
+                    }
+                    break;
+                case RoutingDirection::S:
+                    if (current_coord[NS_DIM] == mesh_shape_[NS_DIM] - 1) {
+                        can_move = false;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
+                    }
+                    break;
+                case RoutingDirection::E:
+                    if (current_coord[EW_DIM] == mesh_shape_[EW_DIM] - 1) {
+                        can_move = false;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
+                    }
+                    break;
+                case RoutingDirection::W:
+                    if (current_coord[EW_DIM] == 0) {
+                        can_move = false;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
+                    }
+                    break;
+                default: TT_THROW("routing direction not supported: {}", current_direction);
+            }
+
+            // If we hit a boundary, determine next direction based on current position
+            if (!can_move) {
+                if (current_direction == RoutingDirection::E) {
+                    // Hit east boundary - direction depends on current row
+                    if (current_coord[NS_DIM] == 0) {
+                        current_direction = RoutingDirection::S;
+                    } else {
+                        current_direction = RoutingDirection::N;
+                    }
+                } else if (current_direction == RoutingDirection::W) {
+                    if (current_coord[NS_DIM] == 0) {
+                        current_direction = RoutingDirection::S;
+                    } else {
+                        log_info(
+                            tt::LogTest,
+                            "current_coord {} current_direction {} next direction RoutingDirection::N",
+                            get_fabric_node_id(current_coord),
+                            current_direction);
+                        current_direction = RoutingDirection::N;
+                    }
+                } else if (current_direction == RoutingDirection::S) {
+                    if (current_coord[EW_DIM] == 0) {
+                        current_direction = RoutingDirection::E;
+                    } else {
+                        current_direction = RoutingDirection::W;
+                    }
+                } else if (current_direction == RoutingDirection::N) {
+                    if (current_coord[EW_DIM] == 0) {
+                        current_direction = RoutingDirection::E;
+                    } else {
+                        current_direction = RoutingDirection::W;
+                    }
+                }
+
+                // Try again with new direction
+                switch (current_direction) {
+                    case RoutingDirection::N:
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
+                        break;
+                    case RoutingDirection::S:
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
+                        break;
+                    case RoutingDirection::E:
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
+                        break;
+                    case RoutingDirection::W:
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
+                        break;
+                    default: TT_THROW("routing direction not supported: {}", current_direction);
+                }
+            }
+
+            // Move to next coordinate
+            current_coord = next_coord;
+            current_node = get_fabric_node_id(current_coord);
+            // Record current node and outgoing direction
+            path.emplace_back(current_node, current_direction);
+        }
+
+        return path;
     }
 
 private:

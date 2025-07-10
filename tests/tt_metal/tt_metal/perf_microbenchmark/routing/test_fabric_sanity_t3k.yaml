@@ -8,8 +8,23 @@ Tests:
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 1024
-      num_packets: 100
+      size: 4096
+      num_packets: 200000
+
+    patterns:
+      - type: all_to_all_multicast
+
+  - name: "UnidirLinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 200000
 
     patterns:
       - type: unidirectional_linear_multicast
@@ -44,3 +59,33 @@ Tests:
 
     patterns:
       - type: half_ring_multicast
+
+  - name: "SingleSenderLinearUnicastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 200000
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+      - device: [0, 4]
+        patterns:
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
