@@ -758,8 +758,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
-    if (skip_mcast) {
+    if (total_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
+    }
+    if (skip_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
