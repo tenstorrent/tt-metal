@@ -11,6 +11,7 @@ from models.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
+from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
 from ttnn.operations.conv2d import get_torch_act_func_from_string
@@ -678,6 +679,7 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
+@skip_for_blackhole("Not fully tested on Blackhole")
 @pytest.mark.parametrize(
     "input_dtype, input_layout",
     [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
@@ -3282,6 +3284,7 @@ def test_conv2d_sdxl(
     ),
 )
 
+@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_conv2d_vae_sdxl(
     device,
