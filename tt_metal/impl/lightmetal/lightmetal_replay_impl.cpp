@@ -373,8 +373,9 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
         cmd->cq_id(),
         cmd->tid(),
         cmd->blocking());
+    // RMAPI
     CommandQueue& cq = this->device_->command_queue(cmd->cq_id());
-    EnqueueTrace(cq, cmd->tid(), cmd->blocking());
+    // EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd) {
@@ -384,19 +385,22 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCo
         cmd->cq_id(),
         cmd->tid(),
         cmd->blocking());
-    ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
+    // RMAPI
+    // ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(LoadTrace) cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
     // Get the trace descriptor from flatbuffer and load it to device.
     auto trace_desc = get_trace_by_id(cmd->tid());
-    LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
+    // RMAPI
+    // LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
 }
 
+// RMAPI
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ReleaseTrace) tid: {}", cmd->tid());
-    ReleaseTrace(this->device_, cmd->tid());
+    // ReleaseTrace(this->device_, cmd->tid());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd) {

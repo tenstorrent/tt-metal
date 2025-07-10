@@ -27,9 +27,13 @@
 #include "trace/trace.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include "distributed/mesh_trace.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
 #include "vector_aligned.hpp"
+
+using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
+using MeshTraceBuffer = tt::tt_metal::distributed::MeshTraceBuffer;
 
 namespace tt {
 namespace tt_metal {
@@ -133,19 +137,21 @@ std::unique_ptr<Allocator>& SubDeviceManager::sub_device_allocator(SubDeviceId s
     return sub_device_allocators_[sub_device_index];
 }
 
-std::shared_ptr<TraceBuffer>& SubDeviceManager::create_trace(uint32_t tid) {
-    auto [trace, emplaced] = trace_buffer_pool_.emplace(tid, Trace::create_empty_trace_buffer());
-    TT_ASSERT(emplaced, "Trace buffer with tid {} already exists", tid);
+std::shared_ptr<MeshTraceBuffer>& SubDeviceManager::create_trace(const MeshTraceId& trace_id) {
+    auto [trace, emplaced] =
+        trace_buffer_pool_.emplace(trace_id, distributed::MeshTrace::create_empty_mesh_trace_buffer());
+    TT_ASSERT(emplaced, "Trace buffer with trace id {} already exists", trace_id);
     return trace->second;
 }
 
-void SubDeviceManager::release_trace(uint32_t tid) { trace_buffer_pool_.erase(tid); }
+void SubDeviceManager::release_trace(const MeshTraceId& trace_id) { trace_buffer_pool_.erase(trace_id); }
 
-std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
-    auto trace = trace_buffer_pool_.find(tid);
+std::shared_ptr<MeshTraceBuffer> SubDeviceManager::get_trace(const MeshTraceId& trace_id) {
+    auto trace = trace_buffer_pool_.find(trace_id);
     if (trace != trace_buffer_pool_.end()) {
         return trace->second;
     }
+    TT_THROW("MeshDevice ID {} Trace Instance with ID {} is not initialized", this->id(), *trace_id);
     return nullptr;
 }
 

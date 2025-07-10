@@ -149,18 +149,10 @@ public:
     virtual SystemMemoryManager& sysmem_manager() = 0;
     virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
-    // Metal trace device capture mode
-    virtual void begin_trace(uint8_t cq_id, uint32_t tid) = 0;
-    virtual void end_trace(uint8_t cq_id, uint32_t tid) = 0;
-    virtual void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) = 0;
-    virtual void release_trace(uint32_t tid) = 0;
-
-    virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
 
     // Light Metal
-    virtual void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) = 0;
     virtual bool using_slow_dispatch() const = 0;
     virtual bool using_fast_dispatch() const = 0;
 
