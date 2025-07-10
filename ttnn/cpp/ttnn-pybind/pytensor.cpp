@@ -449,12 +449,14 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     return convert_to_logical(std::visit(
         tt::stl::overloaded{
             [](const HostStorage& storage) {
+                std::vector<HostBuffer> buffers;
+                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                 TT_FATAL(
-                    storage.buffer().shape() == distributed::MeshShape(1, 1),
+                    buffers.size() == 1,
                     "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
                     "to concatenate multi-device shards.",
                     storage.buffer().shape());
-                return *storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
+                return buffers.front();
             },
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(
@@ -1481,12 +1483,14 @@ void pytensor_module(py::module& m_tensor) {
                 return std::visit(
                     tt::stl::overloaded{
                         [](const HostStorage& s) -> HostBuffer {
+                            std::vector<HostBuffer> buffers;
+                            s.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                             TT_FATAL(
-                                s.buffer().shape() == distributed::MeshShape(1, 1),
+                                buffers.size() == 1,
                                 "Can't get a single buffer from host storage distributed over mesh shape {}. Did you "
                                 "forget to use mesh composer to concatenate tensor shards?",
                                 s.buffer().shape());
-                            return *s.buffer().get_shard(distributed::MeshCoordinate(0, 0));
+                            return buffers.front();
                         },
                         [&](const DeviceStorage& s) -> HostBuffer {
                             TT_THROW(
