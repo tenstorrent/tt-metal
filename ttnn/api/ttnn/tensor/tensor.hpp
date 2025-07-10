@@ -158,11 +158,6 @@ public:
     [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     [[nodiscard]] Tensor to_device(
-        IDevice* target_device,
-        const MemoryConfig& mem_config = MemoryConfig{},
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
-
-    [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
@@ -249,12 +244,9 @@ public:
     // Throws if the tensor is not allocated on a device.
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
 
-    // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
-    distributed::MeshDevice* mesh_device() const;
-
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
-    IDevice* device() const;
+    distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
 

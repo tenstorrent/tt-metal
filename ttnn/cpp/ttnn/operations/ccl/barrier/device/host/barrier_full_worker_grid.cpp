@@ -28,10 +28,10 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle> schedule_kernel_comp
     const CoreCoord receiver_core,
     const CoreCoord sem_init_core) {
     // This just creates a command of what needs to be compiled
-    static std::string const& receiver_code =
+    static const std::string& receiver_code =
         "ttnn/cpp/ttnn/operations/ccl/barrier/device/kernels/barrier_receiver.cpp";
-    static std::string const& sender_code = "ttnn/cpp/ttnn/operations/ccl/barrier/device/kernels/barrier_sender.cpp";
-    static std::string const& sem_init_code =
+    static const std::string& sender_code = "ttnn/cpp/ttnn/operations/ccl/barrier/device/kernels/barrier_sender.cpp";
+    static const std::string& sem_init_code =
         "ttnn/cpp/ttnn/operations/ccl/barrier/device/kernels/barrier_sem_creator.cpp";
 
     KernelHandle receiver_kernel_id = tt::tt_metal::CreateKernel(
@@ -47,9 +47,9 @@ static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<
     tt::tt_metal::Program& program,
     IDevice* device,
     bool is_starting_core,
-    CoreCoord const& eth_sender_core,
-    CoreCoord const& eth_receiver_core,
-    CoreCoord const& sem_init_core) {
+    const CoreCoord& eth_sender_core,
+    const CoreCoord& eth_receiver_core,
+    const CoreCoord& sem_init_core) {
     const uint32_t worker_sem0 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
     const uint32_t worker_sem1 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
     uint32_t start_semaphore_address = hal::get_erisc_l1_unreserved_base() + EriscDatamoverConfig::eth_word_size_bytes;
@@ -103,18 +103,18 @@ operation::ProgramWithCallbacks barrier_with_workers(
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     // Configure operational parameters
-    auto const& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
 
     // Get the device from the tensor
-    const auto& device =
-        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
+    // FIXME: Need to double check this is correct
+    const auto& device = input_tensor.device()->get_device(target_device_id);
     // Get a representation of the topology
 
     // Create the program
     tt::tt_metal::Program program{};
     //////////////////
     // query the core ids
-    auto const& topology_config = ttnn::ccl::RingTopology(
+    const auto& topology_config = ttnn::ccl::RingTopology(
         device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
     const CoreCoord eth_receiver_core = topology_config.eth_receiver_cores.at(0);
     const CoreCoord eth_sender_core = topology_config.eth_sender_cores.at(0);

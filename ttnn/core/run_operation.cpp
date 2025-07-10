@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/run_operation.hpp"
+#include <tt-metalium/mesh_device.hpp>
 
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
@@ -105,7 +106,9 @@ OutputTensors run_without_autoformat(
     QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* phys_device = detail::get_device(input_tensors, optional_input_tensors);
+    auto mesh_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(phys_device->id());
+    auto* device = mesh_owner.get();
     Tensors input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
@@ -169,7 +172,9 @@ Tensors run_with_autoformat(
     QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* phys_device = detail::get_device(input_tensors, optional_input_tensors);
+    auto mesh_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(phys_device->id());
+    auto* device = mesh_owner.get();
 
     Tensors formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
@@ -241,7 +246,9 @@ Tensors run_with_autoformat(
     ttnn::QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* phys_device = detail::get_device(input_tensors, optional_input_tensors);
+    auto mesh_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(phys_device->id());
+    auto* device = mesh_owner.get();
 
     TT_ASSERT(input_tensors.size() == input_formatting.size());
     TT_ASSERT(optional_input_tensors.size() == optional_input_formatting.size());

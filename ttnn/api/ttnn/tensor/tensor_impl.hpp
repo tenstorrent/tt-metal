@@ -174,8 +174,6 @@ bool logical_matches_physical(const TensorSpec& tensor_spec);
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
-
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 

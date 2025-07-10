@@ -67,7 +67,8 @@ Tensor arange_impl(
     TensorSpec spec{
         ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
 
-    return Tensor::from_vector(std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
+    return Tensor::from_vector(
+        std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
 }
 
 template <typename T>
@@ -108,7 +109,7 @@ Tensor full_impl(
     MeshDevice* device = nullptr,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
-    MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->mesh_device() : device;
+    MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->device() : device;
 
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
@@ -208,7 +209,7 @@ Tensor full_like_impl(
                 fill_value,
                 dtype_value,
                 layout_value,
-                device ? device : tensor.mesh_device(),
+                device ? device : tensor.device(),
                 memory_config.value_or(tensor.memory_config()),
                 optional_output_tensor);
         }
@@ -219,7 +220,7 @@ Tensor full_like_impl(
             fill_value,
             dtype_value,
             layout_value,
-            device ? device : tensor.mesh_device(),
+            device ? device : tensor.device(),
             memory_config,
             optional_output_tensor);
     }
@@ -283,7 +284,7 @@ struct EmptyLike {
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
         return allocate_tensor_on_mesh(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-            device.has_value() ? &device->get() : tensor.mesh_device());
+            device.has_value() ? &device->get() : tensor.device());
     }
 };
 

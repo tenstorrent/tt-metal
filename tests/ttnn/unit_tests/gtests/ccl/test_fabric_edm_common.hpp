@@ -1557,17 +1557,25 @@ inline bool TestMultiInputReaderKernel(
     std::vector<Tensor> output0_tensors_device;
     std::vector<Tensor> output1_tensors_device;
 
+    // Create per-device MeshDevice wrappers for tensor allocation
+    std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> mesh_devices;
+    mesh_devices.reserve(devices.size());
+    for (auto* dev : devices) {
+        mesh_devices.push_back(tt::tt_metal::distributed::MeshDevice::create_unit_mesh(dev->id()));
+    }
+
     // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
     // multicast to a consistent destination address
     for (size_t i = 0; i < devices.size(); i++) {
+        auto* mesh_dev = mesh_devices[i].get();
         input0_tensors_device.push_back(
-            input_tensor0.to_device(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId));
+            input_tensor0.to_device(mesh_dev, input_tensor0_mem_config, ttnn::DefaultQueueId));
         input1_tensors_device.push_back(
-            input_tensor1.to_device(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId));
+            input_tensor1.to_device(mesh_dev, input_tensor1_mem_config, ttnn::DefaultQueueId));
         output0_tensors_device.push_back(
-            output_tensor0.to_device(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId));
+            output_tensor0.to_device(mesh_dev, output_tensor0_mem_config, ttnn::DefaultQueueId));
         output1_tensors_device.push_back(
-            output_tensor1.to_device(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId));
+            output_tensor1.to_device(mesh_dev, output_tensor1_mem_config, ttnn::DefaultQueueId));
     }
     auto launch_ccl_command_interpreter_workers = [&](std::vector<Program>& _programs) {
         return RunLocalTestWithMultiInputReaders(
@@ -3994,24 +4002,20 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
             auto worker_core = worker_cores_vec[l];
             const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord[l]).x;
             const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord[l]).y;
-            auto build_connection_args =
-                [device, &program, &worker_core, l](
-                    bool is_connected_in_direction, IDevice* connected_device, std::vector<uint32_t>& rt_args_out) {
-                    rt_args_out.push_back(is_connected_in_direction);
-                    if (is_connected_in_direction) {
-                        const auto& device_fabric_node_id =
-                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
-                        const auto& connected_device_fabric_node_id =
-                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
-                        tt::tt_fabric::append_fabric_connection_rt_args(
-                            device_fabric_node_id,
-                            connected_device_fabric_node_id,
-                            l,
-                            program,
-                            {worker_core},
-                            rt_args_out);
-                    }
-                };
+            auto build_connection_args = [device, &program, &worker_core, l](
+                                             bool is_connected_in_direction,
+                                             IDevice* connected_device,
+                                             std::vector<uint32_t>& rt_args_out) {
+                rt_args_out.push_back(is_connected_in_direction);
+                if (is_connected_in_direction) {
+                    const auto& device_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+                    const auto& connected_device_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        device_fabric_node_id, connected_device_fabric_node_id, l, program, {worker_core}, rt_args_out);
+                }
+            };
 
             // Define the send type parameters
             // There is no atomic in
