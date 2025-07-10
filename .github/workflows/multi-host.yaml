@@ -16,4 +16,4 @@ jobs:
       - name: Run mpirun command
         run: |
           echo "Running mpirun command on multiple hosts"
-          mpirun -np 2 --rankfile rankfile /bin/ls
+          mpirun -np 2 --rankfile /etc/rankfile /bin/ls
