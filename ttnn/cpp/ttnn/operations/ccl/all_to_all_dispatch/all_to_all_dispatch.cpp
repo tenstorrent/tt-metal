@@ -26,7 +26,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<GlobalSemaphore>& global_semaphore) {
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     TT_FATAL(
         global_semaphore.has_value(),

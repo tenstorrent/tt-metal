@@ -13,7 +13,7 @@
 namespace ttnn {
 
 void AllReduce::validate(const std::vector<Tensor>& input_tensors) const {
-    for (auto const& t : input_tensors) {
+    for (const auto& t : input_tensors) {
         TT_FATAL(!t.is_sharded(), "Sharded tensors are not supported for all reduce currently");
     }
 }
@@ -43,7 +43,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program_at(
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
     auto target_device =
-        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+        input_tensors[0].device() ? input_tensors[0].device()->get_device(coord) : input_tensors[0].device();
     ttnn::ccl::SenderRecieverConfig config =
         ttnn::ccl::get_device_sender_receiver_config(target_device, this->devices, this->topology);
 

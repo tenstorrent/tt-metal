@@ -124,14 +124,6 @@ public:
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 
-    static Tensor format_input_tensor(
-        const Tensor& input,
-        tt::tt_metal::IDevice* device,
-        const ttnn::Shape& padded_shape,
-        float pad_value,
-        tt::tt_metal::Layout target_layout,
-        std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
-
     /**
      * Formats an output tensor to meet shape and layout requirements
      * @param output Output tensor

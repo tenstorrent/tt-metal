@@ -123,7 +123,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
             input_tensor.storage_type() == StorageType::DEVICE,
             "Host tensor slice cannot return a scalar or empty tensor");
         return ttnn::empty(
-            actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.mesh_device(), memory_config);
+            actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), memory_config);
     }
 
     auto res =

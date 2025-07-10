@@ -1558,10 +1558,10 @@ inline bool TestMultiInputReaderKernel(
     std::vector<Tensor> output1_tensors_device;
 
     // Create per-device MeshDevice wrappers for tensor allocation
-    std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> mesh_devices;
+    std::vector<std::shared_ptr<distributed::MeshDevice>> mesh_devices;
     mesh_devices.reserve(devices.size());
     for (auto* dev : devices) {
-        mesh_devices.push_back(tt::tt_metal::distributed::MeshDevice::create_unit_mesh(dev->id()));
+        mesh_devices.push_back(distributed::MeshDevice::create_unit_mesh(dev->id()));
     }
 
     // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
@@ -1809,6 +1809,7 @@ bool RunPipelinedWorkersTest(
     auto view = *(test_fixture.view_);
 
     IDevice* device = view.get_device(MeshCoordinate(0, 0));
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device->id());
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it
@@ -1853,7 +1854,7 @@ bool RunPipelinedWorkersTest(
     }
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
-        device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
+        device_tensors.push_back(host_tensors[i].to_device(mesh_device.get(), mem_configs[i]));
         log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
     TT_ASSERT(device_tensors.size() == num_tensors);

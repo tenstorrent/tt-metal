@@ -107,7 +107,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     ttnn::ccl::SenderRecieverConfig config = ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord), this->devices, this->all_gather_struct.topology);
     chip_id_t target_device_id = mesh_device->get_device(mesh_coord)->id();
@@ -253,7 +253,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
         weight_tensor,
         dim,
         all_gather_core_grid_offset,
-	bias,
+        bias,
         num_links,
         memory_config_ag,
         user_defined_num_workers,

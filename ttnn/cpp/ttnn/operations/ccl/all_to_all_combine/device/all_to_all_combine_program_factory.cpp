@@ -61,7 +61,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const auto input_dtype = input_tensor.get_dtype();
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 
@@ -98,7 +98,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto l1_alignment = hal::get_l1_alignment();
     const auto dram_alignment = hal::get_dram_alignment();
 
-    const auto aligned_input_page_size_bytes = tt::align(input_page_size_bytes, input_is_dram? dram_alignment:l1_alignment);
+    const auto aligned_input_page_size_bytes =
+        tt::align(input_page_size_bytes, input_is_dram ? dram_alignment : l1_alignment);
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
@@ -290,8 +291,12 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto & coord = range.start_coord();
-        TT_FATAL(coord == range.end_coord(), "Expected single coordinate per program but got range of {} to {}", coord, range.end_coord());
+        const auto& coord = range.start_coord();
+        TT_FATAL(
+            coord == range.end_coord(),
+            "Expected single coordinate per program but got range of {} to {}",
+            coord,
+            range.end_coord());
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;

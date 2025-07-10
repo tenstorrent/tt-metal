@@ -89,7 +89,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const bool enable_async_output_tensor = false;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
@@ -320,7 +320,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
                     input_tensor_Wt,                              // row_offset
                 (link * batch_slice_num_pages / num_links),       // tiles_read
                 (link + 1) * batch_slice_num_pages / num_links};  // tiles_to_read
-            if (core_idx % num_senders_per_link) {  // forward
+            if (core_idx % num_senders_per_link) {                // forward
                 writer_rt_args.push_back(forward_device.has_value());
                 if (forward_device.has_value()) {
                     const auto sender_fabric_node_id =

@@ -21,7 +21,7 @@ void ReduceScatterAsync::validate_with_output_tensors(
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
-    for (auto const& t : input_tensors) {
+    for (const auto& t : input_tensors) {
         TT_FATAL(
             t.padded_shape()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
@@ -169,7 +169,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     }
 
     auto target_device =
-        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+        input_tensors[0].device() ? input_tensors[0].device()->get_device(coord) : input_tensors[0].device();
 
     ttnn::ccl::SenderRecieverConfig config =
         ttnn::ccl::get_device_sender_receiver_config(target_device, devices, this->topology);

@@ -301,7 +301,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     using namespace ttnn::ccl;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t ring_devices =
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -394,7 +394,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
-
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     size_t packet_size_bytes =

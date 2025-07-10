@@ -198,13 +198,7 @@ Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn:
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
-template <typename T>
-Tensor to_device(
-    const Tensor& tensor,
-    IDevice* target_device,
-    const MemoryConfig& memory_config,
-    QueueId cq_id = ttnn::DefaultQueueId);
-
+// FIXME: Need to check about this deletion
 // TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
 template <typename T>
 Tensor to_device_mesh_tensor(

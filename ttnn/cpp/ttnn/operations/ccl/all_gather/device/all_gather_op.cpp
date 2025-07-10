@@ -100,7 +100,7 @@ AllGatherConfig::AllGatherConfig(
     this->eth_buffers_l1_base_byte_address = this->eth_sems_l1_base_byte_address + this->semaphore_offset;
 
     std::size_t channel_sync_bytes_overhead = (enable_merged_payload_and_channel_sync * 16);
-    uint32_t const page_size = input_tensor.buffer()->page_size();
+    const uint32_t page_size = input_tensor.buffer()->page_size();
     std::size_t l1_per_buffer_region =
         ((total_l1_buffer_space - this->semaphore_offset) /
          (this->num_eth_buffers * num_duplicate_directions * this->num_edm_buffers_per_channel)) -
@@ -184,8 +184,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
-                                                           : input_tensors.at(0).device();
+    auto target_device = input_tensors.at(0).device() ? input_tensors.at(0).device()->get_device(mesh_coord)
+                                                      : input_tensors.at(0).device();
     ccl::SenderRecieverConfig config =
         this->cluster_axis.has_value()
             ? ccl::get_device_sender_receiver_config_in_ring(mesh_coord, mesh_device, *cluster_axis, ring_size)

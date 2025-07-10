@@ -9,7 +9,7 @@
 namespace ttnn {
 
 void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
-    for (auto const& t : input_tensors) {
+    for (const auto& t : input_tensors) {
         TT_FATAL(
             t.padded_shape()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
@@ -54,8 +54,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program_at(
     uint32_t device_index = 0;
     std::optional<chip_id_t> receiver_device_id;
     std::optional<chip_id_t> sender_device_id;
-    auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
-                                                           : input_tensors.at(0).device();
+    auto target_device = input_tensors.at(0).device() ? input_tensors.at(0).device()->get_device(mesh_coord)
+                                                      : input_tensors.at(0).device();
     ccl::SenderRecieverConfig config =
         this->cluster_axis.has_value()
             ? ccl::get_device_sender_receiver_config_in_ring(mesh_coord, mesh_device, *cluster_axis, ring_size)

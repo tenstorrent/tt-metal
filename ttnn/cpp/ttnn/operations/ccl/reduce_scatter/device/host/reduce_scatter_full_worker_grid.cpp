@@ -45,7 +45,7 @@ namespace ccl {
 namespace reduce_scatter_detail {
 
 static std::size_t decide_number_of_edm_channels(
-    ttnn::ccl::CCLOpConfig const& ccl_op_config, std::size_t max_num_workers, bool enable_bidirectional) {
+    const ttnn::ccl::CCLOpConfig& ccl_op_config, std::size_t max_num_workers, bool enable_bidirectional) {
     bool is_linear_topology = ccl_op_config.get_topology() == ttnn::ccl::Topology::Linear;
     TT_ASSERT(!is_linear_topology || max_num_workers > 1);
     if (is_linear_topology) {
@@ -70,14 +70,14 @@ static void add_worker_config_to_edm_builders(
     IDevice* device,
     RingReduceScatterWrappedTensorSlicer&
         tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
-    std::vector<WorkerAttributes> const& all_worker_attributes,
+    const std::vector<WorkerAttributes>& all_worker_attributes,
     std::size_t num_channels_per_edm,
     std::size_t num_buffers_per_channel,
 
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
 
-    ttnn::ccl::RingTopology const& topology_config,
+    const ttnn::ccl::RingTopology& topology_config,
     std::size_t link,
 
     EdmInterfaceAddresses& edm_interface_addresses) {
@@ -86,11 +86,11 @@ static void add_worker_config_to_edm_builders(
         std::size_t num_workers_per_eth_buffer = 1;
         auto global_worker_index = get_global_worker_id(link, c, num_channels_per_edm);
         TT_ASSERT(global_worker_index < all_worker_attributes.size());
-        WorkerAttributes const& worker_attrs = all_worker_attributes[global_worker_index];
+        const WorkerAttributes& worker_attrs = all_worker_attributes[global_worker_index];
 
         std::vector<ttnn::ccl::WorkerXY> sender_worker_coords;
         std::vector<ttnn::ccl::WorkerXY> receiver_worker_coords;
-        auto const& worker_noc_coords = device->worker_core_from_logical_core(worker_attrs.location_logical);
+        const auto& worker_noc_coords = device->worker_core_from_logical_core(worker_attrs.location_logical);
         sender_worker_coords.push_back(ttnn::ccl::WorkerXY(worker_noc_coords.x, worker_noc_coords.y));
         receiver_worker_coords.push_back(ttnn::ccl::WorkerXY(worker_noc_coords.x, worker_noc_coords.y));
 
@@ -117,7 +117,7 @@ static void add_worker_config_to_edm_builders(
                 (num_buffers_per_channel == 1) ? tensor_slicer.get_worker_slice_size_bytes(worker_tensor_slice_index)
                                                : sender_edm_builder.get_eth_buffer_size_bytes();
             TT_ASSERT(worker_attrs.send_to_edm_semaphore_id.has_value(), "Internal error");
-            ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
+            const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& sender_channel_buffer_info =
                 sender_edm_builder.add_sender_channel(
                     worker_attrs.send_to_edm_semaphore_id.value(),
                     1,
@@ -151,7 +151,7 @@ static void add_worker_config_to_edm_builders(
                 (num_buffers_per_channel == 1) ? tensor_slicer.get_worker_slice_size_bytes(worker_tensor_slice_index)
                                                : receiver_edm_builder.get_eth_buffer_size_bytes();
             TT_ASSERT(worker_attrs.receive_from_edm_semaphore_id.has_value());
-            ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
+            const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& receiver_channel_buffer_info =
                 receiver_edm_builder.add_receiver_channel(
                     worker_attrs.receive_from_edm_semaphore_id.value(),
                     // Since we are in worker signal EDM termination mode, we don't need to set the actual number of
@@ -179,19 +179,19 @@ static void add_worker_config_to_edm_builders(
 
 static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<KernelHandle>> build_reduce_scatter_worker_ct(
     tt::tt_metal::Program& program,
-    ttnn::ccl::RingTopology const& topology_config,
-    ttnn::ccl::CCLOpConfig const& op_config,
-    ReduceScatterWorkerArgBuilder const& worker_arg_builder,
-    CoreRangeSet const& worker_core_range,
+    const ttnn::ccl::RingTopology& topology_config,
+    const ttnn::ccl::CCLOpConfig& op_config,
+    const ReduceScatterWorkerArgBuilder& worker_arg_builder,
+    const CoreRangeSet& worker_core_range,
     // if line and at the end of the line we split the worker core range
     // because we need to invoke separate kernels
-    std::optional<CoreRangeSet> const& split_worker_core_range,
+    const std::optional<CoreRangeSet>& split_worker_core_range,
     ttnn::operations::binary::BinaryOpType binary_math_op) {
     log_trace(tt::LogOp, "build_reduce_scatter_worker_ct");
 
-    auto const& worker_defines = op_config.emit_worker_defines();
+    const auto& worker_defines = op_config.emit_worker_defines();
     TT_ASSERT(worker_defines.size() > 0);
-    for (auto const& [key, value] : worker_defines) {
+    for (const auto& [key, value] : worker_defines) {
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
     }
     if (split_worker_core_range.has_value()) {
@@ -201,13 +201,13 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
         }
     }
 
-    static std::string const& receiver_kernel_path =
+    static const std::string& receiver_kernel_path =
         "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
-    static std::string const& forward_sender_kernel_path =
+    static const std::string& forward_sender_kernel_path =
         "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
-    static std::string const& line_start_sender_kernel_path =
+    static const std::string& line_start_sender_kernel_path =
         "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send.cpp";
-    static std::string const& reduce_kernel_path =
+    static const std::string& reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp";
 
     // Need to be able to split up the workers so that on the end of the lines, some of the cores are for send/receive
@@ -255,7 +255,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
             "Internal Error. (line) Reduce scatter did not generate a smaller second worker grid to map the line start "
             "kernels onto");
         log_trace(tt::LogOp, "Invoking CCL send kernel on split kernel core range");
-        for (auto const& core : corerange_to_cores(split_worker_core_range.value())) {
+        for (const auto& core : corerange_to_cores(split_worker_core_range.value())) {
             log_trace(tt::LogOp, "\tcore=(x={},y={})", core.x, core.y);
         }
         line_start_sender_kernel_id = tt::tt_metal::CreateKernel(
@@ -271,17 +271,17 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
 
 static void set_reduce_scatter_worker_rt(
     tt::tt_metal::Program& program,
-    IDevice const* device,
+    const IDevice* device,
     KernelHandle worker_receiver_kernel_id,
     KernelHandle worker_sender_kernel_id,
     KernelHandle worker_reduce_kernel_id,
     std::optional<KernelHandle> optional_line_start_ccl_send_kernel,
-    ttnn::ccl::RingTopology const& topology_config,
-    ttnn::ccl::reduce_scatter_detail::ReduceScatterWorkerArgBuilder const& worker_arg_builder,
+    const ttnn::ccl::RingTopology& topology_config,
+    const ttnn::ccl::reduce_scatter_detail::ReduceScatterWorkerArgBuilder& worker_arg_builder,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
-    EdmInterfaceAddresses const& edm_interface_addresses,
-    WorkerAttributes const& worker_attributes,
+    const EdmInterfaceAddresses& edm_interface_addresses,
+    const WorkerAttributes& worker_attributes,
     std::size_t num_edm_channels,
     std::size_t edm_num_buffers_per_channel,
     ttnn::operations::binary::BinaryOpType binary_math_op) {
@@ -289,7 +289,7 @@ static void set_reduce_scatter_worker_rt(
     const std::size_t global_worker_index = get_global_worker_id(worker_attributes, num_edm_channels);
 
     if (!topology_config.is_first_device_in_line(is_in_clockwise_direction)) {
-        CoreCoord const& receiver_edm = is_in_clockwise_direction
+        const CoreCoord& receiver_edm = is_in_clockwise_direction
                                             ? topology_config.eth_receiver_cores.at(worker_attributes.link)
                                             : topology_config.eth_sender_cores.at(worker_attributes.link);
         ttnn::ccl::WorkerXY receiver_edm_noc_coord = ttnn::ccl::WorkerXY(
@@ -344,7 +344,7 @@ static void set_reduce_scatter_worker_rt(
         if (use_line_start_kernel) {
             log_trace(tt::LogOp, "Setting CCL send RT args");
         }
-        auto const rt_args = use_line_start_kernel
+        const auto rt_args = use_line_start_kernel
                                  ? worker_arg_builder.generate_line_start_sender_kernel_rt_args(
                                        edm_interface, worker_arg_builder.scatter_dim, worker_attributes)
                                  : worker_arg_builder.generate_sender_kernel_rt_args(edm_interface, worker_attributes);
@@ -361,8 +361,8 @@ static void set_reduce_scatter_worker_rt(
  * Core range sets for line topology
  */
 static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_for_line_topology(
-    ttnn::ccl::RingTopology const& topology_config,
-    ttnn::ccl::CCLOpConfig const& op_config,
+    const ttnn::ccl::RingTopology& topology_config,
+    const ttnn::ccl::CCLOpConfig& op_config,
     std::size_t num_links,
     std::size_t num_edm_channels) {
     static constexpr std::size_t num_directions_per_line = 2;
@@ -372,9 +372,9 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_
         "For line topologies, we expect a multiple of 2 number of channels for the algorithm and worker kernels to "
         "work.");
     const std::size_t workers_per_direction = num_edm_channels / num_directions_per_line;
-    auto const& lower_half_of_cores =
+    const auto& lower_half_of_cores =
         CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(workers_per_direction - 1, num_links - 1)));
-    auto const& upper_half_of_cores =
+    const auto& upper_half_of_cores =
         CoreRangeSet(CoreRange(CoreCoord(0, num_links), CoreCoord(workers_per_direction - 1, (2 * num_links) - 1)));
     if (topology_config.ring_index == 0) {
         log_trace(tt::LogOp, "Start of line, putting CCL send cores in lower half");
@@ -397,13 +397,13 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_
  * reduce scatter worker kernels.
  */
 static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores(
-    ttnn::ccl::RingTopology const& topology_config,
-    ttnn::ccl::CCLOpConfig const& op_config,
+    const ttnn::ccl::RingTopology& topology_config,
+    const ttnn::ccl::CCLOpConfig& op_config,
     std::size_t num_links,
     std::size_t num_edm_channels) {
     switch (op_config.get_topology()) {
         case ttnn::ccl::Topology::Linear: {
-            auto const& core_ranges =
+            const auto& core_ranges =
                 select_worker_cores_for_line_topology(topology_config, op_config, num_links, num_edm_channels);
             log_trace(tt::LogOp, "First core range");
             for (const auto& core : corerange_to_cores(core_ranges.first)) {
@@ -427,14 +427,14 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores(
 }
 
 static WorkerTransferInfo compute_num_edm_messages_per_channel(
-    ccl::CCLOpConfig const& op_config,
+    const ccl::CCLOpConfig& op_config,
     RingReduceScatterWrappedTensorSlicer&
         tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
-    ttnn::ccl::RingTopology const& topology_config,
-    std::vector<ttnn::ccl::EriscDatamoverBuilder> const& cw_per_link_edm_builders,
-    std::vector<ttnn::ccl::EriscDatamoverBuilder> const& ccw_per_link_edm_builders,
-    std::size_t const num_edm_channels) {
-    uint32_t const page_size_in_bytes = op_config.get_page_size();
+    const ttnn::ccl::RingTopology& topology_config,
+    const std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_per_link_edm_builders,
+    const std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_per_link_edm_builders,
+    const std::size_t num_edm_channels) {
+    const uint32_t page_size_in_bytes = op_config.get_page_size();
     TT_ASSERT(num_edm_channels > 0);
     TT_ASSERT(topology_config.num_links > 0);
     TT_ASSERT(page_size_in_bytes > 0);
@@ -515,7 +515,7 @@ static uint32_t compute_maximum_worker_slice_in_bytes(
 
 static bool is_cb_buffering_sufficient_to_avoid_deadlock(
     ttnn::ccl::Topology topology,
-    ttnn::ccl::InterleavedTensorWorkerSlice const& worker_slice,
+    const ttnn::ccl::InterleavedTensorWorkerSlice& worker_slice,
     uint32_t cb_src0_size_pages,
     uint32_t cb_dst0_size_pages,
     uint32_t cb_short_circuit_size_pages,
@@ -554,10 +554,10 @@ static std::tuple<
     std::optional<CBHandle>,
     std::optional<CBHandle>>
 create_worker_circular_buffers(
-    Tensor const& input_tensor,
-    ttnn::ccl::CCLOpConfig const& op_config,
-    CoreRangeSet const& worker_core_range,
-    std::optional<CoreRangeSet> const& second_worker_core_range,
+    const Tensor& input_tensor,
+    const ttnn::ccl::CCLOpConfig& op_config,
+    const CoreRangeSet& worker_core_range,
+    const std::optional<CoreRangeSet>& second_worker_core_range,
     uint32_t worker_pages_per_transfer,
     tt::tt_metal::Program& program) {
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -652,7 +652,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     std::vector<Tensor> output_tensors = {output_tensor};
     ttnn::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode =
         ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
-    auto const& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> input_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> output_tensor_config =
@@ -679,7 +679,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         // Override with user defined value
         num_buffers_per_channel = user_defined_num_buffers_per_channel.value();
     }
-    auto const& edm_builder = create_erisc_datamover_builder(
+    const auto& edm_builder = create_erisc_datamover_builder(
         num_edm_channels_per_link,
         op_config.get_page_size(),
         num_buffers_per_channel,
@@ -688,8 +688,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     TT_ASSERT(num_edm_channels_per_link > 0);
 
     const auto& device =
-        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
-    auto const& topology_config = ttnn::ccl::RingTopology(
+        input_tensor.device() ? input_tensor.device()->get_device(target_device_id) : input_tensor.device();
+    const auto& topology_config = ttnn::ccl::RingTopology(
         device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
     bool is_linear = topology_config.is_linear;
     // For line reduce scatter we have special instantiation behaviour at the ends of the line, namely:
@@ -717,9 +717,9 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                                           : true;
         };
 
-    auto const& [worker_core_range, second_worker_core_range] =
+    const auto& [worker_core_range, second_worker_core_range] =
         select_worker_cores(topology_config, op_config, num_links, num_edm_channels_per_link);
-    auto const& worker_cores = corerange_to_cores(worker_core_range, std::nullopt, true);
+    const auto& worker_cores = corerange_to_cores(worker_core_range, std::nullopt, true);
     std::optional<std::vector<CoreCoord>> second_worker_cores_list;
     if (second_worker_core_range.has_value()) {
         second_worker_cores_list = corerange_to_cores(second_worker_core_range.value(), std::nullopt, true);
@@ -770,7 +770,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         std::min(input_tensor_num_units_per_tensor_slice, (edm_buffer_size_bytes / op_config.get_page_size())) * 2;
     uint32_t cb_num_pages_per_packet = cb_num_pages / 2;
     log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
-    auto const& [cb_src0_workers, cb_src1_workers, cb_dst0_sender_workers, cb_short_circuit_sender_workers, optional_cb_src0_workers_2, optional_cb_src1_workers_2, optional_cb_dst0_sender_workers_2, optional_cb_short_circuit_sender_workers_2] =
+    const auto& [cb_src0_workers, cb_src1_workers, cb_dst0_sender_workers, cb_short_circuit_sender_workers, optional_cb_src0_workers_2, optional_cb_src1_workers_2, optional_cb_dst0_sender_workers_2, optional_cb_short_circuit_sender_workers_2] =
         create_worker_circular_buffers(
             input_tensor, op_config, worker_core_range, second_worker_core_range, cb_num_pages, program);
 
@@ -794,7 +794,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         cb_num_pages / 2);
 
     // Not per buffer because the buffer sharing mode may cause some buffers to share EDM transfers
-    WorkerTransferInfo const& worker_transfer_info = compute_num_edm_messages_per_channel(
+    const WorkerTransferInfo& worker_transfer_info = compute_num_edm_messages_per_channel(
         op_config,
         tensor_slicer,
         topology_config,
@@ -822,7 +822,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     }
 
     // build worker kernels ct
-    auto const& dummy_worker_slice = tensor_slicer.get_worker_slice(0);
+    const auto& dummy_worker_slice = tensor_slicer.get_worker_slice(0);
     auto worker_arg_builder = ReduceScatterWorkerArgBuilder(
         device,
         op_config,
@@ -862,7 +862,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
             std::size_t worker_tensor_slice_index = get_worker_index_in_slice(
                 topology_config, global_worker_index, worker, num_edm_channels_per_link, link);
-            auto const& worker_slice = tensor_slicer.get_worker_slice(worker_tensor_slice_index);
+            const auto& worker_slice = tensor_slicer.get_worker_slice(worker_tensor_slice_index);
             auto worker_arg_builder = ReduceScatterWorkerArgBuilder(
                 device,
                 op_config,
@@ -947,10 +947,10 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                     optional_line_start_ccl_send_kernel.has_value(),
                     "Internal error: line start CCL send kernel was not found but we split the worker grid to place it "
                     "onto some worker cores");
-                auto const& line_start_worker_cores = second_worker_cores_list.value();
+                const auto& line_start_worker_cores = second_worker_cores_list.value();
                 auto& ccl_send_kernel_rt_args_by_core =
                     GetRuntimeArgs(program, optional_line_start_ccl_send_kernel.value());
-                for (auto const& core : line_start_worker_cores) {
+                for (const auto& core : line_start_worker_cores) {
                     auto& line_start_kernel_rt_args = ccl_send_kernel_rt_args_by_core[core.x][core.y];
                     line_start_kernel_rt_args.at(0) = input.buffer()->address();
                 }

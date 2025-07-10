@@ -1782,10 +1782,10 @@ void Matmul::validate(
                             program_config.in0_block_w);
                         if (!program_config.gather_in0) {  // Padding allowed for gather_in0
                             TT_FATAL(
-                            (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                            "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
-                            shard_shape[1],
-                            in0_tile_shape[1]);
+                                (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                                "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
+                                shard_shape[1],
+                                in0_tile_shape[1]);
                         }
                     }
                     if (this->output_mem_config.is_sharded()) {
@@ -2394,7 +2394,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
     MatmulProgramConfig chosen_program_config =
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
 
-    auto mesh_device = input_tensor_a.mesh_device();
+    auto mesh_device = input_tensor_a.device();
 
     return std::visit(
         [&](const auto& program_config) -> tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> {
