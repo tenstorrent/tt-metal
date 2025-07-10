@@ -89,7 +89,7 @@ Unlike interleaved tensors, where pages are distributed across all available L1 
 
 This can be illustrated with an example. Consider a tensor with 16 pages, denoted P0 to P15. The left side of the figure shows how the tiled tensor appears in host memory. When the tensor is sharded, each shard is written into the L1 memory of a core.
 
-In the example illustrated in *Figure 4*, Core (0,0) holds pages 0, 1, 4, and 5, while Core (0,1) holds pages 2, 3, 7, and 8. This distribution is defined by a shard specification that includes the shard shape (in this case, 2x2 pages) and the core grid where the shards are placed (a 2x2 core grid).
+In the example illustrated in *Figure 4*, Core (0,0) holds pages 0, 1, 4, and 5, while Core (0,1) holds pages 8, 9, 12, and 13. This distribution is defined by a shard specification that includes the shard shape (in this case, 2x2 pages) and the core grid where the shards are placed (a 2x2 core grid).
 
 <img src="images/sharded_page_mapping_2.svg" style="width:1000px;"/>
 
