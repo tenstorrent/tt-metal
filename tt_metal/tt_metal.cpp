@@ -957,6 +957,16 @@ IDevice* CreateDevice(
     const size_t worker_l1_size) {
     ZoneScoped;
 
+    // MMIO devices do not support dispatch on galaxy cluster
+    // Suggest the user to use the CreateDevices API
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        TT_FATAL(
+            !(tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
+              tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
+            "Galaxy cluster does not support dispatch on mmio devices. Please use CreateDevices API to open all "
+            "devices for dispatch.");
+    }
+
     tt::DevicePool::initialize(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);

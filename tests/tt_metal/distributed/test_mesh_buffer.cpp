@@ -79,12 +79,6 @@ struct DeviceLocalShardedBufferTestConfig {
     }
 };
 
-void skip_for_tg() {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        GTEST_SKIP();
-    }
-}
-
 // MeshBuffer tests on T3000
 TEST_F(MeshBufferTestT3000, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
@@ -151,9 +145,13 @@ TEST_F(MeshBufferTestT3000, Deallocation) {
 }
 
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
-    // Repeated device init takes very long on TG. Skip.
-    skip_for_tg();
-    for (int i = 0; i < 100; i++) {
+    // Repeated device init takes very long on TG. Lower the number of iterations.
+    int iterations = 100;
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        iterations = 10;
+    }
+
+    for (int i = 0; i < iterations; i++) {
         MeshDeviceConfig config(MeshShape(1, 1));
         auto mesh_device =
             MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
@@ -168,9 +166,13 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
 }
 
 TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
-    // Repeated device init takes very long on TG. Skip.
-    skip_for_tg();
-    for (int i = 0; i < 100; i++) {
+    // Repeated device init takes very long on TG. Lower the number of iterations.
+    int iterations = 100;
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        iterations = 10;
+    }
+
+    for (int i = 0; i < iterations; i++) {
         MeshDeviceConfig config(MeshShape(1, 1));
         auto mesh_device =
             MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);

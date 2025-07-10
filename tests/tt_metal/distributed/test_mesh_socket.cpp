@@ -1732,8 +1732,13 @@ void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
                 const auto candidate_eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(
                     reducer_fabric_node_id, forwarding_direction);
 
-                const auto forwarding_links = get_forwarding_link_indices_in_direction(
+                auto forwarding_links = get_forwarding_link_indices_in_direction(
                     reducer_fabric_node_id, dst_fabric_node_id, forwarding_direction);
+                // Cannot use the last link which might already have a fabric router on it or used by dispatch
+                // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+                if (!forwarding_links.empty()) {
+                    forwarding_links.pop_back();
+                }
                 for (auto link_idx : forwarding_links) {
                     if (used_channels.find(candidate_eth_chans[link_idx]) == used_channels.end()) {
                         used_channels.insert(candidate_eth_chans[link_idx]);
