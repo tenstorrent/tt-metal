@@ -8,7 +8,7 @@
 
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::gather {
+namespace ttnn::operations::experimental::gather {
 struct ExecuteGather {
     static Tensor invoke(
         QueueId queue_id,
@@ -20,10 +20,11 @@ struct ExecuteGather {
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
-}  // namespace ttnn::operations::gather
+}  // namespace ttnn::operations::experimental::gather
 
-namespace ttnn {
+namespace ttnn::experimental {
 
-constexpr auto gather = ttnn::register_operation<"ttnn::gather", ttnn::operations::gather::ExecuteGather>();
+constexpr auto gather =
+    ttnn::register_operation<"ttnn::experimental::gather", ttnn::operations::experimental::gather::ExecuteGather>();
 
-}  // namespace ttnn
+}  // namespace ttnn::experimental
