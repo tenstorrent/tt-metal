@@ -31,6 +31,11 @@ void kernel_main() {
             packets_left_to_validate = true;
             bool got_new_data = traffic_config->poll();
             if (!got_new_data) {
+                // for (int i=0; i<10000000; ++i) {
+
+                //     asm volatile("nop");
+                // }
+
                 continue;
             }
 

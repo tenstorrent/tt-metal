@@ -1,26 +1,60 @@
 Tests:
-  - name: "FullRingMulticast"
+  - name: "FullRingUnicast"
     fabric_setup:
       topology: Ring
 
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+
     defaults:
-      ftype: mcast
-      ntype: unicast_write
+      ftype: unicast
       size: 1024
       num_packets: 100
 
     patterns:
-      - type: full_ring_multicast
+      - type: full_ring
+
+  - name: "FullRingMulticast"
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+
+    defaults:
+      ftype: mcast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: full_ring
+
+  - name: "HalfRingUnicast"
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: half_ring
 
   - name: "HalfRingMulticast"
     fabric_setup:
       topology: Ring
 
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
     patterns:
-      - type: half_ring_multicast
+      - type: half_ring
