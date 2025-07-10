@@ -554,7 +554,7 @@ public:
     }
 };
 
-union LowLatencyMeshRoutingFields {
+struct LowLatencyMeshRoutingFields {
     static constexpr uint32_t FIELD_WIDTH = 8;
     static constexpr uint32_t FIELD_MASK = 0b1111;
     static constexpr uint32_t NOOP = 0b0000;
@@ -573,11 +573,16 @@ union LowLatencyMeshRoutingFields {
     static constexpr uint32_t WRITE_AND_FORWARD_NSE = 0b1101;
     static constexpr uint32_t WRITE_AND_FORWARD_NSW = 0b1110;
     static constexpr uint32_t WRITE_AND_FORWARD_NSEW = 0b1111;
-    uint32_t value;
-    struct {
-        uint16_t hop_index;
-        uint8_t branch_east_offset;
-        uint8_t branch_west_offset;
+
+    union {
+        uint32_t value;  // Referenced for fast increment when updating hop count in packet header.
+                         // Also used when doing noc inline dword write to update packet header in next hop
+                         // router.
+        struct {
+            uint16_t hop_index;
+            uint8_t branch_east_offset;  // Referenced when updating hop index for mcast east branch
+            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast east branch
+        };
     };
 };
 

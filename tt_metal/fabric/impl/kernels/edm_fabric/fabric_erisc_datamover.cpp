@@ -539,6 +539,14 @@ FORCE_INLINE bool can_forward_packet_completely(
     }
 }
 
+template <uint8_t SENDER_NUM_BUFFERS, eth_chan_directions... DIRECTIONS>
+FORCE_INLINE bool downstreams_have_space(
+    std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
+        downstream_edm_interface) {
+    return (
+        ... && ((DIRECTIONS == my_direction ? true : downstream_edm_interface[DIRECTIONS].edm_has_space_for_packet())));
+}
+
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_completely(
     uint32_t hop_cmd,
@@ -548,138 +556,97 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
-            if constexpr (my_direction == eth_chan_directions::EAST) {  // packet dest
-                ret_val = true;
-            } else {  // W/N/S forward East
-                ret_val = downstream_edm_interface[eth_chan_directions::EAST].edm_has_space_for_packet();
-            }
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::EAST>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_WEST:
-            if constexpr (my_direction == eth_chan_directions::WEST) {  // packet dest
-                ret_val = true;
-            } else {  // E/N/S forward West
-                ret_val = downstream_edm_interface[eth_chan_directions::WEST].edm_has_space_for_packet();
-            }
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::WEST>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
             // Line Mcast East<->West
-            if constexpr (my_direction == eth_chan_directions::WEST) {  // packet dest + forward East
-                ret_val = downstream_edm_interface[eth_chan_directions::EAST].edm_has_space_for_packet();
-            } else {  // packet dest + forward West
-                ret_val = downstream_edm_interface[eth_chan_directions::WEST].edm_has_space_for_packet();
-            }
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::EAST, eth_chan_directions::WEST>(
+                downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_NORTH:
-            if constexpr (my_direction == eth_chan_directions::NORTH) {  // packet dest
-                ret_val = true;
-            } else {  // E/W/S forward North
-                ret_val = downstream_edm_interface[eth_chan_directions::NORTH].edm_has_space_for_packet();
-            }
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::NORTH>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {  // packet dest
-                ret_val = true;
-            } else {  // E/W/N forward South
-                ret_val = downstream_edm_interface[eth_chan_directions::SOUTH].edm_has_space_for_packet();
-            }
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::SOUTH>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
             // Line Mcast North<->South
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {  // packet dest + forward North
-                ret_val = downstream_edm_interface[eth_chan_directions::NORTH].edm_has_space_for_packet();
-            } else {  // packet dest + forward South
-                ret_val = downstream_edm_interface[eth_chan_directions::SOUTH].edm_has_space_for_packet();
-            }
+            ret_val =
+                downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::NORTH, eth_chan_directions::SOUTH>(
+                    downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {  // packet dest + forward North
-                ret_val = downstream_edm_interface[eth_chan_directions::NORTH].edm_has_space_for_packet();
-            } else {  // packet dest + forward South
-                ret_val = downstream_edm_interface[eth_chan_directions::SOUTH].edm_has_space_for_packet();
-            }
-            // Check space in branch forwarding edms
-            ret_val &= downstream_edm_interface[eth_chan_directions::EAST].edm_has_space_for_packet();
-            ret_val &= downstream_edm_interface[eth_chan_directions::WEST].edm_has_space_for_packet();
+            // 2D Mcast Trunk: North<->South
+            // 2D Mcast Branch: East and West
+            ret_val = downstreams_have_space<
+                SENDER_NUM_BUFFERS,
+                eth_chan_directions::EAST,
+                eth_chan_directions::WEST,
+                eth_chan_directions::NORTH,
+                eth_chan_directions::SOUTH>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {  // packet dest + forward North
-                ret_val = downstream_edm_interface[eth_chan_directions::NORTH].edm_has_space_for_packet();
-            } else {  // packet dest + forward South
-                ret_val = downstream_edm_interface[eth_chan_directions::SOUTH].edm_has_space_for_packet();
-            }
-            // Check space in branch forwarding edm
-            ret_val &= downstream_edm_interface[eth_chan_directions::EAST].edm_has_space_for_packet();
+            // 2D Mcast Trunk: North<->South
+            // 2D Mcast Branch: East
+            ret_val = downstreams_have_space<
+                SENDER_NUM_BUFFERS,
+                eth_chan_directions::EAST,
+                eth_chan_directions::NORTH,
+                eth_chan_directions::SOUTH>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {  // packet dest + forward North
-                ret_val = downstream_edm_interface[eth_chan_directions::NORTH].edm_has_space_for_packet();
-            } else {  // packet dest + forward South
-                ret_val = downstream_edm_interface[eth_chan_directions::SOUTH].edm_has_space_for_packet();
-            }
-            // Check space in branch forwarding edm
-            ret_val &= downstream_edm_interface[eth_chan_directions::WEST].edm_has_space_for_packet();
+            // 2D Mcast Trunk: North<->South
+            // 2D Mcast Branch: West
+            ret_val = downstreams_have_space<
+                SENDER_NUM_BUFFERS,
+                eth_chan_directions::WEST,
+                eth_chan_directions::NORTH,
+                eth_chan_directions::SOUTH>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
-            // Check space in branch forwarding edms
-            ret_val = downstream_edm_interface[eth_chan_directions::EAST].edm_has_space_for_packet();
-            ret_val &= downstream_edm_interface[eth_chan_directions::WEST].edm_has_space_for_packet();
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::NORTH) {  // packet dest + forward North
-                ret_val &= downstream_edm_interface[eth_chan_directions::SOUTH].edm_has_space_for_packet();
-            }
+            // 2D Mcast Trunk: Last hop North
+            // 2D Mcast Branch: East and West
+            ret_val = downstreams_have_space<
+                SENDER_NUM_BUFFERS,
+                eth_chan_directions::EAST,
+                eth_chan_directions::WEST,
+                eth_chan_directions::SOUTH>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
-            // Check space in branch forwarding edms
-            ret_val = downstream_edm_interface[eth_chan_directions::EAST].edm_has_space_for_packet();
-            ret_val &= downstream_edm_interface[eth_chan_directions::WEST].edm_has_space_for_packet();
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {  // packet dest + forward North
-                ret_val &= downstream_edm_interface[eth_chan_directions::NORTH].edm_has_space_for_packet();
-            }
+            // 2D Mcast Trunk: Last hop South
+            // 2D Mcast Branch: East and West
+            ret_val = downstreams_have_space<
+                SENDER_NUM_BUFFERS,
+                eth_chan_directions::EAST,
+                eth_chan_directions::WEST,
+                eth_chan_directions::NORTH>(downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
-            // Check space in branch forwarding edms
-            ret_val = downstream_edm_interface[eth_chan_directions::EAST].edm_has_space_for_packet();
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::NORTH) {  // packet dest + forward North
-                ret_val &= downstream_edm_interface[eth_chan_directions::SOUTH].edm_has_space_for_packet();
-            }
+            // 2D Mcast Trunk: Last hop North
+            // 2D Mcast Branch: East
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::EAST, eth_chan_directions::SOUTH>(
+                downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
-            // Check space in branch forwarding edms
-            ret_val = downstream_edm_interface[eth_chan_directions::WEST].edm_has_space_for_packet();
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::NORTH) {  // packet dest + forward North
-                ret_val &= downstream_edm_interface[eth_chan_directions::SOUTH].edm_has_space_for_packet();
-            }
+            // 2D Mcast Trunk: Last hop North
+            // 2D Mcast Branch: West
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::WEST, eth_chan_directions::SOUTH>(
+                downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
-            // Check space in branch forwarding edm
-            ret_val = downstream_edm_interface[eth_chan_directions::EAST].edm_has_space_for_packet();
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {  // packet dest + forward North
-                ret_val &= downstream_edm_interface[eth_chan_directions::NORTH].edm_has_space_for_packet();
-            }
+            // 2D Mcast Trunk: Last hop South
+            // 2D Mcast Branch: East
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::EAST, eth_chan_directions::NORTH>(
+                downstream_edm_interface);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
-            // Check space in branch forwarding edm
-            ret_val = downstream_edm_interface[eth_chan_directions::WEST].edm_has_space_for_packet();
-            // 2D Mcast Spine: North<->South
-            // 2D Mcast Branch: East and/or West
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {  // packet dest + forward North
-                ret_val &= downstream_edm_interface[eth_chan_directions::NORTH].edm_has_space_for_packet();
-            }
+            // 2D Mcast Trunk: Last hop South
+            // 2D Mcast Branch: West
+            ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::WEST, eth_chan_directions::NORTH>(
+                downstream_edm_interface);
             break;
         default: __builtin_unreachable();
     }
