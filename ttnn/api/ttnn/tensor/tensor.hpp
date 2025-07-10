@@ -242,8 +242,12 @@ public:
     Buffer* buffer() const;
 
     // Returns device `Storage`.
-    // Throws if the tensor is not allocated on a device.
+    // Throws if the tensor is not on device.
     const DeviceStorage& device_storage() const;
+
+    // Returns host `Storage`.
+    // Throws if the tensor is not on host.
+    const HostStorage& host_storage() const;
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.

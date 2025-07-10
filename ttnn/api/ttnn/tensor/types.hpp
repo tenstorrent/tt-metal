@@ -72,7 +72,6 @@ bool is_block_float(DataType dtype);
 enum class StorageType {
     HOST = 0,
     DEVICE = 1,
-    MULTI_DEVICE_HOST = 4,  // host storage for multi-device context
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);

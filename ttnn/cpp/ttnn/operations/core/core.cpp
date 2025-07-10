@@ -18,10 +18,6 @@
 namespace ttnn::operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    if (tt::tt_metal::is_multi_device_host_tensor(tensor)) {
-        return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
-    }
-
     const auto rank = tensor.logical_shape().rank();
     if (rank == 4) {
         return tensor;

@@ -17,13 +17,7 @@ TensorAttributes::TensorAttributes(
     Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) :
     storage_(std::move(storage)),
     tensor_spec_(std::move(tensor_spec)),
-    distributed_tensor_config_(std::move(distributed_tensor_config)) {
-    if (std::holds_alternative<HostStorage>(storage_)) {
-        TT_FATAL(
-            std::holds_alternative<ReplicateTensor>(distributed_tensor_config_),
-            "Host storage is a single shard that must be in replicated configuration.");
-    }
-}
+    distributed_tensor_config_(std::move(distributed_tensor_config)) {}
 
 const Storage& TensorAttributes::get_storage() const { return storage_; }
 Storage& TensorAttributes::get_storage() { return storage_; }
