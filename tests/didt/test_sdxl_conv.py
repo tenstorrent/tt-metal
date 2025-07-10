@@ -152,6 +152,156 @@ class SdxlConvTest(OpTestBase):
         return tt_output_tensor_on_device
 
 
+# Test cases for convs that hang in SDXL UNet and VAE
+conv_test_cases = [
+    {
+        "id": "unet_resnet_1280x1280",
+        "input_shape": [1, 1280, 32, 32],
+        "output_channels": 1280,
+        "weights_dtype": ttnn.bfloat8_b,
+        "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "deallocate_activation": True,
+        "reallocate_halo_output": True,
+        "enable_act_double_buffer": True,
+        "enable_weights_double_buffer": True,
+        "act_block_h_override": 64,
+        "slice_type": None,
+        "num_slices": 1,
+        "math_fidelity": ttnn.MathFidelity.HiFi2,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+    {
+        "id": "unet_resnet_1920x1280",
+        "input_shape": [1, 1920, 32, 32],
+        "output_channels": 1280,
+        "weights_dtype": ttnn.bfloat8_b,
+        "shard_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        "deallocate_activation": True,
+        "reallocate_halo_output": True,
+        "enable_act_double_buffer": True,
+        "enable_weights_double_buffer": True,
+        "act_block_h_override": 512,
+        "slice_type": None,
+        "num_slices": 1,
+        "math_fidelity": ttnn.MathFidelity.HiFi2,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+    {
+        "id": "unet_resnet_2560x1280",
+        "input_shape": [1, 2560, 32, 32],
+        "output_channels": 1280,
+        "weights_dtype": ttnn.bfloat8_b,
+        "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "deallocate_activation": True,
+        "reallocate_halo_output": True,
+        "enable_act_double_buffer": False,
+        "enable_weights_double_buffer": False,
+        "act_block_h_override": 32,
+        "slice_type": None,
+        "num_slices": 1,
+        "math_fidelity": ttnn.MathFidelity.HiFi2,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+    {
+        "id": "vae_resnet_256x256",
+        "input_shape": [1, 256, 512, 512],
+        "output_channels": 256,
+        "weights_dtype": ttnn.bfloat16,
+        "shard_layout": None,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
+        "enable_act_double_buffer": False,
+        "enable_weights_double_buffer": False,
+        "act_block_h_override": 64,
+        "slice_type": ttnn.Conv2dSliceWidth,
+        "num_slices": 8,
+        "math_fidelity": ttnn.MathFidelity.LoFi,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+    {
+        "id": "vae_resnet_512x256",
+        "input_shape": [1, 512, 512, 512],
+        "output_channels": 256,
+        "weights_dtype": ttnn.bfloat16,
+        "shard_layout": None,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
+        "enable_act_double_buffer": False,
+        "enable_weights_double_buffer": False,
+        "act_block_h_override": 64,
+        "slice_type": ttnn.Conv2dSliceWidth,
+        "num_slices": 8,
+        "math_fidelity": ttnn.MathFidelity.LoFi,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+    {
+        "id": "vae_resnet_512x512",
+        "input_shape": [1, 512, 128, 128],
+        "output_channels": 512,
+        "weights_dtype": ttnn.bfloat16,
+        "shard_layout": None,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
+        "enable_act_double_buffer": False,
+        "enable_weights_double_buffer": False,
+        "act_block_h_override": 0,
+        "slice_type": None,
+        "num_slices": 1,
+        "math_fidelity": ttnn.MathFidelity.LoFi,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+    {
+        "id": "vae_upsample_256",
+        "input_shape": [1, 512, 256, 256],
+        "output_channels": 512,
+        "weights_dtype": ttnn.bfloat16,
+        "shard_layout": None,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
+        "enable_act_double_buffer": False,
+        "enable_weights_double_buffer": False,
+        "act_block_h_override": 0,
+        "slice_type": ttnn.Conv2dSliceWidth,
+        "num_slices": 2,
+        "math_fidelity": ttnn.MathFidelity.LoFi,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+    {
+        "id": "vae_upsample_512",
+        "input_shape": [1, 512, 512, 512],
+        "output_channels": 512,
+        "weights_dtype": ttnn.bfloat16,
+        "shard_layout": None,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
+        "enable_act_double_buffer": False,
+        "enable_weights_double_buffer": False,
+        "act_block_h_override": 0,
+        "slice_type": ttnn.Conv2dSliceWidth,
+        "num_slices": 8,
+        "math_fidelity": ttnn.MathFidelity.LoFi,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+    {
+        "id": "vae_upsample_1024",
+        "input_shape": [1, 256, 1024, 1024],
+        "output_channels": 256,
+        "weights_dtype": ttnn.bfloat16,
+        "shard_layout": None,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
+        "enable_act_double_buffer": False,
+        "enable_weights_double_buffer": False,
+        "act_block_h_override": 64,
+        "slice_type": ttnn.Conv2dSliceWidth,
+        "num_slices": 16,
+        "math_fidelity": ttnn.MathFidelity.LoFi,
+        "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+    },
+]
+
+
+@pytest.mark.parametrize("test_config", conv_test_cases, ids=[c["id"] for c in conv_test_cases])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
@@ -163,7 +313,7 @@ class SdxlConvTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_interval, grid_size=(8, 8)):
+def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_interval, test_config, grid_size=(8, 8)):
     groups = 1
     dilation = 1
     pad_w = 1
@@ -172,10 +322,9 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     stride_h = 1
     filter_height = 3
     filter_width = 3
-    batch_size = 1
 
-    input_height = 256
-    input_width = 256
+    batch_size, input_channels, input_height, input_width = test_config["input_shape"]
+    output_channels = test_config["output_channels"]
 
     if is_blackhole():
         compute_grid = get_blackhole_grid_size(mesh_device)
@@ -183,8 +332,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
     logger.info(f"Running on {grid_size} cores")
 
-    output_channels = 512
-    input_channels = 512
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
@@ -194,40 +341,45 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     in1_shape = conv_weight_shape
 
     activations_dtype = ttnn.bfloat16
-    weights_dtype = ttnn.bfloat16
+    weights_dtype = test_config["weights_dtype"]
 
     # Weird situation
     # act and weight dtype need to be bfp8, which is set through conv config
     # however when creating tensors they need to be different
     in0_dtype = ttnn.bfloat16
-    in1_dtype = ttnn.bfloat16
+    in1_dtype = weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
 
-    shard_layout = None
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        shard_layout=shard_layout,
-        deallocate_activation=False,
-        reallocate_halo_output=True,
-        enable_act_double_buffer=False,
-        enable_weights_double_buffer=False,
+        shard_layout=test_config["shard_layout"],
+        deallocate_activation=test_config["deallocate_activation"],
+        reallocate_halo_output=test_config["reallocate_halo_output"],
+        enable_act_double_buffer=test_config["enable_act_double_buffer"],
+        enable_weights_double_buffer=test_config["enable_weights_double_buffer"],
         enable_split_reader=False,
         enable_subblock_padding=False,
         reshard_if_not_optimal=True,
         act_block_w_div=1,
-        act_block_h_override=0,
+        act_block_h_override=test_config["act_block_h_override"],
         preprocess_weights_on_device=False,
         always_preprocess_weights=False,
     )
 
-    slice_config = ttnn.Conv2dSliceConfig(
-        slice_type=ttnn.Conv2dSliceWidth,
-        num_slices=2,
+    slice_type = test_config["slice_type"]
+    num_slices = test_config["num_slices"]
+    slice_config = (
+        ttnn.Conv2dSliceConfig(
+            slice_type=slice_type,
+            num_slices=num_slices,
+        )
+        if slice_type is not None and num_slices > 1
+        else None
     )
 
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_kernel_config = ComputeConfigClass(
-        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_fidelity=test_config["math_fidelity"],
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -238,7 +390,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         in0_shape,
         in1_shape,
         conv_bias_shape,
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        test_config["input_mem_config"],
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),  # see what this does
@@ -276,6 +428,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")
+@pytest.mark.parametrize("test_config", conv_test_cases, ids=[c["id"] for c in conv_test_cases])
 @pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"logical_chip_{i}_" for i in range(32)])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -288,18 +441,21 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_specific_chip_sdxl_conv(mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval):
+def test_specific_chip_sdxl_conv(
+    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval, test_config
+):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
     test_sdxl_conv(
         mesh_device.get_device(logical_chip_id),
         didt_workload_iterations,
         determinism_check_interval,
-        False,
+        test_config,
     )
 
 
 @skip_for_blackhole("Multi-board Blackhole has not been tested")
+@pytest.mark.parametrize("test_config", conv_test_cases, ids=[c["id"] for c in conv_test_cases])
 @pytest.mark.parametrize(
     "t3k_single_board_mesh_device",
     range(4),
@@ -307,5 +463,7 @@ def test_specific_chip_sdxl_conv(mesh_device, logical_chip_id, didt_workload_ite
     indirect=["t3k_single_board_mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_specific_board_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval):
-    test_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)
+def test_specific_board_sdxl_conv(
+    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, test_config
+):
+    test_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, test_config)
