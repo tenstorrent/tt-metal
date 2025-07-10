@@ -165,6 +165,8 @@ public:
     //--- Point-to-point (blocking) -----------------------------------------
     virtual void send(tt::stl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
 
+    virtual void ssend(tt::stl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
+
     virtual void recv(tt::stl::Span<std::byte> buffer, Rank source, Tag tag) const = 0;
 
     //--- Point-to-point (non-blocking) -------------------------------------

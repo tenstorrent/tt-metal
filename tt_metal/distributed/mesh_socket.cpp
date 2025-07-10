@@ -25,7 +25,7 @@ void point_to_point_barrier(
 
     if (distributed_context->rank() == ranks[0]) {
         int sync_msg = 1;
-        distributed_context->send(
+        distributed_context->ssend(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), ranks[1], Tag{0});
     } else {
         int sync_msg = 0;
