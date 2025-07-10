@@ -388,17 +388,17 @@ void kernel_main() {
                     tiles_read++;
                 }
 
-                noc_async_writes_flushed();
+                noc_async_write_barrier();
                 cb_pop_front(cb_compute_output_id, tile_granularity);
+                if constexpr (sync_with_other_direction && is_forward) {
+                    // Tell local backwards reader that it can proceed
+                    uint64_t fwd_bwd_sem_noc_addr =
+                        safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
+                    noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
+                }
             }
 
             noc_async_write_barrier();
-            if constexpr (sync_with_other_direction && is_forward) {
-                // Tell local backwards reader that it can proceed
-                // uint64_t fwd_bwd_sem_noc_addr =
-                //     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
-                // noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
-            }
         }
 
         /**
@@ -419,25 +419,28 @@ void kernel_main() {
             // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 0);
         }
 
-        if (mux_connection_valid) {
-            // mcast batch_ready_sem to opposite core in my direction
-            // uint64_t batch_ready_sem_noc_addr_in_pkt =
-            //     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, batch_ready_sem, 0);
-            // pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            //     batch_ready_sem_noc_addr_in_pkt,
-            //     static_cast<uint16_t>(1),  // increment 1
-            //     32});
-            // pkt_hdr_seminc->to_chip_multicast(
-            //     tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_in_direction)});
-            // tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
-            // noc_async_writes_flushed();
-        }
+        if (num_batches > 1) {
+            if (mux_connection_valid) {
+                // mcast batch_ready_sem to opposite core in my direction
+                uint64_t batch_ready_sem_noc_addr_in_pkt =
+                    safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, batch_ready_sem, 0);
+                pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    batch_ready_sem_noc_addr_in_pkt,
+                    static_cast<uint16_t>(1),  // increment 1
+                    32});
+                pkt_hdr_seminc->to_chip_multicast(
+                    tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_in_direction)});
+                tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
+                noc_async_writes_flushed();
+            }
 
-        // Reset the global semaphore before the next batch
-        // We're going to get hit by however many cores we're targeting, since the opposite core sends back toward us.
-        // noc_semaphore_wait_min(
-        //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), num_targets_in_direction);
-        // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+            // Reset the global semaphore before the next batch
+            // We're going to get hit by however many cores we're targeting, since the opposite core sends back toward
+            // us.
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), num_targets_in_direction);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+        }
     }
 
     if (mux_connection_valid) {

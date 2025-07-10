@@ -75,7 +75,7 @@ def run_reduce_scatter_impl(
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
     single_batch_input_shape = rs_input_shape[:]
-    single_batch_input_shape[0] = 1
+    # single_batch_input_shape[0] = 1
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(single_batch_input_shape),

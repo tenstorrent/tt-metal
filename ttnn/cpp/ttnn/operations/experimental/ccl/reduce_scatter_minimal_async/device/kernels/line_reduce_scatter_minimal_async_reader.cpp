@@ -270,6 +270,7 @@ void kernel_main() {
 
         // Do the final reduction. Synchronize with other direction.
         if constexpr (do_final_reduction) {
+            uint32_t fwd_sync_cnt = 0;
             chunk_count = 0;
             DeviceZoneScopedN("final_reduction");
             bool accumulate_output =
@@ -282,9 +283,6 @@ void kernel_main() {
                  * use output address generator.
                  */
                 accumulate_output = true;
-                // Wait for FWD writer to signal that it has done its final reduction
-                // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 1);
-                // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 0);
             }
 
             /**
@@ -331,14 +329,16 @@ void kernel_main() {
             // Wait on output semaphore
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
-                // {
-                //     DeviceZoneScopedN("wait_sem_final");
-                //     noc_semaphore_wait_min(
-                //         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target++);
-                // }
+                 cb_reserve_back(cb_in0, tile_granularity);
 
-                cb_reserve_back(cb_in0, tile_granularity);
+                // Wait for FWD writer to signal that it has done its final reduction
+                if constexpr (sync_with_other_direction && !is_forward) {
+                    fwd_sync_cnt++;
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), fwd_sync_cnt);
+                }
 
+		
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
                     uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
@@ -352,12 +352,13 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
                 }
+
                 tiles_read += num_pages_to_read;
 
                 if (chunk_count % chunks_per_sync == 0) {
-                    DeviceZoneScopedN("wait_sem");
                     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target++);
                 }
+
                 chunk_count++;
                 // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                 cb_reserve_back(cb_intermediate_id, tile_granularity);

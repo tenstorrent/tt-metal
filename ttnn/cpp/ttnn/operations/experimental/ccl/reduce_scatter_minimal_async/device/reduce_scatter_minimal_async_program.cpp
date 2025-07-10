@@ -415,7 +415,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
-		CoreCoord supplemental_core = sender_worker_cores[link * 2 + ((core_idx + 1) % 2)];
+		CoreCoord supplemental_core = all_cores[link * num_cores_per_link + (1-dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction) + num_mux_cores_per_direction_per_link + worker];
 		opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
 
                 uint32_t worker_id = link * num_workers_per_direction + worker;
@@ -1134,7 +1134,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
-
+            auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
+	    
             // update senders
             uint32_t core_idx = 0;
             for (uint32_t link = 0; link < num_links; link++) {
@@ -1158,6 +1159,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                         worker_writer_sender_runtime_args[1] = output.buffer()->address();
+
+			if (barrier_semaphore.has_value()) {
+			  worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
 
                         core_idx++;
                     }
