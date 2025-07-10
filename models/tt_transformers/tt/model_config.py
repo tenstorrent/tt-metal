@@ -18,12 +18,10 @@ from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     encode_prompt_hf,
     encode_prompt_instruct,
-    freqs_to_rotation_matrix,
     get_base_model_name,
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
-    precompute_freqs,
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -602,11 +600,6 @@ class ModelArgs:
         self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
-
-        self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor, self.orig_context_len
-        )  # for prefill
-        self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
