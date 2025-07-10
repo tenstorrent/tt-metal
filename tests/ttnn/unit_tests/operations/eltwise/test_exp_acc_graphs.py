@@ -22,6 +22,8 @@ device = ttnn.open_device(device_id=device_id)
 
 EPSILON = 2**-9
 
+# ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
+
 
 def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     if low > high:
@@ -74,7 +76,29 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     save_path = os.path.join(plot_dir, filename)
     plt.savefig(save_path)
     plt.close()
-    print(f"==> arange: Torch vs TTNN output graph saved to {os.path.abspath(save_path)}")
+    print("\tfor range [-100,100]")
+    print(f"\t\t\tTorch vs TTNN output graph saved to {os.path.abspath(save_path)}")
+
+    # Compute ULP Error
+    ulp_spacing = util.ulp(torch_out.to(torch.bfloat16)).to(torch.float32)
+    ulp_error = torch.abs(torch_out - ttnn_out) / ulp_spacing
+
+    # Plot ULP Error
+    plt.figure(figsize=(10, 5))
+    plt.plot(x.numpy(), ulp_error.numpy(), label="ULP Error", color="red", linewidth=1)
+    plt.title(f"ULP Error: {ttnn_op.__name__} vs Torch")
+    plt.xlabel("x")
+    plt.ylabel("ULP Error")
+    plt.grid(True)
+    plt.legend()
+
+    ulp_dir = "accuracy_results/plots/arange_comparison/"
+    os.makedirs(ulp_dir, exist_ok=True)
+    filename = f"{ttnn_op.__name__}_bf16_range_{range_str}_{scalar_str}_ulp.png"
+    ulp_path = os.path.join(ulp_dir, filename)
+    plt.savefig(ulp_path)
+    plt.close()
+    print(f"\t\t\tULP error graph saved to {os.path.abspath(ulp_path)}")
 
 
 def plot_torch_vs_ttnn_outputs_full_range(
@@ -415,22 +439,22 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
             plot_torch_vs_ttnn_outputs_full_range(
                 torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "elu", value_range=(-100.0, 100.0)
             )
-            # plot_using_arange(torch_unary_op,ttnn_unary_op ,scalar=scalar, low=-100, high=100)
+            plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=scalar, low=-100, high=100)
         elif operation_name == "selu":
             plot_torch_vs_ttnn_outputs_full_range(
                 torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "selu", value_range=(-100.0, 100.0)
             )
-            # plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=50, high=100)
+            plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=-100, high=100)
         elif operation_name == "exp":
             plot_torch_vs_ttnn_outputs_full_range(
                 torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "exp", value_range=(-100.0, 100.0)
             )
-            # plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=-100, high=100)
+            plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=-100, high=100)
         elif operation_name == "expm1":
             plot_torch_vs_ttnn_outputs_full_range(
                 torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "expm1", value_range=(-100.0, 100.0)
             )
-            # plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=-100, high=100)
+            plot_using_arange(torch_unary_op, ttnn_unary_op, scalar=None, low=-100, high=100)
 
         # Compute errors
         np_golden_f64 = torch_golden_f64.flatten().numpy()
