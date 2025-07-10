@@ -12,7 +12,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::gather::program {
+namespace ttnn::operations::gather::program {
 using namespace tt::tt_metal;
 // Single row - single core
 struct GatherProgramFactorySingleRowSingleCore {
@@ -43,4 +43,4 @@ struct GatherProgramFactorySingleRowMultiCore {
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
-}  // namespace ttnn::operations::experimental::gather::program
+}  // namespace ttnn::operations::gather::program

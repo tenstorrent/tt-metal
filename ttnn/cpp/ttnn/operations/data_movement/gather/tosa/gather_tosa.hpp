@@ -8,7 +8,7 @@
 
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::tosa::gather {
+namespace ttnn::operations::tosa::gather {
 struct ExecuteTosaGather {
     static Tensor invoke(
         QueueId queue_id,
@@ -16,12 +16,11 @@ struct ExecuteTosaGather {
         const Tensor& input_index_tensor,
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config);
 };
-}  // namespace ttnn::operations::experimental::tosa::gather
+}  // namespace ttnn::operations::tosa::gather
 
-namespace ttnn::experimental::tosa {
+namespace ttnn::tosa {
 
-constexpr auto gather = ttnn::register_operation<
-    "ttnn::experimental::tosa_gather",
-    ttnn::operations::experimental::tosa::gather::ExecuteTosaGather>();
+constexpr auto gather =
+    ttnn::register_operation<"ttnn::tosa_gather", ttnn::operations::tosa::gather::ExecuteTosaGather>();
 
-}  // namespace ttnn::experimental::tosa
+}  // namespace ttnn::tosa

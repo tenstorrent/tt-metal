@@ -43,6 +43,10 @@ target_sources(
         fold/device/fold_multi_core_program_factory.cpp
         fold/device/fold_single_core_program_factory.cpp
         fold/fold.cpp
+        gather/gather.cpp
+        gather/device/gather_device_operation.cpp
+        gather/device/gather_program_factory.cpp
+        gather/tosa/gather_tosa.cpp
         indexed_fill/device/indexed_fill_op.cpp
         indexed_fill/device/indexed_fill_op_multi_core_program_factory.cpp
         indexed_fill/indexed_fill.cpp
