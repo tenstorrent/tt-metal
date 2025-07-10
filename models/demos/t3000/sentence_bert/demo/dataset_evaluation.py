@@ -59,7 +59,6 @@ def test_sentence_bert_eval_data_parallel(
         example = dataset[i]
         sen1, sen2, score = example["sentence1_tr"], example["sentence2_tr"], example["score"]
         sen1_list, sen2_list = [sen1] * (batch_size // 2), [sen2] * (batch_size // 2)
-        logger.info(f"Input length: {len(sen1_list + sen2_list)}")
         encoded_input = tokenizer(
             sen1_list + sen2_list,
             padding="max_length",
@@ -91,11 +90,11 @@ def test_sentence_bert_eval_data_parallel(
             )
             ttnn_module._capture_sentencebert_trace_2cqs()
         t0 = time.time()
-        ttnn_out = ttnn_module._execute_sentencebert_trace_2cqs_inference()
+        ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
         t1 = time.time()
         ttnn_sentence_embeddings = ttnn.to_torch(
             ttnn_out, mesh_composer=ttnn_module.runner_infra.output_mesh_composer, dtype=torch.float32
-        ).squeeze(dim=1)
+        )
         inference_times.append(t1 - t0)
         sim1 = F.cosine_similarity(reference_sentence_embeddings[:1], reference_sentence_embeddings[-1:]).item()
         sim2 = F.cosine_similarity(ttnn_sentence_embeddings[:1], ttnn_sentence_embeddings[-1:]).item()
