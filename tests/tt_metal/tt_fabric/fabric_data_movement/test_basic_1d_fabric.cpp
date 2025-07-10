@@ -1191,9 +1191,12 @@ void RunTest2DMCastConnAPI(
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
+        0 /* use_dram_dst */,
         mcast_mode,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC};
+        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        1 /* is_chip_multicast */,
+        1 /* additional_dir */};
 
     std::map<std::string, std::string> defines = {};
     defines["FABRIC_2D"] = "";

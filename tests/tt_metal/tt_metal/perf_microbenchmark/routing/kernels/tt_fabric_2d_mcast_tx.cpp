@@ -24,9 +24,9 @@ constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
 constexpr uint32_t target_address = get_compile_time_arg_val(2);
-constexpr uint32_t mcast_mode = get_compile_time_arg_val(3);
-constexpr bool is_2d_fabric = get_compile_time_arg_val(4);
-constexpr bool use_dynamic_routing = get_compile_time_arg_val(5);
+constexpr uint32_t mcast_mode = get_compile_time_arg_val(4);
+constexpr bool is_2d_fabric = get_compile_time_arg_val(5);
+constexpr bool use_dynamic_routing = get_compile_time_arg_val(6);
 
 inline void setup_connection_and_headers(
     tt::tt_fabric::WorkerToFabricEdmSender& connection,
