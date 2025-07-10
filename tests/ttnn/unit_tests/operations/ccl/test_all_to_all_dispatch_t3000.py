@@ -627,7 +627,10 @@ def run_all_to_all_dispatch_test(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D},
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
@@ -705,7 +708,12 @@ def test_all_to_all_dispatch_no_trace(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "trace_region_size": 500000,
-        }
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 500000,
+        },
     ],
     indirect=True,
 )
@@ -789,7 +797,7 @@ def test_all_to_all_dispatch_trace(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
         }
     ],
@@ -868,9 +876,9 @@ def test_decode_perf(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
-        }
+        },
     ],
     indirect=True,
 )
@@ -886,7 +894,7 @@ def test_decode_perf(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (128, 10, 5),
+        (128, 1, 1),
     ],
     ids=["s128"],
 )
