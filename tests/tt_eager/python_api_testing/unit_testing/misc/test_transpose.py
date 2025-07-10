@@ -12,7 +12,7 @@ from loguru import logger
 from models.utility_functions import is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 def random_torch_tensor(dtype, shape):
@@ -333,7 +333,7 @@ def test_transpose_hw_rm_with_padding(device, n, c, h, w):
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
     activation_pyt_padded_out = activation_pyt_padded_out[:n, :c, :w, :h]
-    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+    assert_equal(torch_output_tensor, activation_pyt_padded_out)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -355,7 +355,7 @@ def test_transpose_hw_rm_no_padding(device, n, c, h, w):
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
-    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+    assert_equal(torch_output_tensor, activation_pyt_padded_out)
 
 
 def run_transpose_hw_rm_program_cache(device, n, c, h, w):
@@ -371,7 +371,7 @@ def run_transpose_hw_rm_program_cache(device, n, c, h, w):
     )
     activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded)
-    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+    assert_equal(torch_output_tensor, activation_pyt_padded_out)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -432,7 +432,7 @@ def test_transpose_hw_sharded_rm(device, n, c, h, w):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 def run_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
@@ -463,7 +463,7 @@ def run_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -506,7 +506,7 @@ def test_transpose_hc_rm(device, n, c, h, w):
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
 
-    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+    assert_equal(torch_output_tensor, activation_pyt_padded_out)
 
 
 def run_transpose_hc_rm_with_program_cache(device, n, c, h, w):
@@ -524,7 +524,7 @@ def run_transpose_hc_rm_with_program_cache(device, n, c, h, w):
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
-    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+    assert_equal(torch_output_tensor, activation_pyt_padded_out)
 
 
 @pytest.mark.parametrize("n", [20])
@@ -574,7 +574,7 @@ def run_transpose_hc_sharded(device, n, c, h, w, grid_size):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -629,7 +629,7 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
     tt_output = ttnn.transpose(tt_input, *swap_dims)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -669,7 +669,7 @@ def test_transpose_2D(dtype, shape, layout, device):
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, 0, 1)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -707,7 +707,7 @@ def test_transpose_3D(dtype, shape, layout, dims, device):
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -722,7 +722,7 @@ def test_transpose_4d_wh_rm(shape, device):
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     tt_output = ttnn.transpose(tt_input, -1, -2)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -737,7 +737,7 @@ def test_transpose_4d_wh_tile(shape, device):
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.transpose(tt_input, -1, -2)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.skip("Issue: #16141 Skipping due to hang on to_layout to tile where input shape has 1 in it.")
@@ -764,7 +764,7 @@ def test_transpose_failures(config, memory_config, device):
     tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -811,7 +811,7 @@ def test_transpose_former_failures(config, memory_config, device):
     )
     tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -825,7 +825,7 @@ def test_transpose_hc_padded_c(shape, device):
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.transpose(tt_input, 1, 2)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -850,7 +850,7 @@ def test_transpose_5d(shape, dims, layout, device):
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -890,7 +890,7 @@ def test_transpose_issue_11650_10350(shape, dims, layout, dtype, device):
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize(
@@ -933,7 +933,7 @@ def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1], pad_value=pad_value)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize("b", [1])
@@ -954,7 +954,7 @@ def test_transpose_forge_llama(device, b, h, w, dim0, dim1):
     output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("b", [1])
@@ -973,7 +973,7 @@ def test_transpose_forge_basic(device, b, h, w, dim0, dim1):
     output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("b", [6])
@@ -992,7 +992,7 @@ def test_transpose_forge_hc(device, b, h, w, dim0, dim1):
     output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [1])
@@ -1040,7 +1040,7 @@ def test_transpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
     tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=output_sharded_mem_config)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 @pytest.mark.parametrize("n", [1])
@@ -1090,7 +1090,7 @@ def test_transpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[16, 4, 256, 256], [16, 128, 8, 256], [1, 1, 32, 32]])
@@ -1106,7 +1106,7 @@ def test_transpose_hw_rm(shape, device):
     )
     tt_output = ttnn.transpose(tt_input, 2, 3)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 def test_transpose_16411(device):
@@ -1128,12 +1128,12 @@ def test_transpose_16411(device):
     c3 = ttnn.transpose(b, 2, 4)
     c4 = ttnn.transpose(b, 3, 4)
 
-    assert_with_pcc(p_b2, ttnn.to_torch(b2), 0.9999)
-    assert_with_pcc(p_b3, ttnn.to_torch(b3), 0.9999)
-    assert_with_pcc(p_c, ttnn.to_torch(c), 0.9999)
-    assert_with_pcc(p_c2, ttnn.to_torch(c2), 0.9999)
-    assert_with_pcc(p_c3, ttnn.to_torch(c3), 0.9999)
-    assert_with_pcc(p_c4, ttnn.to_torch(c4), 0.9999)
+    assert_equal(p_b2, ttnn.to_torch(b2))
+    assert_equal(p_b3, ttnn.to_torch(b3))
+    assert_equal(p_c, ttnn.to_torch(c))
+    assert_equal(p_c2, ttnn.to_torch(c2))
+    assert_equal(p_c3, ttnn.to_torch(c3))
+    assert_equal(p_c4, ttnn.to_torch(c4))
 
 
 @pytest.mark.parametrize("rank", [5])
@@ -1198,7 +1198,7 @@ def test_resnet50_fold(device, n, c, h, w, dim0, dim1):
     tt_output = ttnn.transpose(tt_input, dim0, dim1)
     tt_output = ttnn.to_torch(tt_output.cpu())
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 def test_transpose_21803(device):
