@@ -96,4 +96,10 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 }
 
+void AutoContext::set_fabric_config(
+    const std::string& mesh_graph_descriptor_path,
+    const std::vector<std::vector<std::vector<uint32_t>>>& eth_coords_per_mesh) {
+    this->get_shared_ptr_device()->initialize_control_plane_config(mesh_graph_descriptor_path, eth_coords_per_mesh);
+}
+
 }  // namespace ttml::autograd

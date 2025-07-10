@@ -66,6 +66,10 @@ public:
     [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
         const;
 
+    void set_fabric_config(
+        const std::string& mesh_graph_descriptor_path,
+        const std::vector<std::vector<std::vector<uint32_t>>>& eth_coords_per_mesh);
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
