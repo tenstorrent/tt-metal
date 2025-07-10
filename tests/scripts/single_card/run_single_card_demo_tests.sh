@@ -256,7 +256,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 
 }
 run_yolov8x_perf() {
