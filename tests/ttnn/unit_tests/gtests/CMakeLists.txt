@@ -55,33 +55,13 @@ target_sources(
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_matmul_benchmark.cpp
-        tensor/common_tensor_test_utils.cpp
-        tensor/test_create_tensor.cpp
-        tensor/test_create_tensor_multi_device.cpp
-        tensor/test_create_tensor_with_layout.cpp
-        tensor/test_distributed_tensor.cpp
-        tensor/test_mesh_tensor.cpp
-        tensor/test_partition.cpp
-        tensor/test_tensor_layout.cpp
-        tensor/test_tensor_nd_sharding.cpp
-        tensor/test_tensor_serialization.cpp
-        tensor/test_tensor_sharding.cpp
-        tensor/test_vector_conversion.cpp
-        tensor/test_xtensor_adapter.cpp
-        tensor/test_xtensor_conversion.cpp
 )
-target_include_directories(
-    unit_tests_ttnn_basic
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/tests
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
+target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
     unit_tests_ttnn_basic
     PRIVATE
         test_common_libs
         TTNN::CPP
-        xtensor
 )
 
 add_library(unit_tests_ttnn_slow OBJECT)
@@ -107,6 +87,7 @@ target_link_libraries(
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
+        TTNN::Test::Basic::Tensor
         TTNN::Test::Slow
 )
 
@@ -168,6 +149,35 @@ target_sources(
         accessor/test_tensor_accessor_on_device.cpp
 )
 setup_ttnn_test_target(unit_tests_ttnn_accessor)
+
+# unit_tests_ttnn_tensor
+
+add_library(unit_tests_ttnn_tensor_lib OBJECT)
+add_library(TTNN::Test::Basic::Tensor ALIAS unit_tests_ttnn_tensor_lib)
+TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_tensor_lib)
+target_sources(
+    unit_tests_ttnn_tensor_lib
+    PRIVATE
+        tensor/common_tensor_test_utils.cpp
+        tensor/test_create_tensor.cpp
+        tensor/test_create_tensor_multi_device.cpp
+        tensor/test_create_tensor_with_layout.cpp
+        tensor/test_distributed_tensor.cpp
+        tensor/test_mesh_tensor.cpp
+        tensor/test_partition.cpp
+        tensor/test_tensor_layout.cpp
+        tensor/test_tensor_nd_sharding.cpp
+        tensor/test_tensor_serialization.cpp
+        tensor/test_tensor_sharding.cpp
+        tensor/test_vector_conversion.cpp
+        tensor/test_xtensor_adapter.cpp
+        tensor/test_xtensor_conversion.cpp
+)
+setup_ttnn_test_target(unit_tests_ttnn_tensor_lib)
+target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE xtensor)
+
+add_executable(unit_tests_ttnn_tensor)
+target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
 
 # test_ccl_multi_cq_multi_device
 

@@ -37,6 +37,9 @@ struct CreateTensorParams {
     Expected expected;
 };
 
+const tt::tt_metal::MemoryConfig DefaultMemoryConfig{
+    tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt};
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -51,11 +54,6 @@ TEST_P(CreateTensorWithLayoutTest, Tile) {
     EXPECT_EQ(tensor.logical_shape(), params.inputs.shape);
 }
 
-namespace {
-const tt::tt_metal::MemoryConfig DefaultMemoryConfig{
-    tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt};
-}
-
 INSTANTIATE_TEST_SUITE_P(
     CreateTensorWithLayoutTestWithShape,
     CreateTensorWithLayoutTest,
@@ -63,17 +61,18 @@ INSTANTIATE_TEST_SUITE_P(
         CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{
             CMAKE_UNIQUE_NAMESPACE::Inputs{
                 .shape = ttnn::Shape({1, 1, 32, 32}),
-                .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)},
+                .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, CMAKE_UNIQUE_NAMESPACE::DefaultMemoryConfig)},
             CMAKE_UNIQUE_NAMESPACE::Expected{.padded_shape = ttnn::Shape({1, 1, 32, 32})}},
 
         CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{
             CMAKE_UNIQUE_NAMESPACE::Inputs{
                 .shape = ttnn::Shape({1, 1, 16, 10}),
-                .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)},
+                .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, CMAKE_UNIQUE_NAMESPACE::DefaultMemoryConfig)},
             CMAKE_UNIQUE_NAMESPACE::Expected{.padded_shape = ttnn::Shape({1, 1, 32, 32})}},
 
         CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{
             CMAKE_UNIQUE_NAMESPACE::Inputs{
                 .shape = ttnn::Shape({1, 1, 16, 10}),
-                .layout = TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig)},
+                .layout =
+                    TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, CMAKE_UNIQUE_NAMESPACE::DefaultMemoryConfig)},
             CMAKE_UNIQUE_NAMESPACE::Expected{.padded_shape = ttnn::Shape({1, 1, 16, 10})}}));
