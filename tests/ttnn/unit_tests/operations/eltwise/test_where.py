@@ -61,8 +61,8 @@ def test_ttnn_where_nan(device):
     tt_result3 = ttnn.to_torch(ttnn_result3)
 
     print("ttnn res", tt_result1)
-    print("ttnn res", tt_result2, torch_equal_nan(tt_result2, true_values))
-    print("ttnn res", tt_result3, torch_equal_nan(tt_result3, false_values))
+    print("ttnn res all true", tt_result2, torch_equal_nan(tt_result2, true_values))
+    print("ttnn res all false", tt_result3, torch_equal_nan(tt_result3, false_values))
 
     # where operation in torch expects condition to be a boolean dtype, in ttnn.where we follow 0's & non-zero's (0's and 1's would be ideal)
     result1 = torch.where(condition.bool(), true_values, false_values)
@@ -75,3 +75,26 @@ def test_ttnn_where_nan(device):
     assert torch_equal_nan(tt_result1, result1)
     assert torch_equal_nan(tt_result2, result2)
     assert torch_equal_nan(tt_result3, result3)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [32])
+def test_ttnn_where_mcw(h, w, device):
+    C = torch.arange(h * w, dtype=torch.float32)
+    C = (C % 2).float()  # Alternates 0, 1, 0, 1, ...
+    C = C.reshape(1, 1, h, w)
+    C = C.expand(1, 1, h, w)  # Broadcast to (n, c, h, w)
+    T = torch.ones(1, 1, h, w, dtype=torch.float32) * 2
+    F = torch.ones(1, 1, h, w, dtype=torch.float32) * 10
+    golden = torch.where(C != 0, T, F)
+
+    ttnn_C = ttnn.from_torch(C, ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+    # print("ttnn_result", ttnn_result)
+    result = ttnn.to_torch(ttnn_result)
+    # torch.set_printoptions(linewidth=200, threshold = 10000 , precision=5, sci_mode = False, edgeitems=17)
+    print("result", result, result.shape)
+    print("golden", golden)
+    assert torch.equal(result, golden)

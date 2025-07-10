@@ -5,6 +5,7 @@
 #pragma once
 
 #include "llk_math_eltwise_ternary_sfpu_params.h"
+#include "ckernel_sfpu_where.h"
 
 namespace ckernel {
 
@@ -14,7 +15,7 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_where(
     uint dst_index0, uint dst_index1, uint dst_index2, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_ternary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_where_<APPROXIMATE>, dst_index0, dst_index1, dst_index2, vector_mode);
+        ckernel::sfpu::calculate_where_fp32<APPROXIMATE>, dst_index0, dst_index1, dst_index2, vector_mode);
 }
 
 template <bool APPROXIMATE>
