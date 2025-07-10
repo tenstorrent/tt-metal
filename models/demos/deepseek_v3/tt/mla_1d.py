@@ -15,11 +15,11 @@ from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
-    AllGatherConfig,
+    AllGatherAsyncConfig,
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
-    ReduceScatterConfig,
+    ReduceScatterAsyncConfig,
     ReshardConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import save_and_get_path
@@ -69,8 +69,6 @@ class MLA1D(AbstractModule):
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         v_head_dim = hf_config.v_head_dim
-
-        num_devices = mesh_device.get_num_devices()
 
         def add_weight_config(
             torch_weight,
@@ -541,7 +539,7 @@ class MLA1D(AbstractModule):
         # **Must be in order of execution**
 
         # Q
-        config["wq_a_rs"] = ReduceScatterConfig(
+        config["wq_a_rs"] = ReduceScatterAsyncConfig(
             mesh_device=MeshDeviceStub(list(mesh_device.shape)),
             cluster_axis=0,
             dim=3,
@@ -552,7 +550,7 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        config["wq_a_ag"] = AllGatherConfig(
+        config["wq_a_ag"] = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(list(mesh_device.shape)),
             cluster_axis=0,
             dim=3,
@@ -563,7 +561,7 @@ class MLA1D(AbstractModule):
         )
 
         # KV
-        config["wkv_a_ag"] = AllGatherConfig(
+        config["wkv_a_ag"] = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(list(mesh_device.shape)),
             cluster_axis=0,
             dim=1,
@@ -584,7 +582,7 @@ class MLA1D(AbstractModule):
         }
 
         # WO
-        config["wo_ag"] = AllGatherConfig(
+        config["wo_ag"] = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(list(mesh_device.shape)),
             cluster_axis=0,
             dim=1,

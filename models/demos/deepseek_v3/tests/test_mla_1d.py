@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import tempfile
 from pathlib import Path
 from random import randint
@@ -32,7 +33,8 @@ def temp_dir():
 @pytest.fixture
 def hf_config():
     """Load DeepSeek config for testing"""
-    config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
+    path = os.getenv("HF_MODEL", "/proj_sw/user_dev/deepseek-ai")
+    config = AutoConfig.from_pretrained(path, trust_remote_code=True)
     config.num_hidden_layers = 1  # Reduce layers for testing
     config.max_seq_len = 5 * 1024  # Set max sequence length for testing
 

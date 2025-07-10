@@ -61,13 +61,6 @@ class OpConfigBase:
 
 
 @dataclass
-class ReshardConfig(OpConfigBase):
-    """Simple config for operations that only need memory configuration"""
-
-    memory_config: ttnn.MemoryConfig
-
-
-@dataclass
 class LinearConfig(OpConfigBase):
     """Common parameters for a ttnn.linear op, weights are in input_tensor_b"""
 
@@ -109,7 +102,7 @@ class AllReduceConfig(OpConfigBase):
 
 
 @dataclass
-class AllGatherConfig(OpConfigBase):
+class AllGatherAsyncConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.all_gather_async op"""
 
     mesh_device: ConfigDevice
@@ -122,7 +115,7 @@ class AllGatherConfig(OpConfigBase):
 
 
 @dataclass
-class ReduceScatterConfig(OpConfigBase):
+class ReduceScatterAsyncConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.reduce_scatter_async op"""
 
     mesh_device: ConfigDevice

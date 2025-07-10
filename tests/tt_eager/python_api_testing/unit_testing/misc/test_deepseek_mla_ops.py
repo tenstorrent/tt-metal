@@ -412,11 +412,11 @@ def run_matmul_impl(
     in0_mem_config, in1_mem_config, out_mem_config = memory_configs
 
     # Log configs
-    logger.info("Running matmul with the following configurations:")
-    logger.info(f"Input 0 Shape: {in0_shape}, Dtype: {in0_dtype}, Memory Config: {in0_mem_config}")
-    logger.info(f"Input 1 Shape: {in1_shape}, Dtype: {in1_dtype}, Memory Config: {in1_mem_config}")
-    logger.info(f"Output Memory Config: {out_mem_config}")
-    logger.info(f"Program Config: {program_config}")
+    logger.debug("Running matmul with the following configurations:")
+    logger.debug(f"Input 0 Shape: {in0_shape}, Dtype: {in0_dtype}, Memory Config: {in0_mem_config}")
+    logger.debug(f"Input 1 Shape: {in1_shape}, Dtype: {in1_dtype}, Memory Config: {in1_mem_config}")
+    logger.debug(f"Output Memory Config: {out_mem_config}")
+    logger.debug(f"Program Config: {program_config}")
 
     #################
     ### Torch
@@ -487,8 +487,8 @@ def run_rope_impl(
         bsz = input_shape[1]
         mode = "decode"
 
-    logger.info("Running rope with the following configurations:")
-    logger.info(f"Shape: {input_shape}, Dtype: {dtype}, Memory Config: {mem_config}")
+    logger.debug("Running rope with the following configurations:")
+    logger.debug(f"Shape: {input_shape}, Dtype: {dtype}, Memory Config: {mem_config}")
 
     assert (
         input_shape[-1] == decode_cfg.args.qk_rope_head_dim
@@ -580,9 +580,9 @@ def run_update_cache_impl(
     layout = ttnn.TILE_LAYOUT
     max_seq_len = decode_cfg.args.max_seq_len
 
-    logger.info("Running update cache with the following configurations:")
-    logger.info(f"Shape: {shape}, Dtype: {dtype}, Memory Config: {mem_config}")
-    logger.info(f"Max Seq Len: {max_seq_len}")
+    logger.debug("Running update cache with the following configurations:")
+    logger.debug(f"Shape: {shape}, Dtype: {dtype}, Memory Config: {mem_config}")
+    logger.debug(f"Max Seq Len: {max_seq_len}")
 
     _, bsz, nkv, head_dim = shape
 
@@ -661,9 +661,9 @@ def run_fill_cache_impl(
     input_shape = shape(seq_len)
     _, nkv, seq_len, head_dim = input_shape
 
-    logger.info("Running update cache with the following configurations:")
-    logger.info(f"Shape: {input_shape}, Dtype: {dtype}, Memory Config: {mem_config}")
-    logger.info(f"Max Seq Len: {max_seq_len}")
+    logger.debug("Running update cache with the following configurations:")
+    logger.debug(f"Shape: {input_shape}, Dtype: {dtype}, Memory Config: {mem_config}")
+    logger.debug(f"Max Seq Len: {max_seq_len}")
 
     #################
     ### Torch
@@ -671,7 +671,7 @@ def run_fill_cache_impl(
     cache_torch = torch.randn((prefill_cfg.max_batch_size_per_device, nkv, max_seq_len, head_dim)).float()
     input_torch = torch.randn(input_shape).float()
     batch_idx = torch.randint(0, prefill_cfg.max_batch_size_per_device, (1,)).item()  # Randomly select a batch index
-    logger.info(f"Selected batch index: {batch_idx}")
+    logger.debug(f"Selected batch index: {batch_idx}")
 
     cache_torch[batch_idx, :, :seq_len, :] = input_torch
 
@@ -735,8 +735,8 @@ def run_rmsnorm_impl(
         input_shape = shape
         mode = "decode"
 
-    logger.info("Running RMSNorm with the following configurations:")
-    logger.info(f"Shape: {input_shape}, Dtype: {dtype}, Memory Config: {mem_config}")
+    logger.debug("Running RMSNorm with the following configurations:")
+    logger.debug(f"Shape: {input_shape}, Dtype: {dtype}, Memory Config: {mem_config}")
 
     head_dim = input_shape[-1]
 
