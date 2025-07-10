@@ -360,6 +360,9 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         all_core_utilization_count,
         total_number_of_cores_virtual);
 
+    // uint32 index tensor support
+    const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
+
     /**
      * Calculates the core range based on the number of work units (all_core_utilization_count) and the total number of
      * available cores in the device's compute grid. The core range determines which cores will be utilized for
@@ -596,7 +599,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         number_of_tiles_per_core,
         total_number_of_cores_virtual,
         semaphore_exchange_readers,
-    };
+        static_cast<uint32_t>(is_32_bit_data)};
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
         "writer_cross_core_data_exchange.cpp";
@@ -630,7 +633,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         program,
         compute_kernel_path,
         core_range,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is_32_bit_data, .compile_args = compute_compile_time_args});
 
     return {std::move(program), {reader_kernel_id, compute_kernel_id, writer_kernel_id, core_range}};
 }
