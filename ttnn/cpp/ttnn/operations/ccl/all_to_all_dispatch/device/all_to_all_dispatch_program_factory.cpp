@@ -297,7 +297,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto packet_header_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, packet_header_cb_config);
     auto send_preparation_buffer_cb =
         tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_send_preparation_buffer_config);
-    if (operation_attributes.impl == AllToAllImpl::FullPacket) {
+    if (operation_attributes.impl == AllToAllTransferType::FullPacket) {
         auto metadata_buffer_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_metadata_buffer_config);
     }
 
@@ -365,7 +365,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
         l1_alignment,
         metadata_buffer_id,
-        operation_attributes.impl == AllToAllImpl::PageByPage ? 1 : 0,
+        operation_attributes.impl == AllToAllTransferType::PageByPage ? 1 : 0,
         linearized_mesh_coord,
     };
 

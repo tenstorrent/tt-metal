@@ -30,7 +30,7 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
 }  // namespace detail
 
 struct AllToAllDispatchDeviceOperation {
-    enum AllToAllImpl {
+    enum AllToAllTransferType {
         FullPacket,  // All pages are sent to the intermediate buffer and then written to the output buffer later
         PageByPage,  // Each page is sent directly to the output buffer to conserve L1 space via intermediates
     };
@@ -41,7 +41,7 @@ struct AllToAllDispatchDeviceOperation {
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
         const std::optional<GlobalSemaphore> cross_device_semaphore;
-        const AllToAllImpl impl;
+        const AllToAllTransferType impl;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -113,7 +113,7 @@ struct AllToAllDispatchDeviceOperation {
         const ttnn::MemoryConfig& memory_config,
         tt::tt_metal::SubDeviceId subdevice_id,
         const std::optional<GlobalSemaphore>& global_semaphore,
-        AllToAllImpl impl);
+        AllToAllTransferType impl);
 };
 }  // namespace ttnn::operations::ccl
 

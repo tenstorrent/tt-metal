@@ -173,7 +173,7 @@ AllToAllDispatchDeviceOperation::invoke(
     const ttnn::MemoryConfig& memory_config,
     tt::tt_metal::SubDeviceId subdevice_id,
     const std::optional<GlobalSemaphore>& global_semaphore,
-    AllToAllImpl impl) {
+    AllToAllTransferType impl) {
     return {
         operation_attributes_t{
             .subdevice_id = std::move(subdevice_id),
