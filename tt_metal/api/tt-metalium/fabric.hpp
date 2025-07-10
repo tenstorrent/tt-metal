@@ -8,6 +8,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
 #include <umd/device/tt_core_coordinates.h>
@@ -74,6 +75,8 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction);
 
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
+
+tt::tt_fabric::Topology get_fabric_topology();
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(

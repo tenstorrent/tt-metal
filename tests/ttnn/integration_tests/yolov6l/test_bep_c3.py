@@ -18,13 +18,16 @@ def test_yolov6l_bepc3(device, reset_seeds):
 
     model = model.backbone.ERBlock_3[1]
 
-    torch_input = torch.randn(1, 256, 80, 60)
+    torch_input = torch.randn(1, 256, 80, 80)
+    torch_input_1 = torch_input.reshape(
+        1, torch_input.shape[1], 1, torch_input.shape[0] * torch_input.shape[2] * torch_input.shape[3]
+    )
 
     parameters = create_yolov6l_model_parameters(model, torch_input, device)
 
     ttnn_model = TtBepC3(device, parameters, parameters.model_args, n=12)
 
-    input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
+    input_tensor = torch.permute(torch_input_1, (0, 2, 3, 1))
     ttnn_input = ttnn.from_torch(
         input_tensor,
         dtype=ttnn.bfloat16,
