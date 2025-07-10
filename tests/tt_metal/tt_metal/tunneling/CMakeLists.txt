@@ -1,4 +1,7 @@
-set(UNIT_TESTS_TUNNELING_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_lite_fabric_init.cpp)
+set(UNIT_TESTS_TUNNELING_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lite_fabric_init.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lite_fabric.cpp
+)
 
 function(create_unit_test_executable)
     set(exec_name unit_tests_tunneling)

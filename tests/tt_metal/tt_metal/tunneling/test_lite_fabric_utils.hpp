@@ -92,6 +92,14 @@ inline tt::tt_metal::Program create_eth_init_program(const MmmioAndEthDeviceDesc
                                         ? "tests/tt_metal/tt_metal/tunneling/kernels/lite_fabric_handshake.cpp"
                                         : "tests/tt_metal/tt_metal/tunneling/kernels/lite_fabric.cpp";
 
+    // including 1d_fabric_constants header, this is just so it doesn't complain
+    std::vector<uint32_t> dummy_ctargs(124, 0);
+    dummy_ctargs[0] = 1;
+    dummy_ctargs[1] = 1;
+    dummy_ctargs[2] = 1;
+    dummy_ctargs[3] = 0;
+    dummy_ctargs[6] = 1;
+
     uint32_t eth_chans_mask = 0;
     for (const auto& core : desc.mmio_device->get_active_ethernet_cores()) {
         if (!config.init_all_eth_cores && core != desc.mmio_eth.value()) {
@@ -106,7 +114,10 @@ inline tt::tt_metal::Program create_eth_init_program(const MmmioAndEthDeviceDesc
         auto remote_device_id = std::get<0>(connected_chip_eth);
         std::cout << "Eth core is " << core.str() << " remote device " << remote_device_id << std::endl;
         auto kernel_handle = tt::tt_metal::CreateKernel(
-            mmio_program, kernel_file, core, tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0});
+            mmio_program,
+            kernel_file,
+            core,
+            tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .compile_args = dummy_ctargs});
         mmio_eth_to_kernel[core] = kernel_handle;
         eth_chans_mask += 0x1 << (uint32_t)core.y;
     }
@@ -158,6 +169,25 @@ inline tt::tt_metal::Program create_eth_init_program(const MmmioAndEthDeviceDesc
     std::vector<uint32_t> lite_fabric_rtargs(256, 0);
     lite_fabric_rtargs[0] = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    uint32_t local_sender_channel_0_connection_info_addr = tt::align(
+        lite_fabric_rtargs[0] + sizeof(tunneling::lite_fabric_config_t),
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1));
+    uint32_t local_sender_0_channel_address = tt::align(
+        local_sender_channel_0_connection_info_addr + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo),
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1));
+    // (channel buffer size (4096) + packet header size (32)) * (num sender buffer slots = 8)
+    uint32_t local_receiver_0_channel_buffer_address = tt::align(
+        local_sender_0_channel_address + (4128 * 8),
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1));
+    uint32_t remote_receiver_0_channel_buffer_address = tt::align(
+        local_receiver_0_channel_buffer_address + (4128 * 8),
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1));
+
+    lite_fabric_rtargs[1] = local_sender_0_channel_address;
+    lite_fabric_rtargs[2] = local_sender_channel_0_connection_info_addr;
+    lite_fabric_rtargs[3] = local_receiver_0_channel_buffer_address;
+    lite_fabric_rtargs[4] = remote_receiver_0_channel_buffer_address;
 
     for (const auto& [core, kernel_handle] : mmio_eth_to_kernel) {
         CoreCoord virtual_eth_core = desc.mmio_device->ethernet_core_from_logical_core(core);

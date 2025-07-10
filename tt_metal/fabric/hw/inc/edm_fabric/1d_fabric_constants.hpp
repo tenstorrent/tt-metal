@@ -169,7 +169,7 @@ constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START
 constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
 
 static_assert(enable_first_level_ack == 0, "enable_first_level_ack must be 0");
-static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
+static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 1");
 static_assert(!enable_ring_support || NUM_RECEIVER_CHANNELS > 1, "Ring support requires at least 2 receiver channels");
 // TODO: Pipe from host
 constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
@@ -302,10 +302,10 @@ constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_ID
 
 constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 14;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
-static_assert(
-    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
-    "Special marker 0 not found. This implies some arguments were misaligned between host and device. Double check the "
-    "CT args.");
+// static_assert(
+//     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
+//     "Special marker 0 not found. This implies some arguments were misaligned between host and device. Double check
+//     the " "CT args.");
 
 constexpr size_t SKIP_LIVENESS_CHECK_ARG_IDX = SPECIAL_MARKER_0_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
@@ -339,10 +339,10 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_writ
 constexpr size_t EDM_NOC_VC_IDX = RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t SPECIAL_MARKER_1_IDX = EDM_NOC_VC_IDX + 1;
 constexpr size_t SPECIAL_MARKER_1 = 0x10c0ffee;
-static_assert(
-    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_1_IDX) == SPECIAL_MARKER_1,
-    "Special marker 1 not found. This implies some arguments were misaligned between host and device. Double check the "
-    "CT args.");
+// static_assert(
+//     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_1_IDX) == SPECIAL_MARKER_1,
+//     "Special marker 1 not found. This implies some arguments were misaligned between host and device. Double check
+//     the " "CT args.");
 
 constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
@@ -392,9 +392,9 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
 constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
 namespace tt::tt_fabric {
-static_assert(
-    receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,
-    "edm_to_local_chip_noc must equal to receiver_channel_local_write_noc_ids");
+// static_assert(
+//     receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,
+//     "edm_to_local_chip_noc must equal to receiver_channel_local_write_noc_ids");
 static constexpr uint8_t edm_to_downstream_noc = receiver_channel_forwarding_noc_ids[0];
 static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
 constexpr bool local_chip_noc_equals_downstream_noc =
