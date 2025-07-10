@@ -4,8 +4,6 @@
 
 
 import torch
-import sys
-
 from loguru import logger
 
 import ttnn
@@ -14,8 +12,6 @@ from models.demos.yolov6l.tt.ttnn_yolov6l import TtYolov6l
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.yolov6l.common import load_torch_model
-
-sys.path.append("models/demos/yolov6l/reference/")
 
 
 class YOLOv6lPerformanceRunnerInfra:
