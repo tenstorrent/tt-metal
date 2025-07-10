@@ -87,7 +87,7 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped
 }
 
 template <typename CONNECTIVITY_MAP_T>
-static void build_golden_link_counts(
+void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
     std::unordered_map<MeshId, std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>&
         golden_link_counts_out) {
