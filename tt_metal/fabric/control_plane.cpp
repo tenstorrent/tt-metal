@@ -28,6 +28,7 @@
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
+#include "host_api.hpp"
 #include "intermesh_constants.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/common/env_lib.hpp"
@@ -144,13 +145,42 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
 
+    // Only need fabric routers in the same tunnel for dispatch
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+    bool is_galaxy = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
+    auto skip_direction = [&](const FabricNodeId& node_id, const RoutingDirection direction) -> bool {
+        if (!is_galaxy) {
+            return false;
+        }
+        const auto& neighbors = this->get_chip_neighbors(node_id, direction);
+        if (neighbors.empty()) {
+            return false;
+        }
+
+        // Get physical chip ID to check if this is an MMIO chip
+        auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(node_id);
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        bool is_mmio_chip = cluster.get_cluster_desc()->is_chip_mmio_capable(physical_chip_id);
+
+        // For MMIO chips, allow multiple neighbor meshes (multiple tunnels)
+        // For non-MMIO chips, skip if there are multiple neighbor meshes (inter-mesh connections)
+        if (!is_mmio_chip && (neighbors.size() > 1 || neighbors.begin()->first != node_id.mesh_id)) {
+            return true;
+        }
+
+        return false;
+    };
+
     auto apply_min =
-        [this](
+        [&](FabricNodeId fabric_node_id,
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
             const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& golden_link_counts,
             size_t& val) {
+            if (skip_direction(fabric_node_id, direction)) {
+                return;
+            }
             if (auto it = port_direction_eth_chans.find(direction); it != port_direction_eth_chans.end()) {
                 val = std::min(val, it->second.size());
             }
@@ -170,8 +200,14 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         return MeshCoordinate(coord_x, coord_y);
     };
 
-    // For each mesh in the system
-    auto user_meshes = this->get_user_physical_mesh_ids();
+    // For galaxy initialize all meshes due to workaround for dispatch on fabric
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+    std::vector<MeshId> user_meshes;
+    if (tt_metal::IsGalaxyCluster()) {
+        user_meshes = {MeshId{0}, MeshId{1}, MeshId{2}, MeshId{3}, MeshId{4}};
+    } else {
+        user_meshes = this->get_user_physical_mesh_ids();
+    }
     if (reliability_mode == tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         for (auto mesh_id : user_meshes) {
             size_t num_chips_in_mesh = intra_mesh_connectivity[mesh_id.get()].size();
@@ -196,7 +232,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     build_golden_link_counts(
         this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity(), golden_link_counts);
 
-    auto apply_count = [this](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
+    auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
+        if (skip_direction(fabric_node_id, direction)) {
+            return;
+        }
         if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
             this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
             this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).size() > 0) {
@@ -228,10 +267,30 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
 
                 const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(chip_id);
-                apply_min(port_directions, RoutingDirection::E, golden_counts, row_min_planes.at(chip_coord_y));
-                apply_min(port_directions, RoutingDirection::W, golden_counts, row_min_planes.at(chip_coord_y));
-                apply_min(port_directions, RoutingDirection::N, golden_counts, col_min_planes.at(chip_coord_x));
-                apply_min(port_directions, RoutingDirection::S, golden_counts, col_min_planes.at(chip_coord_x));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::E,
+                    golden_counts,
+                    row_min_planes.at(chip_coord_y));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::W,
+                    golden_counts,
+                    row_min_planes.at(chip_coord_y));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::N,
+                    golden_counts,
+                    col_min_planes.at(chip_coord_x));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::S,
+                    golden_counts,
+                    col_min_planes.at(chip_coord_x));
             }
 
             // TODO: specialize by topology for better perf
@@ -891,7 +950,11 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
 
     // Trim the ethernet channels that don't map to live fabric routing planes.
     // NOTE: This MUST be called after ordering ethernet channels
-    this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+    if (!tt_metal::IsGalaxyCluster()) {
+        this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
+    }
+
     this->convert_fabric_routing_table_to_chip_routing_table();
 }
 

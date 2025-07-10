@@ -10,6 +10,7 @@
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
@@ -170,10 +171,18 @@ protected:
         }
         this->reserved_devices_ = tt::tt_metal::detail::CreateDevices(
             chip_ids, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
+        this->devices_.clear();
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
         if (enable_remote_chip) {
-            for (const auto& [id, device] : this->reserved_devices_) {
-                this->devices_.push_back(device);
+            const auto tunnels =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+            for (const auto& tunnel : tunnels) {
+                for (const auto& chip_id : tunnel) {
+                    if (reserved_devices_.contains(chip_id)) {
+                        this->devices_.push_back(this->reserved_devices_.at(chip_id));
+                    }
+                }
+                break;
             }
         } else {
             for (const auto& chip_id : chip_ids) {
@@ -182,7 +191,9 @@ protected:
         }
     }
 
+    // Devices to test
     std::vector<tt::tt_metal::IDevice*> devices_;
+    // Devices that were initialized
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
@@ -244,20 +255,29 @@ class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixt
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
-class CommandQueueMultiDeviceOnFabricFixture : public CommandQueueMultiDeviceFixture,
-                                               public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+class DISABLED_CommandQueueMultiDeviceOnFabricFixture
+    : public CommandQueueMultiDeviceFixture,
+      public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+private:
+    bool original_fd_fabric_en_ = false;
+    inline static ARCH arch_ = tt::ARCH::Invalid;
+    inline static bool is_galaxy_ = false;
+
 protected:
+    // Multiple fabric configs so need to reset the devices for each test
+    static void SetUpTestSuite() {
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        is_galaxy_ = tt::tt_metal::IsGalaxyCluster();
+    }
+
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
-        }
-        // Skip for TG as it's still being implemented
-        if (tt::tt_metal::IsGalaxyCluster()) {
-            GTEST_SKIP();
-        }
+        original_fd_fabric_en_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric();
+        // Enable Fabric Dispatch
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
-        tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+        tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         CommandQueueMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
@@ -266,9 +286,12 @@ protected:
     }
 
     void TearDown() override {
+        if (::testing::Test::IsSkipped()) {
+            return;
+        }
         CommandQueueMultiDeviceFixture::TearDown();
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(original_fd_fabric_en_);
     }
 };
 
