@@ -21,7 +21,7 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, int MATH_FIDELITY_DESC = 0, bool is_int_fpu_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, int MATH_FIDELITY_DESC = 0, bool is_int_fpu_en = false, bool fp32_transpose = false>
 inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, const uint num_faces = 4)
 {
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
@@ -58,48 +58,87 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
             TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
 
-        // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
-        // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
-        // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
-        // view to be fp16a as int8 datums are stored in src registers as fp16a
-        if constexpr (is_int_fpu_en)
+        if (fp32_transpose)
         {
-            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
-        }
+            // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
+            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+            // move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+            constexpr int dest_32b_hi = 0;
+            constexpr int dest_32b_lo = 1;
 
-        // Move back to B and transpose
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
-        /*
-        if constexpr (is_fp32_dest_acc_en) {
-            if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+            // move hi16 bits D2B
+            // we avoid clobbering weights in src B by moving to rows 16 - 31
+            TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            // note: transpose on src B on works on rows 16 - 31
+            TTI_TRNSPSRCB;
+            // move row D2B again for cases of reducing across multiple tiles
+            TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+            // move hi16 bits B2D
+            TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+            TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+            TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+            // move lo16 bits D2B
+            TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            // transpose face
+            TTI_TRNSPSRCB;
+            // move row again for cases of reducing multiple tiles
+            TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+            // move lo16 bits B2D
+            TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+            TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+            TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+        }
+        else
+        {
+            // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
+            // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
+            // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
+            // view to be fp16a as int8 datums are stored in src registers as fp16a
+            if constexpr (is_int_fpu_en)
+            {
                 TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                TTI_SFPLOAD(0, 0, 3, 0);
-                TTI_SFP_STOCH_RND(0,0,0,0,0,8);
-                TTI_SFPSTORE(0,1,3,0);
+                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
+                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
+                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+                TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
             }
-        }
-        */
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // Note: transpose on src B on works on rows 16 - 31
-        TTI_TRNSPSRCB;
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        if constexpr (is_int_fpu_en)
-        {
-            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
-        }
 
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-        TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
-        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+            // Move back to B and transpose
+            // we avoid clobbering weights in src B by moving to rows 16 - 31
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+            /*
+            if constexpr (is_fp32_dest_acc_en) {
+                if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+                    TTI_SFPLOAD(0, 0, 3, 0);
+                    TTI_SFP_STOCH_RND(0,0,0,0,0,8);
+                    TTI_SFPSTORE(0,1,3,0);
+                }
+            }
+            */
+            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            // Note: transpose on src B on works on rows 16 - 31
+            TTI_TRNSPSRCB;
+            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            if constexpr (is_int_fpu_en)
+            {
+                TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+            }
+
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+            TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+        }
 
         if (num_faces == 2 && !narrow_tile)
         {
@@ -147,49 +186,89 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
             {
                 TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
-            // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
-            // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
-            // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
-            // view to be fp16a as int8 datums are stored in src registers as fp16a
-            if constexpr (is_int_fpu_en)
-            {
-                TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
-                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
-                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
-                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
-                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-                TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
-            }
 
-            // Move back to B and transpose
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
-            /*
-            if constexpr (is_fp32_dest_acc_en) {
-                if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+            if (fp32_transpose)
+            {
+                // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+                // move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+                constexpr int dest_32b_hi = 0;
+                constexpr int dest_32b_lo = 1;
+
+                // move hi16 bits D2B
+                // we avoid clobbering weights in src B by moving to rows 16 - 31
+                TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+                // note: transpose on src B on works on rows 16 - 31
+                TTI_TRNSPSRCB;
+                // move row D2B again for cases of reducing across multiple tiles
+                TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+                // move hi16 bits B2D
+                TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+                TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+                TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+                TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+                // move lo16 bits D2B
+                TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+                // transpose face
+                TTI_TRNSPSRCB;
+                // move row again for cases of reducing multiple tiles
+                TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+                // move lo16 bits B2D
+                TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+                TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+                TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+                TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+            }
+            else
+            {
+                // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
+                // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
+                // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
+                // view to be fp16a as int8 datums are stored in src registers as fp16a
+                if constexpr (is_int_fpu_en)
+                {
                     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                    TTI_SFPLOAD(0, 0, 3, 0);
-                    TTI_SFP_STOCH_RND(0,0,0,0,0,8);
-                    TTI_SFPSTORE(0,1,3,0);
+                    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
+                    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
+                    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
+                    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
+                    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+                    TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
                 }
-            }
-            */
-            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-            // Note: transpose on src B on works on rows 16 - 31
-            TTI_TRNSPSRCB;
-            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-            if constexpr (is_int_fpu_en)
-            {
-                TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+
+                // Move back to B and transpose
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+                /*
+                if constexpr (is_fp32_dest_acc_en) {
+                    if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+                        TTI_SFPLOAD(0, 0, 3, 0);
+                        TTI_SFP_STOCH_RND(0,0,0,0,0,8);
+                        TTI_SFPSTORE(0,1,3,0);
+                    }
+                }
+                */
+                TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+                // Note: transpose on src B on works on rows 16 - 31
+                TTI_TRNSPSRCB;
+                TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+                if constexpr (is_int_fpu_en)
+                {
+                    TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+                }
+
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+                TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
+                TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+                TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
             }
 
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-            TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
-            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-
-            // Increment dest by 32 for next accumulation
+            // Reset counters to 0 for next accumulation
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
     }
