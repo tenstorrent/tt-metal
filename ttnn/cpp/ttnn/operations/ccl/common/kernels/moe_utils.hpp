@@ -56,16 +56,19 @@ bool is_configured_target(uint32_t linearized_dest_mesh_coord) {
     }
 }
 
-bool has_wrap_around(tt::tt_fabric::Topology topology) {
-    return topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus;
+template <tt::tt_fabric::Topology Topology>
+constexpr bool has_wrap_around() {
+    return Topology == tt::tt_fabric::Topology::Ring || Topology == tt::tt_fabric::Topology::Torus;
 }
 
-bool is_1d_topology(tt::tt_fabric::Topology topology) {
-    return topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Ring;
+template <tt::tt_fabric::Topology Topology>
+constexpr bool is_1d_topology() {
+    return Topology == tt::tt_fabric::Topology::Linear || Topology == tt::tt_fabric::Topology::Ring;
 }
 
-bool is_2d_topology(tt::tt_fabric::Topology topology) {
-    return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
+template <tt::tt_fabric::Topology Topology>
+constexpr bool is_2d_topology() {
+    return Topology == tt::tt_fabric::Topology::Mesh || Topology == tt::tt_fabric::Topology::Torus;
 }
 
 template <uint32_t MeshRows, uint32_t MeshCols>
@@ -80,7 +83,7 @@ uint32_t distance(uint32_t position_1, uint32_t position_2, uint32_t axis_size) 
         return 0;
     }
     uint32_t line_distance = std::abs(int(position_2) - int(position_1));
-    if (has_wrap_around(Topology)) {
+    if constexpr (has_wrap_around<Topology>()) {
         return std::min(line_distance, axis_size - line_distance);
     } else {
         return line_distance;
@@ -100,7 +103,7 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
     auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
 
     if (src_row == dest_row) {
-        if (!has_wrap_around(Topology)) {
+        if constexpr (!has_wrap_around<Topology>()) {
             return src_col < dest_col ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         } else {
             // with wrap around, we can go either East or West. Choose the shorter route
@@ -109,7 +112,7 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             return east_distance < west_distance ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         }
     } else if (src_col == dest_col) {
-        if (!has_wrap_around(Topology)) {
+        if constexpr (!has_wrap_around<Topology>()) {
             return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
@@ -120,7 +123,7 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
     } else {
         // when diagonal, we go North or South first, then East or West
         // so we route either North or South
-        if (!has_wrap_around(Topology)) {
+        if constexpr (!has_wrap_around<Topology>()) {
             return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route

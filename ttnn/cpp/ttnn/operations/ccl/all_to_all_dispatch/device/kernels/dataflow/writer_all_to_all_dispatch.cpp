@@ -185,7 +185,7 @@ void kernel_main() {
                         // if the expert lives on a remote device, we dispatch the input token to it
                         // if axis is specified then we only send to the devices that are along the axis
                         // if axis is not specified then we send to all devices
-                        if (is_1d_topology(topology)) {
+                        if constexpr (is_1d_topology<topology>()) {
                             fabric_send_chip_unicast_noc_unicast_1d<
                                 linearized_mesh_coord,
                                 topology,
@@ -242,7 +242,7 @@ void kernel_main() {
                 } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                     // dispatch the metadata to the remote device and increment the remote device's copy of the
                     // semaphore
-                    if (is_1d_topology(topology)) {
+                    if constexpr (is_1d_topology<topology>()) {
                         fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                             linearized_mesh_coord,
                             topology,
@@ -293,7 +293,7 @@ void kernel_main() {
                     indices_size,
                     global_noc_semaphore_address);
             } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-                if (is_1d_topology(topology)) {
+                if constexpr (is_1d_topology<topology>()) {
                     fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                         linearized_mesh_coord,
                         topology,

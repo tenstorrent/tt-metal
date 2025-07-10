@@ -138,7 +138,7 @@ void kernel_main() {
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
                     noc_async_write_barrier();
                 } else {
-                    if (is_1d_topology(topology)) {
+                    if constexpr (is_1d_topology<topology>()) {
                         fabric_send_chip_unicast_noc_unicast_1d<
                             linearized_mesh_coord,
                             topology,
@@ -191,7 +191,7 @@ void kernel_main() {
         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
             const auto& dest_mesh_id = dest_mesh_ids[device_idx];
 
-            if (is_1d_topology(topology)) {
+            if constexpr (is_1d_topology<topology>()) {
                 fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
                     linearized_mesh_coord,
                     topology,
