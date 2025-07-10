@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
 
     ctx.initialize_distributed_context(argc, argv);
     auto distributed_ctx = ctx.get_distributed_context();
-    auto socket_manager = SocketManager(SocketType::FABRIC);
+    auto socket_manager = SocketManager(SocketType::MPI);
 
     CLI::App app{"Multihost Example"};
     fmt::print("Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank());

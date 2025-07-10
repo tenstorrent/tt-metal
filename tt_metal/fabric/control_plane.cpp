@@ -2045,6 +2045,9 @@ void ControlPlane::exchange_intermesh_link_tables() {
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
             tt_fabric::IntermeshLinkTable deserialized_remote_table =
                 tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
+            std::cout << "Received intermesh link table from mesh " << *(deserialized_remote_table.local_mesh_id)
+                      << std::endl;
+            std::cout << "Table size: " << deserialized_remote_table.intermesh_links.size() << std::endl;
             peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id] =
                 std::move(deserialized_remote_table.intermesh_links);
         }
@@ -2122,8 +2125,10 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
         for (const auto& [connected_mesh_id, edge] :
              inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
             bool connection_found = false;
+            std::cout << "Checking user mesh: " << *connected_mesh_id << std::endl;
             for (const auto& [candidate_desc, candidate_peer_desc] : peer_intermesh_link_tables_[connected_mesh_id]) {
                 if (candidate_desc == remote_eth_chan_desc && candidate_peer_desc == curr_eth_chan_desc) {
+                    std::cout << "Found link" << std::endl;
                     // Found the matching intermesh link
                     num_directions_assigned++;
                     intermesh_routing_direction = edge.port_direction;
@@ -2147,6 +2152,9 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
          inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
         num_links_requested_on_node += edge.connected_chip_ids.size();
     }
+    std::cout << "Local Node: " << *(fabric_node_id.mesh_id) << " " << fabric_node_id.chip_id << std::endl;
+    std::cout << "Num directions assigned: " << num_directions_assigned << std::endl;
+    std::cout << "Num links requested on node: " << num_links_requested_on_node << std::endl;
     TT_FATAL(
         num_directions_assigned == num_links_requested_on_node,
         "Could not bind all edges in the Mesh Graph to an intermesh link.");

@@ -674,7 +674,7 @@ int main(int argc, char **argv) {
     fmt::print("Dataset size: {}\n", dataset.get_size());
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
-
+    std::cout << "Config Shape: " << device_config.mesh_shape << std::endl;
     initialize_device(device_config.mesh_shape, device_config.device_ids);
 
     auto *device = &ttml::autograd::ctx().get_device();

@@ -244,6 +244,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    std::cout << "Using shape: " << config.mesh_shape() << std::endl;
     tt::tt_metal::detail::SetFabricConfig(FabricConfig::FABRIC_2D_DYNAMIC);
     MeshDevice::initialize_control_plane_config(
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml",

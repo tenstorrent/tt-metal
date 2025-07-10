@@ -49,10 +49,12 @@ void AutoContext::reset_graph() {
 void AutoContext::open_device(
     const tt::tt_metal::distributed::MeshShape& mesh_shape, const std::vector<int>& device_ids) {
     if (m_device) {
-        throw std::runtime_error("open_device was called after the device was created.");
+        return;
+        // throw std::runtime_error("open_device was called after the device was created.");
     }
     m_mesh_shape = mesh_shape;
-    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
+    std::cout << "Creating MeshDevice with shape: " << m_mesh_shape << std::endl,
+        m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
 }
 
 void AutoContext::close_device() {
