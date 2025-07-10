@@ -37,7 +37,7 @@ private:
 public:
     Impl();
 
-    const MeshShape& get_shape() const;
+    const MeshShape& shape() const;
     const MeshShape& local_shape() const;
     MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(
@@ -59,7 +59,7 @@ bool SystemMesh::Impl::is_local_coordinate(const MeshCoordinate& coord) const {
     return translator.is_local_coordinate(coord);
 }
 
-const MeshShape& SystemMesh::Impl::get_shape() const { return global_shape_; }
+const MeshShape& SystemMesh::Impl::shape() const { return global_shape_; }
 
 const MeshShape& SystemMesh::Impl::local_shape() const { return physical_coordinates_.shape(); }
 
@@ -218,7 +218,7 @@ uint32_t SystemMesh::get_physical_mesh_id(const MeshCoordinate& coord) const {
     return pimpl_->get_physical_mesh_id(coord);
 }
 
-const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
+const MeshShape& SystemMesh::shape() const { return pimpl_->shape(); }
 
 const MeshShape& SystemMesh::local_shape() const { return pimpl_->local_shape(); }
 

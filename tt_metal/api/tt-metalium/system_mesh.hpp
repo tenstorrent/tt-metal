@@ -33,7 +33,7 @@ public:
     SystemMesh& operator=(SystemMesh&&) = delete;
 
     // Returns the shape of the system mesh; this is the global mesh shape in distributed context
-    const MeshShape& get_shape() const;
+    const MeshShape& shape() const;
 
     // Returns the shape of the local mesh
     const MeshShape& local_shape() const;
