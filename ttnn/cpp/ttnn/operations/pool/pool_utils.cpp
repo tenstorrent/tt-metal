@@ -175,12 +175,12 @@ uint32_t calculate_L1_usage(
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool is_large_kernel =
         is_partial_tile ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2 : kernel_size_hw > tt::constants::TILE_HEIGHT;
-    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool && is_large_kernel ? 4 : 8;
+    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     // ToDo: enable 32 sticks per tile for reduction for all cases.
     const uint32_t max_rows_for_reduction =
-        (!is_partial_tile && !is_large_kernel) ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+        !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_blackhole = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
@@ -207,12 +207,7 @@ uint32_t calculate_L1_usage(
 
     uint32_t clear_value_cb_size = 0;
     const bool avg_pool_on_blackhole = is_blackhole && pool_type == Pool2DType::AVG_POOL2D;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel ||
-        (is_wide_reduction && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0)) {
-        // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
-        // is needed only if we use more then 16 sticks per tile for reduction.
-        clear_value_cb_size = tile_size(in_df);
-    }
+    clear_value_cb_size = tile_size(in_df);
 
     uint32_t in_cb_sz = 0;
     if (is_wide_reduction) {

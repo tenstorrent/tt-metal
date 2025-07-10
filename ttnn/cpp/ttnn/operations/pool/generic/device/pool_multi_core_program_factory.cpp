@@ -278,9 +278,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool is_large_kernel =
         is_partial_tile ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2 : kernel_size_hw > tt::constants::TILE_HEIGHT;
-    // For large kernel avg pool, we need to use fp32 accumulation to avoid precision error buildup over multiple
+    // avg pool, we need to use fp32 accumulation to avoid precision error buildup over multiple
     // reduction stages, so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles at a time.
-    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool && is_large_kernel ? 4 : 8;
+    // TODO do we actually need fp32 accumulation if there is only one reduction stage (small kernels)?
+    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     // TODO: enable 32 sticks per tile for reduction for all cases, we can only support 16 row reductions for
@@ -524,9 +525,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en =
-            is_large_kernel && is_avg_pool,  // for large kernels average pool requires fp32 accumulation to avoid
-                                             // precision error buildup over multiuple reduction stages
+        .fp32_dest_acc_en = is_avg_pool,  // average pool requires fp32 accumulation to avoid
+                                          // precision error buildup over multiuple reduction stages
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};
@@ -609,7 +609,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "split_reader: {}", split_reader);
         log_debug(tt::LogOp, "multi_buffering_factor: {}", multi_buffering_factor);
         log_debug(tt::LogOp, "is_wide_reduction: {}", is_wide_reduction);
-        log_debug(tt::LogOp, "is_large_kernel: {}", is_large_kernel);
         log_debug(tt::LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
         log_debug(tt::LogOp, "is_out_sharded: {}", output.memory_config().is_sharded());
     }

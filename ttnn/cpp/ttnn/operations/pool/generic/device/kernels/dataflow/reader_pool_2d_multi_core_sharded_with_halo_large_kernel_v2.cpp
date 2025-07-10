@@ -186,6 +186,8 @@ void kernel_main() {
         if constexpr (reader_id == 1) {
             cb_wait_front(clear_value_cb_id, 1);
         }
+        // TODO we wouldn't always need to clear the in_cb for small kernels if we adjusted the face_r_dim and only
+        // reduced kernel_hw
         clear_out_tiles<in_cb_id, clear_value_cb_id>();
     }
 
