@@ -13,7 +13,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
 #include "ttnn/tensor/storage.hpp"
 
@@ -534,10 +533,7 @@ StorageType Tensor::storage_type() const {
         this->storage());
 }
 
-ttnn::Shape Tensor::strides() const {
-    auto s = tt::tt_metal::compute_strides(this->padded_shape());
-    return ttnn::Shape(tt::stl::SmallVector<uint32_t>(s.begin(), s.end()));
-}
+ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->padded_shape())); }
 
 uint64_t Tensor::logical_volume() const { return logical_shape().volume(); }
 uint64_t Tensor::physical_volume() const { return padded_shape().volume(); }
