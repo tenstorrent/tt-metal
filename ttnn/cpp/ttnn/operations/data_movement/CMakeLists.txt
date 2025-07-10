@@ -48,6 +48,8 @@ target_sources(
         indexed_fill/indexed_fill.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
+        move/device/move_multi_core_with_overlap_program_factory.cpp
+        move/device/move_multi_core_sharded_program_factory.cpp
         move/move.cpp
         non_zero_indices/device/non_zero_indices_op.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
