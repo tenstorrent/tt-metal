@@ -14,120 +14,80 @@ class TtDetect:
             device=device,
             conv=model_params.stems[0].block.conv,
             conv_pth=parameters.stems[0].block.conv,
-            shard_layout=None,
-            auto_shard=True,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
         )
         self.stem_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.stems[1].block.conv,
             conv_pth=parameters.stems[1].block.conv,
-            shard_layout=None,
-            auto_shard=True,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
         )
         self.stem_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.stems[2].block.conv,
             conv_pth=parameters.stems[2].block.conv,
-            shard_layout=None,
-            auto_shard=True,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
         )
 
         self.cls_convs_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_convs[0].block.conv,
             conv_pth=parameters.cls_convs[0].block.conv,
-            shard_layout=None,
-            auto_shard=True,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
         )
         self.cls_convs_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_convs[1].block.conv,
             conv_pth=parameters.cls_convs[1].block.conv,
-            shard_layout=None,
-            auto_shard=True,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
         )
         self.cls_convs_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_convs[2].block.conv,
             conv_pth=parameters.cls_convs[2].block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
         )
 
         self.reg_convs_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_convs[0].block.conv,
             conv_pth=parameters.reg_convs[0].block.conv,
-            shard_layout=None,
-            auto_shard=True,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
+            deallocate_activation=True,
         )
         self.reg_convs_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_convs[1].block.conv,
             conv_pth=parameters.reg_convs[1].block.conv,
-            shard_layout=None,
-            auto_shard=True,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
+            deallocate_activation=True,
         )
         self.reg_convs_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_convs[2].block.conv,
             conv_pth=parameters.reg_convs[2].block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             activation="silu",
-            is_nhwc=True,
-            reshape=True,
+            deallocate_activation=True,
         )
 
         self.cls_preds_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_preds[0],
             conv_pth=parameters.cls_preds[0],
-            shard_layout=None,
-            auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
         self.cls_preds_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_preds[1],
             conv_pth=parameters.cls_preds[1],
-            shard_layout=None,
-            auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
         self.cls_preds_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_preds[2],
             conv_pth=parameters.cls_preds[2],
-            shard_layout=None,
-            auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
 
@@ -135,36 +95,27 @@ class TtDetect:
             device=device,
             conv=model_params.reg_preds[0],
             conv_pth=parameters.reg_preds[0],
-            shard_layout=None,
-            auto_shard=True,
-            is_nhwc=True,
             reshape=True,
+            deallocate_activation=True,
         )
         self.reg_preds_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_preds[1],
             conv_pth=parameters.reg_preds[1],
-            shard_layout=None,
-            auto_shard=True,
-            is_nhwc=True,
             reshape=True,
+            deallocate_activation=True,
         )
         self.reg_preds_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_preds[2],
             conv_pth=parameters.reg_preds[2],
-            shard_layout=None,
-            auto_shard=True,
-            is_nhwc=True,
             reshape=True,
+            deallocate_activation=True,
         )
         self.proj_conv = Yolov6l_Conv2D(
             device=device,
             conv=model_params.proj_conv,
             conv_pth=parameters.proj_conv,
-            shard_layout=None,
-            auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
 
@@ -232,14 +183,10 @@ class TtDetect:
         cls_output_1 = ttnn.sigmoid_accurate(cls_output_1)
         cls_output_2 = ttnn.sigmoid_accurate(cls_output_2)
 
-        cls_output_0 = ttnn.permute(cls_output_0, (0, 3, 1, 2))
-        cls_output_0 = ttnn.reshape(cls_output_0, (1, 80, cls_output_0.shape[2] * cls_output_0.shape[3]))
-
-        cls_output_1 = ttnn.permute(cls_output_1, (0, 3, 1, 2))
-        cls_output_1 = ttnn.reshape(cls_output_1, (1, 80, cls_output_1.shape[2] * cls_output_1.shape[3]))
-
-        cls_output_2 = ttnn.permute(cls_output_2, (0, 3, 1, 2))
-        cls_output_2 = ttnn.reshape(cls_output_2, (1, 80, cls_output_2.shape[2] * cls_output_2.shape[3]))
+        # Since self.nc=80 we have eliminated permute before reshape
+        cls_output_0 = ttnn.reshape(cls_output_0, (1, cls_output_0.shape[1] * cls_output_0.shape[2], 80))
+        cls_output_1 = ttnn.reshape(cls_output_1, (1, cls_output_1.shape[1] * cls_output_1.shape[2], 80))
+        cls_output_2 = ttnn.reshape(cls_output_2, (1, cls_output_2.shape[1] * cls_output_2.shape[2], 80))
 
         reg_output_0 = ttnn.permute(reg_output_0, (0, 3, 1, 2))
         reg_output_0 = ttnn.reshape(reg_output_0, (1, 4, reg_output_0.shape[3]))
@@ -250,8 +197,7 @@ class TtDetect:
         reg_output_2 = ttnn.permute(reg_output_2, (0, 3, 1, 2))
         reg_output_2 = ttnn.reshape(reg_output_2, (1, 4, reg_output_2.shape[3]))
 
-        cls_score_list = ttnn.concat([cls_output_0, cls_output_1, cls_output_2], dim=-1)
-        cls_score_list = ttnn.permute(cls_score_list, (0, 2, 1))
+        cls_score_list = ttnn.concat([cls_output_0, cls_output_1, cls_output_2], dim=1)
 
         reg_dist_list = ttnn.concat([reg_output_0, reg_output_1, reg_output_2], dim=-1)
         reg_dist_list = ttnn.permute(reg_dist_list, (0, 2, 1))
@@ -268,7 +214,6 @@ class TtDetect:
         bbox = ttnn.concat([c_xy, wh], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         bbox = ttnn.multiply(bbox, self.strides)
-
         output = ttnn.concat([bbox, self.ones_tensor, cls_score_list], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return output
