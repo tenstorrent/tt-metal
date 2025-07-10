@@ -14,7 +14,7 @@ struct GeluBackwardOperation {
         QueueId queue_id,
         const Tensor& grad_output_tensor,
         const Tensor& input_tensor,
-        const string& approximate,
+        const std::string& approximate,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad_tensor = std::nullopt);
 };

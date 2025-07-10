@@ -44,13 +44,13 @@ int main() {
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size);
-    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     /* Specify data movement kernel for reading/writing data to/from DRAM */
     KernelHandle binary_reader_kernel_id = CreateKernel(

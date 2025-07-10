@@ -76,6 +76,16 @@ inline void llk_math_eltwise_unary_sfpu_typecast(uint dst_index, int vector_mode
     } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt16 && OUT_DTYPE == (uint32_t)DataFormat::UInt32) {
         _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
             ckernel::sfpu::calculate_typecast_uint16_to_uint32<APPROXIMATE, 8>, dst_index, vector_mode);
+    } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt16 && OUT_DTYPE == (uint32_t)DataFormat::Int32) {
+        // Calls same kernel as UInt32 case
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_uint16_to_uint32<APPROXIMATE, 8>, dst_index, vector_mode);
+    } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt32 && OUT_DTYPE == (uint32_t)DataFormat::UInt16) {
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_uint32_to_uint16<APPROXIMATE, 8>, dst_index, vector_mode);
+    } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Int32 && OUT_DTYPE == (uint32_t)DataFormat::UInt16) {
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_int32_to_uint16<APPROXIMATE, 8>, dst_index, vector_mode);
     } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp8_b && OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
         // no SFPU kernel needed, handled by unpacker
     } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::Bfp8_b) {
