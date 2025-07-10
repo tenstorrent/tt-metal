@@ -72,6 +72,7 @@ enum class ShardingTensorSpecMethod {
 struct NDShardingTensorSpecParams {
     Shape tensor_shape;
     Layout layout = Layout::TILE;
+    std::optional<Tile> tile;
     ShardingTensorSpecMethod method = ShardingTensorSpecMethod::ShardedAcrossDims;
     std::vector<int32_t> dims;
     Shape expected_shard_shape;
@@ -367,7 +368,8 @@ TEST_P(NDShardingTensorSpecTests, TestTensorSpec) {
 
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{3, 3}));
     TensorSpec tensor_spec(
-        params.tensor_shape, TensorLayout(DataType::FLOAT32, PageConfig(params.layout), MemoryConfig(BufferType::L1)));
+        params.tensor_shape,
+        TensorLayout(DataType::FLOAT32, PageConfig(params.layout, params.tile), MemoryConfig(BufferType::L1)));
     switch (params.method) {
         case ShardingTensorSpecMethod::ShardedAcrossDims:
             tensor_spec = tensor_spec.sharded_across_dims(params.dims, cores);
@@ -1190,6 +1192,30 @@ INSTANTIATE_TEST_SUITE_P(
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-1, -2},
             .expected_shard_shape = Shape({5, 3, 32, 32}),
+        },
+        NDShardingTensorSpecParams{
+            .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
+            .layout = Layout::TILE,
+            .tile = Tile({16, 16}),
+            .method = ShardingTensorSpecMethod::ShardedAcrossDims,
+            .dims = {-1, -2},
+            .expected_shard_shape = Shape({5, 3, 16, 16}),
+        },
+        NDShardingTensorSpecParams{
+            .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
+            .layout = Layout::TILE,
+            .tile = Tile({16, 32}),
+            .method = ShardingTensorSpecMethod::ShardedAcrossDims,
+            .dims = {-1, -2},
+            .expected_shard_shape = Shape({5, 3, 16, 32}),
+        },
+        NDShardingTensorSpecParams{
+            .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
+            .layout = Layout::TILE,
+            .tile = Tile({32, 16}),
+            .method = ShardingTensorSpecMethod::ShardedAcrossDims,
+            .dims = {-1, -2},
+            .expected_shard_shape = Shape({5, 3, 32, 16}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
