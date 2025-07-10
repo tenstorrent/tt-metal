@@ -18,6 +18,8 @@ class UFLDPerformantRunner:
         model_location_generator=None,
         resolution=(320, 800),
         torch_input_tensor=None,
+        mesh_mapper=None,
+        mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
@@ -30,6 +32,8 @@ class UFLDPerformantRunner:
             model_location_generator,
             resolution=resolution,
             torch_input_tensor=self.torch_input_tensor,
+            mesh_mapper=mesh_mapper,
+            mesh_composer=mesh_composer,
         )
         (
             self.tt_inputs_host,
@@ -89,6 +93,7 @@ class UFLDPerformantRunner:
             self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.device)
         return self.runner_infra.output_tensor_1
 
     def _validate(self, input_tensor, result_output_tensor):
