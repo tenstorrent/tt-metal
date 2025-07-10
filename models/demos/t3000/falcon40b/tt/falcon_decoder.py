@@ -211,8 +211,10 @@ class TtFalconDecoderLayer:
                 replicated_hidden_states, self.model_config["BFP8_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
+        output_buffer = self.tt_ccl.ag_output_pbs["DECODER_FWD_PREFILL_AG"]
         replicated_hidden_states = ttnn.experimental.all_gather_async(
             replicated_hidden_states,
+            persistent_output_buffer=output_buffer,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -278,7 +280,6 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
             # output_tensor=output,
         )
-        mlp_output.deallocate(True)
 
         if use_cache:
             outputs = (output,) + outputs
@@ -306,8 +307,10 @@ class TtFalconDecoderLayer:
 
         assert not output_attentions
 
+        persistent_output_buffer = self.tt_ccl.ag_output_pbs["DECODER_FWD_DECODE_AG"]
         replicated_hidden_states = ttnn.experimental.all_gather_async(
             hidden_states,
+            persistent_output_buffer=persistent_output_buffer,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -371,7 +374,6 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
             # output_tensor=output,
         )
-        mlp_output.deallocate(True)
 
         if use_cache:
             outputs = (output,) + outputs

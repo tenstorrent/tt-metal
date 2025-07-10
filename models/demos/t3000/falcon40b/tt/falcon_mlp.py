@@ -106,7 +106,6 @@ class TtFalconMLP:
             dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
-        x.deallocate(True)
 
         hidden_states = ttnn.matmul(
             hidden_states,
@@ -119,6 +118,8 @@ class TtFalconMLP:
 
         hidden_states = ttnn.experimental.reduce_scatter_minimal_async(
             hidden_states,
+            persistent_intermediate_buffer=self.tt_ccl.rs_intermediate_pbs["MLP_FWD_DECODE_RS"],
+            persistent_output_buffer=self.tt_ccl.rs_output_pbs["MLP_FWD_DECODE_RS"],
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
             num_links=1,  # only unidirectional supported for now
@@ -184,6 +185,8 @@ class TtFalconMLP:
 
         return ttnn.experimental.reduce_scatter_minimal_async(
             self.output,
+            persistent_intermediate_buffer=self.tt_ccl.rs_intermediate_pbs["MLP_FWD_PREFILL_RS"],
+            persistent_output_buffer=self.tt_ccl.rs_output_pbs["MLP_FWD_PREFILL_RS"],
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
             num_links=1,  # only one link supported for now

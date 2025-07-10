@@ -31,13 +31,14 @@ class TtFalconModelShared:
         model_config,
         tt_cache_path,
         use_global_cos_sin_cache,
+        seq_len,
     ):
         super().__init__()
 
         # NOTE: Once we make embeddings run on device, pass in state dict
         # instead of model itself
         self.mesh_device = mesh_device
-        self.tt_ccl = TT_CCL(self.mesh_device)
+        self.tt_ccl = TT_CCL(self.mesh_device, model_config, seq_len)
         self.state_dict = state_dict
         self.base_url = base_url
         self.config = config
@@ -46,6 +47,7 @@ class TtFalconModelShared:
         self.num_layers = num_layers
         self.hidden_size = config.hidden_size
         self.num_devices = mesh_device.get_num_devices()
+        self.seq_len = seq_len
         self.ln_output_tensors_dict = {
             "final_layernorm": dict(),
             "mlp_layernorm": dict(),
@@ -313,6 +315,7 @@ class TtFalconModelShared:
 
         layer_output = ttnn.experimental.all_gather_async(
             layer_output,
+            persistent_output_buffer=self.tt_ccl.ag_output_pbs["MODEL_FWD_PREFILL_AG"],
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -368,6 +371,7 @@ class TtFalconModelShared:
 
         layer_output = ttnn.experimental.all_gather_async(
             layer_output,
+            persistent_output_buffer=self.tt_ccl.ag_output_pbs["MODEL_FWD_DECODE_AG"],
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],

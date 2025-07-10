@@ -119,6 +119,7 @@ def run_test_FalconCausalLM_end_to_end(
         model_config,
         tt_cache_path,
         use_global_cos_sin_cache,
+        seq_len=seq_len,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("TtFalcon_model_setup")
@@ -430,6 +431,7 @@ def run_test_FalconCausalLM_end_to_end(
         ),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,

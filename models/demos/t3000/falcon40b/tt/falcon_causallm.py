@@ -24,6 +24,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         model_config,
         tt_cache_path,
         use_global_cos_sin_cache,
+        seq_len: Optional[int] = None,
     ):
         assert base_url == "", "base_url should be empty at the root of the model!"
 
@@ -37,6 +38,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             model_config=model_config,
             tt_cache_path=tt_cache_path,
             use_global_cos_sin_cache=use_global_cos_sin_cache,
+            seq_len=seq_len,
         )
         self.model_config = model_config
         self.mesh_device = mesh_device
@@ -168,6 +170,5 @@ class TtFalconCausalLM(TtFalconModelShared):
             dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
-        hidden_states.deallocate(True)
 
         return lm_logits, presents

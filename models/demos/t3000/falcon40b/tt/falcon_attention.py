@@ -367,6 +367,7 @@ class TtFalconAttention:
         )
         attn_output = ttnn.experimental.all_gather_async(
             attn_output,
+            persistent_output_buffer=self.tt_ccl.ag_output_pbs["ATTN_FWD_PREFILL_AG"],
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -586,6 +587,7 @@ class TtFalconAttention:
         )
         attn_output = ttnn.experimental.all_gather_async(
             attn_output,
+            persistent_output_buffer=self.tt_ccl.ag_output_pbs["ATTN_FWD_DECODE_AG"],
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
