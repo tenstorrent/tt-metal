@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 from typing import Union, Optional, Tuple
 
 
@@ -13,7 +13,7 @@ from models.experimental.deit.tt.deit_self_attention import TtDeiTSelfAttention
 from models.experimental.deit.tt.deit_self_output import TtDeiTSelfOutput
 
 
-class TtDeiTAttention(nn.Module):
+class TtDeiTAttention(LightweightModule):
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
 

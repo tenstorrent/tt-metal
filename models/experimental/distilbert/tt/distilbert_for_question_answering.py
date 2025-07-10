@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple, Union
-import torch.nn as nn
 from dataclasses import dataclass
 
 from models.utility_functions import (
@@ -26,7 +26,7 @@ class TtQuestionAnsweringModelOutput:
     attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
-class TtDistilBertForQuestionAnswering(nn.Module):
+class TtDistilBertForQuestionAnswering(LightweightModule):
     def __init__(self, config, state_dict=None, base_address="", device=None) -> None:
         super().__init__()
         self.config = config
