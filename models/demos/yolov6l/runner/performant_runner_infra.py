@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import sys
-
 import torch
 from loguru import logger
 
@@ -13,8 +11,6 @@ from models.demos.yolov6l.tt.model_preprocessing import create_yolov6l_model_par
 from models.demos.yolov6l.tt.ttnn_yolov6l import TtYolov6l
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-sys.path.append("models/demos/yolov6l/reference/")
 
 
 class YOLOv6lPerformanceRunnerInfra:
