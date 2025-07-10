@@ -229,8 +229,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         intermediate_num_tiles,
     };
 
-    std::map<string, string> reader_kernel_defines;
-    std::map<string, string> writer_kernel_defines;
+    std::map<std::string, std::string> reader_kernel_defines;
+    std::map<std::string, std::string> writer_kernel_defines;
     if (in0_is_sharded) {
         writer_kernel_defines["IN0_SHARDED"] = "1";
     }

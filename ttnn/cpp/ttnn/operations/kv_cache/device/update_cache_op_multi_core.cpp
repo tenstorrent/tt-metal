@@ -54,8 +54,6 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.padded_shape()[0];
     uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.padded_shape()[1];
 
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
-
     uint32_t B = input_tensor.padded_shape()[-2];
     uint32_t Bcache = cache_tensor.padded_shape()[0];
     const uint32_t granularity = std::min(static_cast<uint32_t>(2), Bcache);  // granularity = 2 best for performance
@@ -105,7 +103,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         tt::tt_metal::CircularBufferConfig(
             num_cache_tiles * cache_single_tile_size, {{src0_cb_index, cache_cb_data_format}})
             .set_page_size(src0_cb_index, cache_single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_src1_config =
@@ -126,14 +124,14 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         tt::tt_metal::CircularBufferConfig(num_interm_tiles * interm_single_tile_size, interim_data_format_spec)
             .set_page_size(interm0_cb_index, interm_single_tile_size)
             .set_page_size(interm1_cb_index, interm_single_tile_size);
-    auto cb_interm0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_interm0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_interm0_config);
 
     uint32_t interm2_cb_index = tt::CBIndex::c_26;
     tt::tt_metal::CircularBufferConfig cb_interm2_config =
         tt::tt_metal::CircularBufferConfig(
             num_interm_tiles * interm_single_tile_size, {{interm2_cb_index, interm_cb_data_format}})
             .set_page_size(interm2_cb_index, interm_single_tile_size);
-    auto cb_interm2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_interm2_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_interm2_config);
 
     // Output is same tensor as cache input, so cb/tile size is same
     uint32_t output_cb_index = tt::CBIndex::c_16;
@@ -144,7 +142,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * cache_single_tile_size, {{output_cb_index, cache_cb_data_format}})
             .set_page_size(output_cb_index, cache_single_tile_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = cache_tensor.buffer();
@@ -171,7 +169,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         (std::uint32_t)granularity,
         (std::uint32_t)u_count};
 
-    std::map<string, string> reader_kernel_defines;
+    std::map<std::string, std::string> reader_kernel_defines;
     if (shard_spec.has_value()) {
         reader_kernel_defines["INPUT_SHARDED"] = "1";
     }
@@ -200,7 +198,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         granularity,
         u_count};
 
-    auto compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp",
         core_group_1,
@@ -208,7 +206,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
 
     if (!core_group_2.ranges().empty()) {
         compute_kernel_args[6] = num_batched_heads_per_core_group_2;
-        auto compute_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp",
             core_group_2,
@@ -216,7 +214,6 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
@@ -227,7 +224,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     uint32_t total_batched_heads = 0;
     std::vector<uint32_t> cache_start_ids;
     cache_start_ids.reserve(num_cores);
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; ++i) {
+    for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_batched_heads_per_core;
         if (i < g1_numcores) {
@@ -297,7 +294,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
                 UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
             }
 
-            for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); ++i) {
+            for (uint32_t i = 0; i < cores.size(); ++i) {
                 const CoreCoord& core = cores.at(i);
                 uint32_t curr_cache_start_id = cache_start_ids[i] + cache_tile_idx;
                 {
@@ -397,7 +394,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    std::map<string, string> reader_kernel_defines;
+    std::map<std::string, std::string> reader_kernel_defines;
     if (shard_spec.has_value()) {
         reader_kernel_defines["INPUT_SHARDED"] = "1";
     }
@@ -415,7 +412,6 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 

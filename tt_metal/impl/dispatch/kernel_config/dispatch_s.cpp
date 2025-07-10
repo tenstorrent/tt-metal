@@ -7,7 +7,6 @@
 #include <tt_metal.hpp>
 #include <map>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -18,22 +17,17 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
-#include "utils.hpp"
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 
 using namespace tt::tt_metal;
 
 void DispatchSKernel::GenerateStaticConfigs() {
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-    uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     uint32_t dispatch_s_buffer_base = 0xff;
@@ -117,7 +111,7 @@ void DispatchSKernel::CreateKernel() {
     auto downstream_s_virtual_noc_coords =
         device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},  // Unused, remove later

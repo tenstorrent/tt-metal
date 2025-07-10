@@ -74,7 +74,7 @@ void CreateSenderKernel(
     const std::string& sender_kernel_name,
     std::vector<uint32_t>&& sender_compile_time_args,
     const CoreCoord& sender_logical_core,
-    const std::map<string, string>& defines,
+    const std::map<std::string, std::string>& defines,
     std::vector<uint32_t>&& sender_runtime_args) {
     // Allocate space for the client interface
     uint32_t client_interface_cb_index = tt::CBIndex::c_0;
@@ -102,7 +102,7 @@ void CreateSenderKernel(
 void CreateReceiverKernel(
     tt::tt_metal::Program& receiver_program,
     const CoreCoord& receiver_logical_core,
-    const std::map<string, string>& defines,
+    const std::map<std::string, std::string>& defines,
     const uint32_t address,
     const uint32_t data_size) {
     auto receiver_kernel = tt_metal::CreateKernel(
@@ -223,7 +223,7 @@ void RunAsyncWriteTest(
         end_fabric_node_id.chip_id,
         tt_metal::MetalContext::instance().hal().noc_xy_encoding(router_virtual_core.x, router_virtual_core.y),
         outbound_eth_channels.begin()->first};
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
@@ -313,7 +313,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
@@ -431,7 +431,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
@@ -535,7 +535,7 @@ void RunAsyncWriteMulticastTest(
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
     // Create receiver programs and buffers
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
@@ -788,6 +788,8 @@ TEST_F(Fabric2DFixture, TestUnicastRaw) {
 
 TEST_F(Fabric2DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
+TEST_F(Fabric2DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
+
 TEST_F(Fabric2DFixture, TestUnicastConnAPIRandom) {
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastConnAPIRandom(this);
@@ -890,6 +892,8 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
 TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+
+TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
 
 // 2D Dynamic Routing Unidirectional mcast tests (no turns)
 TEST_F(Fabric2DDynamicFixture, TestLineMcastE1Hop) {

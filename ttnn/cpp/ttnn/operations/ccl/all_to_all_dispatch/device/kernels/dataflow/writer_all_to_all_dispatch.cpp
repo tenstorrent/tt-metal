@@ -6,33 +6,17 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
-template <uint32_t mesh_cols, uint32_t mesh_rows, int axis>
-bool is_configured_target(uint32_t src_chip_id, uint32_t dest_chip_id) {
-    // axis is the direction along which we are allowed to send packets
-    // axis = 1; means we are allowed to send packets in the row direction
-    // axis = 0; means we are allowed to send packets in the column direction
-    // axis = -1; means we are allowed to send packets in all directions
-    if (axis == 0) {  // check if they're on the same column
-        return src_chip_id % mesh_cols == dest_chip_id % mesh_cols;
-    } else if (axis == 1) {  // check if they're on the same row
-        return src_chip_id / mesh_cols == dest_chip_id / mesh_cols;
-    } else {
-        return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
-                      // is all directions
-    }
-}
+namespace detail {
 
-/*
-enum eth_chan_directions {
-    EAST = 0,
-    WEST = 1,
-    NORTH = 2,
-    SOUTH = 3,
-    COUNT = 4,
-};*/
+inline void dispatch_input_local_device(
+    uint32_t input_token_read_addr, uint64_t output_token_write_addr, uint32_t output_page_size) {
+    noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
+    noc_async_write_barrier();
+}
 
 // Insert helper that handles the local-device metadata path
 inline void dispatch_metadata_local_device(
@@ -86,52 +70,9 @@ inline void dispatch_metadata_remote_device(
     fabric_connections[route].send_payload_flush_blocking_from_address(
         (uint32_t)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
 }
+}  // namespace detail
 
-inline void dispatch_input_local_device(
-    uint32_t input_token_read_addr, uint64_t output_token_write_addr, uint32_t output_page_size) {
-    noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
-    noc_async_write_barrier();
-}
-
-inline void dispatch_input_remote_device(
-    uint32_t src_chip_id,
-    uint32_t dest_chip_id,
-    uint32_t dest_mesh_id,
-    uint32_t mesh_cols,
-    uint32_t mesh_rows,
-    uint32_t input_token_read_addr,
-    uint64_t output_token_write_addr,
-    int size,
-    uint32_t fabric_max_packet_size,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
-    volatile PACKET_HEADER_TYPE* token_unicast_packet_header) {
-    // Clear the header buffer region.
-    uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
-
-    // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)token_unicast_packet_header,
-        static_cast<eth_chan_directions>(fabric_connections[route].direction),
-        src_chip_id,
-        dest_chip_id,
-        dest_mesh_id,
-        mesh_cols);
-    while (size > 0) {
-        uint32_t curr_packet_size = std::min(fabric_max_packet_size, (uint32_t)size);
-        token_unicast_packet_header->to_noc_unicast_write(
-            NocUnicastCommandHeader{output_token_write_addr}, curr_packet_size);
-
-        fabric_connections[route].wait_for_empty_write_slot();
-        fabric_connections[route].send_payload_without_header_non_blocking_from_address(
-            input_token_read_addr, curr_packet_size);
-        fabric_connections[route].send_payload_flush_blocking_from_address(
-            (uint32_t)token_unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
-
-        input_token_read_addr += curr_packet_size;
-        output_token_write_addr += curr_packet_size;
-        size -= curr_packet_size;
-    }
-}
+using namespace ttnn::operations::ccl::common;
 
 void kernel_main() {
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
@@ -179,6 +120,7 @@ void kernel_main() {
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(36);
 
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(37);
+    constexpr uint32_t alignment = get_compile_time_arg_val(38);
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -195,20 +137,15 @@ void kernel_main() {
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
 
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
-    for (uint32_t i = 0; i < directions.size(); i++) {
-        if (directions[i] == true) {
-            fabric_connections[i] =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-            fabric_connections[i].open_start();
-        }
-    }
+    open_direction_connections(directions, fabric_connections, rt_args_idx);
 
 #ifdef AXIS
-    constexpr int axis = AXIS;
-    constexpr uint32_t dispatch_devices = axis == 0 ? mesh_rows : mesh_cols;
-    constexpr uint32_t dispatch_index = axis == 0 ? src_chip_id / mesh_cols : src_chip_id % mesh_cols;
+    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
+    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
+    constexpr uint32_t dispatch_index =
+        axis == ReplicateGroup::COLS ? src_chip_id / mesh_cols : src_chip_id % mesh_cols;
 #else
-    constexpr int axis = -1;
+    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
     constexpr uint32_t dispatch_devices = num_devices;
     constexpr uint32_t dispatch_index = src_chip_id;
 #endif
@@ -222,12 +159,6 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
-
-    for (uint32_t i = 0; i < directions.size(); i++) {
-        if (directions[i] == true) {
-            fabric_connections[i].open_finish();
-        }
-    }
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
@@ -254,21 +185,19 @@ void kernel_main() {
                 if (devices_for_expert[d] == 1) {
                     if (dest_chip_ids[d] == src_chip_id) {
                         // if the expert lives on the current device, we dispatch the input token to it
-                        dispatch_input_local_device(input_token_read_addr, output_token_write_addr, output_page_size);
-                    } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
+                        detail::dispatch_input_local_device(
+                            input_token_read_addr, output_token_write_addr, output_page_size);
+                    } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, axis>(dest_chip_ids[d])) {
                         // if the expert lives on a remote device, we dispatch the input token to it
                         // if axis is specified then we only send to the devices that are along the axis
                         // if axis is not specified then we send to all devices
-                        dispatch_input_remote_device(
-                            src_chip_id,
+                        dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size>(
                             dest_chip_ids[d],
                             dest_mesh_ids[d],
-                            mesh_cols,
-                            mesh_rows,
+                            alignment,
+                            (int)output_page_size,
                             input_token_read_addr,
                             output_token_write_addr,
-                            (int)output_page_size,
-                            fabric_max_packet_size,
                             fabric_connections,
                             unicast_packet_header);
                     }
@@ -291,11 +220,11 @@ void kernel_main() {
         for (uint32_t d = 0; d < num_devices; d++) {
             if (dest_chip_ids[d] == src_chip_id) {
                 // dispatch the metadata to the current device and increment the local copy of the semaphore
-                dispatch_metadata_local_device(
+                detail::dispatch_metadata_local_device(
                     token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
-            } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
+            } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, axis>(dest_chip_ids[d])) {
                 // dispatch the metadata to the remote device and increment the remote device's copy of the semaphore
-                dispatch_metadata_remote_device(
+                detail::dispatch_metadata_remote_device(
                     src_chip_id,
                     dest_chip_ids[d],
                     dest_mesh_ids[d],
@@ -312,9 +241,5 @@ void kernel_main() {
     }
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
-    for (uint32_t i = 0; i < directions.size(); i++) {
-        if (directions[i] == true) {
-            fabric_connections[i].close();
-        }
-    }
+    close_direction_connections(directions, fabric_connections);
 }
