@@ -13,28 +13,6 @@
 #include "debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
-namespace NAMESPACE {
-
-void read_block_tiles(
-    const uint32_t cb_input_idx,
-    const InterleavedAddrGenFast<true>& input_address_generator,
-    const uint32_t Wt,
-    const uint32_t block_size,
-    const uint32_t tile_bytes,
-    const uint32_t idx) {
-    for (uint32_t j = 0; j < Wt; j += block_size) {
-        cb_reserve_back(cb_input_idx, block_size);
-        uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-            l1_write_addr += tile_bytes;
-        }
-
-        noc_async_read_barrier();
-        cb_push_back(cb_input_idx, block_size);
-    }
-}
-
 void read_coloumn_tiles() {
 }
 
@@ -55,8 +33,12 @@ void kernel_main() {
     constexpr uint32_t cb_scaler = tt::CBIndex::c_4;
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
 
+    //[DEBUG] TODO: remove this
+    constexpr uint32_t cb_transpose_key = tt::CBIndex::c_6;
+
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);  // d / TILE_W
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);  // S / TILE_W
     constexpr uint32_t packed_scaler = get_compile_time_arg_val(3);
 
     constexpr uint32_t onetile = 1U;
@@ -86,36 +68,29 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         uint32_t idx = (start_row + i) * Wt;
 
-        for (uint32_t col = 0; col < Wt; col += block_size) {
-            // read query block_size tiles
-            cb_reserve_back(cb_query, block_size);
-            uint32_t query_l1_write_addr = get_write_ptr(cb_query);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + col + block_idx, query_address_generator, query_l1_write_addr);
-                query_l1_write_addr += tile_bytes;
-            }
+        uint32_t key_page_offset = ((start_row + i) / Ht) * Wt * Ht;
 
+        cb_reserve_back(cb_query, Wt);
+        uint32_t query_l1_write_addr = get_write_ptr(cb_query);
+        for (uint32_t col = 0; col < Wt; ++col) {
+            noc_async_read_tile(idx + col, query_address_generator, query_l1_write_addr);
+            query_l1_write_addr += tile_bytes;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_query, Wt);
+
+        for (uint32_t h = 0; h < Ht; ++h) {             // read all
+            uint32_t k_idx = key_page_offset + h * Wt;  // add row offset in case I need to read second batch
+            // read key row block_size tiles
+            // we read key by rows to compute matmul Q by K^T
+            cb_reserve_back(cb_key, Wt);
+            uint32_t key_l1_writer_addr = get_write_ptr(cb_key);
+            for (uint32_t w = 0; w < Wt; ++w) {
+                noc_async_read_tile(k_idx + w, key_address_generator, key_l1_writer_addr);
+                key_l1_writer_addr += tile_bytes;
+            }
             noc_async_read_barrier();
-            cb_push_back(cb_query, block_size);
-
-            for (uint32_t j = 0; j < Wt; j += block_size) {
-                // read key row block_size tiles
-                // we read key by rows to compute matmul Q by K^T
-                cb_reserve_back(cb_key, block_size);
-                uint32_t key_l1_writer_addr = get_write_ptr(cb_key);
-                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                    noc_async_read_tile(idx + j + block_idx, key_address_generator, key_l1_writer_addr);
-                    key_l1_writer_addr += tile_bytes;
-                }
-
-                noc_async_read_barrier();
-                cb_push_back(cb_key, block_size);
-            }
-            // for k_block, v_blcok in K, V
-            //      read k_block
-            //      read q_block <- nee to read it in transpose way: read col instead of row
+            cb_push_back(cb_key, Wt);
         }
     }
 }
-
-}  // namespace NAMESPACE

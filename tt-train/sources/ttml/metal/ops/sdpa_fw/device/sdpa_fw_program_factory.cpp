@@ -179,7 +179,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
-    const auto& attn_mask = tensor_args.mask.has_value() ? tensor_args.mask.value() : std::nullopt;
+    const auto& attn_mask = tensor_args.mask;
     /*
     Q: B x H_q x S x E
     K: B x H_k x S x E
@@ -222,8 +222,26 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
     // We assume that all input tensors inner dim is the same and divisible by TILE_W == 32
-    uint32_t block_size = get_block_size(Wt, 3U);
+    // TODO[check]: check max block size value based on how many registers we use in compute kernel
+    uint32_t block_size = get_block_size(Wt, 4U);
     uint32_t twice_block_size = 2 * block_size;
+
+    //[DEBUG]:
+    fmt::print(
+        "SDPA FW: NC={}, Ht_={}, Wt={}, block_size={}, num_cores={} ({}x{}), group1 cores={} rows/core={}, group2 "
+        "cores={} "
+        "rows/core={}\n",
+        NC,
+        Ht_,
+        Wt,
+        block_size,
+        num_cores,
+        num_cores_x,
+        num_cores_y,
+        core_group_1.size(),
+        num_rows_per_core_group_1,
+        core_group_2.size(),
+        num_rows_per_core_group_2);
 
     auto data_format = input_data_format;
     auto precise_data_format = tt::DataFormat::Float32;
@@ -232,11 +250,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    auto cb_query = create_circular_buffer(
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    auto cb_query =
+        create_circular_buffer(program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
-    auto cb_key = create_circular_buffer(
-        program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    auto cb_key =
+        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
     auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
@@ -251,13 +269,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
     auto cb_transposed_key = create_circular_buffer(
-        program, all_cores, kTranspoxeKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, kTranspoxeKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
     auto cb_temp_accum = create_circular_buffer(
         program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kTempAccumTiles);
 
     auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Ht_);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -305,10 +323,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     SDPAForwardKernels kernels;
     kernels.reader = create_reader_kernel(
-        program, all_cores, /* reader_compile_args */ {block_size, Wt, packed_scaler}, defines, kReaderKernelPath);
+        program, all_cores, /* reader_compile_args */ {block_size, Wt, Ht_, packed_scaler}, defines, kReaderKernelPath);
 
     kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
+        program, all_cores, /* writer_compile_args */ {block_size, Wt, Ht_}, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for rmsnorm_fw
@@ -318,7 +336,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
-        Wt                          // num_inner / TILE_W
+        Wt,                         // num_inner / TILE_W
+        Ht_                         // num_seq_len / TILE_H
     };
 
     kernels.compute_group_1 =
@@ -329,7 +348,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         std::vector<uint32_t> compute_group_2_args = {
             num_rows_per_core_group_2,  // per_core_block_cnt
             block_size,                 // per_core_block_size
-            Wt                          // num_inner / TILE_W
+            Wt,                         // num_inner / TILE_W
+            Ht_                         // num_seq_len / TILE_H
         };
 
         kernels.compute_group_2 =

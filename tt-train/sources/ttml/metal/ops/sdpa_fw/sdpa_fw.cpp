@@ -12,7 +12,7 @@ std::vector<std::optional<ttnn::Tensor>> SDPAForwardOperation::invoke(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,
-    std::optional<ttnn::Tensor> mask,
+    const std::optional<ttnn::Tensor>& mask,
     float dropout_probability,
     bool return_intermediates) {
     auto result = ttnn::prim::ttml_sdpa_fw(query, key, value, mask, dropout_probability, return_intermediates);

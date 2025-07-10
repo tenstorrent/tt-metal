@@ -17,7 +17,7 @@ struct tensor_args_t {
     const ttnn::Tensor& query;
     const ttnn::Tensor& key;
     const ttnn::Tensor& value;
-    std::optional<ttnn::Tensor> mask;  // attention mask
+    const std::optional<ttnn::Tensor>& mask;  // attention mask
 
     std::optional<ttnn::Tensor> preallocated_intermediate;
     std::optional<ttnn::Tensor> preallocated_output;

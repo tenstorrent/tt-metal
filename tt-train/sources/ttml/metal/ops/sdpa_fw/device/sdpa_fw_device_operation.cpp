@@ -14,12 +14,12 @@ SDPAForwardDeviceOperation::program_factory_t SDPAForwardDeviceOperation::select
     return SDPAForwardProgramFactory{};
 }
 
-SDPAForwardDeviceOperation::validate_on_program_cache_hit(
+void SDPAForwardDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-SDPAForwardDeviceOperation::validate_on_program_cache_miss(
+void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
@@ -41,8 +41,10 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
     if (tensor_args.preallocated_output.has_value()) {
         output_specs.push_back(tensor_args.preallocated_output->tensor_spec());
     } else {
+        auto shape = tensor_args.query.logical_shape();
+        shape[3] = shape[2];
         output_specs.emplace_back(
-            tensor_args.query.logical_shape(),
+            shape,
             tt::tt_metal::TensorLayout(
                 tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
     }
@@ -54,7 +56,7 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
     return output_specs;
 }
 
-tensor_return_value_t SDPAForwardDeviceOperation::create_ouptut_tensors(
+tensor_return_value_t SDPAForwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     tensor_return_value_t output_tensors;
     output_tensors.reserve(1U + static_cast<uint32_t>(args.return_intermediates));
@@ -101,5 +103,6 @@ SDPAForwardDeviceOperation::invoke(
     };
 
     return {operation_attributes, tensor_args};
+}
 
 }  // namespace ttml::metal::ops::sdpa_fw::device

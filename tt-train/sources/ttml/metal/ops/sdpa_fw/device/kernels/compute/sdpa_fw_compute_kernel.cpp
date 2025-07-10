@@ -6,7 +6,6 @@
 #include <compute_kernel_api/pack.h>
 #include <compute_kernel_api/reconfig_data_format.h>
 #include <compute_kernel_api/reg_api.h>
-#include <debug/dprint.h>
 #include <hostdevcommon/kernel_structs.h>
 #include <tensix.h>
 
@@ -28,13 +27,13 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "metal/ops/common/dataflow_utils.hpp"
 
 namespace NAMESPACE {
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
 constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
+constexpr uint32_t Ht = get_compile_time_arg_val(3);
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -48,88 +47,92 @@ constexpr uint32_t cb_output = tt::CBIndex::c_8;
 
 const uint32_t onetile = 1U;
 
-void MAIN() {
+void MAIN {
+    init_sfpu(cb_query, cb_output);
+    binary_op_init_common(cb_query, cb_key, cb_output);
+
+    mm_init(cb_query, cb_key, cb_output, 1);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        // run throught all tiles in query row
-        for (uint32_t col = 0; col < Wt; col += block_size) {
-            cb_wait_front(cb_query, block_size);
+        cb_wait_front(cb_query, Wt);
+        cb_reserve_back(cb_output, Ht);
 
-            // process  block_size tiles from query row
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                const uint32_t accum_register = 0;
-                const uint32_t tile_register = 1U;
-                cb_reserve_back(cb_output, block_size);
+        for (uint32_t h = 0; h < Ht; ++h) {  // read all
+            cb_wait_front(cb_key, Wt);
 
-                // run through all tiles in key row and matmul with query row
-                for (uint32_t key_col = 0; key_col < Wt;) {
-                    cb_wait_front(cb_key, block_size);
-                    tile_regs_acquire();
-                    for (uint32_t block_idx_key = 0; block_idx_key < block_size; ++block_idx_key) {
-                        transpose_wh_tile(cb_key, block_idx_key, block_idx_key);
-                    }
-                    tile_regs_commit();
+            // for (uint32_t k_col = 0; k_col < Wt; k_col += block_size) {
+            //     cb_reserve_back(cb_transpose_key, block_size);
 
-                    tile_regs_wait();
-                    cb_reserve_back(cb_transpose_key, block_size);
-                    pack_reconfig_data_format(cb_transpose_key);
-                    for (uint32_t block_idx_key = 0; block_idx_key < block_size; ++block_idx_key) {
-                        pack_tile(block_idx_key, cb_transpose_key);
-                    }
-                    tile_regs_release();
-                    cb_push_back(cb_transpose_key, block_size);
+            //     tile_regs_acquire();
+            //     transpose_wh_init(cb_key, cb_transpose_key);
+            //     for (uint32_t key_block_idx = 0; key_block_idx < block_size; ++key_block_idx) {
+            //         transpose_wh_tile(cb_key, k_col + key_block_idx, key_block_idx);
+            //     }
+            //     tile_regs_commit();
 
-                    cb_wait_front(cb_transpose_key, block_size);
-                    tile_regs_acquire();
+            //     tile_regs_wait();
+            //     pack_reconfig_data_format(cb_transpose_key);
+            //     for (uint32_t key_block_idx = 0; key_block_idx < block_size; ++key_block_idx) {
+            //         pack_tile(key_block_idx, cb_transpose_key);
+            //     }
+            //     tile_regs_release();
+            //     cb_push_back(cb_transpose_key, block_size);
+            // }
+            // cb_wait_front(cb_transpose_key, Wt);
 
-                    // TODO[check]: maybe I can call this func once before the loop and then call mm_init_short()
-                    mm_init(cb_query, cb_transpose_key, cb_output, 0);
-                    for (uint32_t block_idx_key = 0; block_idx_key < block_size; ++block_idx_key, ++key_col) {
-                        const uint32_t working_register = (key_col == 0) ? accum_register : tile_register;
-                        matmul_tiles(
-                            cb_query,
-                            cb_transpose_key,
-                            /* tile_idx */ 0,
-                            /* tile_idx */ block_idx_key,
-                            working_register,
-                            0);
-
-                        if (j > 0) {
-                            add_binary_tile_init();
-                            add_binary_tile(accum_register, working_register);
-                        }
-                    }
-
-                    if (key_col >= block_size) {  // we’re processing the second (and subsequent) blocks of the key row
-                        copy_tile_init(cb_temp_accum);
-                        copy_tile(cb_temp_accum, /* tile_idx */ 0, /* register_idx */ tile_register);
-
-                        add_binary_tile_init();
-                        add_binary_tile(accum_register, tile_register);
-                        pop_front(cb_temp_accum, onetile);
-                    }
-                    tile_regs_commit();
-
-                    cb_reserve_back(cb_temp_accum, onetile);
-                    tile_regs_wait();
-                    pack_reconfig_data_format(cb_temp_accum);
-                    pack_tile(accum_register, cb_temp_accum);
-                    tile_regs_release();
-                    cb_push_back(cb_temp_accum, onetile);
-                }  // end of processing key row
-
+            mm_init_short(cb_query, cb_key, 1);
+            for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
                 tile_regs_acquire();
-                copy_tile_init(cb_temp_accum);
-                copy_tile(cb_temp_accum, /* tile_idx */ 0, /* register_idx */ accum_register);
+                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                    matmul_tiles(
+                        cb_query,
+                        cb_key,
+                        /* tile_idx */ tile_idx + block_idx,
+                        /* tile_idx */ tile_idx + block_idx,
+                        block_idx,
+                        1);
+                }
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_reconfig_data_format(cb_output);
-                pack_tile(accum_register, cb_output);
+                if (tile_idx > 0) {
+                    // if in the same row continue accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+
+                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                    pack_tile<true>(/* dst_reg_idx */ block_idx, /* cb_idx */ cb_output, /* tile_idx */ h);
+                    if (tile_idx == 0 && block_idx == 0) {
+                        // If this was the first tile of a row, start accumulating
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
+                }
                 tile_regs_release();
-            }  // end of processing query row block_size tiles
-            cb_push_back(cb_output, block_size);
-            cb_pop_front(cb_query, block_size);
-        }  // end of processing query row
+            }
+            PACK((llk_pack_reconfig_l1_acc(0)));
+
+            // tile_regs_acquire();
+            // mm_init_short(cb_query, cb_key, 1);
+            // for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx++) {
+            //     matmul_tiles(
+            //         cb_query,
+            //         cb_key,
+            //         /* tile_idx */ tile_idx,
+            //         /* tile_idx */ tile_idx,
+            //         0,
+            //         1);
+            // }
+            // tile_regs_commit();
+
+            // tile_regs_wait();
+            // pack_reconfig_data_format(cb_output);
+            // pack_tile(0, cb_output);
+            // tile_regs_release();
+
+            cb_pop_front(cb_key, Wt);
+            // cb_pop_front(cb_transpose_key, Wt);
+        }
+        cb_push_back(cb_output, Ht);
+        cb_pop_front(cb_query, Wt);
     }
 }
 
