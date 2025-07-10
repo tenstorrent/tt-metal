@@ -59,6 +59,7 @@ template <typename SrcType, typename DstType>
 tt::tt_metal::Tensor transform_type(const tt::tt_metal::Tensor& input_tensor, const DataType dst_type) {
     using namespace tt::tt_metal;
 
+    TT_FATAL(!is_device_tensor(input_tensor), "transform_type(...) function only support host tensors!");
     auto input_dtype = input_tensor.dtype();
     auto buffer = preprocess_buffer<SrcType>(std::get<HostStorage>(input_tensor.storage()).buffer);
 
