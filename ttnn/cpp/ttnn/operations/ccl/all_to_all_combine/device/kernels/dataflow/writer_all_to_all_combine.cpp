@@ -17,9 +17,9 @@ using namespace ttnn::operations::ccl::common;
 
 namespace detail {
 
-template <uint32_t SourceChipId, uint32_t BatchSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
+template <uint32_t SourceChipId, uint32_t BatchSize, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
 inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
-    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshCols * MeshRows
+    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
                                          : (Axis == ReplicateGroup::COLS) ? MeshRows
                                                                           : MeshCols;
 
@@ -36,11 +36,11 @@ inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
 }
 
 // output per device is [K, B/replicate_group, 1, H]
-template <uint32_t BatchSize, uint32_t SeqSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
+template <uint32_t BatchSize, uint32_t SeqSize, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
 inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const uint32_t k) {
     uint32_t batch_devices;
     if constexpr (Axis == ReplicateGroup::NONE) {
-        batch_devices = MeshCols * MeshRows;
+        batch_devices = MeshRows * MeshCols;
     } else if constexpr (Axis == ReplicateGroup::ROWS) {
         batch_devices = MeshCols;
     } else {
@@ -123,12 +123,12 @@ void kernel_main() {
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx =
-                    detail::get_output_page_idx<batch_size, seq_size, mesh_cols, mesh_rows, replicate_axis>(b,s,k);
+                    detail::get_output_page_idx<batch_size, seq_size, mesh_rows, mesh_cols, replicate_axis>(b, s, k);
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx = detail::
-                    get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_cols, mesh_rows, replicate_axis>(b);
+                    get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_rows, mesh_cols, replicate_axis>(b);
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
 
                 if (dest_chip_id == src_chip_id) {
@@ -165,7 +165,7 @@ void kernel_main() {
         if (dest_chip_id == src_chip_id) {
             noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
             noc_async_atomic_barrier();
-        } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, replicate_axis>(dest_chip_id)) {
+        } else if (is_configured_target<src_chip_id, mesh_rows, mesh_cols, replicate_axis>(dest_chip_id)) {
             const auto & dest_mesh_id = dest_mesh_ids[device_idx];
             const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 

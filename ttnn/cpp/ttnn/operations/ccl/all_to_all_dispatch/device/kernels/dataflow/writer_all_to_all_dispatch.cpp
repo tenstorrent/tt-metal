@@ -181,7 +181,7 @@ void kernel_main() {
                         // if the expert lives on the current device, we dispatch the input token to it
                         detail::dispatch_input_local_device(
                             input_token_read_addr, output_token_write_addr, output_page_size);
-                    } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
+                    } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                         // if the expert lives on a remote device, we dispatch the input token to it
                         // if axis is specified then we only send to the devices that are along the axis
                         // if axis is not specified then we send to all devices
@@ -239,7 +239,7 @@ void kernel_main() {
                     // dispatch the metadata to the current device and increment the local copy of the semaphore
                     detail::dispatch_metadata_local_device(
                         token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
-                } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
+                } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                     // dispatch the metadata to the remote device and increment the remote device's copy of the
                     // semaphore
                     if (is_1d_topology(topology)) {
@@ -292,7 +292,7 @@ void kernel_main() {
                     intermediate_metadata_write_addr + (dispatch_index * indices_size),
                     indices_size,
                     global_noc_semaphore_address);
-            } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
+            } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                 if (is_1d_topology(topology)) {
                     fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                         linearized_mesh_coord,

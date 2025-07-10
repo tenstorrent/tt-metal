@@ -39,32 +39,32 @@ enum class ReplicateGroup : int {
     COLS = 0,
 };
 
-template <uint32_t src_chip_id, uint32_t mesh_cols, uint32_t mesh_rows, ReplicateGroup Axis>
+template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
 bool is_configured_target(uint32_t dest_chip_id) {
     // axis is the direction along which we are allowed to send packets
     // axis = 1; means we are allowed to send packets in the row direction
     // axis = 0; means we are allowed to send packets in the column direction
     // axis = -1; means we are allowed to send packets in all directions
     if constexpr (Axis == ReplicateGroup::COLS) {  // check if they're on the same column
-        return src_chip_id % mesh_cols == dest_chip_id % mesh_cols;
+        return SrcChipId % MeshCols == dest_chip_id % MeshCols;
     } else if constexpr (Axis == ReplicateGroup::ROWS) {  // check if they're on the same row
-        return src_chip_id / mesh_cols == dest_chip_id / mesh_cols;
+        return SrcChipId / MeshCols == dest_chip_id / MeshCols;
     } else {
         return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
                       // is all directions
     }
 }
 
-template <uint32_t linearized_src_mesh_coord, uint32_t mesh_cols, uint32_t mesh_rows, ReplicateGroup Axis>
+template <uint32_t LinearizedSrcMeshCoord, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
 bool is_configured_target_mesh(uint32_t linearized_dest_mesh_coord) {
     // axis is the direction along which we are allowed to send packets
     // axis = 1; means we are allowed to send packets in the row direction
     // axis = 0; means we are allowed to send packets in the column direction
     // axis = -1; means we are allowed to send packets in all directions
     if constexpr (Axis == ReplicateGroup::COLS) {  // check if they're on the same column
-        return linearized_src_mesh_coord % mesh_cols == linearized_dest_mesh_coord % mesh_cols;
+        return LinearizedSrcMeshCoord % MeshCols == linearized_dest_mesh_coord % MeshCols;
     } else if constexpr (Axis == ReplicateGroup::ROWS) {  // check if they're on the same row
-        return linearized_src_mesh_coord / mesh_cols == linearized_dest_mesh_coord / mesh_cols;
+        return LinearizedSrcMeshCoord / MeshCols == linearized_dest_mesh_coord / MeshCols;
     } else {
         return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
                       // is all directions
@@ -83,7 +83,7 @@ bool is_2d_topology(tt::tt_fabric::Topology topology) {
     return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
 }
 
-template <uint32_t MeshCols, uint32_t MeshRows>
+template <uint32_t MeshRows, uint32_t MeshCols>
 std::pair<uint32_t, uint32_t> get_mesh_coords(uint32_t linearized_mesh_coord) {
     // {row, column}
     return {linearized_mesh_coord / MeshCols, linearized_mesh_coord % MeshCols};
@@ -102,17 +102,17 @@ uint32_t distance(uint32_t position_1, uint32_t position_2, uint32_t axis_size) 
     }
 }
 
-template <tt::tt_fabric::Topology Topology, uint32_t MeshCols, uint32_t MeshRows>
+template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
 uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
-    auto [src_row, src_col] = get_mesh_coords<MeshCols, MeshRows>(linearized_src_mesh_coord);
-    auto [dest_row, dest_col] = get_mesh_coords<MeshCols, MeshRows>(linearized_dest_mesh_coord);
+    auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
+    auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
     return distance<Topology>(src_row, dest_row, MeshRows) + distance<Topology>(src_col, dest_col, MeshCols);
 }
 
-template <tt::tt_fabric::Topology Topology, uint32_t MeshCols, uint32_t MeshRows>
+template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
 uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
-    auto [src_row, src_col] = get_mesh_coords<MeshCols, MeshRows>(linearized_src_mesh_coord);
-    auto [dest_row, dest_col] = get_mesh_coords<MeshCols, MeshRows>(linearized_dest_mesh_coord);
+    auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
+    auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
 
     if (src_row == dest_row) {
         if (!has_wrap_around(Topology)) {
@@ -294,10 +294,10 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
     int32_t size_bytes,
     const uint32_t alignment) {
     uint32_t distance =
-        manhattan_distance<Topology, MeshCols, MeshRows>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     packet_header->to_chip_unicast(distance);
 
-    uint32_t route = get_route<Topology, MeshCols, MeshRows>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         fabric_connections[route], packet_header, payload_l1_address, noc_payload_write_address, size_bytes, alignment);
 }
@@ -320,10 +320,10 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     uint16_t increment_value,
     bool flush) {
     uint32_t distance =
-        manhattan_distance<Topology, MeshCols, MeshRows>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     packet_header->to_chip_unicast(distance);
 
-    uint32_t route = get_route<Topology, MeshCols, MeshRows>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
         packet_header,
