@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
@@ -54,6 +55,31 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+
+#ifdef OUTPUT_IS_SHARDED
+    using tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(13),   // Memory layout
+        get_compile_time_arg_val(14),   // The number of sharding cores
+        get_compile_time_arg_val(15),   // The page size we offset each write to
+        get_compile_time_arg_val(16),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(17),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(18),   // pages_per_shard_x
+        get_compile_time_arg_val(19)>;  // pages_per_shard_y
+
+    const auto [mapping_table, rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<tensor_shard_info> output_addrgen = {
+        .bank_base_address = output_address, .shard_array = mapping_table};
+
+    arg_idx += rt_increment;
+#else
+    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
+    const InterleavedAddrGenFast<output_is_dram> output_addrgen = {
+        .bank_base_address = output_address,
+        .page_size = output_page_size,
+        .data_format = get_dataformat(cb_output_id)};
+#endif
+
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     /* Args for overlapped all gather */
@@ -73,12 +99,6 @@ void kernel_main() {
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
     pkt_hdr->to_chip_unicast(1);
-
-    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
-    auto output_addrgen = InterleavedAddrGenFast<output_is_dram>{
-        .bank_base_address = output_address,
-        .page_size = output_page_size,
-        .data_format = get_dataformat(cb_output_id)};
 
     fabric_connection.open();
 
@@ -121,30 +141,34 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    uint64_t noc0_dest_noc_addr_tile_one =
+                    uint64_t remote_noc0_dest_noc_addr_tile_one =
                         get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                    uint64_t noc0_dest_noc_addr_tile_two =
+                    uint64_t remote_noc0_dest_noc_addr_tile_two =
                         get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
                             scatter_write_for_fabric_write_backward(
-                                noc0_dest_noc_addr_tile_one,
-                                noc0_dest_noc_addr_tile_two,
+                                remote_noc0_dest_noc_addr_tile_one,
+                                remote_noc0_dest_noc_addr_tile_two,
                                 pkt_hdr,
                                 fabric_connection,
                                 l1_read_addr,
                                 output_page_size,
                                 output_page_size);
                         }
-                        noc_async_write_tile(tile_one_id, output_addrgen, l1_read_addr);
-                        noc_async_write_tile(tile_two_id, output_addrgen, l1_read_addr + output_page_size);
+                        uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
+                        uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
+
+                        noc_async_write(l1_read_addr, local_noc0_dest_noc_addr_tile_one, output_page_size);
+                        noc_async_write(
+                            l1_read_addr + output_page_size, local_noc0_dest_noc_addr_tile_two, output_page_size);
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
                             scatter_write_for_fabric_write_forward(
-                                noc0_dest_noc_addr_tile_one,
-                                noc0_dest_noc_addr_tile_two,
+                                remote_noc0_dest_noc_addr_tile_one,
+                                remote_noc0_dest_noc_addr_tile_two,
                                 pkt_hdr,
                                 fabric_connection,
                                 l1_read_addr,
@@ -163,19 +187,20 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
+                    uint64_t remote_noc0_dest_noc_addr =
+                        get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
                             write_for_fabric_write_backward(
-                                noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                                remote_noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
                         }
-                        noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
+                        uint64_t local_noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen);
+                        noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
                             write_for_fabric_write_forward(
-                                noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                                remote_noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
                         }
                     }
                     break;
@@ -297,15 +322,15 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        uint64_t noc0_dest_noc_addr_tile_one =
+                        uint64_t remote_noc0_dest_noc_addr_tile_one =
                             get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                        uint64_t noc0_dest_noc_addr_tile_two =
+                        uint64_t remote_noc0_dest_noc_addr_tile_two =
                             get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                         if (direction == 1) {
                             scatter_write_for_fabric_write_backward(
-                                noc0_dest_noc_addr_tile_one,
-                                noc0_dest_noc_addr_tile_two,
+                                remote_noc0_dest_noc_addr_tile_one,
+                                remote_noc0_dest_noc_addr_tile_two,
                                 pkt_hdr,
                                 fabric_connection,
                                 l1_read_addr,
@@ -313,8 +338,8 @@ void kernel_main() {
                                 output_page_size);
                         } else {
                             scatter_write_for_fabric_write_forward(
-                                noc0_dest_noc_addr_tile_one,
-                                noc0_dest_noc_addr_tile_two,
+                                remote_noc0_dest_noc_addr_tile_one,
+                                remote_noc0_dest_noc_addr_tile_two,
                                 pkt_hdr,
                                 fabric_connection,
                                 l1_read_addr,
@@ -332,14 +357,15 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                        uint64_t remote_noc0_dest_noc_addr =
+                            get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                         if (direction == 1) {
                             write_for_fabric_write_backward(
-                                noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                                remote_noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
                         } else {
                             write_for_fabric_write_forward(
-                                noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                                remote_noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
                         }
                         break;
                     }
