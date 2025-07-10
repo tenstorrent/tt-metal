@@ -6,7 +6,6 @@
 
 #include <vector>
 
-#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal::distributed {
