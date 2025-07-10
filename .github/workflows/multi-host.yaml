@@ -8,7 +8,9 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on:
+        - ubuntu-latest
+        - multi-host
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
