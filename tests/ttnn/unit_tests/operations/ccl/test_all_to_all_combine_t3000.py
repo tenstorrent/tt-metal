@@ -253,7 +253,16 @@ def trace_all_to_all_combine(
     )
 
     _, input_contrib, expert_mapping, metadata_tensor, output_contrib_tensor, data_map = gen_tensors(
-        batch, experts, select_experts_k, hidden_size, seq, mesh_shape, axis, devices, scheme=scheme
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq,
+        mesh_shape,
+        axis,
+        devices,
+        scheme=scheme,
+        local_reduce=local_reduce,
     )
 
     ccl_semaphore_handle = ttnn.create_global_semaphore(mesh_device, subdevice_shard_cores_grid, 0)
