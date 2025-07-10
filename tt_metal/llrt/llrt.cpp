@@ -396,7 +396,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
     uint32_t previous_heartbeat_val = heartbeat_val;
 
     while (heartbeat_val == previous_heartbeat_val) {
-        constexpr auto k_sleep_time = std::chrono::milliseconds{1};
+        constexpr auto k_sleep_time = std::chrono::milliseconds{5};
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
         previous_heartbeat_val = heartbeat_val;
         heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
