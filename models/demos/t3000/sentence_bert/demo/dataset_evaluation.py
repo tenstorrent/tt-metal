@@ -37,6 +37,11 @@ def load_sts_tr(split="test"):
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
+    "mesh_device",
+    ((1, 8),),
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "model_name, sequence_length,device_batch_size,num_samples",
     [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 10)],
 )

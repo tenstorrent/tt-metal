@@ -92,6 +92,11 @@ def load_knowledge_base(kb_file="knowledge_base.txt"):
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
+    "mesh_device",
+    ((1, 8),),
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "model_name, sequence_length, device_batch_size, kb_file",
     [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, "knowledge_base.txt")],
 )

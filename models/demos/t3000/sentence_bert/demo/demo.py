@@ -36,6 +36,11 @@ from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerf
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    ((1, 8),),
+    indirect=True,
+)
 @pytest.mark.parametrize("model_name, sequence_length", [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384)])
 def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_length):
     batch_size = len(inputs[0]) * mesh_device.get_num_devices()
