@@ -95,12 +95,13 @@ public:
                 to_mesh_id,
                 ew_dim);
 #else
-            tt::tt_fabric::fabric_set_route(
+            tt::tt_fabric::fabric_set_unicast_route(
                 (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
                 (eth_chan_directions)edm.direction,
-                0, // start hop
-                num_hops,
-                true);
+                my_dev_id,
+                to_dev_id,
+                to_mesh_id,
+                ew_dim);
 #endif
         } else {
             auto header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
