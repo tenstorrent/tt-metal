@@ -291,6 +291,7 @@ public:
                 distributed_buffer.emplace_shard(mapped_coord, [&b = replicated_buffer]() { return b; });
             }
 
+            std::cout << "distribution_shape_: " << distribution_shape_ << std::endl;
             const auto topology_config = tt::tt_metal::TopologyConfig{
                 .mesh_shape = distribution_shape_,
                 .device_coords = buffer_coords,

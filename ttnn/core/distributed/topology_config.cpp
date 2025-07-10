@@ -7,18 +7,41 @@
 namespace tt::tt_metal {
 
 tt::tt_metal::distributed::MeshCoordinate TopologyConfig::get_neighbor(
-    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
-    // TODO: Implement topology-aware neighbor finding logic
-    // For now, return the same coordinate as a placeholder
+    const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t offset, int32_t dim) const {
+    const auto neighbor_coord =
+        coord.get_neighbor(mesh_shape, offset, dim, tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP);
+    TT_FATAL(
+        neighbor_coord.has_value(),
+        "Failed to get neighbor for coordinate {} at dim {} with offset {}",
+        coord,
+        dim,
+        offset);
 
-    return coord;
+    return neighbor_coord.value();
+}
+
+tt::tt_metal::distributed::MeshCoordinate TopologyConfig::get_next_neighbor(
+    const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t dim) const {
+    const auto next_coord =
+        coord.get_neighbor(mesh_shape, 1, dim, tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP);
+    TT_FATAL(next_coord.has_value(), "Failed to get next neighbor for coordinate {} at dim {}", coord, dim);
+
+    return next_coord.value();
+}
+
+tt::tt_metal::distributed::MeshCoordinate TopologyConfig::get_prev_neighbor(
+    const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t dim) const {
+    const auto prev_coord =
+        coord.get_neighbor(mesh_shape, -1, dim, tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP);
+    TT_FATAL(prev_coord.has_value(), "Failed to get previous neighbor for coordinate {} at dim {}", coord, dim);
+
+    return prev_coord.value();
 }
 
 tt::tt_metal::distributed::MeshCoordinate TopologyConfig::get_device_coord(
     const tt::tt_metal::distributed::MeshCoordinate& coord) const {
     // Convert mesh coordinate to flattened index (row-major order)
     std::size_t flattened_index = 0;
-    std::size_t stride = 1;
 
     // Calculate row-major flattened index
     for (std::size_t i = 0; i < mesh_shape.dims(); ++i) {

@@ -23,7 +23,13 @@ struct TopologyConfig {
     tt::stl::SmallVector<Placement> placements;
 
     tt::tt_metal::distributed::MeshCoordinate get_neighbor(
-        const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+        const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t offset, int32_t dim) const;
+
+    tt::tt_metal::distributed::MeshCoordinate get_next_neighbor(
+        const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t dim) const;
+
+    tt::tt_metal::distributed::MeshCoordinate get_prev_neighbor(
+        const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t dim) const;
 
     tt::tt_metal::distributed::MeshCoordinate get_device_coord(
         const tt::tt_metal::distributed::MeshCoordinate& coord) const;

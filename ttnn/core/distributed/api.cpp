@@ -59,7 +59,8 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             tensors.reserve(device_storage.coords.size());
             for (const auto& coord : device_storage.coords) {
                 DeviceStorage shard_storage(mesh_buffer, {coord});
-                tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), AllGatherTensor{}));
+                tensors.push_back(Tensor(
+                    std::move(shard_storage), tensor.tensor_spec(), AllGatherTensor{}, tensor.topology_config()));
             }
             return tensors;
         } else {
