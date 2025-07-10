@@ -7,6 +7,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -152,6 +153,9 @@ void kernel_main() {
 
     constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
 
+    uint32_t chunks_per_sync = 2;
+    uint32_t chunk_count = 0;
+
     for (uint32_t b = 0; b < num_batches; b++) {
         if (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
@@ -166,7 +170,9 @@ void kernel_main() {
         // If we are not the first device in the direction, do the final reduction.
         // If this device has both FWD and BWD neighbors, the FWD reader will do final reduction first
         // and then signal the BWD reader to do its final reduction.
+        uint32_t sem_target = 1;
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
+            chunk_count = 0;
             uint32_t input_tile_id_start = slice_idx * slice_Wt + batch_offset;
             uint32_t intermediate_tile_id_start = slice_idx * slice_Wt;
             uint32_t stride_Wt = input_tensor_Wt;
@@ -204,7 +210,6 @@ void kernel_main() {
                 // I have incoming slices, so write my output to compute kernel and read intermediate input
                 uint32_t cb_in0 = cb_input_id;
                 // Wait on output semaphore
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), iter + 1);
 
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
@@ -226,6 +231,12 @@ void kernel_main() {
 
                     tiles_read += num_pages_to_read;
 
+                    if (chunk_count % chunks_per_sync == 0) {
+                        DeviceZoneScopedN("wait_sem");
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target++);
+                    }
+                    chunk_count++;
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                     cb_reserve_back(cb_intermediate_id, tile_granularity);
 
@@ -259,6 +270,8 @@ void kernel_main() {
 
         // Do the final reduction. Synchronize with other direction.
         if constexpr (do_final_reduction) {
+            chunk_count = 0;
+            DeviceZoneScopedN("final_reduction");
             bool accumulate_output =
                 false;  // If true, output += intermediate. Otherwise, output = input + intermediate
             constexpr bool use_output_tensor_addrgen = sync_with_other_direction && !is_forward;
@@ -270,8 +283,8 @@ void kernel_main() {
                  */
                 accumulate_output = true;
                 // Wait for FWD writer to signal that it has done its final reduction
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 1);
-                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 0);
+                // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 1);
+                // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 0);
             }
 
             /**
@@ -307,6 +320,8 @@ void kernel_main() {
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
             uint32_t cb_in0 = cb_input_id;
 
+            DPRINT << "my tiles to read " << tiles_to_read - tiles_read << ENDL();
+
             if (accumulate_output) {
                 input_tile_id_start = b * batch_slice_num_pages;  // output batch offset
                 pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
@@ -314,10 +329,13 @@ void kernel_main() {
                 stride_Wt = slice_Wt;
             }
             // Wait on output semaphore
-            noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), num_targets_in_direction + 1);
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                // {
+                //     DeviceZoneScopedN("wait_sem_final");
+                //     noc_semaphore_wait_min(
+                //         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target++);
+                // }
 
                 cb_reserve_back(cb_in0, tile_granularity);
 
@@ -336,6 +354,11 @@ void kernel_main() {
                 }
                 tiles_read += num_pages_to_read;
 
+                if (chunk_count % chunks_per_sync == 0) {
+                    DeviceZoneScopedN("wait_sem");
+                    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target++);
+                }
+                chunk_count++;
                 // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                 cb_reserve_back(cb_intermediate_id, tile_granularity);
 
