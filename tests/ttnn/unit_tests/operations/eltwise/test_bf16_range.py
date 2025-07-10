@@ -15,6 +15,7 @@ import scipy
 import models.utility_functions as util
 import matplotlib.pyplot as plt
 import random
+import csv
 
 
 device_id = 0
@@ -23,6 +24,124 @@ device = ttnn.open_device(device_id=device_id)
 EPSILON = 2**-9
 
 # ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
+
+
+def test_plot_binary_op_pow_looping_tensor():
+    torch_binary_op = torch.pow
+    ttnn_op = ttnn.pow
+    low = -100
+    high = 100
+    x = torch.arange(low, high, 0.1, dtype=torch.float32)
+    x_bf16 = x.to(torch.bfloat16)
+
+    plot_dir = "accuracy_results/plots/pow_results/"
+    csv_dir = "accuracy_results/csvs/pow_results/"
+    os.makedirs(plot_dir, exist_ok=True)
+    os.makedirs(csv_dir, exist_ok=True)
+
+    csv_path = os.path.join(csv_dir, f"{ttnn_op.__name__}_bf16_range_{int(low)}_{int(high)}_results.csv")
+
+    with open(csv_path, mode="w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["input_x", "input_y", "torch_result", "ttnn_result", "abs_error", "ulp_error"])
+
+    scalar_values = []
+    mean_ulp_errors = []
+    max_ulp_errors = []
+
+    for y_scalar in np.arange(1.0, 10.5, 0.5):
+        y = torch.full_like(x, fill_value=y_scalar, dtype=torch.float32)
+        y_bf16 = y.to(torch.bfloat16)
+
+        torch_out = torch_binary_op(x, y)
+
+        ttnn_x = ttnn.from_torch(x_bf16, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn_y = ttnn.from_torch(y_bf16, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn_out_res = ttnn.multiply(
+            ttnn_x,
+            ttnn_y,
+            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)],
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)],
+            use_legacy=False,
+        )
+        ttnn_out = ttnn.to_torch(ttnn_out_res).to(torch.float32)
+
+        abs_error = torch.abs(torch_out - ttnn_out)
+        ulp_spacing = util.ulp(torch_out.to(torch.bfloat16)).to(torch.float32)
+        ulp_error = abs_error / ulp_spacing
+
+        # Filter valid ULP values to avoid NaNs/infs
+        valid_mask = torch.isfinite(ulp_error)
+        filtered_ulp_error = ulp_error[valid_mask]
+
+        scalar_values.append(y_scalar)
+        mean_ulp_errors.append(filtered_ulp_error.mean().item() if filtered_ulp_error.numel() > 0 else float("nan"))
+        max_ulp_errors.append(filtered_ulp_error.max().item() if filtered_ulp_error.numel() > 0 else float("nan"))
+
+        # CSV
+        with open(csv_path, mode="a", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            for i in range(len(x)):
+                writer.writerow(
+                    [
+                        x[i].item(),
+                        y_scalar,
+                        torch_out[i].item(),
+                        ttnn_out[i].item(),
+                        abs_error[i].item(),
+                        ulp_error[i].item(),
+                    ]
+                )
+
+        # Output Comparison
+        plt.plot(x.numpy(), torch_out.numpy(), label="torch", linewidth=1)
+        plt.plot(x.numpy(), ttnn_out.numpy(), label="ttnn", linestyle="--", linewidth=1)
+        plt.title(f"Output Comparison: {torch_binary_op.__name__}(x, y={y_scalar})\nInput Range: x ∈ [{low}, {high}]")
+        plt.xlabel(f"x (with y = {y_scalar})")
+        plt.ylabel(f"{torch_binary_op.__name__}(x, {y_scalar})")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+
+        filename = f"{ttnn_op.__name__}_bf16_range_{int(low)}_{int(high)}_y_{y_scalar}.png"
+        save_path = os.path.join(plot_dir, filename)
+        plt.savefig(save_path)
+        plt.close()
+        print(f"\n[x, y={y_scalar}] Output graph saved to {os.path.abspath(save_path)}")
+
+        # ULP
+        plt.figure(figsize=(10, 5))
+        plt.plot(x.numpy(), ulp_error.numpy(), label="ULP Error", color="red", linewidth=1)
+        plt.title(f"ULP Error: {ttnn_op.__name__} vs Torch\nInput Range: x ∈ [{low}, {high}], y = {y_scalar}")
+        plt.xlabel(f"x (with y = {y_scalar})")
+        plt.ylabel("ULP Error")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+
+        ulp_filename = f"{ttnn_op.__name__}_bf16_range_{int(low)}_{int(high)}_y_{y_scalar}_ulp.png"
+        ulp_path = os.path.join(plot_dir, ulp_filename)
+        plt.savefig(ulp_path)
+        plt.close()
+        print(f"[x, y={y_scalar}] ULP graph saved to {os.path.abspath(ulp_path)}")
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(scalar_values, mean_ulp_errors, label="Mean ULP Error", marker="o")
+    plt.plot(scalar_values, max_ulp_errors, label="Max ULP Error", marker="x")
+    plt.title(f"ULP Error Summary across Scalar y ∈ [1.0, 10.0]")
+    plt.xlabel("Scalar y Value")
+    plt.ylabel("ULP Error")
+    plt.xticks(scalar_values)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    summary_path = os.path.join(plot_dir, f"{ttnn_op.__name__}_ulp_summary_vs_scalar.png")
+    plt.savefig(summary_path)
+    plt.close()
+    print(f"\nULP summary graph saved to {os.path.abspath(summary_path)}")
+
+    print(f"\nAll results saved to CSV: {os.path.abspath(csv_path)}")
 
 
 def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
