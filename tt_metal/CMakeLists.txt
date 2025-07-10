@@ -173,6 +173,7 @@ target_sources(
             include/compute_kernel_api/common_globals.h
             include/compute_kernel_api/compute_kernel_hw_startup.h
             include/compute_kernel_api/eltwise_binary.h
+            include/compute_kernel_api/eltwise_binary_sfpu.h
             include/compute_kernel_api/eltwise_unary/comp.h
             include/compute_kernel_api/eltwise_unary/eltwise_unary.h
             include/compute_kernel_api/eltwise_unary/exp.h
@@ -193,8 +194,6 @@ target_sources(
             include/compute_kernel_api/tilize.h
             include/compute_kernel_api/transpose_wh.h
             include/compute_kernel_api/untilize.h
-            include/compute_kernel_api/eltwise_binary.h
-            include/compute_kernel_api/tile_move_copy.h
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
