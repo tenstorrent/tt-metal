@@ -316,6 +316,12 @@ run_yolov7_demo() {
 
 }
 
+run_yolov6l_perf() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov6l/demo/demo.py --timeout 600
+
+}
+
 # Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
 # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
 # run_vgg_unet_demo() {
