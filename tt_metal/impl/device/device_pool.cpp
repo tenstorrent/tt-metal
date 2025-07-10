@@ -450,6 +450,33 @@ void DevicePool::initialize_active_devices() const {
         }
     }
 
+    // Create command queue programs
+    for (auto dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+
+        create_cq_program(dev);
+        auto tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        if (not this->skip_remote_devices) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    auto device = get_device(mmio_controlled_device_id);
+                    create_cq_program(device);
+                }
+            }
+        }
+    }
+
+    // Compile programs
+    compile_cq_programs();
+
     // Init command queue
     for (auto dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -794,7 +821,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         if (mmio_devices_to_close.find(mmio_device_id) != mmio_devices_to_close.end()) {
             continue;
         }
-        auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         // iterate over all tunnels origination from this mmio device

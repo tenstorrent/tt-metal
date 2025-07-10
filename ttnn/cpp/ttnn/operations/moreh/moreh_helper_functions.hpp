@@ -71,14 +71,14 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args = {},
-    std::map<string, string> defines = {});
+    std::map<std::string, std::string> defines = {});
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args = {},
-    std::map<string, string> defines = {});
+    std::map<std::string, std::string> defines = {});
 
 struct ComputeKernelArg {
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec;

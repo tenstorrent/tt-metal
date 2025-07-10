@@ -82,7 +82,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         .is_false_tensor_in_dram = args.false_value_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM};
 
     /* Specify data movement kernels for reading/writing data to/from DRAM */
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel.cpp",
@@ -93,7 +93,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     CompileTimeWriterKernelArgs writer_compile_time_args = {
         .cb_dst = output_cb_index, .is_dst_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM};
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel.cpp",

@@ -11,7 +11,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -68,21 +67,21 @@ enum BroadcastDim : uint8_t { ROW = 0, COL = 1, SCALAR = 2 };
 
 enum TileShape : uint8_t { FULL_TILE = 0, TINY_TILE_16x32 = 1 };
 
-const map<EltwiseOp, string> eltwise_op_to_type = {
+const map<EltwiseOp, std::string> eltwise_op_to_type = {
     {EltwiseOp::ADD, "EltwiseBinaryType::ELWADD"},
     {EltwiseOp::SUB, "EltwiseBinaryType::ELWSUB"},
     {EltwiseOp::MUL, "EltwiseBinaryType::ELWMUL"}};
 
-const map<EltwiseOp, string> eltwise_op_to_api_prefix = {
+const map<EltwiseOp, std::string> eltwise_op_to_api_prefix = {
     {EltwiseOp::ADD, "add"}, {EltwiseOp::SUB, "sub"}, {EltwiseOp::MUL, "mul"}};
 
-const map<BroadcastDim, string> broadcast_dim_to_type = {
+const map<BroadcastDim, std::string> broadcast_dim_to_type = {
     {BroadcastDim::ROW, "BroadcastType::ROW"},
     {BroadcastDim::COL, "BroadcastType::COL"},
     {BroadcastDim::SCALAR, "BroadcastType::SCALAR"},
 };
 
-const map<BroadcastDim, string> broadcast_dim_to_api_suffix = {
+const map<BroadcastDim, std::string> broadcast_dim_to_api_suffix = {
     {BroadcastDim::ROW, "rows"},
     {BroadcastDim::COL, "cols"},
     {BroadcastDim::SCALAR, "scalar"},
@@ -249,7 +248,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
             .set_tile_dims(16, tile_dims);
     auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"BCAST_LLKOP", eltwise_op_to_type.at(test_config.eltwise_op)},
         {"BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim)},
         {"BCAST_OP", eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_tiles_bcast"}};

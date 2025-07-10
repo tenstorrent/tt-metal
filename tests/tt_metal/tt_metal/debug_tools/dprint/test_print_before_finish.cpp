@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <functional>
-#include <map>
 #include <string>
 #include <variant>
 #include <vector>
@@ -58,10 +57,10 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
     }
     fixture->RunProgram(device, program);
     // Close system instantly after running to attempt to cut off prints.
-    fixture->EarlyTeardown();
+    fixture->TearDownTestSuite();
 
     // Check the print log against expected output.
-    vector<string> expected_output;
+    vector<std::string> expected_output;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             expected_output.push_back(fmt::format("({},{}) Before wait...", x, y));

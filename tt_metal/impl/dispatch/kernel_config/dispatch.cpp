@@ -9,7 +9,6 @@
 #include <array>
 #include <map>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -30,7 +29,6 @@
 #include "rtoptions.hpp"
 #include <umd/device/types/xy_pair.h>
 #include "dispatch/system_memory_manager.hpp"
-#include "utils.hpp"
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 
@@ -151,14 +149,6 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dev_completion_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     } else if (static_config_.is_d_variant.value()) {
-        uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
-        uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
-        uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
-        uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
-
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
@@ -351,8 +341,6 @@ void DispatchKernel::GenerateDependentConfigs() {
         // Or direct connection to DISPATCH_H if using fabric
         //
         // + A Dispatch_s if enabled
-        auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
-        auto mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[0]);
 
         bool found_dispatch_s = false;
         bool found_mux = false;
@@ -450,7 +438,7 @@ void DispatchKernel::CreateKernel() {
     auto downstream_s_virtual_noc_coords =
         device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},

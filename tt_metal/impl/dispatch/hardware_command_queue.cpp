@@ -283,20 +283,16 @@ void HWCommandQueue::enqueue_read_buffer(
     } else {
         // Forward data from device to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
-        buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
+        buffer_dispatch::BufferReadDispatchParams dispatch_params =
             buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
                 *buffer_obj, this->id_, this->expected_num_workers_completed_);
 
-        buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
-            [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
-            dispatch_params_variant);
-
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            *dispatch_params,
+            dispatch_params,
             *buffer_obj,
             sub_device_ids,
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
-        if (dispatch_params->pages_per_txn > 0) {
+        if (dispatch_params.pages_per_txn > 0) {
             this->issued_completion_q_reads_.push(
                 buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *buffer_obj));
             this->increment_num_entries_in_completion_q();
@@ -926,7 +922,6 @@ void HWCommandQueue::record_end() {
     // separately
     this->trace_ctx_->sub_device_ids.reserve(this->trace_ctx_->descriptors.size());
     for (const auto& [id, _] : this->trace_ctx_->descriptors) {
-        auto index = *id;
         this->trace_ctx_->sub_device_ids.push_back(id);
     }
     this->tid_ = std::nullopt;

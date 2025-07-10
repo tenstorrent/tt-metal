@@ -219,18 +219,11 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
     return std::make_unique<L1BankingAllocator>(config);
 }
 
-void Device::compile_command_queue_programs() {
-    ZoneScoped;
-    auto command_queue_program_ptr = create_and_compile_cq_program(this);
-    this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-}
-
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
 void Device::configure_command_queue_programs() {
     chip_id_t device_id = this->id();
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    IDevice* mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
 
     std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
@@ -299,14 +292,7 @@ void Device::init_command_queue_host() {
 }
 
 void Device::init_command_queue_device() {
-    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
-        detail::EnablePersistentKernelCache();
-        this->compile_command_queue_programs();
-        detail::DisablePersistentKernelCache();
-    } else {
-        this->compile_command_queue_programs();
-    }
-
+    this->command_queue_programs_.push_back(get_compiled_cq_program(this));
     TT_ASSERT(this->command_queue_programs_.size() == 1);
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs_[0];
@@ -626,13 +612,11 @@ CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel, NOC noc) co
 }
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_logical_core_for_dram_view(
         dram_channel);
 }
 
 uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_dram_channel_from_logical_core(
         logical_core);
 }
