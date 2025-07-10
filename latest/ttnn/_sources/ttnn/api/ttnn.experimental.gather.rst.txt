@@ -1,0 +1,8 @@
+﻿ttnn.experimental.gather
+========================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.gather:
+
+.. autodata:: ttnn.experimental.gather
