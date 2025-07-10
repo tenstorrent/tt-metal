@@ -151,7 +151,6 @@ std::shared_ptr<MeshTraceBuffer> SubDeviceManager::get_trace(const MeshTraceId& 
     if (trace != trace_buffer_pool_.end()) {
         return trace->second;
     }
-    TT_THROW("MeshDevice ID {} Trace Instance with ID {} is not initialized", this->id(), *trace_id);
     return nullptr;
 }
 
