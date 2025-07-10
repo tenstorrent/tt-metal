@@ -137,6 +137,11 @@ RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && make install \
     && rm -rf /tmp/gdb-build
 
+COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
 #############################################################
 
 FROM base AS release
