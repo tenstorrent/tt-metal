@@ -408,6 +408,7 @@ public:
     //    protected:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
+    chan_id_t my_eth_channel;
     size_t my_noc_x = 0;
     size_t my_noc_y = 0;
 

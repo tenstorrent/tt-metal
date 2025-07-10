@@ -95,6 +95,8 @@ struct tensix_routing_l1_info_t {
 // MEM_TENSIX_ROUTING_TABLE_SIZE
 static_assert(sizeof(tensix_routing_l1_info_t) == 2064, "Struct size mismatch!");
 
+constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
+
 struct fabric_connection_info_t {
     uint32_t edm_direction;
     uint32_t edm_noc_xy;  // packed x,y coordinates

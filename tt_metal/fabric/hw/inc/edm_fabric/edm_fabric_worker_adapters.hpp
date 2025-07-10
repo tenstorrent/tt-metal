@@ -326,7 +326,7 @@ struct WorkerToFabricEdmSenderImpl {
     // for the read barrier to complete before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) open_finish().
-    template <bool mux_client = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    template <bool legacy_client = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
         *this->from_remote_buffer_free_slots_ptr = 0;
@@ -362,7 +362,9 @@ struct WorkerToFabricEdmSenderImpl {
                 edm_worker_location_info_addr +
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
         // write the address of our local copy of read counter (that EDM is supposed to update)
-        if constexpr (mux_client) {
+        if constexpr (legacy_client) {
+            // Legacy client need to send semaphore address to target EDM or MUX
+            // Newer implementation doesn't need to do as the address is fixed on its L1
             noc_inline_dw_write<false, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(from_remote_buffer_free_slots_ptr),
@@ -426,9 +428,9 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
-    template <bool mux_client = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    template <bool legacy_client = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open() {
-        open_start<mux_client, posted, WORKER_HANDSHAKE_NOC>();
+        open_start<legacy_client, posted, WORKER_HANDSHAKE_NOC>();
         open_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 

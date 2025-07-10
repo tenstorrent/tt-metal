@@ -111,7 +111,7 @@ void forward_data(
         increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
     }
 
-    tt::tt_fabric::check_worker_connections<255>(
+    tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
         worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
 }
 

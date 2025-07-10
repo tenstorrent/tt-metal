@@ -785,6 +785,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     bool build_in_worker_connection_mode,
     bool dateline_connection) :
     my_eth_core_logical(my_eth_core_logical),
+    my_eth_channel(my_eth_core_logical.y),
     my_noc_x(my_noc_x),
     my_noc_y(my_noc_y),
     config(config),
@@ -968,7 +969,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         default_handshake_context_switch_timeout,
         static_cast<uint32_t>(
             this->firmware_context_switch_type == FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE),
-        this->my_eth_core_logical.y,
+        this->my_eth_channel,
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 

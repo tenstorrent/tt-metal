@@ -13,12 +13,13 @@ public:
     inline bool is_logically_connected() const { return has_forward_connection() || has_backward_connection(); }
 
     // make the connection live
+    template <bool legacy_client = false>
     inline void open() {
         if (has_forward_connection()) {
-            forward_fabric_sender.open_start();
+            forward_fabric_sender.open_start<legacy_client>();
         }
         if (has_backward_connection()) {
-            backward_fabric_sender.open_start();
+            backward_fabric_sender.open_start<legacy_client>();
         }
         if (has_forward_connection()) {
             forward_fabric_sender.open_finish();
