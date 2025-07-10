@@ -4,8 +4,9 @@
 
 import os
 import warnings
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn.parameter import Parameter

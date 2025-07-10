@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
+import pkg_resources as pkg
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-import pkg_resources as pkg
 
 
 def dist2bbox(distance, anchor_points, box_format="xyxy"):
