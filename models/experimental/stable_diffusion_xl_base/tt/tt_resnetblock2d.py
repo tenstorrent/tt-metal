@@ -255,7 +255,8 @@ class TtResnetBlock2D(nn.Module):
         )
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.add(hidden_states, temb)
+        # Note: moving this add to NG has perf impact, to be investigated
+        hidden_states = ttnn.add(hidden_states, temb, use_legacy=True)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         grid_coord = ttnn.CoreCoord(self.norm_core_grid_2.x - 1, self.norm_core_grid_2.y - 1)
@@ -325,7 +326,8 @@ class TtResnetBlock2D(nn.Module):
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        ttnn.add_(hidden_states, input_tensor)
+        # Note: Moving this to NG results in error caused by shard shape, to be investigated
+        ttnn.add_(hidden_states, input_tensor, use_legacy=True)
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states, [C, H, W]
