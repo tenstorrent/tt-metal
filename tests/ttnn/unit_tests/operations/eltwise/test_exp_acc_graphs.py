@@ -81,7 +81,8 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
 
     # Compute ULP Error
     ulp_spacing = util.ulp(torch_out.to(torch.bfloat16)).to(torch.float32)
-    ulp_error = torch.abs(torch_out - ttnn_out) / ulp_spacing
+    abs_diff = torch.abs(torch_out - ttnn_out)
+    ulp_error = abs_diff / ulp_spacing
 
     # Plot ULP Error
     plt.figure(figsize=(10, 5))
@@ -99,6 +100,19 @@ def plot_using_arange(torch_unary_op, ttnn_op, scalar=None, low=-100, high=100):
     plt.savefig(ulp_path)
     plt.close()
     print(f"\t\t\tULP error graph saved to {os.path.abspath(ulp_path)}")
+
+    # Save results to CSV
+    csv_data = {
+        "x": x.numpy(),
+        "ttnn_out": ttnn_out.numpy(),
+        "torch_out_bf16": torch_out.numpy(),
+        "abs_diff": abs_diff.numpy(),
+        "ulp_error": ulp_error.numpy(),
+    }
+    df = pd.DataFrame(csv_data)
+    csv_path = os.path.join(plot_dir, f"{ttnn_op.__name__}_bf16__{scalar_str}_results.csv")
+    df.to_csv(csv_path, index=False)
+    print(f"\t\t\tResults CSV saved to {os.path.abspath(csv_path)}")
 
 
 def plot_torch_vs_ttnn_outputs_full_range(
@@ -641,12 +655,12 @@ def main(args):
 
     #   Ops that require equal check
     equal_check_operations = [
-        # "maximum",
-        # "minimum",
+        "maximum",
+        "minimum",
     ]
 
     all_operations = [
-        # "deg2rad",
+        "deg2rad",
         "exp",
         "expm1",
         "elu",
