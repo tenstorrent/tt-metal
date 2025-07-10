@@ -966,8 +966,8 @@ void MeshDevice::initialize_control_plane_config(
             eth_coords, *(control_plane.get_local_mesh_id_bindings()[0])));
 }
 
-multihost::DistributedContext& MeshDevice::get_distributed_context() const {
-    return tt::tt_metal::MetalContext::instance().get_distributed_context();
+std::shared_ptr<distributed::multihost::DistributedContext> MeshDevice::get_distributed_context() const {
+    return tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
 }
 
 }  // namespace tt::tt_metal::distributed

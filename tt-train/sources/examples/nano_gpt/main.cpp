@@ -484,6 +484,20 @@ const std::unordered_map<
     std::function<std::unique_ptr<ttml::schedulers::LRSchedulerBase>(ttml::optimizers::OptimizerBase *, size_t)>>
     schedulers = {{"identity", create_idendity_scheduler}, {"warmup_linear", create_warmup_with_linear_scheduler}};
 
+const std::vector<std::vector<uint32_t>> &get_eth_coords_for_t3k() {
+    static const std::vector<std::vector<uint32_t>> t3k_eth_coords = {
+        {0, 0, 0, 0, 0},
+        {0, 1, 0, 0, 0},
+        {0, 2, 0, 0, 0},
+        {0, 3, 0, 0, 0},
+        {0, 0, 1, 0, 0},
+        {0, 1, 1, 0, 0},
+        {0, 2, 1, 0, 0},
+        {0, 3, 1, 0, 0}};
+
+    return t3k_eth_coords;
+}
+
 int main(int argc, char **argv) {
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
@@ -511,8 +525,16 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        ctx.initialize_distributed_context(argc, argv);
 
+        ctx.set_fabric_config(
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml",
+            {get_eth_coords_for_t3k(),
+             get_eth_coords_for_t3k(),
+             get_eth_coords_for_t3k(),
+             get_eth_coords_for_t3k(),
+             get_eth_coords_for_t3k()});
+
+        ctx.initialize_distributed_context(argc, argv);
         auto distributed_ctx = ctx.get_distributed_context();
         fmt::print(
             "Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank().get());

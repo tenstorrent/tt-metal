@@ -10,7 +10,7 @@ void _generate_fabric_socket_config(
     tt::tt_metal::distributed::SocketConfig& socket_config,
     const std::shared_ptr<ttnn::distributed::MeshDevice>& mesh_device) {
     auto socket_mem_config = tt::tt_metal::distributed::SocketMemoryConfig{};
-    socket_mem_config.socket_storage_type = ttnn::BufferType::DRAM;
+    socket_mem_config.socket_storage_type = ttnn::BufferType::L1;
     socket_mem_config.fifo_size = 32U * 32U * 2U * 8U;  // 16K, 8 bfloat16 tiles
     socket_config.socket_mem_config = socket_mem_config;
 

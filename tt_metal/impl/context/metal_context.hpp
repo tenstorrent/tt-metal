@@ -84,6 +84,7 @@ public:
     tt_metal::FabricConfig get_fabric_config() const;
 
     distributed::multihost::DistributedContext& get_distributed_context();
+    std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr() const;
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;

@@ -22,11 +22,11 @@ SCP_OPTS="-p"    # preserve modification times & modes
 
 # Your cluster hosts, in the order MPI should assign ranks:
 HOSTS=(
-  "11.228.0.10"   # worker #1 (this host—skip copy)
+  "11.228.0.10"   # worker #1
   "11.228.0.11"   # worker #2
-  "11.228.0.14"   # aggregator
+  "11.228.0.14"   # worker #3
+  "11.228.0.15"   # aggregator
   "11.228.0.16"   # optimizer
-  # "11.228.0.15" # disabled host (slots=1) – uncomment to re-enable
 )
 
 print_usage() {
@@ -110,10 +110,18 @@ echo "✔ Remote copy complete."
 
 # launch MPI job
 echo "Launching MPI 3-tier demo..."
+
 mpirun --hostfile "${HOSTFILE}" \
-  -np "${WORKER_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+  -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=1 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+  : -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=2 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+  : -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=3 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
   : -np "${AGG_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_aggregator\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
-  : -np "${OPT_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG"
+  : -np "${OPT_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=4 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG"
+
+# mpirun --hostfile "${HOSTFILE}" \
+#   -np "${WORKER_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+#   : -np "${AGG_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_aggregator\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+#   : -np "${OPT_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG"
 
 # cleanup
 rm -f "${HOSTFILE}"

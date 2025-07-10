@@ -276,7 +276,7 @@ public:
         const std::string& mesh_graph_descriptor_path,
         const std::vector<std::vector<std::vector<uint32_t>>>& eth_coords_per_mesh);
 
-    multihost::DistributedContext& get_distributed_context() const;
+    std::shared_ptr<multihost::DistributedContext> get_distributed_context() const;
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
     // Reshaping Rules:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)

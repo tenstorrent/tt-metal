@@ -92,8 +92,9 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     if (m_distributed_context) {
         throw std::runtime_error("MPIContext is already initialized.");
     }
-    tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
-    m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    // tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
+    // m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    m_distributed_context = this->get_shared_ptr_device()->get_distributed_context();
 }
 
 void AutoContext::set_fabric_config(
