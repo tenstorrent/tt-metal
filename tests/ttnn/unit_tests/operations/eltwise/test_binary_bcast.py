@@ -279,6 +279,10 @@ def test_binary_scalar_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
         [[16, 6, 64, 64], [6, 1, 1]],
         [[16, 8, 64, 64], [8, 1, 1]],
         [[16, 1], [1, 1, 32]],
+        [[2, 4, 12, 64, 64], [12, 1, 1]],
+        [[12, 1, 1], [2, 4, 12, 64, 64]],
+        [[2, 3, 3, 4, 32], [3, 3, 4, 32]],
+        [[5, 2, 3, 3, 4, 32], [5, 1, 3, 3, 4, 32]],
     ],
 )
 def test_unequal_ranks(a_shape, b_shape, device):
@@ -333,9 +337,8 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_confi
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
-        [[2, 4, 12, 64, 64], [12, 1, 1]],
-        [[12, 1, 1], [2, 4, 12, 64, 64]],
         [[3, 4, 8, 6, 32, 64], [1, 1, 8, 6, 32, 64]],
+        [[1, 2, 3, 3, 4, 32], [5, 1, 3, 3, 4, 32]],
     ],
 )
 def test_binary_invalid_rank(device, a_shape, b_shape):
@@ -400,11 +403,30 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     ((torch.Size([5, 7, 64, 128]), torch.Size([5, 7, 64, 128])),),
 )
 @pytest.mark.parametrize(
-    "sharded_config",
+    "a_config, b_config, out_config",
     [
-        height_sharded_memory_config,
-        width_sharded_memory_config,
-        block_sharded_memory_config,
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, height_sharded_memory_config],
+        [ttnn.DRAM_MEMORY_CONFIG, height_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.DRAM_MEMORY_CONFIG, height_sharded_memory_config, height_sharded_memory_config],
+        [height_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [height_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, height_sharded_memory_config],
+        [height_sharded_memory_config, height_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
+        [height_sharded_memory_config, height_sharded_memory_config, height_sharded_memory_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, width_sharded_memory_config],
+        [ttnn.DRAM_MEMORY_CONFIG, width_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.DRAM_MEMORY_CONFIG, width_sharded_memory_config, width_sharded_memory_config],
+        [width_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [width_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, width_sharded_memory_config],
+        [width_sharded_memory_config, width_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
+        [width_sharded_memory_config, width_sharded_memory_config, width_sharded_memory_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config],
+        [ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config, block_sharded_memory_config],
+        [block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config],
+        [block_sharded_memory_config, block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
+        [block_sharded_memory_config, block_sharded_memory_config, block_sharded_memory_config],
     ],
 )
 @pytest.mark.parametrize(
@@ -415,41 +437,28 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         [torch.float32, ttnn.float32],
     ),
 )
-def test_binary_sharded(a_shape, b_shape, sharded_config, dtype_pt, dtype_tt, device):
-    input_combinations = (
-        (ttnn.DRAM_MEMORY_CONFIG, sharded_config),
-        (sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        (sharded_config, sharded_config),
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+def test_binary_sharded(a_shape, b_shape, a_config, b_config, out_config, dtype_pt, dtype_tt, device):
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(b_shape)
+
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=dtype_tt,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=a_config,
+    )
+    b_tt = ttnn.from_torch(
+        b_pt,
+        dtype=dtype_tt,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=b_config,
     )
 
-    for src_config, dst_config in input_combinations:
-        a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(a_shape)
-        b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(b_shape)
-
-        a_tt = ttnn.from_torch(
-            a_pt,
-            dtype=dtype_tt,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=src_config,
-        )
-        b_tt = ttnn.from_torch(
-            b_pt,
-            dtype=dtype_tt,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=dst_config,
-        )
-
-        out_pt = torch.add(a_pt, b_pt)
-        out_tt_interleaved = ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
-        out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
-        assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988
-
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=sharded_config, use_legacy=None)
-        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
+    out_pt = torch.add(a_pt, b_pt)
+    out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+    assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
 
 @pytest.mark.parametrize(
@@ -989,7 +998,6 @@ def test_inplace_binary_ops_fp32(input_shapes, ttnn_fn, device):
         (torch.Size([1, 1, 31, 32]), torch.Size([5, 3, 32, 32])),
         (torch.Size([5, 2, 64, 1]), torch.Size([1, 3, 1, 128])),
         (torch.Size([5, 1, 1, 64]), torch.Size([2, 3, 128, 1])),
-        (torch.Size([2, 2, 3, 128, 1]), torch.Size([2, 3, 128, 1])),
     ),
 )
 @pytest.mark.parametrize(

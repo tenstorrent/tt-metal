@@ -234,6 +234,11 @@ std::vector<uint32_t> get_forwarding_link_indices(
         src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
+tt::tt_fabric::Topology get_fabric_topology() {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_context().get_fabric_topology();
+}
+
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(
