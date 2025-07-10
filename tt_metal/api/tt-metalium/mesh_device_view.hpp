@@ -47,6 +47,7 @@ public:
     // // Create a view of a sub-region of the mesh defined by `range`.
     // MeshDeviceView(const std::vector<IDevice*>& devices, const MeshCoordinateRange& range);
     explicit MeshDeviceView(const MeshContainer<IDevice*>& devices);
+    explicit MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices);
     explicit MeshDeviceView(const MeshDevice& mesh_device);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
@@ -100,6 +101,19 @@ public:
         const Shape2D& ring_shape, const Shape2D& mesh_shape);
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
+
+    // Distributed mesh support
+    // Returns the offset of this host's portion of the mesh within the global distributed mesh.
+    // For single-host meshes, this returns (0, 0).
+    [[nodiscard]] MeshCoordinate local_offset() const;
+    
+    // Returns the shape of the mesh portion managed by this host.
+    // For single-host meshes, this equals the global mesh shape.
+    [[nodiscard]] MeshShape local_shape() const;
+    
+    // Checks if a global coordinate is managed by this host.
+    // Returns true if the coordinate falls within this host's local mesh bounds.
+    [[nodiscard]] bool is_local_coordinate(const MeshCoordinate& coord) const;
 
 private:
     MeshContainer<MaybeRemote<IDevice*>> devices_;

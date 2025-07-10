@@ -99,7 +99,6 @@ private:
         // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
         const std::vector<IDevice*>& root_devices() const;
     };
-    DistributedMeshConfig distributed_mesh_config_;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -128,7 +127,6 @@ private:
 
 public:
     MeshDevice(
-        const DistributedMeshConfig& distributed_mesh_config,
         std::shared_ptr<ScopedDevices> scoped_devices,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh = {});

@@ -81,15 +81,9 @@ const MeshShape& SystemMesh::Impl::local_shape() const {
 }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
-    if (!is_local_coordinate(coord)) {
-        TT_FATAL(false, "Coordinate {} is not in the local mesh", coord);
-    }
+    TT_FATAL(is_local_coordinate(coord), "Coordinate {} is not in the local mesh", coord);
     
     const auto& maybe_physical = physical_coordinates_.at(coord);
-    if (maybe_physical.is_remote()) {
-        TT_FATAL(false, "Coordinate {} is marked as remote - this should not happen", coord);
-    }
-    
     auto physical_device_id = maybe_physical.value().chip_id();
     log_debug(LogDistributed, "Global coordinate: {} mapped to physical device ID: {}", 
               coord, physical_device_id);
@@ -97,15 +91,8 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
 }
 
 uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
-    if (!is_local_coordinate(coord)) {
-        return 0;  // Return 0 for remote coordinates
-    }
-    
+    TT_FATAL(is_local_coordinate(coord), "Coordinate {} is not in the local mesh", coord);
     const auto& maybe_physical = physical_coordinates_.at(coord);
-    if (maybe_physical.is_remote()) {
-        return 0;
-    }
-    
     return *maybe_physical.value().mesh_id();
 }
 
