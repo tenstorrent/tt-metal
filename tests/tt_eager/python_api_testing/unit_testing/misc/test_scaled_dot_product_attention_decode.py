@@ -1012,7 +1012,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     expect = expect.squeeze(2).unsqueeze(0)
 
     out_pass, out_pcc = comp_pcc(expect, tt_back, min_pcc)
-
     logger.debug(f"python vs pytorch: {out_pcc}")
 
     assert out_pass

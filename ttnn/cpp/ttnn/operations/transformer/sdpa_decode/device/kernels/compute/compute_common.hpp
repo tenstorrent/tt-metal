@@ -72,8 +72,15 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
 reduce_c is a function used to sum up the values along a dimension - typically rows.
 --> stores the result in a separate output buffer
 */
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows>
-void reduce_c(uint32_t cols) {
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t in0_cb,
+    uint32_t scale_cb,
+    uint32_t rows,
+    uint32_t out_cb,
+    uint32_t prev_cb>
+void reduce_c(uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -83,25 +90,28 @@ void reduce_c(uint32_t cols) {
 
     reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
+    max_tile_init();
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
     constexpr uint32_t reduce_dst_idx = 0;
-
+    constexpr uint32_t prev_max_dst_idx = 1;
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
         for (uint32_t j = 0; j < cols; j++) {
             reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
         }
-
-        cb_reserve_back(out_cb, 1);
+        if (do_eltwise_max) {
+            copy_tile_to_dst_init_short(prev_cb);
+            copy_tile(prev_cb, i, prev_max_dst_idx);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+        }
         pack_tile(reduce_dst_idx, out_cb);
-        cb_push_back(out_cb, 1);
         release_dst();
     }
-
+    cb_push_back(out_cb, rows);
     reduce_uninit();
 }
 
@@ -353,7 +363,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<EXP_APPROX_MODE, false>();
+    exp_tile_init<EXP_APPROX_MODE>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -365,8 +375,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        // exp_tile<EXP_APPROX_MODE>(0);
-        exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
+        exp_tile<EXP_APPROX_MODE>(0);
+        // exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
@@ -613,13 +623,15 @@ void flash_attention_loop(
 
         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
         pack_reconfig_data_format(cb_cur_max);
-        reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t>(
-            Sk_chunk_t);
+        reduce_c<
+            PoolType::MAX,
+            ReduceDim::REDUCE_ROW,
+            cb_qk_im,
+            cb_identity_scale_in,
+            Sq_chunk_t,
+            cb_cur_max,
+            cb_prev_max>(Sk_chunk_t, k_chunk > k_chunk_start);
 
-        if (k_chunk > k_chunk_start) {
-            reconfig_data_format(cb_cur_max, cb_prev_max);
-            max_block_inplace(cb_cur_max, cb_prev_max, Sq_chunk_t);
-        }
         /* QK -= cb_cur_max */
         /* QK = exp(QK)*/
         reconfig_data_format(cb_qk_im, cb_cur_max);
@@ -629,8 +641,14 @@ void flash_attention_loop(
         /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
         pack_reconfig_data_format(cb_cur_sum);
-        reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_sum, Sq_chunk_t>(
-            Sk_chunk_t);
+        reduce_c<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_qk_im,
+            cb_identity_scale_in,
+            Sq_chunk_t,
+            cb_cur_sum,
+            cb_prev_sum>(Sk_chunk_t);
 
         /* OUT_IM = QK @ V_CHUNK */
         reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
@@ -663,9 +681,6 @@ void flash_attention_loop(
             /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
             sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
             cb_pop_front(cb_prev_max, Sq_chunk_t);
-
-            /* cb_prev_sum *= cb_exp_max_diff */
-            // mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
             /* cb_out_accumulate_im *= cb_exp_max_diff */
             reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);  // DEBUG

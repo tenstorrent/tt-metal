@@ -256,12 +256,12 @@ void MAIN {
                     // reconfig_data_format(cb_prev_max_2, cb_cur_max); // DEBUG
                     // pack_reconfig_data_format(cb_exp_max_diff_2);
                     sub_exp_block<scale_fp32>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
-                    // mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
+                    mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
                     /// l2 = torch.exp(m_1 - m) * l_1
                     // reconfig_data_format(cb_prev_max, cb_cur_max); // DEBUG
                     // pack_reconfig_data_format(cb_exp_max_diff);
                     sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    // mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
                     /// l = l1 + l2
                     // reconfig_data_format(cb_cur_sum, cb_prev_sum); // DEBUG
                     // pack_reconfig_data_format(cb_cur_sum);
