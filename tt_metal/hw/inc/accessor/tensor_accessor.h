@@ -154,6 +154,7 @@ private:
         return {bank_id, bank_page_offset};
     }
 
+public:
     const size_t bank_base_address = 0;
     const uint32_t page_size = 0;
 };
