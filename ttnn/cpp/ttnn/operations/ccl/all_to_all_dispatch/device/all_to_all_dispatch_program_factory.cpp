@@ -134,8 +134,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = detail::get_linearized_index(mesh_coordinate, mesh_view);
 
-    log_info(
-        tt::LogAlways,
+    log_debug(
+        tt::LogOp,
         "\nCreating all to all dispatch program for mesh coordinate: ({}, {}) with physical device id: {} mesh id: {} "
         "chip id: {} linearized mesh coord: {}",
         mesh_coordinate[0],
