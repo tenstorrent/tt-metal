@@ -15,6 +15,7 @@
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_config.hpp"
+#include "tt_fabric_test_memory_map.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -23,52 +24,20 @@ namespace tt::tt_fabric::fabric_tests {
 // ======================================================================================
 
 /**
- * Defines the memory layout for a worker core.
- */
-class WorkerCoreMemoryMap {
-    static constexpr uint32_t ATOMIC_COUNTER_SIZE = 0x1000;
-
-public:
-    WorkerCoreMemoryMap(
-        uint32_t l1_unreserved_base,
-        uint32_t l1_unreserved_size,
-        uint32_t l1_alignment,
-        uint32_t payload_chunk_size,
-        uint32_t num_configs) :
-        l1_alignment(l1_alignment) {
-        // reserve the top space for atomic counters
-        atomic_counter_start = l1_unreserved_base;
-        atomic_counter_end = l1_unreserved_base + ATOMIC_COUNTER_SIZE;
-
-        // reserve the bottom space for payloads
-        payload_buffer_start = atomic_counter_end;
-        payload_buffer_end = payload_buffer_start + payload_chunk_size * num_configs;
-        TT_FATAL(
-            payload_buffer_end <= l1_unreserved_base + l1_unreserved_size,
-            "Overflow when setting up memory map for worker core, try adjusting the chunk size of number of configs");
-    }
-
-    const uint32_t l1_alignment;
-    uint32_t payload_buffer_start;
-    uint32_t payload_buffer_end;
-    uint32_t atomic_counter_start;
-    uint32_t atomic_counter_end;
-};
-
-/**
- * Manages memory resources for a single worker core.
+ * Manages memory resources for a single worker core
  */
 class CoreResources {
 public:
     CoreResources(
-        uint32_t l1_unreserved_base,
-        uint32_t l1_unreserved_size,
         uint32_t l1_alignment,
         uint32_t payload_chunk_size,
-        uint32_t num_configs) :
+        const BaseMemoryRegion& payload_region,
+        const BaseMemoryRegion& atomic_region) :
         payload_chunk_size(payload_chunk_size),
-        memory_map_(l1_unreserved_base, l1_unreserved_size, l1_alignment, payload_chunk_size, num_configs) {
-        this->next_atomic_addr_ = this->memory_map_.atomic_counter_start;
+        l1_alignment_(l1_alignment),
+        payload_region_(payload_region),
+        atomic_region_(atomic_region) {
+        this->next_atomic_addr_ = this->atomic_region_.start;
         init_payload_buffer_allocator();
     }
 
@@ -93,10 +62,10 @@ public:
 
     uint32_t allocate_atomic_counter() {
         uint32_t addr = next_atomic_addr_;
-        if (addr + memory_map_.l1_alignment > memory_map_.atomic_counter_end) {
+        if (addr + l1_alignment_ > atomic_region_.end()) {
             TT_THROW("Out of atomic counter memory on core.");
         }
-        next_atomic_addr_ += memory_map_.l1_alignment;
+        next_atomic_addr_ += l1_alignment_;
         return addr;
     }
 
@@ -105,10 +74,13 @@ public:
     const std::vector<uint32_t>& get_available_payload_chunks() const { return available_payload_chunks_; }
 
     std::vector<uint32_t> get_available_atomic_counters() const {
+        const uint32_t available_space = atomic_region_.end() - next_atomic_addr_;
+        const uint32_t num_counters = available_space / l1_alignment_;
+
         std::vector<uint32_t> counters;
-        counters.reserve((memory_map_.atomic_counter_end - next_atomic_addr_) / memory_map_.l1_alignment);
-        for (uint32_t addr = next_atomic_addr_; addr + memory_map_.l1_alignment <= memory_map_.atomic_counter_end;
-             addr += memory_map_.l1_alignment) {
+        counters.reserve(num_counters);
+
+        for (uint32_t addr = next_atomic_addr_; addr + l1_alignment_ <= atomic_region_.end(); addr += l1_alignment_) {
             counters.push_back(addr);
         }
         return counters;
@@ -120,19 +92,20 @@ private:
     void init_payload_buffer_allocator() {
         uint32_t chunk_size = this->payload_chunk_size;
         TT_FATAL(
-            chunk_size > 0 && chunk_size % memory_map_.l1_alignment == 0,
+            chunk_size > 0 && chunk_size % l1_alignment_ == 0,
             "Payload chunk_size must be positive and a multiple of alignment");
 
         available_payload_chunks_.clear();
-        for (uint32_t addr = memory_map_.payload_buffer_start; addr + chunk_size <= memory_map_.payload_buffer_end;
-             addr += chunk_size) {
+        for (uint32_t addr = payload_region_.start; addr + chunk_size <= payload_region_.end(); addr += chunk_size) {
             available_payload_chunks_.push_back(addr);
         }
         // Allocate from the end of the buffer first
         std::reverse(available_payload_chunks_.begin(), available_payload_chunks_.end());
     }
 
-    WorkerCoreMemoryMap memory_map_;
+    uint32_t l1_alignment_;
+    BaseMemoryRegion payload_region_;
+    BaseMemoryRegion atomic_region_;
     uint32_t next_atomic_addr_;
     std::vector<uint32_t> available_payload_chunks_;
 };
@@ -167,12 +140,12 @@ public:
     TestDeviceResources(
         const FabricNodeId& node_id,
         const CoreCoord& worker_grid_size,
-        uint32_t l1_unreserved_base,
-        uint32_t l1_unreserved_size,
         uint32_t l1_alignment,
-        uint32_t default_payload_chunk_size,
+        uint32_t payload_chunk_size,
         const CoreAllocationConfig& sender_policy,
-        const CoreAllocationConfig& receiver_policy);
+        const CoreAllocationConfig& receiver_policy,
+        const BaseMemoryRegion& payload_region,
+        const BaseMemoryRegion& atomic_region);
 
     void initialize_receiver_pool();
     CoreCoord reserve_sender_core(const std::optional<CoreCoord>& specified_core);
@@ -180,10 +153,10 @@ public:
     CoreResources& get_or_create_core_resources(const CoreCoord& core, CoreType core_type);
 
     const FabricNodeId node_id_;
-    uint32_t l1_unreserved_base_;
-    uint32_t l1_unreserved_size_;
     uint32_t l1_alignment_;
-    uint32_t default_payload_chunk_size_;
+    uint32_t payload_chunk_size_;
+    BaseMemoryRegion payload_region_;
+    BaseMemoryRegion atomic_region_;
     std::vector<CoreCoord> pristine_cores_;                        // Cores not yet used at all.
     std::array<CorePool, 2> core_pools_;                           // Indexed by CoreType
     std::unordered_map<CoreCoord, uint32_t> core_workload_;        // map core -> num_configs
@@ -202,21 +175,21 @@ private:
 inline TestDeviceResources::TestDeviceResources(
     const FabricNodeId& node_id,
     const CoreCoord& worker_grid_size,
-    uint32_t l1_unreserved_base,
-    uint32_t l1_unreserved_size,
     uint32_t l1_alignment,
-    uint32_t default_payload_chunk_size,
+    uint32_t payload_chunk_size,
     const CoreAllocationConfig& sender_policy,
-    const CoreAllocationConfig& receiver_policy) :
+    const CoreAllocationConfig& receiver_policy,
+    const BaseMemoryRegion& payload_region,
+    const BaseMemoryRegion& atomic_region) :
     node_id_(node_id),
-    l1_unreserved_base_(l1_unreserved_base),
-    l1_unreserved_size_(l1_unreserved_size),
     l1_alignment_(l1_alignment),
-    default_payload_chunk_size_(default_payload_chunk_size),
+    payload_chunk_size_(payload_chunk_size),
+    payload_region_(payload_region),
+    atomic_region_(atomic_region),
     core_pools_{CorePool(sender_policy), CorePool(receiver_policy)} {
     for (size_t y = 0; y < worker_grid_size.y; ++y) {
         for (size_t x = 0; x < worker_grid_size.x; ++x) {
-            pristine_cores_.push_back({x, y});
+            pristine_cores_.emplace_back(x, y);
         }
     }
     // Sort to ensure canonical order for determinism
@@ -274,11 +247,10 @@ inline CoreResources& TestDeviceResources::get_or_create_core_resources(const Co
         core_resources_.emplace(
             core,
             CoreResources(
-                l1_unreserved_base_,
-                l1_unreserved_size_,
                 l1_alignment_,
-                this->default_payload_chunk_size_,
-                policy.max_configs_per_core));
+                payload_chunk_size_,  // Use constant from receiver memory map
+                payload_region_,
+                atomic_region_));
     }
     return core_resources_.at(core);
 }
@@ -392,7 +364,9 @@ public:
     GlobalAllocator(
         const IDeviceInfoProvider& device_info_provider,
         const IRouteManager& route_manager,
-        const AllocatorPolicies& policies);
+        const AllocatorPolicies& policies,
+        const SenderMemoryMap& sender_memory_map,
+        const ReceiverMemoryMap& receiver_memory_map);
 
     void allocate_resources(TestConfig& test_config);
     void reset();
@@ -403,6 +377,8 @@ private:
     const IDeviceInfoProvider& device_info_provider_;
     const IRouteManager& route_manager_;
     AllocatorPolicies policies_;
+    const SenderMemoryMap& sender_memory_map_;
+    const ReceiverMemoryMap& receiver_memory_map_;
     std::optional<CoreCoord> worker_grid_size_;
     std::unordered_map<FabricNodeId, std::unique_ptr<TestDeviceResources>> all_device_resources_;
 };
@@ -410,30 +386,38 @@ private:
 inline GlobalAllocator::GlobalAllocator(
     const IDeviceInfoProvider& device_info_provider,
     const IRouteManager& route_manager,
-    const AllocatorPolicies& policies) :
-    device_info_provider_(device_info_provider), route_manager_(route_manager), policies_(policies) {}
+    const AllocatorPolicies& policies,
+    const SenderMemoryMap& sender_memory_map,
+    const ReceiverMemoryMap& receiver_memory_map) :
+    device_info_provider_(device_info_provider),
+    route_manager_(route_manager),
+    policies_(policies),
+    sender_memory_map_(sender_memory_map),
+    receiver_memory_map_(receiver_memory_map) {}
 
 inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(const FabricNodeId& node_id) {
-    if (all_device_resources_.find(node_id) == all_device_resources_.end()) {
-        if (!worker_grid_size_.has_value()) {
-            worker_grid_size_ = device_info_provider_.get_worker_grid_size();
-        }
-        uint32_t l1_unreserved_base = device_info_provider_.get_l1_unreserved_base(node_id);
-        uint32_t l1_unreserved_size = device_info_provider_.get_l1_unreserved_size(node_id);
-        uint32_t l1_alignment = device_info_provider_.get_l1_alignment();
-        all_device_resources_.emplace(
-            node_id,
-            std::make_unique<TestDeviceResources>(
-                node_id,
-                worker_grid_size_.value(),
-                l1_unreserved_base,
-                l1_unreserved_size,
-                l1_alignment,
-                policies_.default_payload_chunk_size.value(),
-                policies_.sender_config,
-                policies_.receiver_config));
+    auto it = all_device_resources_.find(node_id);
+    if (it != all_device_resources_.end()) {
+        return *it->second;
     }
-    return *all_device_resources_.at(node_id);
+
+    // Create new device resources
+    if (!worker_grid_size_.has_value()) {
+        worker_grid_size_ = device_info_provider_.get_worker_grid_size();
+    }
+
+    auto [inserted_it, success] = all_device_resources_.emplace(
+        node_id,
+        std::make_unique<TestDeviceResources>(
+            node_id,
+            worker_grid_size_.value(),
+            device_info_provider_.get_l1_alignment(),  // Get directly from device info provider
+            policies_.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES),
+            policies_.sender_config,
+            policies_.receiver_config,
+            receiver_memory_map_.payload_chunks,
+            receiver_memory_map_.atomic_counters));
+    return *inserted_it->second;
 }
 
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
@@ -481,8 +465,6 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     dst_node_ids.push_back(dest.device.value());
                 }
 
-                const auto& receiver_policy =
-                    get_or_create_device_resources(dst_node_ids.front()).core_pools_[RECEIVER_TYPE_IDX].policy;
                 uint32_t chunk_size =
                     policies_.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
                 TT_FATAL(
@@ -491,21 +473,26 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     pattern.size.value(),
                     chunk_size);
 
+                // Use histogram analysis to find uniform receiver core and memory address
                 std::map<CoreCoord, uint32_t> core_counts;
                 std::map<CoreCoord, std::map<uint32_t, uint32_t>> memory_histograms;
 
+                // Build histograms for all destination devices
                 for (const auto& device_id : dst_node_ids) {
                     auto& device_resources = get_or_create_device_resources(device_id);
+
                     const auto& receiver_pool = device_resources.core_pools_[RECEIVER_TYPE_IDX];
                     if (!receiver_pool.initialized) {
                         device_resources.initialize_receiver_pool();
                     }
 
-                    for (const auto& core : receiver_pool.get_available_cores(device_resources.core_workload_)) {
+                    const auto available_cores = receiver_pool.get_available_cores(device_resources.core_workload_);
+                    for (const auto& core : available_cores) {
                         core_counts[core]++;
                         auto& core_resources = device_resources.get_or_create_core_resources(core, CoreType::RECEIVER);
                         if (core_resources.has_available_payload_chunk()) {
-                            for (auto addr : core_resources.get_available_payload_chunks()) {
+                            const auto& available_chunks = core_resources.get_available_payload_chunks();
+                            for (auto addr : available_chunks) {
                                 memory_histograms[core][addr]++;
                             }
                         }
@@ -523,7 +510,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
                 std::optional<std::pair<CoreCoord, uint32_t>> uniform_receiver = std::nullopt;
                 if (best_core.has_value()) {
-                    std::map<uint32_t, uint32_t>& address_histogram = memory_histograms[best_core.value()];
+                    const auto& address_histogram = memory_histograms[best_core.value()];
                     for (const auto& [addr, count] : address_histogram) {
                         if (count == dst_node_ids.size()) {
                             uniform_receiver = std::make_pair(best_core.value(), addr);
@@ -543,7 +530,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     TT_THROW("Multicast atomic/fused atomic not supported yet");
                 }
 
-                // Reserve the found core/address on all destination devices
+                // Reserve resources on all destination devices
                 for (const auto& node_id : dst_node_ids) {
                     auto& device_resources = get_or_create_device_resources(node_id);
                     device_resources.reserve_receiver_core(dest.core);
@@ -557,7 +544,6 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                         core_resources.reserve_payload_chunk(dest.target_address.value());
                     }
                 }
-
             } else {  // Unicast
                 TT_FATAL(dest.device.has_value(), "Unicast destination requires a device ID.");
                 auto& device_resources = get_or_create_device_resources(dest.device.value());

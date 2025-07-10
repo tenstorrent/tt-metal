@@ -14,9 +14,14 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     auto receiver_config = ReceiverKernelConfig::build_from_args(rt_args_idx);
 
-    // clear out test results area
+    // Clear test results area and mark as started
+    tt::tt_fabric::fabric_tests::clear_test_results(
+        receiver_config.get_result_buffer_address(), receiver_config.get_result_buffer_size());
+    tt::tt_fabric::fabric_tests::write_test_status(
+        receiver_config.get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
 
     bool failed = false;
+    uint64_t total_packets_received = 0;
 
     bool packets_left_to_validate = true;
     while (packets_left_to_validate) {
@@ -41,6 +46,7 @@ void kernel_main() {
             }
 
             traffic_config->advance();
+            total_packets_received++;
             packets_left_to_validate |= traffic_config->has_packets_to_validate();
         }
 
@@ -49,5 +55,11 @@ void kernel_main() {
         }
     }
 
-    // dump results
+    // Write test results
+    tt::tt_fabric::fabric_tests::write_test_packets(
+        receiver_config.get_result_buffer_address(), total_packets_received);
+
+    // Mark test as passed or failed
+    uint32_t final_status = failed ? TT_FABRIC_STATUS_DATA_MISMATCH : TT_FABRIC_STATUS_PASS;
+    tt::tt_fabric::fabric_tests::write_test_status(receiver_config.get_result_buffer_address(), final_status);
 }
