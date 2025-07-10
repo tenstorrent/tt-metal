@@ -77,7 +77,8 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     const auto num_output_tiles = output.physical_volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
-    // choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8
+    // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
+    // Helps with locality and increases work unit for better performance.
     std::uint32_t input_granularity;
     for (input_granularity = 8; input_granularity > 1; --input_granularity) {
         if (num_reduce_input_tile % input_granularity == 0) {
@@ -98,7 +99,8 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     const std::uint32_t out0_t = 2;                     // output
     std::uint32_t shard_factor = 1;
 
-    // when dim=0, nd sharded, and number of shards is larger than core count, divide the work by shards
+    // When dim=0, nd sharded, tensor shape divisible by shard, and number of
+    // shards is larger than core count, divide the work by shards.
     std::uint32_t input_shard_size = 1;
     std::uint32_t output_shard_size = 1;
     auto input_tile = input.tensor_spec().tile().get_tile_shape();
@@ -112,10 +114,8 @@ operation::ProgramWithCallbacks reduce_nc_factory(
         NdShardSpec input_nd_shard_spec = input.nd_shard_spec().value();
         const Shape& input_shard_shape = input_nd_shard_spec.shard_shape;
         if (is_tensor_divisible_by_shard(input_shape, input_shard_shape)) {
-            std::uint32_t input_shard_volume = input_nd_shard_spec.shard_shape.volume();
             NdShardSpec output_nd_shard_spec = output.nd_shard_spec().value();
             std::uint32_t output_shard_volume = output_nd_shard_spec.shard_shape.volume();
-            input_shard_size = input_shard_volume / tile_size;
             output_shard_size = output_shard_volume / tile_size;
             std::uint32_t num_output_shards = inner_tile_size / output_shard_size;
             bool more_shards_than_cores = num_output_shards > (num_cores_x * num_cores_y);
@@ -232,6 +232,29 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    // Each core is assigned an output work unit in a row wise round robin
+    // fashion. For a given core, the first index is i, and all subsequent
+    // indicies are increments of num_cores_to_be_used. The total number of
+    // units is num_tiles_per_group times num_cores_to_be_used.
+    // For example, with 130 output tiles to be processed and no shards (shard
+    // factor is 1) on an 8x8 grid
+    // - the increment is 64
+    // - the first 2 cores will have num_tiles_per_core 3 and the rest 2
+    // - core x=0,y=0 will process output tiles 0, 64, and 128
+    // - core x=1,y=0 will process output tiles 1, 65, and 129
+    // - core x=2,y=0 will process output tiles 2 and 66
+    // - core x=3,y=0 will process output tiles 3 and 67
+    // - etc
+    // The first tile that needs to be reduced has the same as the output tile.
+    // That is the starting point for the reader, which then processes all
+    // subsequent tiles to be reduced. The increment for the input indicies is
+    // the size of the inner dimensions in tiles (inner_tile_size). The number
+    // of tiles to process is the size of the reduce dimension in tiles
+    // (reduce_tile_size).
+    // The shard factor is used to iterate over shards instead of tiles.
+    // It is taken into account in the num_cols_per_core_group variables and
+    // the tile_offset is incremented by it for the reader to adjust it's
+    // reading pattern.
     for (std::uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 

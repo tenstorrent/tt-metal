@@ -24,6 +24,10 @@ void kernel_main() {
 
     auto tensor_accessor = make_tensor_accessor_from_args(tensor_args, output_addr, output_tile_bytes);
 
+    // For each shard, start at the index of the first shard to be reduced (same
+    // index as output), then increment by the appropriate increment (based on
+    // the grid size), until the range length is reached. See reader and program
+    // factory for examples.
     for (uint32_t outer_id = start_id; outer_id < start_id + id_range_length; outer_id += outer_id_increment) {
         for (uint32_t id_offset = 0; id_offset < shard_factor; id_offset++) {
             uint32_t i = outer_id + id_offset;

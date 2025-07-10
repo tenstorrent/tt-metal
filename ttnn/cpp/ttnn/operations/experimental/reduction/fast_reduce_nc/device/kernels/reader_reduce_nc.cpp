@@ -40,10 +40,24 @@ void kernel_main() {
     auto tensor_accessor = make_tensor_accessor_from_args(tensor_args, input_addr, input_tile_bytes);
     uint32_t input_granularity_index = 0;
 
+    // For each shard, start at the index of the first shard to be reduced (same
+    // index as output), then increment by the appropriate increment (based on
+    // the grid size), until the range length is reached. E.g. For 130 shards
+    // on an 8x8 grid, the first core would have start_id equal 0,
+    // outer_id_increment equal 64, and id_range_length 64*3. The outer_id
+    // values would be 0, 64, and 128.
     for (uint32_t outer_id = start_id; outer_id < start_id + id_range_length; outer_id += outer_id_increment) {
+        // Go through each tile of each shard.
         for (uint32_t id_offset = 0; id_offset < shard_factor; ++id_offset) {
             uint32_t i = outer_id + id_offset;
             auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));
+            // Now reduce all tiles in the reduction dim. The first index is the
+            // same as the output index. After that need to increment by the
+            // size of the inner dimensions in tiles. E.g. for 130 tiles
+            // (where shard factor equals 1), the increment is 130. If 4 tiles
+            // need to be reduced, then the first core would access tiles at
+            // indices 0, 130, 260, 390, 64, 64+130, 64+260, 64+390, 128,
+            // 128+130, 128+260, and 128+390.
             for (uint32_t j = 0; j < num_input_tiles; ++j) {
                 if (input_granularity_index == 0) {
                     cb_reserve_back(cb_id_in0, input_granularity);
