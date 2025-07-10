@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "ttnn/distributed/bidirectional_fabric_socket.hpp"
 #include "ttnn/operations/experimental/ccl/send_async/send_async.hpp"
 #include "ttnn/operations/experimental/ccl/recv_async/recv_async.hpp"

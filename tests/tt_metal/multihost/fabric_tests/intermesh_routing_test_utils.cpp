@@ -375,8 +375,6 @@ void run_mcast_sender_step(
 
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
 
-    log_debug(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
-
     tt_fabric::append_fabric_connection_rt_args(
         mcast_sender_node, mcast_start_node, 0, mcast_send_program, {sender_logical_core}, sender_runtime_args);
 

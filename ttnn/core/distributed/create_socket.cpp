@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/bidirectional_fabric_socket.hpp"
 #include "ttnn/distributed/fabric_socket.hpp"

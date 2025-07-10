@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "ttnn/distributed/mpi_socket.hpp"
 
 #include <ttnn/operations/data_movement/copy/copy.hpp>
