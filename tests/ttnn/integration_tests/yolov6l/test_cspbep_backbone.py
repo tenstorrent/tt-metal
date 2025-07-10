@@ -18,7 +18,7 @@ def test_yolov6l_cspbep_backbone(device, reset_seeds):
 
     model = model.backbone
 
-    torch_input = torch.randn(1, 3, 640, 480)
+    torch_input = torch.randn(1, 3, 640, 640)
 
     parameters = create_yolov6l_model_parameters(model, torch_input, device)
 
