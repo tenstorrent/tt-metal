@@ -465,7 +465,7 @@ struct LineSyncConfig {
 
     void global_sync_finish() {
         // sync wait
-        while (line_sync_ptr[0] != line_sync_val);
+        noc_semaphore_wait(line_sync_ptr, line_sync_val);
     }
 
 private:
@@ -945,7 +945,7 @@ private:
             if constexpr (MASTER_SYNC_CORE) {
                 uint32_t line_sync_val = get_arg_val<uint32_t>(arg_idx++);
                 for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-                    uint32_t packet_header_address = this->memory_allocator.get_packet_header_address();
+                    uint32_t packet_header_address = this->memory_map.get_packet_header_address();
                     new (&line_sync_configs()[i])
                         LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
 

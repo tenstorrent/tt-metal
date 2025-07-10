@@ -109,7 +109,7 @@ struct SenderMemoryMap {
         uint32_t local_sync_region_base = current_addr;
         uint32_t local_sync_region_size = l1_alignment;
         current_addr += local_sync_region_size;
-        global_sync_region = BaseMemoryRegion(local_sync_region_base, local_sync_region_size);
+        local_sync_region = BaseMemoryRegion(local_sync_region_base, local_sync_region_size);
 
         TT_FATAL(
             current_addr <= highest_usable_address,

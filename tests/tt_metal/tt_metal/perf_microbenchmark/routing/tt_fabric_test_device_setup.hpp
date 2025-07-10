@@ -507,8 +507,7 @@ inline void TestDevice::create_sync_kernel() {
 
     // ===== GLOBAL SYNC ARGS =====
     // Expected sync value for global sync
-    global_sync_args.push_back(
-        sender_memory_map_->get_global_sync_address());  // Use the stored line sync value from test config
+    global_sync_args.push_back(this->global_sync_val_);  // Use the stored line sync value from test config
 
     for (size_t i = 0; i < sync_sender.global_sync_configs_.size(); ++i) {
         const auto& [sync_config, fabric_conn_idx] = sync_sender.global_sync_configs_[i];

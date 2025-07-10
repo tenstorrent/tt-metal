@@ -847,6 +847,10 @@ private:
         resolved_test.patterns = parsed_test.patterns;
         resolved_test.bw_calc_func = parsed_test.bw_calc_func;
         resolved_test.seed = parsed_test.seed;
+        resolved_test.global_sync_configs = parsed_test.global_sync_configs;
+        resolved_test.benchmark_mode = parsed_test.benchmark_mode;
+        resolved_test.global_sync = parsed_test.global_sync;
+        resolved_test.global_sync_val = parsed_test.global_sync_val;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {
@@ -1320,7 +1324,7 @@ private:
         }
     }
 
-    void expand_sync_patterns(TestConfig& test) {
+    void expand_sync_patterns(ParsedTestConfig& test) {
         log_info(
             LogTest,
             "Expanding line sync patterns for test: {} with topology: {}",
