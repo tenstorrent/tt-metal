@@ -226,9 +226,9 @@ const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 
 Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
-    return Alignment({div_up(
-        CMAKE_UNIQUE_NAMESPACE::RECOMMENDED_MEMORY_ALIGNMENT_BYTES,
-        CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype))});
+    auto element_size_bytes = CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
+    auto alignment_bytes = std::lcm(CMAKE_UNIQUE_NAMESPACE::RECOMMENDED_MEMORY_ALIGNMENT_BYTES, element_size_bytes);
+    return Alignment({alignment_bytes / element_size_bytes});
 }
 
 }  // namespace tt::tt_metal
