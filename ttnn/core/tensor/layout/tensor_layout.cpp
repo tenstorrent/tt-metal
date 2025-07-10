@@ -47,23 +47,11 @@ Alignment legacyShapeToAlignment(
         const auto& shard_spec = memory_config.shard_spec().value();
         const auto shard_shape = shard_spec.physical_shard_shape.value_or(shard_spec.shape);
         if (page_config.get_layout() == Layout::ROW_MAJOR) {
-            if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-                return Alignment{shard_shape[0], 1};
-            } else if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-                return Alignment{1, shard_shape[1]};
-            } else if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-                return Alignment{shard_shape[0], shard_shape[1]};
-            }
+            return Alignment{shard_shape[0], shard_shape[1]};
         } else if (page_config.get_layout() == Layout::TILE) {
-            if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-                return Alignment{tt::round_up(shard_shape[0], constants::TILE_HEIGHT), constants::TILE_WIDTH};
-            } else if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-                return Alignment{constants::TILE_HEIGHT, tt::round_up(shard_shape[1], constants::TILE_WIDTH)};
-            } else if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-                return Alignment{
-                    tt::round_up(shard_shape[0], constants::TILE_HEIGHT),
-                    tt::round_up(shard_shape[1], constants::TILE_WIDTH)};
-            }
+            return Alignment{
+                tt::round_up(shard_shape[0], constants::TILE_HEIGHT),
+                tt::round_up(shard_shape[1], constants::TILE_WIDTH)};
         }
 
         return Alignment{};
