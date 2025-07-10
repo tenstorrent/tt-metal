@@ -869,7 +869,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             auto num_full_size_channels = num_workers_per_direction;
             auto num_header_only_channels = 0;
             uint32_t payload_size_bytes = tiles_to_write_per_packet * op_config.get_page_size();
-            uint32_t num_buffers_full_size_channels = 1;
+            uint32_t num_buffers_full_size_channels = 2;
             size_t buffer_size_bytes_full_size_channel =
                 tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
             const uint32_t l1_unreserved_base_address =

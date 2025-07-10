@@ -11,6 +11,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -217,18 +218,23 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
+    uint32_t chunks_per_sync = 2;
+    uint32_t chunk_count = 0;
+
     for (uint32_t b = 0; b < num_batches; b++) {
         int slice_idx = is_forward ? ring_size - 1 : 0;
 
         uint32_t batch_slice_offset = batch_slice_num_pages * b;
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
+            chunk_count = 0;
             // Last send is special for backwards - send to different slice idx to avoid overlap
             if constexpr (!is_forward) {
                 if (iter == num_targets_in_direction - 1) {
                     // Wait for final_reduction_slot_sem to be signaled
                     // Send to different slice idx to avoid overlap
-                    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_reduction_slot_sem), 1);
-                    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_reduction_slot_sem), 0);
+                    // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_reduction_slot_sem),
+                    // 1); noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_reduction_slot_sem),
+                    // 0);
                     constexpr bool their_first_write_was_fwd = (my_chip_id - 1) < ring_size / 2;
                     // If their first write was forward, they freed up the last slot first. Otherwise, the freed
                     // up the first slot first. That's where I can write to.
@@ -307,34 +313,52 @@ void kernel_main() {
                     tiles_read += num_pages_to_write;
                 }
                 cb_pop_front(cb_output_id, tile_granularity);
-            }
 
-            // 2. unicast output ready semaphore
-            uint64_t out_ready_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-            pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                out_ready_sem_noc_addr_in_pkt,
-                static_cast<uint16_t>(1),  // increment 1
-                32});
-            pkt_hdr_seminc->to_chip_unicast(1);
-            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
-            noc_async_writes_flushed();
-
-            if constexpr (is_forward) {
-                if (iter == 0) {
-                    // First send is special for forwards (tell backwards direction that slot is free)
-
-                    // Signal final_reduction_slot_sem on remote BWD core
-                    uint64_t final_slot_sem_noc_addr_in_pkt = safe_get_noc_addr(
-                        opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, final_reduction_slot_sem, 0);
+                chunk_count++;
+                if (chunk_count % chunks_per_sync == 0) {
+                    DeviceZoneScopedN("increment_sem");
+                    // 2. unicast output ready semaphore
+                    uint64_t out_ready_sem_noc_addr_in_pkt =
+                        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
                     pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                        final_slot_sem_noc_addr_in_pkt,
+                        out_ready_sem_noc_addr_in_pkt,
                         static_cast<uint16_t>(1),  // increment 1
-                        32});
+                        static_cast<uint16_t>(0xFFFF)});
+                    pkt_hdr_seminc->to_chip_unicast(1);
                     tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
                     noc_async_writes_flushed();
                 }
             }
+            if (chunk_count % chunks_per_sync != 0) {
+                DeviceZoneScopedN("increment_sem");
+                // 2. unicast output ready semaphore
+                uint64_t out_ready_sem_noc_addr_in_pkt =
+                    safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+                pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    out_ready_sem_noc_addr_in_pkt,
+                    static_cast<uint16_t>(1),  // increment 1
+                    static_cast<uint16_t>(0xFFFF)});
+                pkt_hdr_seminc->to_chip_unicast(1);
+                tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
+                noc_async_writes_flushed();
+            }
+            DPRINT << "chunk_count: " << chunk_count << ENDL();
+
+            // if constexpr (is_forward) {
+            //     if (iter == 0) {
+            //         // First send is special for forwards (tell backwards direction that slot is free)
+
+            //         // Signal final_reduction_slot_sem on remote BWD core
+            //         uint64_t final_slot_sem_noc_addr_in_pkt = safe_get_noc_addr(
+            //             opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, final_reduction_slot_sem, 0);
+            //         pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            //             final_slot_sem_noc_addr_in_pkt,
+            //             static_cast<uint16_t>(1),  // increment 1
+            //             32});
+            //         tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
+            //         noc_async_writes_flushed();
+            //     }
+            // }
 
             // Next slice idx
             if constexpr (is_forward) {
@@ -371,9 +395,9 @@ void kernel_main() {
             noc_async_write_barrier();
             if constexpr (sync_with_other_direction && is_forward) {
                 // Tell local backwards reader that it can proceed
-                uint64_t fwd_bwd_sem_noc_addr =
-                    safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
-                noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
+                // uint64_t fwd_bwd_sem_noc_addr =
+                //     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
+                // noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
             }
         }
 
@@ -386,34 +410,34 @@ void kernel_main() {
         // Have local FWD wait on local BWD reaching here
         if constexpr (!is_forward) {
             // Have local BWD tell local FWD that it's done
-            uint64_t fwd_bwd_sem_noc_addr =
-                safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
-            noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
+            // uint64_t fwd_bwd_sem_noc_addr =
+            //     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
+            // noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
         } else {
             // Local FWD waits here until BWD has completed writes
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 1);
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 0);
+            // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 1);
+            // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 0);
         }
 
         if (mux_connection_valid) {
             // mcast batch_ready_sem to opposite core in my direction
-            uint64_t batch_ready_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, batch_ready_sem, 0);
-            pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                batch_ready_sem_noc_addr_in_pkt,
-                static_cast<uint16_t>(1),  // increment 1
-                32});
-            pkt_hdr_seminc->to_chip_multicast(
-                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_in_direction)});
-            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
-            noc_async_writes_flushed();
+            // uint64_t batch_ready_sem_noc_addr_in_pkt =
+            //     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, batch_ready_sem, 0);
+            // pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            //     batch_ready_sem_noc_addr_in_pkt,
+            //     static_cast<uint16_t>(1),  // increment 1
+            //     32});
+            // pkt_hdr_seminc->to_chip_multicast(
+            //     tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_in_direction)});
+            // tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
+            // noc_async_writes_flushed();
         }
 
         // Reset the global semaphore before the next batch
         // We're going to get hit by however many cores we're targeting, since the opposite core sends back toward us.
-        noc_semaphore_wait_min(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), num_targets_in_direction);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+        // noc_semaphore_wait_min(
+        //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), num_targets_in_direction);
+        // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
     }
 
     if (mux_connection_valid) {
