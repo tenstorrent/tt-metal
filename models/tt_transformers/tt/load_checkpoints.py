@@ -126,6 +126,17 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+
+        #phi-1
+        "model.layers.{layer}.self_attn.dense.weight": "layers.{layer}.attention.wo.weight",
+        "model.layers.{layer}.self_attn.dense.bias": "layers.{layer}.attention.wo.bias",
+        "model.layers.{layer}.mlp.fc1.weight": "layers.{layer}.feed_forward.w1.weight",
+        "model.layers.{layer}.mlp.fc2.weight": "layers.{layer}.feed_forward.w2.weight",
+        "model.layers.{layer}.mlp.fc1.bias": "layers.{layer}.feed_forward.w1.bias",
+        "model.layers.{layer}.mlp.fc2.bias": "layers.{layer}.feed_forward.w2.bias",
+        "model.layers.{layer}.layernorm.weight": "layers.{layer}.attention_norm.weight",
+        "model.layers.{layer}.layernorm.bias": "layers.{layer}.attention_norm.bias",
+        "lm_head.bias": "output.bias",
     }
 
     meta_state_dict = {}
