@@ -22,6 +22,8 @@ target_sources(
         nlp_concat_heads/nlp_concat_heads.cpp
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_program_factory.cpp
+        nlp_concat_heads_decode/device/multi_core_nlp_concat_heads_decode_program_factory.cpp
+        nlp_concat_heads_decode/device/multi_core_nlp_concat_heads_decode_subcoregrids_program_factory.cpp
         nlp_concat_heads_decode/nlp_concat_heads_decode.cpp
         nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.cpp
         nlp_create_qkv_heads/device/nlp_create_qkv_heads_program_factory.cpp
