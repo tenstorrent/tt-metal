@@ -816,14 +816,17 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
         fprintf(f, "D");
     } else if (launch_msg->kernel_config.mode == DISPATCH_MODE_HOST) {
         fprintf(f, "H");
+    } else if (launch_msg->kernel_config.mode == DISPATCH_MODE_NONE) {
+        fprintf(f, "N");
     } else {
         LogRunningKernels(core, launch_msg);
         TT_THROW(
-            "Watcher data corruption, unexpected launch mode on core {}: {} (expected {} or {})",
+            "Watcher data corruption, unexpected launch mode on core {}: {} (expected {}, {}, or {})",
             core.coord.str(),
             launch_msg->kernel_config.mode,
             DISPATCH_MODE_DEV,
-            DISPATCH_MODE_HOST);
+            DISPATCH_MODE_HOST,
+            DISPATCH_MODE_NONE);
     }
 
     if (launch_msg->kernel_config.brisc_noc_id == 0 || launch_msg->kernel_config.brisc_noc_id == 1) {
