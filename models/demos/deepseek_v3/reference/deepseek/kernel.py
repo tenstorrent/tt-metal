@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 DeepSeek
+
+# SPDX-License-Identifier: MIT
+
 from typing import Tuple
 
 import torch

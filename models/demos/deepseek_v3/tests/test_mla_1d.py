@@ -12,13 +12,13 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
+
+# Import from local reference files instead of HuggingFace
+from models.demos.deepseek_v3.reference.deepseek.model import MLA, ModelArgs, precompute_freqs_cis
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-
-# Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3_impl.model import MLA, ModelArgs, precompute_freqs_cis
 from models.utility_functions import comp_pcc, get_mesh_device
 
 

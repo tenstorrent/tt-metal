@@ -20,7 +20,7 @@ import pytest
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
-from models.demos.deepseek_v3_impl.model import (
+from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
     precompute_freqs_cis,
     apply_rotary_emb,
 )
