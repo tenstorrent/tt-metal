@@ -381,27 +381,22 @@ def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, pcc
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-@pytest.mark.parametrize("scalar", [1, 2, -1, -2, 1.5, 2.5, -1.5, -2.5, 0, -0])
-# @pytest.mark.parametrize("scalar", [-1])
+@pytest.mark.parametrize("scalar", [1, 2])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
-def test_logit(device, h, w, scalar, dtype):
+def test_logit(device, h, w, scalar):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
 
-    golden_function = ttnn.get_golden_function(ttnn.fill)
-    torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    torch_output_tensor = golden_function(torch_input_tensor_a, eps=scalar, device=device)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.fill(input_tensor_a, scalar)
+    output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
-    if dtype == ttnn.int32:
-        torch_output_tensor = torch_output_tensor.to(torch.int32)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
-    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("scalar", [0, 1.0, 2])

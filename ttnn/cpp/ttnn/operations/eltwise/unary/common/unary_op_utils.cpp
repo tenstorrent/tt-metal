@@ -93,7 +93,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     switch (op_type) {
         case UnaryOpType::FILL:
             if (input_dtype == DataType::INT32) {
-                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile({}, {}u);", idst, (uint)param0)};
+                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0)};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
                 op_init_and_name = {
