@@ -70,6 +70,25 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
         (input_shape.rank() == 4) && (metadata_shape.rank() == 4) && (mapping_shape.rank() == 4),
         "Input, metadata, and mapping tensors must all be rank 4");
 
+    const auto num_devices = mesh_view.num_devices();
+
+    TT_FATAL(experts%num_devices==0, "Number of experts {} should be evenly divisible by devices: {}", experts, num_devices);
+
+    if (operation_attributes.locally_reduced){
+        TT_FATAL(
+            input_shape[0] == 1,
+            "Expecting input dim 0 equal to num devices: {}, got: {}",
+            num_devices,
+            input_shape[0]);
+    }
+    else{
+        TT_FATAL(
+            input_shape[0] == experts / num_devices,
+            "Expected input shape dim 0: {} to be equal to expert mapping dim 2: {}",
+            input_shape[0],
+            mapping_shape[2]);
+    }
+
     TT_FATAL(operation_attributes.axis.has_value(), "Axis must be specified at the moment");
     const auto& axis = operation_attributes.axis.value();
     const auto& axis_group = (axis == 0) ? mesh_rows : mesh_cols;
@@ -135,7 +154,8 @@ AllToAllCombineDeviceOperation::invoke(
     const GlobalSemaphore& global_semaphore,
     const std::optional<uint32_t>& axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const bool locally_reduced) {
     return {
         operation_attributes_t{
             .output_mem_config = memory_config,
@@ -143,6 +163,7 @@ AllToAllCombineDeviceOperation::invoke(
             .num_links = num_links,
             .topology = topology,
             .cross_device_semaphore = global_semaphore,
+            .locally_reduced = locally_reduced,
             .subdevice_id = std::move(subdevice_id)},
         tensor_args_t{
             .input_tensor = input_tensor,
