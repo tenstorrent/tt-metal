@@ -8,7 +8,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import LinearConfig, MulConfig
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MulConfig
+from models.demos.deepseek_v3.utils.run_config import ModelDecodeConfig, ModelPrefillConfig, WeightConfig
 
 
 class Expert(AbstractModule):
@@ -23,7 +24,7 @@ class Expert(AbstractModule):
         state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.Device,
-    ):
+    ) -> WeightConfig:
         """
         MOE expert layer running on 1 device.
         Args:
@@ -37,9 +38,9 @@ class Expert(AbstractModule):
         """
 
         # Get the weights of exerpt from the state dict
-        torch_weight_w1 = state_dict["w1.weight"]
-        torch_weight_w2 = state_dict["w2.weight"]
-        torch_weight_w3 = state_dict["w3.weight"]
+        torch_weight_w1 = state_dict["gate_proj.weight"]
+        torch_weight_w2 = state_dict["down_proj.weight"]
+        torch_weight_w3 = state_dict["up_proj.weight"]
 
         torch_weight_w1 = torch_weight_w1.transpose(-2, -1)
         torch_weight_w2 = torch_weight_w2.transpose(-2, -1)
@@ -75,7 +76,7 @@ class Expert(AbstractModule):
             torch_weight_w1,
             "w1",
             "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -85,7 +86,7 @@ class Expert(AbstractModule):
             torch_weight_w2,
             "w2",
             "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -95,7 +96,7 @@ class Expert(AbstractModule):
             torch_weight_w3,
             "w3",
             "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -104,22 +105,7 @@ class Expert(AbstractModule):
         return weight_config
 
     @staticmethod
-    def prefill_model_config(hf_config, mesh_device):
-        """Prefill model config for an RMSNorm with 1D tensor parallelism.
-
-        Args:
-            hf_config: HuggingFace model configuration object
-            mesh_device: TTNN mesh device
-
-        Returns:
-            Dict containing operator configurations for prefill mode
-        """
-        config = {"mode": "prefill"}
-
-        return config
-
-    @staticmethod
-    def decode_model_config(hf_config, mesh_device):
+    def decode_model_config(hf_config, mesh_device) -> ModelDecodeConfig:
         """Generate decode operator configuration for this embedding layer.
         Same as prefill mode for this module.
 
@@ -133,18 +119,15 @@ class Expert(AbstractModule):
         config = {"mode": "decode"}
         # Expert configuration for decode mode
         config["w1"] = LinearConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig(mesh_device)
         )
 
         config["w2"] = LinearConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig(mesh_device)
         )
 
         config["w3"] = LinearConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig(mesh_device)
         )
 
         config["mul"] = MulConfig(
@@ -152,7 +135,25 @@ class Expert(AbstractModule):
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
         )
 
-        print(f"Decode config: {config}")
+        config["input_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        config["output_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+
+        return config
+
+    @staticmethod
+    def prefill_model_config(hf_config, mesh_device) -> ModelPrefillConfig:
+        """Prefill model config for an RMSNorm with 1D tensor parallelism.
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device
+
+        Returns:
+            Dict containing operator configurations for prefill mode
+        """
+        config = Expert.decode_model_config(hf_config, mesh_device)
+        config["mode"] = "prefill"
+
         return config
 
     def __init__(self, hf_config, mesh_device):
@@ -164,7 +165,8 @@ class Expert(AbstractModule):
         self.hf_config = hf_config
         self.mesh_device = mesh_device
 
-    def forward(self, x, cfg, mesh_device):
+    @classmethod
+    def forward(cls, x, cfg):
         """
         Forward pass for the Expert layer.
 
@@ -176,14 +178,14 @@ class Expert(AbstractModule):
         """
 
         if cfg["mode"] == "decode":
-            return self._forward_decode(x, cfg, mesh_device)
+            return cls.forward_decode(x, cfg)
+        elif cfg["mode"] == "prefill":
+            return cls.forward_prefill(x, cfg)
         else:
-            assert cfg["mode"] == "prefill"
-            return self._forward_prefill(x, cfg, mesh_device)
+            raise ValueError(f"Invalid mode: {cfg['mode']}. Expected 'decode' or 'prefill'.")
 
-    def _forward_decode(self, x, cfg, mesh_device):
-        print("Forward Decode")
-
+    @classmethod
+    def forward_decode(cls, x, cfg):
         w1_out = ttnn.linear(x, **cfg["w1"])
         w3_out = ttnn.linear(x, **cfg["w3"])
         ttnn.deallocate(x)
@@ -198,6 +200,18 @@ class Expert(AbstractModule):
 
         return output
 
-    def _forward_prefill(self, x, cfg, mesh_device):
-        print("Forward Prefill not implemented yet")
-        return x
+    @classmethod
+    def forward_prefill(cls, x, cfg):
+        w1_out = ttnn.linear(x, **cfg["w1"])
+        w3_out = ttnn.linear(x, **cfg["w3"])
+        ttnn.deallocate(x)
+
+        # Apply activation and multiply
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+        # Down projection
+        output = ttnn.linear(activated, **cfg["w2"])
+        ttnn.deallocate(activated)
+
+        return output
