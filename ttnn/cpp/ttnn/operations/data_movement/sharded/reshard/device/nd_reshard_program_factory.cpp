@@ -23,7 +23,8 @@ operation::ProgramWithCallbacks nd_reshard_multicore_generic_naive(const Tensor&
 
     // Create Program + Grid
     auto program = CreateProgram();
-    auto grid = input_nd_shard_spec.grid;
+    auto grid_size = input.device()->compute_with_storage_grid_size();
+    auto grid = CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
     auto cores = corerange_to_cores(grid, std::nullopt, input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     // Create Circular Buffer
