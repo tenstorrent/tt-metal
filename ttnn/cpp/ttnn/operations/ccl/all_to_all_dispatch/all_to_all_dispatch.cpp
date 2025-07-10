@@ -35,7 +35,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         detail::get_cb_sizes(input_tensor, expert_indices_tensor, expert_mapping_tensor, axis);
 
     AllToAllDispatchDeviceOperation::AllToAllImpl impl = AllToAllDispatchDeviceOperation::AllToAllImpl::FullPacket;
-    uint32_t total_size_bytes = std::accumulate(cb_sizes.begin(), cb_sizes.end(), 0);
+    uint32_t total_size_bytes = std::accumulate(cb_sizes.begin(), cb_sizes.end(), 0u);
     if (optional_output_tensors.has_value()) {
         auto output_tensors = optional_output_tensors.value();
         auto output_tensor = output_tensors.at(0);
