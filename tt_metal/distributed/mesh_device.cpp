@@ -33,6 +33,7 @@
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
+#include "tt-metalium/fabric_types.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -221,6 +222,20 @@ MeshDevice::MeshDevice(
     dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
     reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {}
 
+const std::vector<std::vector<uint32_t>>& get_eth_coords_for_t3k() {
+    static const std::vector<std::vector<uint32_t>> t3k_eth_coords = {
+        {0, 0, 0, 0, 0},
+        {0, 1, 0, 0, 0},
+        {0, 2, 0, 0, 0},
+        {0, 3, 0, 0, 0},
+        {0, 0, 1, 0, 0},
+        {0, 1, 1, 0, 0},
+        {0, 2, 1, 0, 0},
+        {0, 3, 1, 0, 0}};
+
+    return t3k_eth_coords;
+}
+
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
     size_t l1_small_size,
@@ -229,6 +244,15 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    tt::tt_metal::detail::SetFabricConfig(FabricConfig::FABRIC_2D_DYNAMIC);
+    MeshDevice::initialize_control_plane_config(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml",
+        {get_eth_coords_for_t3k(),
+         get_eth_coords_for_t3k(),
+         get_eth_coords_for_t3k(),
+         get_eth_coords_for_t3k(),
+         get_eth_coords_for_t3k()});
+
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();

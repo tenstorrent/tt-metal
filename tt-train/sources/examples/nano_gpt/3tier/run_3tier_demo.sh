@@ -13,7 +13,8 @@ IFS=$'\n\t'
 # Defaults (customize as needed)
 METAL_HOME="${TT_METAL_HOME:-/home/ttuser/git/tt-metal}"
 CONFIG="training_shakespear_nanogpt_3tier.yaml"
-BIN_DIR="${METAL_HOME}/tt-train/build/sources/examples/nano_gpt"
+BIN_DIR="${METAL_HOME}/build/tt-train/sources/examples/nano_gpt"
+# BIN_DIR="${METAL_HOME}/tt-train/build/sources/examples/nano_gpt"
 CFG_DIR="${METAL_HOME}/tt-train/configs"
 HOSTFILE="/tmp/mpi_hosts.$$"
 BINARIES=(nano_gpt nano_gpt_aggregator nano_gpt_optimizer)
@@ -97,16 +98,16 @@ fi
 } > "${HOSTFILE}"
 
 # copy to all remote hosts (skip index 0)
-echo "Copying binaries and config to remote hosts..."
-for host in "${HOSTS[@]:1}"; do
-  echo " -> $host"
-  ssh "${SSH_USER}@${host}" "mkdir -p '${BIN_DIR}' '${CFG_DIR}'"
-  for bin in "${BINARIES[@]}"; do
-    scp ${SCP_OPTS} "${BIN_DIR}/${bin}" "${SSH_USER}@${host}:${BIN_DIR}/"
-  done
-  scp ${SCP_OPTS} "${CFG_DIR}/${CONFIG}" "${SSH_USER}@${host}:${CFG_DIR}/"
-done
-echo "✔ Remote copy complete."
+# echo "Copying binaries and config to remote hosts..."
+# for host in "${HOSTS[@]:1}"; do
+#   echo " -> $host"
+#   ssh "${SSH_USER}@${host}" "mkdir -p '${BIN_DIR}' '${CFG_DIR}'"
+#   for bin in "${BINARIES[@]}"; do
+#     scp ${SCP_OPTS} "${BIN_DIR}/${bin}" "${SSH_USER}@${host}:${BIN_DIR}/"
+#   done
+#   scp ${SCP_OPTS} "${CFG_DIR}/${CONFIG}" "${SSH_USER}@${host}:${CFG_DIR}/"
+# done
+# echo "✔ Remote copy complete."
 
 # launch MPI job
 echo "Launching MPI 3-tier demo..."

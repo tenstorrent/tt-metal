@@ -526,14 +526,6 @@ int main(int argc, char **argv) {
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
 
-        ctx.set_fabric_config(
-            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml",
-            {get_eth_coords_for_t3k(),
-             get_eth_coords_for_t3k(),
-             get_eth_coords_for_t3k(),
-             get_eth_coords_for_t3k(),
-             get_eth_coords_for_t3k()});
-
         ctx.initialize_distributed_context(argc, argv);
         auto distributed_ctx = ctx.get_distributed_context();
         fmt::print(

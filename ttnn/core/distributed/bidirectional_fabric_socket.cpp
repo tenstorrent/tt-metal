@@ -19,35 +19,17 @@ BidirectionalFabricSocket::BidirectionalFabricSocket(
 }
 
 void BidirectionalFabricSocket::send(const ttnn::Tensor& tensor) {
-    if (send_socket_.get_config().sender_rank == get_distributed_context()->rank()) {
-        ttnn::experimental::send_async(tensor, send_socket_);
-    } else if (recv_socket_.get_config().sender_rank == get_distributed_context()->rank()) {
-        ttnn::experimental::send_async(tensor, recv_socket_);
-    } else {
-        TT_THROW(
-            "Rank {} is not a sender or receiver of the bidirectional fabric socket",
-            get_distributed_context()->rank());
-    }
+    ttnn::experimental::send_async(tensor, send_socket_);
 }
 
-void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) {
-    if (recv_socket_.get_config().sender_rank == get_distributed_context()->rank()) {
-        ttnn::experimental::recv_async(tensor, recv_socket_);
-    } else if (send_socket_.get_config().receiver_rank == get_distributed_context()->rank()) {
-        ttnn::experimental::recv_async(tensor, send_socket_);
-    } else {
-        TT_THROW(
-            "Rank {} is not a sender or receiver of the bidirectional fabric socket",
-            get_distributed_context()->rank());
-    }
-}
+void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) { ttnn::experimental::recv_async(tensor, recv_socket_); }
 
 tt::tt_metal::distributed::multihost::Rank BidirectionalFabricSocket::get_sender_rank() const {
-    return send_socket_.get_config().sender_rank;
+    return recv_socket_.get_config().sender_rank;
 }
 
 tt::tt_metal::distributed::multihost::Rank BidirectionalFabricSocket::get_receiver_rank() const {
-    return recv_socket_.get_config().receiver_rank;
+    return send_socket_.get_config().receiver_rank;
 }
 
 std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>

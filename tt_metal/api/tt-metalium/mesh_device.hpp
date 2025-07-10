@@ -272,7 +272,7 @@ public:
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
     const MeshShape& shape() const;
-    void initialize_control_plane_config(
+    static void initialize_control_plane_config(
         const std::string& mesh_graph_descriptor_path,
         const std::vector<std::vector<std::vector<uint32_t>>>& eth_coords_per_mesh);
 
