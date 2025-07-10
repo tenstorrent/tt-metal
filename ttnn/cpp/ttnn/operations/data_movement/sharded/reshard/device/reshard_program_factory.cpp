@@ -703,4 +703,5 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         return reshard_multi_core_generic(input, output);
     }
 }
+
 }  // namespace ttnn::operations::data_movement::detail

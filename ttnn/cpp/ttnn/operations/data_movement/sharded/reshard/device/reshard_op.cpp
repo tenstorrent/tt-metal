@@ -6,11 +6,12 @@
 
 #include <magic_enum/magic_enum.hpp>
 
-#include "reshard_program_factory.hpp"
-#include "nd_reshard_program_factory.hpp"
-#include "tt-metalium/buffer_types.hpp"
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+
+#include "reshard_program_factory.hpp"
+#include "nd_reshard_program_factory.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
