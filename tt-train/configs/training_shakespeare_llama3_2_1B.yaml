@@ -23,8 +23,8 @@ training_config:
     dropout_prob: 0.0
     num_blocks: 16
     vocab_size: 128256
-    max_sequence_length: 2048
-    runner_type: default
+    max_sequence_length: 256
+    runner_type: memory_efficient
     theta: 500000.0
 
     rope_scaling:
