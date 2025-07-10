@@ -136,20 +136,36 @@ void kernel_main() {
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
                     noc_async_write_barrier();
                 } else {
-                    const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
-                    fabric_send_chip_unicast_noc_unicast<
-                        src_chip_id,
-                        mesh_rows,
-                        mesh_cols,
-                        fabric_max_packet_size_bytes>(
-                        fabric_connections,
-                        packet_headers[0],
-                        dest_chip_id,
-                        dest_mesh_id,
-                        src_data_l1_ptr,
-                        output_noc_addr,
-                        data_size_bytes,
-                        alignment);
+                    if (is_1d_topology(topology)) {
+                        fabric_send_chip_unicast_noc_unicast_1d<
+                            linearized_mesh_coord,
+                            topology,
+                            mesh_rows,
+                            mesh_cols,
+                            fabric_max_packet_size_bytes>(
+                            fabric_connections,
+                            packet_headers[0],
+                            dest_device_idx,
+                            src_data_l1_ptr,
+                            output_noc_addr,
+                            data_size_bytes,
+                            alignment);
+                    } else {
+                        const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
+                        fabric_send_chip_unicast_noc_unicast<
+                            src_chip_id,
+                            mesh_rows,
+                            mesh_cols,
+                            fabric_max_packet_size_bytes>(
+                            fabric_connections,
+                            packet_headers[0],
+                            dest_chip_id,
+                            dest_mesh_id,
+                            src_data_l1_ptr,
+                            output_noc_addr,
+                            data_size_bytes,
+                            alignment);
+                    }
                 }
                 cb_pop_front(data_cb_id,1);
             }
@@ -167,23 +183,34 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
             noc_async_atomic_barrier();
         } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
-            const auto & dest_mesh_id = dest_mesh_ids[device_idx];
-            const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
+            const auto& dest_mesh_id = dest_mesh_ids[device_idx];
 
             packet_headers[1]->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{global_noc_semaphore_addr, 1, 32, true});
 
-            fabric_set_unicast_route(
-                const_cast<LowLatencyMeshPacketHeader*>(packet_headers[1]),
-                static_cast<eth_chan_directions>(fabric_connections[route].direction),
-                src_chip_id,
-                dest_chip_id,
-                dest_mesh_id,
-                mesh_cols);
+            if (is_1d_topology(topology)) {
+                uint32_t distance =
+                    manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, device_idx);
+                packet_headers[1]->to_chip_unicast(distance);
 
-            fabric_connections[route].wait_for_empty_write_slot();
-            fabric_connections[route].send_payload_flush_blocking_from_address(
-                reinterpret_cast<uint32_t>(packet_headers[1]), sizeof(PACKET_HEADER_TYPE));
+                uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, device_idx);
+                fabric_connections[route].wait_for_empty_write_slot();
+                fabric_connections[route].send_payload_flush_blocking_from_address(
+                    reinterpret_cast<uint32_t>(packet_headers[1]), sizeof(PACKET_HEADER_TYPE));
+
+            } else {
+                uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
+                fabric_set_unicast_route(
+                    const_cast<LowLatencyMeshPacketHeader*>(packet_headers[1]),
+                    static_cast<eth_chan_directions>(fabric_connections[route].direction),
+                    src_chip_id,
+                    dest_chip_id,
+                    dest_mesh_id,
+                    mesh_cols);
+                fabric_connections[route].wait_for_empty_write_slot();
+                fabric_connections[route].send_payload_flush_blocking_from_address(
+                    reinterpret_cast<uint32_t>(packet_headers[1]), sizeof(PACKET_HEADER_TYPE));
+            }
         }
     }
 
