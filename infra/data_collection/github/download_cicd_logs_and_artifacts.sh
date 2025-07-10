@@ -32,7 +32,7 @@ get_jobs_with_pagination_fallback() {
     local workflow_run_id=$2
     local attempt_number=$3
 
-    local jobs_json_file="workflow_jobs_${workflow_run_id}_${attempt_number}.json"
+    local jobs_json_file="workflow_jobs.json"
 
     # Try the original --paginate approach first, fall back to manual pagination if it fails
     set +e  # Disable exit on error
