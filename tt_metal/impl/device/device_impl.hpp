@@ -200,7 +200,6 @@ private:
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
-    void compile_command_queue_programs();
     void configure_command_queue_programs();
 
     void mark_allocations_unsafe();
