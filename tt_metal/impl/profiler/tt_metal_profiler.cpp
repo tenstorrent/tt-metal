@@ -773,14 +773,8 @@ void DumpDeviceProfileResults(
     const chip_id_t device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
-    if (onlyProfileDispatchCores(state)) {
-        for (const CoreCoord& core :
-             tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
-            const CoreCoord curr_core =
-                device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
-            virtual_cores.push_back(curr_core);
-        }
-    } else {
+
+    if (!onlyProfileDispatchCores(state)) {
         for (const CoreCoord& core :
              tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
             const CoreCoord curr_core = device->worker_core_from_logical_core(core);
@@ -788,6 +782,17 @@ void DumpDeviceProfileResults(
         }
         for (const CoreCoord& core : device->get_active_ethernet_cores(true)) {
             const CoreCoord curr_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            virtual_cores.push_back(curr_core);
+        }
+    }
+
+    // Dispatch cores must be added after non-dispatch cores as they must be profiled after non-dispatch cores in order
+    // to minimize the amount of dispatch data that is lost
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
+        for (const CoreCoord& core :
+             tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
+            const CoreCoord curr_core =
+                device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
             virtual_cores.push_back(curr_core);
         }
     }

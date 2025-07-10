@@ -194,6 +194,30 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceEvent>> getDeviceEventsV
     return device_events_vec;
 }
 
+bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+    const auto& dispatch_core_config = get_dispatch_core_config();
+    const std::vector<CoreCoord> logical_dispatch_cores =
+        get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
+
+    std::vector<CoreCoord> virtual_dispatch_cores;
+    for (const CoreCoord& core : logical_dispatch_cores) {
+        const CoreCoord virtual_dispatch_core =
+            device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
+        virtual_dispatch_cores.push_back(virtual_dispatch_core);
+    }
+
+    bool has_dispatch_core_been_found = false;
+    for (const CoreCoord& core : virtual_cores) {
+        if (std::find(virtual_dispatch_cores.begin(), virtual_dispatch_cores.end(), core) !=
+            virtual_dispatch_cores.end()) {
+            has_dispatch_core_been_found = true;
+        } else if (has_dispatch_core_been_found) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool onlyProfileDispatchCores(const ProfilerDumpState state) {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
            state == ProfilerDumpState::ONLY_DISPATCH_CORES;
@@ -1434,6 +1458,7 @@ void DeviceProfiler::dumpResults(
     // create nlohmann json log object
     nlohmann::ordered_json noc_trace_json_log = nlohmann::json::array();
 
+    TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
     if (data_source == ProfilerDataBufferSource::DRAM) {
         readControlBuffers(device, virtual_cores, state);
 
