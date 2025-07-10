@@ -30,8 +30,8 @@ namespace tt::tt_metal::distributed {
 
 class SystemMesh::Impl {
 private:
-    MeshContainer<MaybeRemote<PhysicalMeshCoordinate>> physical_coordinates_;
     MeshShape global_shape_;
+    MeshContainer<MaybeRemote<PhysicalMeshCoordinate>> physical_coordinates_;
     MeshCoordinate local_offset_;
 
 public:
@@ -59,7 +59,8 @@ SystemMesh::Impl::Impl()
     // Map local coordinates to global mesh
     for (const auto& [local_coord, physical_coord] : local_coordinates) {
         auto global_coord = translator.local_to_global(local_coord);
-        if (physical_coordinates_.coord_range().contains(global_coord)) {
+        auto& coord_range = physical_coordinates_.coord_range();
+        if (coord_range.contains(global_coord)) {
             physical_coordinates_.at(global_coord) = MaybeRemote<PhysicalMeshCoordinate>::local(physical_coord);
         }
     }

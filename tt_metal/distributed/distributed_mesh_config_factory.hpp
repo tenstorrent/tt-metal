@@ -14,15 +14,6 @@ class DistributedMeshConfigFactory {
 public:
     // Create a DistributedMeshConfig from the current control plane state
     static DistributedMeshConfig create_from_control_plane(const MeshDeviceConfig& config);
-
-private:
-    // Fetch local mesh information from control plane
-    struct LocalMeshInfo {
-        MeshShape local_shape;
-        MeshCoordinate local_offset;
-    };
-    
-    static LocalMeshInfo fetch_local_mesh_info();
 };
 
 }  // namespace tt::tt_metal::distributed

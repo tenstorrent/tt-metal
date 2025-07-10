@@ -416,15 +416,17 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
 
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const {
     CoordinateTranslator translator(this->local_shape(), this->local_offset());
-    MeshCoordinate local_coord = translator.translate_or_fatal(coord);
-    return view_->get_device(local_coord);
+    std::optional<MeshCoordinate> local_coord = translator.global_to_local(coord);
+    TT_FATAL(local_coord.has_value(), "Global coordinate {} is not within the local mesh", coord);
+    return view_->get_device(local_coord.value());
 }
 
 tt_fabric::FabricNodeId MeshDevice::get_device_fabric_node_id(const MeshCoordinate& coord) const {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     CoordinateTranslator translator(this->local_shape(), this->local_offset());
-    MeshCoordinate local_coord = translator.translate_or_fatal(coord);
-    return control_plane.get_fabric_node_id_from_physical_chip_id(view_->get_device(local_coord)->id());
+    std::optional<MeshCoordinate> local_coord = translator.global_to_local(coord);
+    TT_FATAL(local_coord.has_value(), "Global coordinate {} is not within the local mesh", coord);
+    return control_plane.get_fabric_node_id_from_physical_chip_id(view_->get_device(local_coord.value())->id());
 }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {

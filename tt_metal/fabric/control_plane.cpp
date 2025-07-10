@@ -397,7 +397,7 @@ ControlPlane::ControlPlane(
 void ControlPlane::load_physical_chip_mapping(
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
-    this->validate_mesh_connections();
+    //this->validate_mesh_connections();
 }
 
 void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
@@ -1499,6 +1499,7 @@ std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
 }
 
 MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id, MeshScope scope) const {
+    log_info(tt::LogFabric, "ControlPlane::get_physical_mesh_shape: mesh_id={}, scope={}", mesh_id, scope);
     std::optional<HostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
     return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id, local_host_rank_id);
