@@ -14,9 +14,8 @@ IFS=$'\n\t'
 METAL_HOME="${TT_METAL_HOME:-/home/ttuser/git/tt-metal}"
 CONFIG="training_shakespear_nanogpt_3tier.yaml"
 BIN_DIR="${METAL_HOME}/build/tt-train/sources/examples/nano_gpt"
-# BIN_DIR="${METAL_HOME}/tt-train/build/sources/examples/nano_gpt"
 CFG_DIR="${METAL_HOME}/tt-train/configs"
-HOSTFILE="/tmp/mpi_hosts.$$"
+HOSTFILE="/tmp/mpi_hosts.txt"
 BINARIES=(nano_gpt nano_gpt_aggregator nano_gpt_optimizer)
 SSH_USER="ttuser"
 SCP_OPTS="-p"    # preserve modification times & modes
@@ -113,11 +112,12 @@ fi
 echo "Launching MPI 3-tier demo..."
 
 mpirun --hostfile "${HOSTFILE}" \
-  -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=1 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
-  : -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=2 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
-  : -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=3 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
-  : -np "${AGG_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_aggregator\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
-  : -np "${OPT_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=4 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG"
+  -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=1 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG >> nano_gpt_rank1.log 2>&1" \
+  : -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=2 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG >> nano_gpt_rank2.log 2>&1" \
+  : -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=3 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG >> nano_gpt_rank3.log 2>&1" \
+  : -np "${AGG_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_aggregator\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG >> nano_gpt_aggregator.log 2>&1" \
+  : -np "${OPT_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=4 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG >> nano_gpt_optimizer.log 2>&1"
+
 
 # mpirun --hostfile "${HOSTFILE}" \
 #   -np "${WORKER_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
@@ -125,5 +125,5 @@ mpirun --hostfile "${HOSTFILE}" \
 #   : -np "${OPT_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG"
 
 # cleanup
-rm -f "${HOSTFILE}"
+# rm -f "${HOSTFILE}"
 echo "✔ MPI job finished."

@@ -26,10 +26,14 @@ training_config:
 
 multihost_config:
   enabled: true
-  num_workers: 2
+  num_workers: 3
 
 eval_config:
   repetition_penalty: 1.0
   temperature: 0.7
   top_k: 50
   top_p: 1.0
+
+device_config:
+    enable_ddp: true
+    mesh_shape: [2, 4]

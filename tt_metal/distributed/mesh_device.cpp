@@ -983,11 +983,12 @@ void MeshDevice::initialize_control_plane_config(
                 {.cluster_id = coord[0], .x = coord[1], .y = coord[2], .rack = coord[3], .shelf = coord[4]});
         }
     }
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const char* mesh_id_str = std::getenv("TT_MESH_ID");
+    auto local_mesh_id = std::string(mesh_id_str);
+    std::cout << "Using local mesh id: " << local_mesh_id << std::endl;
     tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
         mesh_graph_descriptor_path,
-        get_physical_chip_mapping_from_eth_coords_mapping(
-            eth_coords, *(control_plane.get_local_mesh_id_bindings()[0])));
+        get_physical_chip_mapping_from_eth_coords_mapping(eth_coords, std::stoi(local_mesh_id)));
 }
 
 std::shared_ptr<distributed::multihost::DistributedContext> MeshDevice::get_distributed_context() const {
