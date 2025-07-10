@@ -22,7 +22,7 @@ YOLOv6-L is a large variant of the YOLOv6 family—an advanced real-time object 
 Resource link - [source](https://github.com/meituan/YOLOv6)
 
 ### Details:
-- The entry point to yolov6l model is TtYolov6l in `models/experimental/yolov6l/tt/ttnn_yolov6l.py`.
+- The entry point to yolov6l model is TtYolov6l in `models/demos/yolov6l/tt/ttnn_yolov6l.py`.
 - Batch size :1
 - Supported Input Resolution - (640,480) (Height,Width)
 
@@ -39,5 +39,5 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov6l/test_ttnn_yolov6l
 Use the following command to run the performant Model with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/experimental/yolov6l/tests/perf/test_perf_yolov6l.py::test_perf_yolov6l
+pytest --disable-warnings models/demos/yolov6l/tests/perf/test_perf_yolov6l.py::test_perf_yolov6l
 ```
