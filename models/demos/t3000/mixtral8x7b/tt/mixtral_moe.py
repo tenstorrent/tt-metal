@@ -135,13 +135,10 @@ class TtMoeLayer(LightweightModule):
             dim = 1
             ag_output_shape = list(results_11BH.shape)
             ag_output_shape[dim] *= self.mesh_device.get_num_devices()
-            # print("MOE_FWD_PREFILL_AG")
-            # print(ag_output_shape)
-            # print(results_11BH.dtype)
-            # print(results_11BH.memory_config())
+            output_buffer = self.tt_ccl.ag_output_pbs[("ATTN_FWD_PREFILL_AG", tuple(ag_output_shape))]
             output_11BH_gathered = ttnn.experimental.all_gather_async(
                 results_11BH,
-                persistent_output_buffer=self.tt_ccl.ag_output_pbs["MOE_FWD_PREFILL_AG"],
+                persistent_output_buffer=output_buffer,
                 dim=1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
@@ -155,13 +152,6 @@ class TtMoeLayer(LightweightModule):
             )
             # output_11BH_gathered.deallocate(True)
         else:  # Decode mode
-            dim = 1
-            ag_output_shape = list(results_11BH.shape)
-            ag_output_shape[dim] *= self.mesh_device.get_num_devices()
-            # print("MOE_FWD_DECODE_AG")
-            # print(ag_output_shape)
-            # print(results_11BH.dtype)
-            # print(results_11BH.memory_config())
             output_11BH_gathered = ttnn.experimental.all_gather_async(
                 results_11BH,
                 persistent_output_buffer=self.tt_ccl.ag_output_pbs["MOE_FWD_DECODE_AG"],

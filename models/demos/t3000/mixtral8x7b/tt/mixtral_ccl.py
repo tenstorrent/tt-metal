@@ -118,7 +118,7 @@ class TT_CCL:
         )
 
         self.ag_output_pbs["MOE_FWD_DECODE_AG"] = self.create_persistent_buffer(
-            shape=[1, 8, 32, 4096],
+            shape=[1, 1, 256, 4096],
             mem_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT8_B,
         )
