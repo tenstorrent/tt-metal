@@ -513,6 +513,7 @@ def test_fp32_support(input_shape, output_shape, device):
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
+        ((4, 4), (4, 4)),
         ((1, 1, 864, 128), (1, 27, 32, 128)),
         ((1, 256, 32), (32, 256)),
         ((1, 256, 1024), (1, 128, 32, 64)),
