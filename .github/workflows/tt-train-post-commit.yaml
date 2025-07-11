@@ -18,7 +18,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 25
+        default: 35
 
 jobs:
   models:
