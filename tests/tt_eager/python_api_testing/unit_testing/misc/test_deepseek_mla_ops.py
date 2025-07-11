@@ -16,6 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
+from models.utility_functions import skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
@@ -981,6 +982,7 @@ def test_prefill_matmuls(
     )
 
 
+@skip_for_blackhole("See GH Issue #24926.")
 @pytest.mark.parametrize(
     "shape, dtype, mem_config",
     [
