@@ -945,27 +945,13 @@ FORCE_INLINE void noc_async_read_page(
         has_required_addrgen_traits<AddrGen>::value,
         "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
 
-    uint32_t page_size = has_page_size<AddrGen>::value ? addrgen.page_size : 1 << addrgen.log_base_2_of_page_size;
+    uint32_t page_size;
+    if constexpr (has_page_size<AddrGen>::value) {
+        page_size = addrgen.page_size;
+    } else {
+        page_size = (1 << addrgen.log_base_2_of_page_size);
+    }
     noc_async_read_one_packet(addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, size ? size : page_size, noc);
-}
-
-// clang-format off
-/**
- * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
- *
- * Initiates an asynchronous read for a single packet with transaction size and source location determined by the TensorAccessor object.
- * This function is a convenience wrapper around noc_async_read_page for TensorAccessor objects.
- * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
- */
-// clang-format on
-template <typename DSpec>
-FORCE_INLINE void noc_async_read_page(
-    const uint32_t id,
-    const TensorAccessor<DSpec>& addrgen,
-    uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    noc_async_read_page<TensorAccessor<DSpec>>(id, addrgen, dst_local_l1_addr, addrgen.page_size, offset, noc);
 }
 
 // clang-format off
@@ -1134,28 +1120,13 @@ FORCE_INLINE void noc_async_write_page(
         has_required_addrgen_traits<AddrGen>::value,
         "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
 
-    uint32_t page_size = has_page_size<AddrGen>::value ? addrgen.page_size : 1 << addrgen.log_base_2_of_page_size;
+    uint32_t page_size;
+    if constexpr (has_page_size<AddrGen>::value) {
+        page_size = addrgen.page_size;
+    } else {
+        page_size = (1 << addrgen.log_base_2_of_page_size);
+    }
     noc_async_write_one_packet(src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
-}
-
-// clang-format off
-/**
- * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
- *
- * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the TensorAccessor object.
- * This function is a convenience wrapper around noc_async_write_page for TensorAccessor objects.
- * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
- */
-// clang-format on
-template <typename DSpec>
-FORCE_INLINE void noc_async_write_page(
-    const uint32_t id,
-    const TensorAccessor<DSpec>& addrgen,
-    uint32_t src_local_l1_addr,
-    const uint32_t write_size_bytes,
-    const uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    noc_async_write_page<TensorAccessor<DSpec>>(id, addrgen, src_local_l1_addr, write_size_bytes, offset, noc);
 }
 
 // clang-format off
