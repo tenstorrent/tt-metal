@@ -85,7 +85,7 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
-        EXPECT_EQ(!path.empty(), true);
+        EXPECT_GT(path.size(), 0);
     }
 }
 
