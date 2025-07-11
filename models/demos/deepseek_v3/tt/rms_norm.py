@@ -110,6 +110,7 @@ class RMSNorm(AbstractModule):
             output_dtype=ttnn.bfloat16,
             topology=ttnn.Topology.Linear,
             norm_category=norm_category,
+            mesh_device=MeshDeviceStub(mesh_device.shape),
         )
 
     @classmethod
@@ -147,12 +148,12 @@ class RMSNorm(AbstractModule):
         if cfg.is_distributed:
             return RMSNorm._distributed_rmsnorm(
                 x,
-                mesh_device=mesh_device,
                 epsilon=cfg.epsilon,
                 weight=cfg.weight,
                 compute_kernel_config=cfg.compute_kernel_config,
                 program_config=program_config,
                 output_memcfg=cfg.output_memcfg,
+                mesh_device=cfg.mesh_device,
                 stats_memcfg=cfg.stats_memcfg,
                 output_dtype=cfg.output_dtype,
                 topology=cfg.topology,
@@ -175,6 +176,7 @@ class RMSNorm(AbstractModule):
         compute_kernel_config,
         program_config,
         output_memcfg,
+        mesh_device,
         stats_memcfg,
         output_dtype,
         topology=ttnn.Topology.Linear,

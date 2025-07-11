@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from pathlib import Path
 
 import pytest
@@ -43,14 +42,14 @@ def test_convert_weights(reference_model, hf_config_single_layer, temp_dir, mesh
     assert Path(weight_config["w3"]["input_tensor_b"]).exists()
 
     # Load and verify a weight
-    w1_ttnn = ttnn.load_tensor(weight_config["w1"]["input_tensor_b"], device=mesh_device)
+    w1_ttnn = ttnn.load_tensor(weight_config["w1"]["input_tensor_b"], device=mesh_row)
     w1_torch = ttnn.to_torch(
         w1_ttnn,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(-2, -1), mesh_shape=tuple(mesh_row.shape)),
     )
 
     # Weight should be transposed from PyTorch format
-    expected_shape = (hf_config.hidden_size, hf_config.intermediate_size)
+    expected_shape = (hf_config_single_layer.hidden_size, hf_config_single_layer.intermediate_size)
     assert w1_torch.shape[-2:] == expected_shape
 
     # Verify the values match (accounting for transpose and bfloat8 conversion)
@@ -134,7 +133,7 @@ def test_forward_pass(
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(-2, -1), mesh_shape=tuple(mesh_row.shape)),
     )
 
     # Compare outputs
