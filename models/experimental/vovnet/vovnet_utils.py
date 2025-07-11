@@ -74,9 +74,7 @@ def create_conv2d(in_channels, out_channels, kernel_size, **kwargs):
     Used extensively by EfficientNet, MobileNetv3 and related networks.
     """
     if isinstance(kernel_size, list):
-        assert (
-            "num_experts" not in kwargs
-        )  # MixNet + CondConv combo not supported currently
+        assert "num_experts" not in kwargs  # MixNet + CondConv combo not supported currently
         if "groups" in kwargs:
             groups = kwargs.pop("groups")
             if groups == in_channels:
@@ -87,9 +85,7 @@ def create_conv2d(in_channels, out_channels, kernel_size, **kwargs):
         depthwise = kwargs.pop("depthwise", False)
         # for DW out_channels must be multiple of in_channels as must have out_channels % groups == 0
         groups = in_channels if depthwise else kwargs.pop("groups", 1)
-        m = create_conv2d_pad(
-            in_channels, out_channels, kernel_size, groups=groups, **kwargs
-        )
+        m = create_conv2d_pad(in_channels, out_channels, kernel_size, groups=groups, **kwargs)
     return m
 
 
@@ -134,18 +130,10 @@ def get_padding(kernel_size: int, stride: int = 1, dilation: int = 1, **_) -> in
 
 
 def create_batchnorm(out_ch, state_dict, base_address: str, device=None):
-    weight = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.weight"], device, put_on_device=False
-    )
-    bias = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.bias"], device, put_on_device=False
-    )
-    running_mean = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.running_mean"], device, put_on_device=False
-    )
-    running_variance = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.running_var"], device, put_on_device=False
-    )
+    weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.weight"], device, put_on_device=False)
+    bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.bias"], device, put_on_device=False)
+    running_mean = torch_to_tt_tensor_rm(state_dict[f"{base_address}.running_mean"], device, put_on_device=False)
+    running_variance = torch_to_tt_tensor_rm(state_dict[f"{base_address}.running_var"], device, put_on_device=False)
     num_batches_tracked = torch_to_tt_tensor_rm(
         state_dict[f"{base_address}.num_batches_tracked"], device, put_on_device=False
     )

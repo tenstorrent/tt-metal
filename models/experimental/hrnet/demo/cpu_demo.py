@@ -14,9 +14,7 @@ from torchvision.utils import save_image
     "model_name",
     (("hrnet_w18_small"),),
 )
-def test_timm_hrnet_image_classification_inference(
-    model_name, imagenet_sample_input, imagenet_label_dict, reset_seeds
-):
+def test_timm_hrnet_image_classification_inference(model_name, imagenet_sample_input, imagenet_label_dict, reset_seeds):
     class_labels = imagenet_label_dict
 
     Timm_model = timm.create_model(model_name, pretrained=True)

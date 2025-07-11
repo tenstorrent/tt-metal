@@ -178,10 +178,10 @@
 2024-09-02T07:02:38.0819137Z [90mNot an Espressif copyright notice ./models/demos/wormhole/stable_diffusion/tt/ttnn_functional_embeddings.py:1[0m
 2024-09-02T07:02:38.0820312Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp:1[0m
 2024-09-02T07:02:38.0821582Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.cpp:1[0m
-2024-09-02T07:02:38.0822240Z 
+2024-09-02T07:02:38.0822240Z
 2024-09-02T07:02:38.0822524Z Additional information about this hook and copyright headers may be found here:
 2024-09-02T07:02:38.0823361Z https://docs.espressif.com/projects/esp-idf/en/latest/esp32/contribute/copyright-guide.html
-2024-09-02T07:02:38.0823855Z 
+2024-09-02T07:02:38.0823855Z
 2024-09-02T07:02:38.0824026Z [92mSuccessfully processed 6809 files.[0m
 2024-09-02T07:02:38.0951175Z Post job cleanup.
 2024-09-02T07:02:38.2334203Z ##[warning]Cache paths are empty. Please check the previous logs and make sure that the python version is specified

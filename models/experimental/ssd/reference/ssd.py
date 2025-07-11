@@ -20,13 +20,9 @@ from torchvision.models.detection.transform import GeneralizedRCNNTransform
 
 
 class SSDHead(nn.Module):
-    def __init__(
-        self, in_channels: List[int], num_anchors: List[int], num_classes: int
-    ):
+    def __init__(self, in_channels: List[int], num_anchors: List[int], num_classes: int):
         super().__init__()
-        self.classification_head = SSDClassificationHead(
-            in_channels, num_anchors, num_classes
-        )
+        self.classification_head = SSDClassificationHead(in_channels, num_anchors, num_classes)
         self.regression_head = SSDRegressionHead(in_channels, num_anchors)
 
     def forward(self, x: List[Tensor]) -> Dict[str, Tensor]:
@@ -74,14 +70,10 @@ class SSDScoringHead(nn.Module):
 
 
 class SSDClassificationHead(SSDScoringHead):
-    def __init__(
-        self, in_channels: List[int], num_anchors: List[int], num_classes: int
-    ):
+    def __init__(self, in_channels: List[int], num_anchors: List[int], num_classes: int):
         cls_logits = nn.ModuleList()
         for channels, anchors in zip(in_channels, num_anchors):
-            cls_logits.append(
-                nn.Conv2d(channels, num_classes * anchors, kernel_size=3, padding=1)
-            )
+            cls_logits.append(nn.Conv2d(channels, num_classes * anchors, kernel_size=3, padding=1))
         _xavier_init(cls_logits)
         super().__init__(cls_logits, num_classes)
 
@@ -199,26 +191,16 @@ class SSD(nn.Module):
         ) in zip(targets, bbox_regression, cls_logits, anchors, matched_idxs):
             # produce the matching between boxes and targets
             foreground_idxs_per_image = torch.where(matched_idxs_per_image >= 0)[0]
-            foreground_matched_idxs_per_image = matched_idxs_per_image[
-                foreground_idxs_per_image
-            ]
+            foreground_matched_idxs_per_image = matched_idxs_per_image[foreground_idxs_per_image]
             num_foreground += foreground_matched_idxs_per_image.numel()
 
             # Calculate regression loss
-            matched_gt_boxes_per_image = targets_per_image["boxes"][
-                foreground_matched_idxs_per_image
-            ]
-            bbox_regression_per_image = bbox_regression_per_image[
-                foreground_idxs_per_image, :
-            ]
+            matched_gt_boxes_per_image = targets_per_image["boxes"][foreground_matched_idxs_per_image]
+            bbox_regression_per_image = bbox_regression_per_image[foreground_idxs_per_image, :]
             anchors_per_image = anchors_per_image[foreground_idxs_per_image, :]
-            target_regression = self.box_coder.encode_single(
-                matched_gt_boxes_per_image, anchors_per_image
-            )
+            target_regression = self.box_coder.encode_single(matched_gt_boxes_per_image, anchors_per_image)
             bbox_loss.append(
-                torch.nn.functional.smooth_l1_loss(
-                    bbox_regression_per_image, target_regression, reduction="sum"
-                )
+                torch.nn.functional.smooth_l1_loss(bbox_regression_per_image, target_regression, reduction="sum")
             )
 
             # Estimate ground truth for class targets
@@ -237,18 +219,16 @@ class SSD(nn.Module):
 
         # Calculate classification loss
         num_classes = cls_logits.size(-1)
-        cls_loss = F.cross_entropy(
-            cls_logits.view(-1, num_classes), cls_targets.view(-1), reduction="none"
-        ).view(cls_targets.size())
+        cls_loss = F.cross_entropy(cls_logits.view(-1, num_classes), cls_targets.view(-1), reduction="none").view(
+            cls_targets.size()
+        )
 
         # Hard Negative Sampling
         foreground_idxs = cls_targets > 0
         num_negative = self.neg_to_pos_ratio * foreground_idxs.sum(1, keepdim=True)
         # num_negative[num_negative < self.neg_to_pos_ratio] = self.neg_to_pos_ratio
         negative_loss = cls_loss.clone()
-        negative_loss[foreground_idxs] = -float(
-            "inf"
-        )  # use -inf to detect positive values that creeped in the sample
+        negative_loss[foreground_idxs] = -float("inf")  # use -inf to detect positive values that creeped in the sample
         values, idx = negative_loss.sort(1, descending=True)
         # background_idxs = torch.logical_and(idx.sort(1)[1] < num_negative, torch.isfinite(values))
         background_idxs = idx.sort(1)[1] < num_negative
@@ -256,10 +236,7 @@ class SSD(nn.Module):
         N = max(1, num_foreground)
         return {
             "bbox_regression": bbox_loss.sum() / N,
-            "classification": (
-                cls_loss[foreground_idxs].sum() + cls_loss[background_idxs].sum()
-            )
-            / N,
+            "classification": (cls_loss[foreground_idxs].sum() + cls_loss[background_idxs].sum()) / N,
         }
 
     def forward(
@@ -341,25 +318,17 @@ class SSD(nn.Module):
                         )
                         continue
 
-                    match_quality_matrix = box_iou(
-                        targets_per_image["boxes"], anchors_per_image
-                    )
+                    match_quality_matrix = box_iou(targets_per_image["boxes"], anchors_per_image)
                     matched_idxs.append(self.proposal_matcher(match_quality_matrix))
 
                 losses = self.compute_loss(targets, head_outputs, anchors, matched_idxs)
         else:
-            detections = self.postprocess_detections(
-                head_outputs, anchors, images.image_sizes
-            )
-            detections = self.transform.postprocess(
-                detections, images.image_sizes, original_image_sizes
-            )
+            detections = self.postprocess_detections(head_outputs, anchors, images.image_sizes)
+            detections = self.transform.postprocess(detections, images.image_sizes, original_image_sizes)
 
         if torch.jit.is_scripting():
             if not self._has_warned:
-                warnings.warn(
-                    "SSD always returns a (Losses, Detections) tuple in scripting"
-                )
+                warnings.warn("SSD always returns a (Losses, Detections) tuple in scripting")
                 self._has_warned = True
             return losses, detections
         return self.eager_outputs(losses, detections)
@@ -378,9 +347,7 @@ class SSD(nn.Module):
 
         detections: List[Dict[str, Tensor]] = []
 
-        for boxes, scores, anchors, image_shape in zip(
-            bbox_regression, pred_scores, image_anchors, image_shapes
-        ):
+        for boxes, scores, anchors, image_shape in zip(bbox_regression, pred_scores, image_anchors, image_shapes):
             boxes = self.box_coder.decode_single(boxes, anchors)
             boxes = clip_boxes_to_image(boxes, image_shape)
 
@@ -401,11 +368,7 @@ class SSD(nn.Module):
 
                 image_boxes.append(box)
                 image_scores.append(score)
-                image_labels.append(
-                    torch.full_like(
-                        score, fill_value=label, dtype=torch.int64, device=device
-                    )
-                )
+                image_labels.append(torch.full_like(score, fill_value=label, dtype=torch.int64, device=device))
 
             image_boxes = torch.cat(image_boxes, dim=0)
             image_scores = torch.cat(image_scores, dim=0)

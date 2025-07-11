@@ -1,12 +1,12 @@
 #!/bin/bash
 
-#  The script will reorder the devices based on the desired coordinates sequence. 
-#  Run the script with the following command: 
+#  The script will reorder the devices based on the desired coordinates sequence.
+#  Run the script with the following command:
 #  sudo bash reorder_devices.sh <input_directory>
 #  The script will use the latest timestamped .json file in the input directory to get the current device order.
 #  If the input directory is not provided, the script will use the default directory ~/tt_smi_logs.
-#  The script will reorder the devices based on the desired coordinates sequence. If the devices are already in the desired order, the script will exit. 
-#  The script will output the following message: 
+#  The script will reorder the devices based on the desired coordinates sequence. If the devices are already in the desired order, the script will exit.
+#  The script will output the following message:
 #  Successfully unbinded and binded TT devices into default order
 
 # check if have sudo permissions
@@ -23,7 +23,7 @@ fi
 
 # Check if the input directory is provided
 if [ -z "$1" ]; then
-    echo "Usage: $0 <input_directory> not given - using default ~/tt_smi_logs as input" 
+    echo "Usage: $0 <input_directory> not given - using default ~/tt_smi_logs as input"
     tt-smi -s
     input_directory=~/tt_smi_logs
 else
@@ -109,4 +109,3 @@ done
 
 echo "Successfully unbinded and binded TT devices into default order"
 echo "Run tt-topology again for the updated device order!"
- 

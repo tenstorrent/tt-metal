@@ -29,10 +29,10 @@ namespace ckernel {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | first           | Set true for tiles in the first row                                        | bool     |                                                       | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void cumsum_tile(uint32_t idst, bool first = true) {
     MATH((llk_math_eltwise_unary_sfpu_cumsum<false>(idst, first)));  // There is only non APPROXIMATE implementation
 }
