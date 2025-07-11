@@ -5,6 +5,7 @@
 #include "interleaved_to_sharded_partial_op.hpp"
 
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -55,6 +56,18 @@ std::vector<ttnn::TensorSpec> InterleavedToShardedPartialDeviceOperation::comput
     auto mem_config = this->output_mem_config.with_shard_spec(this->shard_spec);
 
     return {TensorSpec(shape, TensorLayout(output_dtype, PageConfig(input_tensor.layout()), mem_config))};
+}
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+InterleavedToShardedPartialDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks InterleavedToShardedPartialDeviceOperation::create_program(

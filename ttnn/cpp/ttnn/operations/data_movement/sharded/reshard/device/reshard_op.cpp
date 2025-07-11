@@ -9,6 +9,7 @@
 #include "reshard_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -77,6 +78,19 @@ std::vector<ttnn::TensorSpec> ReshardDeviceOperation::compute_output_specs(
             output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+ReshardDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
