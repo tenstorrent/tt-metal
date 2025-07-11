@@ -8,32 +8,24 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/device_operation.hpp"
+#include "full_program_factory.hpp"
+#include "full_common_types.hpp"
 
 namespace ttnn::operations::full {
 
 struct FullOperation {
-    struct operation_attributes_t {
-        const ttnn::SmallVector<uint32_t> shape;
-        const std::variant<float, int> fill_value;
-        const DataType dtype;
-        const Layout layout;
-        const MemoryConfig memory_config;
-    };
-
-    struct tensor_args_t {
-        const Tensor& any;
-    };
-
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
+    using operation_attributes_t = ttnn::operations::full::operation_attributes_t;
+    using tensor_args_t = ttnn::operations::full::tensor_args_t;
+    using spec_return_value_t = ttnn::operations::full::spec_return_value_t;
+    using tensor_return_value_t = ttnn::operations::full::tensor_return_value_t;
 
     struct ProgramFactory {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle writer_id;
-            std::size_t num_cores;
-            std::size_t core_h;
+            uint32_t writer_id;
+            uint32_t num_cores;
+            uint32_t core_h;
         };
-
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(

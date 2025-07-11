@@ -2,40 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "full_device_operation.hpp"
+#include "full_program_factory.hpp"
+#include "full_program_factory_common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <map>
+#include <variant>
 
 using namespace tt;
 using namespace tt::constants;
 
-// After the full modification and if there are no issues in the overall tests, it will be added to `bfloat16.hpp` and
-// applied globally.
-uint32_t get_bfloat16_rounded(const float val) {
-    uint32_t float_bits = *reinterpret_cast<const uint32_t*>(&val);
-
-    // upper 16 bits
-    uint16_t bfloat16_bits = float_bits >> 16;
-
-    // check Guard, Round, Sticky bits from lower 16 bits
-    uint32_t lower_bits = float_bits & 0xFFFF;
-    uint32_t guard_bit = (lower_bits >> 15) & 1;
-    uint32_t round_bit = (lower_bits >> 14) & 1;
-    uint32_t sticky_bit = (lower_bits & 0x3FFF) != 0;
-
-    // Tie-to-even rounding rule
-    if (guard_bit && (round_bit || sticky_bit || (bfloat16_bits & 1))) {
-        bfloat16_bits += 1;
-    }
-
-    return static_cast<uint32_t>(bfloat16_bits) << 16;
-}
-
-union datatype {
-    uint32_t u32;
-    float f32;
-} u;
 namespace ttnn::operations::full {
+
 FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -72,6 +50,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         default: break;
     }
 
+    datatype u;
     if (std::holds_alternative<int>(fill_value)) {
         u.u32 = std::get<int>(fill_value);
     } else if (std::holds_alternative<float>(fill_value)) {
@@ -128,4 +107,5 @@ void FullOperation::ProgramFactory::override_runtime_arguments(
         }
     }
 }
+
 }  // namespace ttnn::operations::full

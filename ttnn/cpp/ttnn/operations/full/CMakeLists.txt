@@ -9,6 +9,7 @@ target_sources(
     PRIVATE
         device/full_device_operation.cpp
         device/full_program_factory.cpp
+        device/full_program_factory_common.hpp
         full.cpp
 )
 
