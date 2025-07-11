@@ -111,4 +111,5 @@ enum SfpuType {
     unary_min,
     gcd,
     lcm,
+    hardsigmoid
 };
