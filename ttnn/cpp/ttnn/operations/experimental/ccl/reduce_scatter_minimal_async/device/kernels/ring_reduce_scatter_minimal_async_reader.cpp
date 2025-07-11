@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "debug/dprint.h"
+
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
 
@@ -83,6 +85,7 @@ void kernel_main() {
         // If slices_forwarded in writer is 7, we don't forward anymore and write it to output_buffer
         // Otherwise, the writer will write cb_output_id to the next chip in the forward direction
         for (uint32_t i = 0; i < ring_size; ++i) {
+            DPRINT << i << ENDL();
             const bool do_reduce = i != 0;
             uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
