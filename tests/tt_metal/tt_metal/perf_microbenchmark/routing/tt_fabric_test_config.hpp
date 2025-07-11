@@ -1336,8 +1336,7 @@ private:
 
         // Create sync patterns based on topology - returns multiple patterns per device for mcast
         for (const auto& src_device : all_devices) {
-            const auto& sync_patterns_and_sync_val_pair =
-                create_sync_patterns_for_topology(src_device, all_devices, test.fabric_setup.topology);
+            const auto& sync_patterns_and_sync_val_pair = create_sync_patterns_for_topology(src_device, all_devices);
 
             const auto& sync_patterns = sync_patterns_and_sync_val_pair.first;
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
@@ -1358,55 +1357,8 @@ private:
             test.global_sync_val);
     }
 
-    /// Helper to compute per‐direction hops and the global sync value
-    std::pair<std::unordered_map<RoutingDirection, uint32_t>, uint32_t> get_sync_hops_and_val(
-        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices, tt::tt_fabric::Topology topology) {
-        std::unordered_map<RoutingDirection, uint32_t> multi_directional_hops;
-        uint32_t global_sync_val = 0;
-
-        switch (topology) {
-            case tt::tt_fabric::Topology::Ring: {
-                // Get ring neighbors - returns nullopt for non-perimeter devices
-                auto ring_neighbors = this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_device, devices);
-
-                // Check if the result is valid (has value)
-                if (!ring_neighbors.has_value()) {
-                    // Skip this device as it's not on the perimeter and can't participate in ring multicast
-                    log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_device.chip_id);
-                    return {{}, 0};
-                }
-
-                // Extract the valid ring neighbors
-                auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
-
-                multi_directional_hops = this->route_manager_.get_full_or_half_ring_mcast_hops(
-                    src_device, dst_node_forward, dst_node_backward, HighLevelTrafficPattern::FullRingMulticast);
-
-                // minus 2 because full ring pattern traverse each node twice.
-                auto num_sync_devices = this->route_manager_.get_wrap_around_mesh_ring_topology_num_sync_devices();
-                global_sync_val =
-                    2 * num_sync_devices - 2;  // minus 2 because in a full ring pattern we dont mcast to self (twice).
-                break;
-            }
-            case tt::tt_fabric::Topology::Linear: {
-                multi_directional_hops = this->route_manager_.get_full_mcast_hops(src_device);
-                global_sync_val = this->route_manager_.get_linear_topology_num_sync_devices() - 1;
-                break;
-            }
-            case tt::tt_fabric::Topology::Mesh: {
-                multi_directional_hops = this->route_manager_.get_full_mcast_hops(src_device);
-                global_sync_val = this->route_manager_.get_mesh_topology_num_sync_devices() - 1;
-                TT_THROW("We need mcast support for mesh topology to perform sync");
-                break;
-            }
-            default: TT_THROW("Unsupported topology for line sync: {}", static_cast<int>(topology));
-        }
-
-        return {std::move(multi_directional_hops), global_sync_val};
-    }
-
     std::pair<std::vector<TrafficPatternConfig>, uint32_t> create_sync_patterns_for_topology(
-        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices, tt::tt_fabric::Topology topology) {
+        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) {
         std::vector<TrafficPatternConfig> sync_patterns;
 
         // Common sync pattern characteristics
@@ -1419,7 +1371,8 @@ private:
         base_sync_pattern.atomic_inc_wrap = 0xFFFF;                     // Large wrap value
 
         // Topology-specific routing - get multi-directional hops first
-        auto [multi_directional_hops, global_sync_val] = get_sync_hops_and_val(src_device, devices, topology);
+        auto [multi_directional_hops, global_sync_val] =
+            this->route_manager_.get_sync_hops_and_val(src_device, devices);
 
         // Split multi-directional hops into single-direction patterns
         auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);

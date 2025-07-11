@@ -72,10 +72,6 @@ public:
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
-    uint32_t get_global_sync_address() { return sender_memory_map_.get_global_sync_address(); }
-    uint32_t get_global_sync_region_size() { return sender_memory_map_.get_global_sync_region_size(); }
-    uint32_t get_local_sync_address() { return sender_memory_map_.get_local_sync_address(); }
-    uint32_t get_local_sync_region_size() { return sender_memory_map_.get_local_sync_region_size(); }
 
 private:
     void add_traffic_config(const TestTrafficConfig& traffic_config);
@@ -226,10 +222,10 @@ void TestContext::initialize_sync_memory() {
     log_info(tt::LogTest, "Initializing sync memory for line sync");
 
     // Initialize sync memory location with 16 bytes of zeros on all devices
-    uint32_t global_sync_address = this->get_global_sync_address();
-    uint32_t global_sync_memory_size = this->get_global_sync_region_size();
-    uint32_t local_sync_address = this->get_local_sync_address();
-    uint32_t local_sync_memory_size = this->get_local_sync_region_size();
+    uint32_t global_sync_address = this->sender_memory_map_.get_global_sync_address();
+    uint32_t global_sync_memory_size = this->sender_memory_map_.get_global_sync_region_size();
+    uint32_t local_sync_address = this->sender_memory_map_.get_local_sync_address();
+    uint32_t local_sync_memory_size = this->sender_memory_map_.get_local_sync_region_size();
 
     // clear the global sync cores in device_global_sync_cores_ using zero_out_buffer_on_cores
     for (const auto& [device_id, global_sync_core] : device_global_sync_cores_) {
@@ -328,7 +324,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 // For sync patterns, we use a dummy destination core and fixed sync address
                 // The actual sync will be handled by atomic operations
                 CoreCoord dummy_dst_core = {0, 0};                        // Sync doesn't need specific dst core
-                uint32_t sync_address = this->get_global_sync_address();  // Hard-coded sync address
+                uint32_t sync_address = this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
                 uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(
                     sync_sender.device, sync_core);  // populate the master coord
 
