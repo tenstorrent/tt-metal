@@ -25,6 +25,9 @@ class YOLOv8sWorldPerformanceRunnerInfra:
         model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        inputs_mesh_mapper=None,
+        weights_mesh_mapper=None,
+        outputs_mesh_composer=None,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
@@ -37,9 +40,14 @@ class YOLOv8sWorldPerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
+        self.num_devices = self.device.get_num_devices()
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.outputs_mesh_composer = outputs_mesh_composer
+
         self.torch_model = load_torch_model()
         self.torch_input_tensor = (
-            torch.randn((1, 3, 640, 640), dtype=torch.float32)
+            torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
             if self.torch_input_tensor is None
             else self.torch_input_tensor
         )
@@ -75,18 +83,19 @@ class YOLOv8sWorldPerformanceRunnerInfra:
         else:
             exit("Unsupported device")
 
-        num_devices = device.get_num_devices()
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
         n, c, h, w = torch_input_tensor.shape
         ## Converting from image based channels (3) to min channels (16)
         if c == 3:
             c = 16
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, c, h, w],
+            [n // self.num_devices, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_inputs_host = ttnn.from_torch(
+            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
+        )
 
         return tt_inputs_host, input_mem_config
 
@@ -115,7 +124,7 @@ class YOLOv8sWorldPerformanceRunnerInfra:
     def validate(self, output_tensor=None, torch_output_tensor=None):
         ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
-        output_tensor = ttnn.to_torch(ttnn_output_tensor[0])
+        output_tensor = ttnn.to_torch(ttnn_output_tensor[0], mesh_composer=self.outputs_mesh_composer)
 
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=0.99)
 
