@@ -10,40 +10,40 @@
 
 struct metal_SocDescriptor;
 
-namespace tt {
+namespace tt::tt_metal {
+class WatcherServer {
+public:
+    WatcherServer();
+    ~WatcherServer();
 
-void watcher_init(chip_id_t device_id);
-void watcher_attach(chip_id_t device_id);
-void watcher_detach(chip_id_t device_id);
+    void init_devices();    // Always runs, puts watcher mailboxes in a default state
+    void attach_devices();  // Start watcher server and attach all devices
+    void detach_devices();  // Detach all devices and stop watcher server
 
-void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
-void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
+    // Helper function to clear the log file, get the log file name
+    void clear_log();
+    std::string log_file_name();
 
-int watcher_register_kernel(const std::string& name);
-void watcher_register_kernel_elf_paths(int id, std::vector<std::string> paths);
+    // Functions to register kernel ids & elf paths with the watcher server, which is responsible for dumping them to
+    // files for use after the metal run is completed.
+    int register_kernel(const std::string& name);
+    void register_kernel_elf_paths(int id, std::vector<std::string>& paths);
 
-// Helper functions for manually dumping watcher contents.
-void watcher_dump();
-void watcher_read_kernel_ids_from_file();
+    // Test-only helper functions
+    bool killed_due_to_error();
+    void set_killed_due_to_error_flag(bool val);
+    std::string exception_message();
+    void set_exception_message(const std::string& msg);
+    int dump_count();
 
-// Check whether the watcher server has been killed due to an error detected, and a function to set
-// that flag. Used in test mode only.
-bool watcher_server_killed_due_to_error();
-void watcher_server_set_error_flag(bool val);
+    // Helper to return the watcher mutex lock. Use this when writing to mailboxes if watcher server has started.
+    std::unique_lock<std::mutex> get_lock();
 
-// Description of thrown exception from watcher server, used for testing purposes.
-std::string get_watcher_exception_message();
+    // Helper function for manually dumping watcher contents. TODO: remove when watcher_dump tool is removed.
+    void isolated_dump(std::vector<chip_id_t>& device_ids);
 
-// Helper function to clear the watcher log file
-void watcher_clear_log();
-
-// Helper function to get the current watcher log file name/path
-std::string watcher_get_log_file_name();
-
-// Helper function to get the current watcher dump count
-int watcher_get_dump_count();
-
-// Helper to return the watcher mutex lock
-std::unique_lock<std::mutex> watcher_get_lock();
-
-}  // namespace tt
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;  // Pointer to implementation
+};
+}  // namespace tt::tt_metal
