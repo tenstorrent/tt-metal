@@ -50,6 +50,10 @@ target_sources(
         core/distributed/distributed_tensor.cpp
         core/distributed/distributed_tensor_config.cpp
         core/distributed/distributed_tensor_config.cpp
+        core/distributed/bidirectional_fabric_socket.cpp
+        core/distributed/create_socket.cpp
+        core/distributed/fabric_socket.cpp
+        core/distributed/mpi_socket.cpp
         core/events.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
@@ -303,6 +307,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_async/send_async_${PY_BINDING}.cpp
 )
 
 set(CCL_TTNN_SRCS_PYBIND
@@ -529,6 +534,7 @@ if(WITH_PYTHON_BINDINGS)
         ttnn
         PUBLIC
             TTNN::CPP
+            TTNN::Core
         PRIVATE
             pybind11::module
             Boost::algorithm

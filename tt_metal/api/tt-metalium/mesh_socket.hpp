@@ -81,6 +81,10 @@ public:
 
     tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
 
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
+    auto attribute_values() const { return std::forward_as_tuple(config_, socket_endpoint_type_, fabric_node_id_map_); }
+
 private:
     MeshSocket(
         std::shared_ptr<MeshBuffer> data_buffer,
@@ -103,3 +107,32 @@ private:
 };
 
 }  // namespace tt::tt_metal::distributed
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::distributed::SocketConfig> {
+    size_t operator()(const tt::tt_metal::distributed::SocketConfig& config) const noexcept {
+        std::optional<tt::tt_metal::distributed::multihost::Rank> distributed_context_rank = std::nullopt;
+        std::optional<tt::tt_metal::distributed::multihost::Size> distributed_context_size = std::nullopt;
+        if (config.distributed_context) {
+            distributed_context_rank = config.distributed_context->rank();
+            distributed_context_size = config.distributed_context->size();
+        }
+        return tt::stl::hash::hash_objects_with_default_seed(
+            config.socket_connection_config,
+            config.socket_mem_config,
+            config.sender_rank,
+            config.receiver_rank,
+            distributed_context_rank,
+            distributed_context_size);
+    }
+};
+template <>
+struct hash<tt::tt_metal::distributed::MeshSocket> {
+    size_t operator()(const tt::tt_metal::distributed::MeshSocket& socket) const noexcept {
+        return tt::stl::hash::hash_objects_with_default_seed(socket.attribute_values());
+    }
+};
+
+}  // namespace std

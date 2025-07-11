@@ -13,20 +13,20 @@ IFS=$'\n\t'
 # Defaults (customize as needed)
 METAL_HOME="${TT_METAL_HOME:-/home/ttuser/git/tt-metal}"
 CONFIG="training_shakespear_nanogpt_3tier.yaml"
-BIN_DIR="${METAL_HOME}/tt-train/build/sources/examples/nano_gpt"
+BIN_DIR="${METAL_HOME}/build/tt-train/sources/examples/nano_gpt"
 CFG_DIR="${METAL_HOME}/tt-train/configs"
-HOSTFILE="/tmp/mpi_hosts.$$"
+HOSTFILE="/tmp/mpi_hosts.txt"
 BINARIES=(nano_gpt nano_gpt_aggregator nano_gpt_optimizer)
 SSH_USER="ttuser"
 SCP_OPTS="-p"    # preserve modification times & modes
 
 # Your cluster hosts, in the order MPI should assign ranks:
 HOSTS=(
-  "11.228.0.10"   # worker #1 (this host—skip copy)
-  "11.228.0.11"   # worker #2
-  "11.228.0.14"   # aggregator
-  "11.228.0.16"   # optimizer
-  # "11.228.0.15" # disabled host (slots=1) – uncomment to re-enable
+  "11.228.0.10"   # worker #1 1
+  "11.228.0.11"   # worker #2 4
+  "11.228.0.14"   # worker #3 3
+  "11.228.0.15"   # aggregator 0
+  "11.228.0.16"   # optimizer 2
 )
 
 print_usage() {
@@ -97,24 +97,33 @@ fi
 } > "${HOSTFILE}"
 
 # copy to all remote hosts (skip index 0)
-echo "Copying binaries and config to remote hosts..."
-for host in "${HOSTS[@]:1}"; do
-  echo " -> $host"
-  ssh "${SSH_USER}@${host}" "mkdir -p '${BIN_DIR}' '${CFG_DIR}'"
-  for bin in "${BINARIES[@]}"; do
-    scp ${SCP_OPTS} "${BIN_DIR}/${bin}" "${SSH_USER}@${host}:${BIN_DIR}/"
-  done
-  scp ${SCP_OPTS} "${CFG_DIR}/${CONFIG}" "${SSH_USER}@${host}:${CFG_DIR}/"
-done
-echo "✔ Remote copy complete."
+# echo "Copying binaries and config to remote hosts..."
+# for host in "${HOSTS[@]:1}"; do
+#   echo " -> $host"
+#   ssh "${SSH_USER}@${host}" "mkdir -p '${BIN_DIR}' '${CFG_DIR}'"
+#   for bin in "${BINARIES[@]}"; do
+#     scp ${SCP_OPTS} "${BIN_DIR}/${bin}" "${SSH_USER}@${host}:${BIN_DIR}/"
+#   done
+#   scp ${SCP_OPTS} "${CFG_DIR}/${CONFIG}" "${SSH_USER}@${host}:${CFG_DIR}/"
+# done
+# echo "✔ Remote copy complete."
 
 # launch MPI job
 echo "Launching MPI 3-tier demo..."
+
 mpirun --hostfile "${HOSTFILE}" \
-  -np "${WORKER_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
-  : -np "${AGG_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_aggregator\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
-  : -np "${OPT_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG"
+  -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=1 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+  : -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=4 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+  : -np 1 bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=3 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+  : -np "${AGG_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_aggregator\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+  : -np "${OPT_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=2 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG"
+
+
+# mpirun --hostfile "${HOSTFILE}" \
+#   -np "${WORKER_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+#   : -np "${AGG_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_aggregator\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
+#   : -np "${OPT_COUNT}"    bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt_optimizer\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG"
 
 # cleanup
-rm -f "${HOSTFILE}"
+# rm -f "${HOSTFILE}"
 echo "✔ MPI job finished."

@@ -18,6 +18,7 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
+#include "fmt/base.h"
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
@@ -480,6 +481,20 @@ const std::unordered_map<
     std::function<std::unique_ptr<ttml::schedulers::LRSchedulerBase>(ttml::optimizers::OptimizerBase *, size_t)>>
     schedulers = {{"identity", create_idendity_scheduler}, {"warmup_linear", create_warmup_with_linear_scheduler}};
 
+const std::vector<std::vector<uint32_t>> &get_eth_coords_for_t3k() {
+    static const std::vector<std::vector<uint32_t>> t3k_eth_coords = {
+        {0, 0, 0, 0, 0},
+        {0, 1, 0, 0, 0},
+        {0, 2, 0, 0, 0},
+        {0, 3, 0, 0, 0},
+        {0, 0, 1, 0, 0},
+        {0, 1, 1, 0, 0},
+        {0, 2, 1, 0, 0},
+        {0, 3, 1, 0, 0}};
+
+    return t3k_eth_coords;
+}
+
 int main(int argc, char **argv) {
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
@@ -507,10 +522,11 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        ctx.initialize_distributed_context(argc, argv);
 
-        auto &distributed_ctx = ctx.get_distributed_context();
-        fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
+        ctx.initialize_distributed_context(argc, argv);
+        auto distributed_ctx = ctx.get_distributed_context();
+        fmt::print(
+            "Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank().get());
 
         // disable wandb for now in case of mpi example
         enable_wandb = false;
@@ -604,7 +620,7 @@ int main(int argc, char **argv) {
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
     if (config.enable_mpi) {
-        int rank = *ttml::autograd::ctx().get_distributed_context().rank();
+        int rank = ttml::autograd::ctx().get_distributed_context()->rank().get();
         auto seed = config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
     }
@@ -655,7 +671,7 @@ int main(int argc, char **argv) {
     fmt::print("Dataset size: {}\n", dataset.get_size());
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
-
+    std::cout << "Config Shape: " << device_config.mesh_shape << std::endl;
     initialize_device(device_config.mesh_shape, device_config.device_ids);
 
     auto *device = &ttml::autograd::ctx().get_device();
@@ -838,6 +854,7 @@ int main(int argc, char **argv) {
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
+            fmt::print("Using RemoteOptimizer with {} workers\n", config.num_mh_workers);
             return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mh_workers);
         } else if (use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
@@ -846,7 +863,9 @@ int main(int argc, char **argv) {
         }
     };
 
+    fmt::println("before select optimizer");
     auto optimizer = select_optimizer(config.use_moreh_adamw);
+    fmt::println("after select optimizer");
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (config.enable_mpi) {
@@ -929,7 +948,7 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
                 if (config.enable_mpi) {
-                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context().rank());
+                    fmt::print("[Rank {}] ", ttml::autograd::ctx().get_distributed_context()->rank().get());
                 }
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
@@ -985,9 +1004,9 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        auto &distributed_ctx = ctx.get_distributed_context();
-        distributed_ctx.barrier();
-        fmt::print("Rank {}: Finalizing MPI context\n", *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        distributed_ctx->barrier();
+        fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank().get());
     }
 
     if (enable_wandb) {

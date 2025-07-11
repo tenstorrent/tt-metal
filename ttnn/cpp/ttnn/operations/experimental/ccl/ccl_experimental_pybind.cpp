@@ -22,6 +22,7 @@
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/send_async/send_async_pybind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -42,6 +43,7 @@ void py_module(pybind11::module& module) {
     ccl::py_bind_llama_reduce_scatter(module);
     ccl::py_bind_llama_rs_create_heads(module);
     ccl::py_bind_ring_attention_all_gather_async(module);
+    ccl::py_bind_send_async(module);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

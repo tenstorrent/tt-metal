@@ -4,6 +4,8 @@
 
 #include "mesh_device.hpp"
 
+#include <ttnn/distributed/api.hpp>
+
 namespace ttml::core {
 
 MeshDevice::MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const std::vector<int>& device_ids) :
@@ -16,15 +18,24 @@ MeshDevice::MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const 
         /*offset=*/std::nullopt,
         /*physical_device_ids=*/device_ids)) {
     assert(m_mesh_device);
+
+    m_sub_mesh = m_mesh_device->create_submesh(tt::tt_metal::distributed::MeshShape(1, 1));
 }
 
 [[nodiscard]] ttnn::distributed::MeshDevice& MeshDevice::get_device() {
     assert(m_mesh_device);
-    return *m_mesh_device;
+    // return *m_mesh_device;
+    return *m_sub_mesh;
+}
+
+[[nodiscard]] std::shared_ptr<ttnn::distributed::MeshDevice> MeshDevice::get_shared_ptr_device() const {
+    // return m_mesh_device;
+    return m_sub_mesh;
 }
 
 MeshDevice::~MeshDevice() {
     assert(m_mesh_device);
+    ttnn::distributed::close_mesh_device(m_sub_mesh);
     ttnn::distributed::close_mesh_device(m_mesh_device);
 }
 

@@ -16,6 +16,10 @@ namespace fabric_router_tests {
 
 namespace multihost_utils {
 
+void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank recv_host_rank);
+
+void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank sender_host_rank);
+
 void RandomizedInterMeshUnicast(BaseFabricFixture* fixture);
 
 void InterMeshLineMcast(

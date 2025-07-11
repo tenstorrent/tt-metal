@@ -32,6 +32,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <umd/device/types/arch.h>
 
 enum class CoreType;
@@ -271,7 +272,11 @@ public:
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
     const MeshShape& shape() const;
+    static void initialize_control_plane_config(
+        const std::string& mesh_graph_descriptor_path,
+        const std::vector<std::vector<std::vector<uint32_t>>>& eth_coords_per_mesh);
 
+    std::shared_ptr<multihost::DistributedContext> get_distributed_context() const;
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
     // Reshaping Rules:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)

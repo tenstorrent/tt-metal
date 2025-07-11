@@ -116,8 +116,24 @@ target_link_libraries(
 # unit_tests_ttnn_ccl_ops
 
 add_executable(unit_tests_ttnn_ccl_ops)
-target_sources(unit_tests_ttnn_ccl_ops PRIVATE ccl/test_persistent_fabric_ccl_ops.cpp)
+target_sources(
+    unit_tests_ttnn_ccl_ops
+    PRIVATE
+        ccl/test_persistent_fabric_ccl_ops.cpp
+        ccl/test_send_recv.cpp
+)
 setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
+
+# unit_tests_ttnn_multihost_ccl_ops
+
+add_executable(unit_tests_ttnn_multihost_ccl_ops)
+target_sources(
+    unit_tests_ttnn_multihost_ccl_ops
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost/fabric_tests/intermesh_routing_test_utils.cpp
+        multihost_ccl/test_send_recv.cpp
+)
+setup_ttnn_test_target(unit_tests_ttnn_multihost_ccl_ops)
 
 # unit_tests_ttnn_fabric_edm
 

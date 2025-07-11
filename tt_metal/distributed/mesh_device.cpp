@@ -33,9 +33,11 @@
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
+#include "tt-metalium/fabric_types.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/api/tt-metalium/fabric_types.hpp"
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
@@ -109,6 +111,23 @@ decltype(auto) validate_and_get_reference_value(
         }
     }
     return reference_value;
+}
+
+std::map<tt_fabric::FabricNodeId, chip_id_t> get_physical_chip_mapping_from_eth_coords_mapping(
+    const std::vector<std::vector<eth_coord_t>>& mesh_graph_eth_coords, uint32_t local_mesh_id) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::map<tt_fabric::FabricNodeId, chip_id_t> physical_chip_ids_mapping;
+    for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
+        if (mesh_id == local_mesh_id) {
+            for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
+                const auto& eth_coord = mesh_graph_eth_coords[mesh_id][chip_id];
+                physical_chip_ids_mapping.insert(
+                    {tt_fabric::FabricNodeId(tt_fabric::MeshId{mesh_id}, chip_id),
+                     cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+            }
+        }
+    }
+    return physical_chip_ids_mapping;
 }
 
 }  // namespace
@@ -206,6 +225,20 @@ MeshDevice::MeshDevice(
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
+const std::vector<std::vector<uint32_t>>& get_eth_coords_for_t3k() {
+    static const std::vector<std::vector<uint32_t>> t3k_eth_coords = {
+        {0, 0, 0, 0, 0},
+        {0, 1, 0, 0, 0},
+        {0, 2, 0, 0, 0},
+        {0, 3, 0, 0, 0},
+        {0, 0, 1, 0, 0},
+        {0, 1, 1, 0, 0},
+        {0, 2, 1, 0, 0},
+        {0, 3, 1, 0, 0}};
+
+    return t3k_eth_coords;
+}
+
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
     size_t l1_small_size,
@@ -214,6 +247,16 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    std::cout << "Using shape: " << config.mesh_shape() << std::endl;
+    tt::tt_metal::detail::SetFabricConfig(FabricConfig::FABRIC_2D_DYNAMIC);
+    MeshDevice::initialize_control_plane_config(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml",
+        {get_eth_coords_for_t3k(),
+         get_eth_coords_for_t3k(),
+         get_eth_coords_for_t3k(),
+         get_eth_coords_for_t3k(),
+         get_eth_coords_for_t3k()});
+
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
@@ -934,5 +977,30 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+
+void MeshDevice::initialize_control_plane_config(
+    const std::string& mesh_graph_descriptor_path,
+    const std::vector<std::vector<std::vector<uint32_t>>>& eth_coords_per_mesh) {
+    std::vector<std::vector<eth_coord_t>> eth_coords;
+    eth_coords.reserve(eth_coords_per_mesh.size());
+    for (const auto& coords_per_chip : eth_coords_per_mesh) {
+        eth_coords.push_back({});
+        eth_coords.back().reserve(coords_per_chip.size());
+        for (const auto& coord : coords_per_chip) {
+            eth_coords.back().push_back(
+                {.cluster_id = coord[0], .x = coord[1], .y = coord[2], .rack = coord[3], .shelf = coord[4]});
+        }
+    }
+    const char* mesh_id_str = std::getenv("TT_MESH_ID");
+    auto local_mesh_id = std::string(mesh_id_str);
+    std::cout << "Using local mesh id: " << local_mesh_id << std::endl;
+    tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+        mesh_graph_descriptor_path,
+        get_physical_chip_mapping_from_eth_coords_mapping(eth_coords, std::stoi(local_mesh_id)));
+}
+
+std::shared_ptr<distributed::multihost::DistributedContext> MeshDevice::get_distributed_context() const {
+    return tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+}
 
 }  // namespace tt::tt_metal::distributed
