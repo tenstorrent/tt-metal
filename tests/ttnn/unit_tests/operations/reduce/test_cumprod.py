@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "shape",
     [
         [],
-        [1],
+        [2],
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
