@@ -389,9 +389,6 @@ public:
     inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() const { return fd_fabric_en && !using_slow_dispatch; }
-    inline void set_fd_fabric(bool enable) { fd_fabric_en = enable; }
-
     inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
 

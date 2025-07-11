@@ -82,8 +82,7 @@ enum class ClusterType : std::uint8_t {
 
 enum class EthRouterMode : uint32_t {
     IDLE = 0,
-    BI_DIR_TUNNELING = 1,
-    FABRIC_ROUTER = 2,
+    FABRIC_ROUTER = 1,
 };
 
 class Cluster {
@@ -238,19 +237,6 @@ public:
     // Returns virtual eth coord from channel
     CoreCoord get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const;
 
-    // Bookkeeping for mmio device tunnels
-    uint32_t get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const;
-    uint32_t get_mmio_device_tunnel_count(chip_id_t mmio_device) const;
-    uint32_t get_device_tunnel_depth(chip_id_t chip_id) const;
-
-    // Dispatch core is managed by device, so this is an api for device to get the each eth core used in FD tunneling.
-    // Returns logical eth core that communicates with specified dispatch core
-    tt_cxy_pair get_eth_core_for_dispatch_core(
-        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
-
-    std::tuple<tt_cxy_pair, tt_cxy_pair> get_eth_tunnel_core(
-        chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const;
-
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
     //       CreateDevice(0)
@@ -366,7 +352,7 @@ private:
     void generate_virtual_to_profiler_flat_id_mapping();
 
     // Reserves ethernet cores in cluster for tunneling
-    void reserve_ethernet_cores_for_tunneling();
+    void initialize_ethernet_cores_router_mode();
 
     void initialize_ethernet_sockets();
 

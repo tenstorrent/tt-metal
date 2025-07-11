@@ -38,7 +38,6 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
-// #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
