@@ -327,10 +327,9 @@ struct WorkerToFabricEdmSenderImpl {
     // for the read barrier to complete before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) open_finish().
-    template <bool legacy_client = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
-        *this->from_remote_buffer_free_slots_ptr = 0;
 
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
@@ -369,10 +368,7 @@ struct WorkerToFabricEdmSenderImpl {
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
                 0xf,
                 WORKER_HANDSHAKE_NOC);
-        } else if constexpr (legacy_client) {
-            // This address notification is forcibly enabled.
-            // because IDLE_ETH potentially become a EDM client and EDM itself doesn't know client core type.
-            // IDLE_ETH doesn't have tensix_fabric_connections_l1_info_t on fixed L1 region
+        } else if constexpr (SEND_CREDIT_ADDR) {
             noc_inline_dw_write<false, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(from_remote_buffer_free_slots_ptr),
@@ -430,9 +426,11 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
-    template <bool legacy_client = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    // SEND_CREDIT_ADDR: True when the EDM sender is IDLE_ETH (mux) as it doesn't have credits on L1 static address
+    //                   or some legacy code which skips connection info copy on Tensix L1 static address
+    template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open() {
-        open_start<legacy_client, posted, WORKER_HANDSHAKE_NOC>();
+        open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>();
         open_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 

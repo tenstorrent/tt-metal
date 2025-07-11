@@ -256,15 +256,13 @@ struct EdmChannelWorkerInterface {
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address;
         if constexpr (MY_ETH_CHANNEL == USE_DYNAMIC_CREDIT_ADDR) {
-            // This address notification from client is forcibly enabled.
-            // because IDLE_ETH potentially become a EDM client and EDM itself doesn't know client core type.
-            // IDLE_ETH doesn't have tensix_fabric_connections_l1_info_t on fixed L1 region
+            // EDM-EDM, Worker(IDLE_ETH)-EDM and legacy Worker(TENSIX)-EDM connections
             worker_semaphore_address = get_noc_addr(
                 (uint32_t)worker_info.worker_xy.x,
                 (uint32_t)worker_info.worker_xy.y,
                 worker_info.worker_semaphore_address);
         } else {
-            // New Worker-EDM connection, but disabled because IDLE_ETH doesn't have tensix_fabric_connections_l1_info_t
+            // Worker(TENSIX)-EDM connection
             worker_semaphore_address = get_noc_addr(
                 (uint32_t)worker_info.worker_xy.x,
                 (uint32_t)worker_info.worker_xy.y,
