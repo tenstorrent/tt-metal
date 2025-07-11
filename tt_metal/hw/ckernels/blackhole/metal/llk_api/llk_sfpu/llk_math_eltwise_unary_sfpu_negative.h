@@ -6,26 +6,8 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "ckernel_sfpu_negative.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
-namespace ckernel {
+SFPU_UNARY_KERNEL(negative)
 
-// New LLK SFPU APIs
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_negative_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::negative, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, int ITERATIONS = 8>
-inline void llk_math_eltwise_unary_sfpu_negative(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::_calculate_negative_<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE, int ITERATIONS = 8>
-inline void llk_math_eltwise_unary_sfpu_negative_int(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::_calculate_negative_int_<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
-}
-
-}  // namespace ckernel
