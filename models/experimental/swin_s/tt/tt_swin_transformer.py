@@ -66,12 +66,20 @@ class TtSwinTransformer:
         self.flatten = nn.Flatten(1)
 
     def __call__(self, input_tensor):
-        # conv starts
-        input_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
-        input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        output_tensor = self.conv2d(self.device, input_tensor)
+        N, C, H, W = input_tensor.shape
+        min_channels = 16
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(input_tensor, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = input_tensor
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # , memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(input_tensor)
+        nhwc = ttnn.reallocate(nhwc)
+        output_tensor = self.conv2d(self.device, nhwc)
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        # conv ends
 
         if self.norm_layer is None:
             output_tensor = ttnn.layer_norm(
