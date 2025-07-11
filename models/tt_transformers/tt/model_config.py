@@ -1374,7 +1374,7 @@ class ModelArgs:
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
-        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads)
+        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
