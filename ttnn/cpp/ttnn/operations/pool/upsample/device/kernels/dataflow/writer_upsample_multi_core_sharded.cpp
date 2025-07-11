@@ -41,7 +41,6 @@ void kernel_main() {
     if constexpr (!is_reader) {
         reader_idx = elem_per_core_reader * 4;
     }
-    // cb_reserve_back(out_cb_id, out_nsticks_per_core);
 
     for (uint32_t row_begin = 0; row_begin < elem_per_core_reader; ++row_begin) {
         uint16_t cores = config_data[reader_idx++];
@@ -61,5 +60,4 @@ void kernel_main() {
     }
 
     noc_async_read_barrier();
-    // cb_push_back(out_cb_id, out_nsticks_per_core);
 }
