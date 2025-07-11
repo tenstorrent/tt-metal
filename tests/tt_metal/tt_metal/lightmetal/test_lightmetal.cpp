@@ -417,94 +417,94 @@ TEST_F(LightMetalBasicTest, ThreeRISCDataMovementComputeDynamicCBDeallocEarly) {
 }
 
 // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
-// RMAPI
-// TEST_F(LightMetalBasicTest, SingleProgramTraceCapture) {
-//     CreateDeviceAndBeginCapture(4096);
+// Test currently not supported due to Trace API deprecation. See Issue #24955
+TEST_F(LightMetalBasicTest, SingleProgramTraceCapture) {
+    CreateDeviceAndBeginCapture(4096);
 
-//     uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
-//     auto input = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
-//     auto output = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
+    uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
+    auto input = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
+    auto output = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
 
-//     CommandQueue& command_queue = device_->command_queue();
-//     Program simple_program = create_simple_unary_program(*input, *output);
+    CommandQueue& command_queue = device_->command_queue();
+    Program simple_program = create_simple_unary_program(*input, *output);
 
-//     // Setup input data for program with some simple values.
-//     vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
-//     for (uint32_t i = 0; i < input_data.size(); i++) {
-//         input_data[i] = i;
-//     }
+    // Setup input data for program with some simple values.
+    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = i;
+    }
 
-//     std::vector<uint32_t> eager_output_data(input_data.size());
+    std::vector<uint32_t> eager_output_data(input_data.size());
 
-//     // Initial run w/o trace. Preloads binary cache, and captures golden output.
-//     EnqueueWriteBuffer(command_queue, *input, input_data.data(), /*blocking=*/true);
-//     EnqueueProgram(command_queue, simple_program, /*blocking=*/true);
-//     // This will verify that outputs matches between capture + replay.
-//     LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
+    // Initial run w/o trace. Preloads binary cache, and captures golden output.
+    EnqueueWriteBuffer(command_queue, *input, input_data.data(), /*blocking=*/true);
+    EnqueueProgram(command_queue, simple_program, /*blocking=*/true);
+    // This will verify that outputs matches between capture + replay.
+    // LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
 
-//     // Write junk to output buffer to help make sure trace run from standalone binary works.
-//     write_junk_to_buffer(command_queue, *output);
+    // Write junk to output buffer to help make sure trace run from standalone binary works.
+    write_junk_to_buffer(command_queue, *output);
 
-//     // Now enable Metal Trace and run program again for capture.
-//     uint32_t tid = BeginTraceCapture(device_, command_queue.id());
-//     EnqueueProgram(command_queue, simple_program, false);
-//     EndTraceCapture(device_, command_queue.id(), tid);
+    // Now enable Metal Trace and run program again for capture.
+    // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
+    EnqueueProgram(command_queue, simple_program, false);
+    // EndTraceCapture(device_, command_queue.id(), tid);
 
-//     // Verify trace output during replay matches expected output from original capture.
-//     LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
+    // Verify trace output during replay matches expected output from original capture.
+    // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
 
-//     // Done
-//     Finish(command_queue);
-//     ReleaseTrace(device_, tid);
-// }
+    // Done
+    Finish(command_queue);
+    // ReleaseTrace(device_, tid);
+}
 
-// RMAPI
-//  Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
-//  TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
-//      CreateDeviceAndBeginCapture(4096);
+// Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
+// Test currently not supported due to Trace API deprecation. See Issue #24955
+TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
+    CreateDeviceAndBeginCapture(4096);
 
-//     uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
-//     auto input = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
-//     auto interm = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
-//     auto output = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
+    uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
+    auto input = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
+    auto interm = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
+    auto output = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
 
-//     CommandQueue& command_queue = device_->command_queue();
+    CommandQueue& command_queue = device_->command_queue();
 
-//     Program op0 = create_simple_unary_program(*input, *interm);
-//     Program op1 = create_simple_unary_program(*interm, *output);
+    Program op0 = create_simple_unary_program(*input, *interm);
+    Program op1 = create_simple_unary_program(*interm, *output);
 
-//     // Setup input data for program with some simple values.
-//     vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
-//     for (uint32_t i = 0; i < input_data.size(); i++) {
-//         input_data[i] = i;
-//     }
+    // Setup input data for program with some simple values.
+    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = i;
+    }
 
-//     std::vector<uint32_t> eager_output_data(input_data.size());
+    std::vector<uint32_t> eager_output_data(input_data.size());
 
-//     // Initial run w/o trace. Preloads binary cache, and captures golden output.
-//     EnqueueWriteBuffer(command_queue, *input, input_data.data(), /*blocking=*/true);
-//     EnqueueProgram(command_queue, op0, /*blocking=*/true);
-//     EnqueueProgram(command_queue, op1, /*blocking=*/true);
-//     // This will verify that outputs matches between capture + replay.
-//     LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
-//     Finish(command_queue);
+    // Initial run w/o trace. Preloads binary cache, and captures golden output.
+    EnqueueWriteBuffer(command_queue, *input, input_data.data(), /*blocking=*/true);
+    EnqueueProgram(command_queue, op0, /*blocking=*/true);
+    EnqueueProgram(command_queue, op1, /*blocking=*/true);
+    // This will verify that outputs matches between capture + replay.
+    // LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
+    Finish(command_queue);
 
-//     // Write junk to output buffer to help make sure trace run from standalone binary works.
-//     write_junk_to_buffer(command_queue, *output);
+    // Write junk to output buffer to help make sure trace run from standalone binary works.
+    write_junk_to_buffer(command_queue, *output);
 
-//     // Now enable Metal Trace and run program again for capture.
-//     uint32_t tid = BeginTraceCapture(device_, command_queue.id());
-//     EnqueueProgram(command_queue, op0, false);
-//     EnqueueProgram(command_queue, op1, false);
-//     EndTraceCapture(device_, command_queue.id(), tid);
+    // Now enable Metal Trace and run program again for capture.
+    // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
+    EnqueueProgram(command_queue, op0, false);
+    EnqueueProgram(command_queue, op1, false);
+    // EndTraceCapture(device_, command_queue.id(), tid);
 
-//     // Verify trace output during replay matches expected output from original capture.
-//     LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
+    // Verify trace output during replay matches expected output from original capture.
+    // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
 
-//     // Done
-//     Finish(command_queue);
-//     ReleaseTrace(device_, tid);
-// }
+    // Done
+    Finish(command_queue);
+    ReleaseTrace(device_, tid);
+}
 
 }  // namespace
 }  // namespace tt::tt_metal
