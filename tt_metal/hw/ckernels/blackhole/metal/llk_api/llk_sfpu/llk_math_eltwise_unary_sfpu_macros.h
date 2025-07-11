@@ -25,16 +25,17 @@
 #define SFPU_UNARY_KERNEL_NO_INIT(OP)                                                                     \
     template <bool APPROXIMATE>                                                                           \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                  \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode);                          \
     }
 
 // For ops with extra arguments that require a custom compute callback instead of the default calculate_<OP>
-#define SFPU_UNARY_PARAMS_KERNEL_WITH_CUSTOM_CALC(OP, MODE, CALC_CB, EXTRA_ARG_DECL, EXTRA_ARG_PASS)                   \
-    template <bool APPROXIMATE>                                                                                        \
-    inline void llk_math_eltwise_unary_sfpu_##OP(                                                                      \
-        uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {                                     \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(CALC_CB<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
+#define SFPU_UNARY_PARAMS_KERNEL_WITH_CUSTOM_CALC(OP, MODE, CALC_CB, EXTRA_ARG_DECL, EXTRA_ARG_PASS) \
+    template <bool APPROXIMATE>                                                                      \
+    inline void llk_math_eltwise_unary_sfpu_##OP(                                                    \
+        uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {                   \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                           \
+            CALC_CB<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS);                           \
     }
 
 // For unary kernels with multiple extra arguments and a custom compute callback
@@ -56,7 +57,7 @@
 #define SFPU_ROUNDING_OP_KERNEL(NAME)                                                                        \
     template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = false>                                   \
     inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index, int vector_mode = (int)VectorMode::RC) {  \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                     \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                   \
             ckernel::sfpu::_calculate_##NAME##_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode); \
     }
 
@@ -64,7 +65,7 @@
 #define SFPU_ROUNDING_OP_KERNEL_FLOAT32(NAME)                                                                         \
     template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = true>                                             \
     inline void llk_math_eltwise_unary_sfpu_##NAME##_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                              \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                            \
             ckernel::sfpu::_calculate_##NAME##_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);          \
     }
 
@@ -72,7 +73,7 @@
 #define SFPU_TRUNC_OP_KERNEL(NAME)                                                                          \
     template <bool APPROXIMATE>                                                                             \
     inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                    \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                  \
             ckernel::sfpu::_calculate_##NAME##_<APPROXIMATE>, dst_index, vector_mode);                      \
     }
 
@@ -80,7 +81,7 @@
 #define SFPU_TRUNC_OP_KERNEL_FLOAT32(NAME)                                                                            \
     template <bool APPROXIMATE>                                                                                       \
     inline void llk_math_eltwise_unary_sfpu_##NAME##_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                              \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                            \
             ckernel::sfpu::_calculate_##NAME##_<APPROXIMATE, true>, dst_index, vector_mode);                          \
     }
 
@@ -89,7 +90,7 @@
     template <bool APPROXIMATE>                                                                \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                              \
         uint dst_index, int decimals, int vector_mode = (int)VectorMode::RC) {                 \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                       \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                     \
             ckernel::sfpu::_calculate_##OP##_<APPROXIMATE>, dst_index, vector_mode, decimals); \
     }
 
@@ -97,7 +98,7 @@
 #define SFPU_UNARY_INT32_KERNEL(OP)                                                                               \
     template <bool APPROXIMATE>                                                                                   \
     inline void llk_math_eltwise_unary_sfpu_##OP##_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                          \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                        \
             ckernel::sfpu::calculate_##OP##_int32<APPROXIMATE>, dst_index, vector_mode);                          \
     }
 
@@ -116,7 +117,7 @@
     template <bool APPROXIMATE>                                                                  \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                                \
         uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {               \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                         \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                       \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }
 
@@ -126,10 +127,10 @@
     inline void llk_math_eltwise_unary_sfpu_##OP(                                             \
         uint dst_index, ENUM data_format, int vector_mode = (int)VectorMode::RC) {            \
         if (data_format == ENUM::TYPE0A || data_format == ENUM::TYPE0B) {                     \
-            llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                  \
+            _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                \
                 ckernel::sfpu::CALC0<APPROXIMATE>, dst_index, vector_mode);                   \
         } else if (data_format == ENUM::MODE1) {                                              \
-            llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                  \
+            _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                \
                 ckernel::sfpu::CALC1<APPROXIMATE>, dst_index, vector_mode);                   \
         }                                                                                     \
     }
@@ -141,7 +142,7 @@
     }                                                                                                     \
     template <bool APPROXIMATE>                                                                           \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                  \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode);                          \
     }
 
@@ -159,13 +160,11 @@
 
 // For the int32 comparison variants
 #define SFPU_COMP_INT32_KERNEL(OP, TYPE)                                                                           \
-    namespace ckernel {                                                                                            \
     template <bool APPROXIMATE>                                                                                    \
     inline void llk_math_eltwise_unary_sfpu_unary_##OP##_int32(                                                    \
         uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {                                      \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                           \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                         \
             ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::TYPE>, dst_index, vector_mode, param0); \
-    }                                                                                                              \
     }
 
 // For the int32 comparison variants with underscore in callback
@@ -173,13 +172,12 @@
     template <bool APPROXIMATE>                                                                                      \
     inline void llk_math_eltwise_unary_sfpu_unary_##OP##_int32(                                                      \
         uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {                                        \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                             \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
             ckernel::sfpu::_calculate_comp_unary_int_<APPROXIMATE, SfpuType::TYPE>, dst_index, vector_mode, param0); \
     }
 
 // For the "normal" comparison ops
 #define SFPU_COMP_KERNEL(OP)                                                                   \
-    namespace ckernel {                                                                        \
     template <bool APPROXIMATE>                                                                \
     inline void llk_math_eltwise_unary_sfpu_unary_##OP##_init() {                              \
         llk_math_eltwise_unary_sfpu_init<SfpuType::unary_##OP, APPROXIMATE>();                 \
@@ -187,9 +185,8 @@
     template <bool APPROXIMATE>                                                                \
     inline void llk_math_eltwise_unary_sfpu_unary_##OP(                                        \
         uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {                  \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                       \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                     \
             ckernel::sfpu::calculate_unary_##OP<APPROXIMATE>, dst_index, vector_mode, param0); \
-    }                                                                                          \
     }
 
 #define SFPU_TOPK_LOCAL_SORT_KERNEL(OP)                                      \
@@ -202,7 +199,7 @@
         int i_end_step,                                                      \
         int i_start_step,                                                    \
         int vector_mode = (int)VectorMode::RC_custom) {                      \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                     \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                   \
             ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROXIMATE>, \
             dst_index,                                                       \
             vector_mode,                                                     \
@@ -218,7 +215,7 @@
     template <bool APPROXIMATE, bool idir = false>                                                              \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                                               \
         uint dst_index, int m_iter, int k, int vector_mode = (int)VectorMode::RC_custom) {                      \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                        \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                      \
             ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE, idir>, dst_index, vector_mode, m_iter, k); \
     }
 
@@ -232,7 +229,7 @@
         int logk,                                                       \
         int skip_second,                                                \
         int vector_mode = (int)VectorMode::RC_custom) {                 \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(              \
             ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROXIMATE>, \
             dst_index,                                                  \
             vector_mode,                                                \
@@ -253,7 +250,7 @@
     template <bool APPROXIMATE>                                                              \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                            \
         uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {           \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                     \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                   \
             CALC_CB<APPROXIMATE, EXTRA_TEMPLATE>, dst_index, vector_mode, EXTRA_ARG_PASS);   \
     }
 
@@ -268,7 +265,7 @@
     /* default compute */                                                                                 \
     template <bool APPROXIMATE>                                                                           \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                  \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode);                          \
     }
 
@@ -279,7 +276,7 @@
     }                                                                                                     \
     template <bool APPROXIMATE>                                                                           \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                  \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
             ckernel::sfpu::FN<APPROXIMATE, T1, T2>, dst_index, vector_mode);                              \
     }
 
@@ -290,7 +287,7 @@
     }                                                                                                     \
     template <bool APPROXIMATE>                                                                           \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                  \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
             ckernel::sfpu::calculate_##OP<APPROXIMATE, false>, /* base_flag = false*/                     \
             dst_index,                                                                                    \
             vector_mode,                                                                                  \
@@ -306,7 +303,7 @@
     template <bool APPROXIMATE>                                                                  \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                                \
         uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {               \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                         \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                       \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }
 
@@ -318,17 +315,15 @@
     }                                                                                            \
     template <bool APPROXIMATE>                                                                  \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, uint param0) {                  \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                         \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                       \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0); \
     }
 
 // For ops that need a custom init callback but takes one extra init-parameter
 #define SFPU_INIT_ONE_PARAM_KERNEL(OP, INIT_CB, EXTRA_ARG_DECL, EXTRA_ARG_PASS)                            \
-    namespace ckernel {                                                                                    \
     template <bool APPROXIMATE>                                                                            \
     inline void llk_math_eltwise_unary_sfpu_##OP##_init(EXTRA_ARG_DECL) {                                  \
         llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, EXTRA_ARG_PASS); \
-    }                                                                                                      \
     }
 
 // Trig ops with exactly one dst_index argument and RC mode
@@ -339,7 +334,7 @@
     }                                                                                                       \
     template <bool APPROXIMATE>                                                                             \
     inline void llk_math_eltwise_unary_sfpu_##OP##_op(uint dst_index) {                                     \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                    \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                  \
             ckernel::sfpu::calculate_sfpu_trig<SfpuType::OP, APPROXIMATE>, dst_index, (int)VectorMode::RC); \
     }
 
@@ -354,8 +349,19 @@
     /* compute */                                                                                         \
     template <bool APPROXIMATE, int ITERATIONS = ITER>                                                    \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                  \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
             ckernel::sfpu::_calculate_##OP##_<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);          \
+    }
+
+#define SFPU_ATANH_KERNEL()                                                                                          \
+    template <bool APPROXIMATE>                                                                                      \
+    inline void llk_math_eltwise_unary_sfpu_atanh_init() {                                                           \
+        llk_math_eltwise_unary_sfpu_init<SfpuType::atanh, APPROXIMATE>(ckernel::sfpu::_init_atanh_<APPROXIMATE>);    \
+    }                                                                                                                \
+    template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>                                        \
+    inline void llk_math_eltwise_unary_sfpu_atanh(uint dst_index, int vector_mode = (int)VectorMode::RC) {           \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
+            ckernel::sfpu::_calculate_atanh_<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode); \
     }
 
 // For ops with exactly one dst_index and RC mode
@@ -366,18 +372,21 @@
     }                                                                                    \
     template <bool APPROXIMATE>                                                          \
     inline void llk_math_eltwise_unary_sfpu_##OP##_op(uint dst_index) {                  \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                 \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                               \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, (int)VectorMode::RC); \
     }
 
 // For compute kernels named ..._op(uint dst_index), with fixed RC mode
-#define SFPU_OP_SUFFIX_KERNEL(OP)                                                        \
-    template <bool APPROXIMATE>                                                          \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_op(uint dst_index) {                  \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                 \
-            ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, (int)VectorMode::RC); \
+#define SFPU_OP_SUFFIX_KERNEL(OP)                                                                  \
+    template <bool APPROXIMATE>                                                                    \
+    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                        \
+        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(sfpu::OP##_init<APPROXIMATE>); \
+    }                                                                                              \
+    template <bool APPROXIMATE>                                                                    \
+    inline void llk_math_eltwise_unary_sfpu_##OP##_op(uint dst_index) {                            \
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                           \
+            ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, (int)VectorMode::RC);           \
     }
-
 // For erf and erfc which share one compute callback
 #define SFPU_ERF_ERFC_KERNEL(NAME, TYPE)                                                                          \
     template <bool APPROXIMATE>                                                                                   \
@@ -386,16 +395,14 @@
     }                                                                                                             \
     template <bool APPROXIMATE>                                                                                   \
     inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index, int param0 /*= 0*/) {                          \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                          \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                        \
             ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::TYPE, APPROXIMATE>, dst_index, (int)VectorMode::RC); \
     }
 
 #define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB)                                                                 \
-    namespace ckernel {                                                                                        \
     template <bool APPROXIMATE, bool FAST_APPROX, uint32_t scale = 0x3F800000>                                 \
     inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                                    \
         llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, FAST_APPROX, scale>); \
-    }                                                                                                          \
     }
 
 #define SFPU_TEMPLATE_PARAMS_KERNEL(                                                                            \
@@ -416,7 +423,7 @@
         int vector_mode = (int)VectorMode::MODE,                                                                \
         IT_ARG_DECL param0 = ITERATIONS,                                                                        \
         SCALE_ARG_DECL param1 = 0x3F80) {                                                                       \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                        \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                      \
             ckernel::sfpu::calculate_##OP<APPROXIMATE, FAST_APPROX, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>, \
             dst_index,                                                                                          \
             vector_mode,                                                                                        \
@@ -433,10 +440,11 @@
 
 // For a simple compute‐only kernel for ops whose sfpu::calculate_<OP> takes two template parameters: <APPROXIMATE,
 // LITERAL_ITERATIONS>
-#define SFPU_SIMPLE_TWO_PARAM_KERNEL_SUFFIX(OP, FN, ITER)                                                              \
-    template <bool APPROXIMATE>                                                                                        \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) {              \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE, ITER>, dst_index, vector_mode); \
+#define SFPU_SIMPLE_TWO_PARAM_KERNEL_SUFFIX(OP, FN, ITER)                                                 \
+    template <bool APPROXIMATE>                                                                           \
+    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
+            ckernel::sfpu::FN<APPROXIMATE, ITER>, dst_index, vector_mode);                                \
     }
 
 // For a trivial no‐compute init for identity‐style ops
@@ -458,10 +466,10 @@
     template <bool APPROXIMATE>                                                        \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, ENUM sum_int_dim) {   \
         if (sum_int_dim == ENUM::SUM_COL) {                                            \
-            llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                           \
+            _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                         \
                 ckernel::sfpu::CALC0<APPROXIMATE>, dst_index, (int)VectorMode::MODE0); \
         } else if (sum_int_dim == ENUM::SUM_ROW) {                                     \
-            llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                           \
+            _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                         \
                 ckernel::sfpu::CALC1<APPROXIMATE>, dst_index, (int)VectorMode::MODE1); \
         }                                                                              \
     }
@@ -470,7 +478,7 @@
     template <bool APPROXIMATE>                                                                   \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                                 \
         uint dst_index, uint dst_offset, int iterations, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                          \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                        \
             ckernel::sfpu::OP<APPROXIMATE, ITERS>, dst_index, vector_mode, dst_offset);           \
     }
 
@@ -482,7 +490,7 @@
     }                                                                                                                \
     template <bool APPROXIMATE>                                                                                      \
     inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index) {                                                 \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                             \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
             ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::TYPE, APPROXIMATE>, dst_index, (int)VectorMode::RC); \
     }
 
@@ -494,12 +502,12 @@
     }                                                                                   \
     template <bool APPROXIMATE>                                                         \
     inline void llk_math_eltwise_unary_sfpu_##NAME##_op(uint dst_index) {               \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                              \
             ckernel::sfpu::calculate_##NAME<VT0, ET0>, dst_index, (int)VectorMode::RC); \
     }                                                                                   \
     template <bool APPROXIMATE>                                                         \
     inline void llk_math_eltwise_unary_sfpu_##NAME##_op_int32(uint dst_index) {         \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                              \
             ckernel::sfpu::calculate_##NAME<VT1, ET1>, dst_index, (int)VectorMode::RC); \
     }
 
@@ -511,7 +519,7 @@
     }                                                                                                 \
     template <bool APPROXIMATE>                                                                       \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint32_t dst_index, uint32_t from, uint32_t scale) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                              \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                            \
             ckernel::sfpu::OP<APPROXIMATE>, dst_index, (int)VectorMode::RC, from, scale);             \
     }
 
@@ -523,7 +531,7 @@
     }                                                                                                     \
     template <bool APPROXIMATE, bool is_fp32_dest_acc_en>                                                 \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                  \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
             ckernel::sfpu::calculate_##OP<APPROXIMATE, is_fp32_dest_acc_en, 8>, dst_index, vector_mode);  \
     }
 
@@ -538,14 +546,15 @@
 #define SFPU_UNARY_OP_COMPUTE(OP, CB)                                                \
     template <bool APPROXIMATE>                                                      \
     inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, uint param0 = 0) {  \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                             \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                           \
             ckernel::sfpu::CB<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0); \
     }
 
-#define SFPU_RELU_ALIAS()                                                \
-    template <bool APPROXIMATE>                                          \
-    inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {       \
-        llk_math_eltwise_unary_sfpu_relu_min<APPROXIMATE>(dst_index, 0); \
+#define SFPU_RELU_KERNEL()                                                            \
+    template <bool APPROXIMATE>                                                       \
+    inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {                    \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                            \
+            ckernel::sfpu::relu_min<APPROXIMATE>, dst_index, (int)VectorMode::RC, 0); \
     }
 
 // For a kernel with exactly two extra uint parameters (init and compute)
@@ -559,7 +568,7 @@
     template <bool APPROXIMATE>                                                                                      \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                                                    \
         uint dst_index, EXTRA1_DECL, EXTRA2_DECL, int vector_mode = (int)VectorMode::MODE) {                         \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                             \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA1_PASS, EXTRA2_PASS);           \
     }
 
@@ -572,7 +581,7 @@
     /* compute(dst, param0=0) */                                                                       \
     template <bool APPROXIMATE>                                                                        \
     inline void llk_math_eltwise_unary_sfpu_rsub(uint dst_index, uint param0 = 0) {                    \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                               \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                             \
             ckernel::sfpu::calculate_rsub<APPROXIMATE, 8>, dst_index, (int)VectorMode::RC, param0);    \
     }
 
@@ -599,7 +608,7 @@
     template <bool APPROXIMATE>                                                                                      \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                                                    \
         uint dst_index, int vector_mode = (int)VectorMode::MODE, EXTRA_ARG_DECL = EXTRA_ARG_DEFAULT) {               \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                             \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS);                     \
     }
 
@@ -612,7 +621,7 @@
     template <bool APPROXIMATE>                                                                  \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                                \
         uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {               \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                         \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                       \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }
 
@@ -625,7 +634,7 @@
     template <bool APPROXIMATE>                                                            \
     inline void llk_math_eltwise_unary_sfpu_##OP(                                          \
         uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {         \
-        llk_math_eltwise_unary_sfpu_params<false>(                                         \
+        _llk_math_eltwise_unary_sfpu_params_<false>(                                       \
             ckernel::sfpu::calculate_##OP<false>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }
 
@@ -640,14 +649,14 @@
     /* fp variant: pass literal LITERAL as extra arg */                                                             \
     template <bool APPROXIMATE>                                                                                     \
     inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index, int vector_mode = (int)VectorMode::RC) {         \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                            \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                          \
             ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::TYPE>, dst_index, vector_mode, LITERAL);           \
     }                                                                                                               \
                                                                                                                     \
     /* int32 variant: no literal */                                                                                 \
     template <bool APPROXIMATE>                                                                                     \
     inline void llk_math_eltwise_unary_sfpu_##NAME##_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                            \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                          \
             ckernel::sfpu::calculate_comp_int<APPROXIMATE, SfpuType::TYPE>, dst_index, vector_mode);                \
     }
 
@@ -661,13 +670,13 @@
     template <bool APPROXIMATE>                                                                                   \
     inline void llk_math_eltwise_unary_sfpu_##NAME(                                                               \
         uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::RC) {                                  \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                          \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                        \
             ckernel::sfpu::calculate_unary_max_min<IS_MAX, APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }                                                                                                             \
     template <bool APPROXIMATE>                                                                                   \
     inline void llk_math_eltwise_unary_sfpu_##NAME##_int32(                                                       \
         uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::RC) {                                  \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                          \
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                        \
             ckernel::sfpu::calculate_unary_max_min_int32<IS_MAX, APPROXIMATE>,                                    \
             dst_index,                                                                                            \
             vector_mode,                                                                                          \
