@@ -309,7 +309,7 @@ void MAIN {
                     cb_v_in,
                     cb_out_mm,
                     Sq_chunk_t,
-                    DHt,
+                    vDHt,
                     Sk_chunk_t_dynamic,
                     out_num_blocks_dynamic,
                     out_in0_num_subblocks,
@@ -337,7 +337,7 @@ void MAIN {
                     /* cb_out_accumulate_im *= cb_exp_max_diff */
                     reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);  // DEBUG
                     pack_reconfig_data_format(cb_out_accumulate_im);
-                    mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im, Sq_chunk_t, DHt);
+                    mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im, Sq_chunk_t, vDHt);
 
                     /* cb_cur_sum += cb_prev_sum */
                     reconfig_data_format(cb_cur_sum, cb_prev_sum);  // DEBUG
@@ -378,7 +378,7 @@ void MAIN {
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
                     reconfig_data_format(cb_q_in, cb_q_in);  // DEBUG
                     pack_reconfig_data_format(cb_out_accumulate_im_2);
-                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);
+                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
 
@@ -400,8 +400,8 @@ void MAIN {
 
                     // reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff); // DEBUG
                     // pack_reconfig_data_format(cb_out_accumulate_im);
-                    mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
-                    mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, DHt);
+                    mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
+                    mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
 
                     // reconfig_data_format(cb_out_accumulate_im, cb_out_accumulate_im_2);
                     // pack_reconfig_data_format(cb_out_accumulate_im);
@@ -417,15 +417,17 @@ void MAIN {
                 }
             }
 
-            /* cb_prev_sum = 1.0 / cb_prev_sum */
-            reconfig_data_format(cb_prev_sum, cb_prev_sum);  // DEBUG
-            pack_reconfig_data_format(cb_prev_sum);
-            recip_block_inplace<vector_mode>(cb_prev_sum, Sq_chunk_t);
+            /* cb_cur_sum = 1.0 / cb_cur_sum */
+            cb_push_back(cb_cur_sum, Sq_chunk_t);
 
-            /* cb_out_accumulate_im *= cb_prev_sum */
-            reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);  // DEBUG
+            reconfig_data_format(cb_cur_sum, cb_cur_sum);  // DEBUG
+            pack_reconfig_data_format(cb_cur_sum);
+            recip_block_inplace(cb_cur_sum, Sq_chunk_t);
+
+            /* cb_out_accumulate_im *= cb_cur_sum */
+            reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_prev_sum, Sq_chunk_t, DHt);
+            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
 
             if constexpr (untilize_output) {
