@@ -95,11 +95,13 @@
 
 | Model                                                                       | Batch | Hardware                                                 | Image/sec    | Target Image/sec | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
+| [ResNet-50 (224x224)](./models/demos/blackhole/resnet50)                     | 16    | [p150](https://tenstorrent.com/hardware/blackhole)        | 8,700   | 14,000      | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
+| [ResNet-50 (224x224)](./models/demos/blackhole/resnet50)                     | 32    | [p150](https://tenstorrent.com/hardware/blackhole)        | 10,500   | 15,000      | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224)](./models/demos/wormhole/resnet50)                     | 16    | [n150](https://tenstorrent.com/hardware/wormhole)        | 4,700   | 7,000      | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224) (DP=2)](./models/demos/t3000/resnet50)                 | 32    | [n300](https://tenstorrent.com/hardware/wormhole)        | 9,200   | 14,000     | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224) (DP=8)](./models/demos/t3000/resnet50)                 | 128   | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 35,800  | 56,000     | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224) (DP=32)](./models/demos/tg/resnet50)                   | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 96,800  | 224,000    | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
-| [ViT-base (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 1,370    | 1,600      | [v0.60.0-rc4](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc4) |
+| [ViT-base (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 1,450    | 1,600      | [v0.60.0-rc4](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc4) |
 | [ViT-base (224x224)  (DP=2)](./models/demos/t3000/vit)                                | 16     | [n300](https://tenstorrent.com/hardware/wormhole)        | 1,900   | 3,200      | [v0.60.0-rc4](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc4) |
 | [ViT-base (224x224)  (DP=8)](./models/demos/t3000/vit)                                | 64     | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox)        | 7,700    | 12,800      | [v0.60.0-rc4](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc4) |
 | [MobileNet-v2 (224x224)](./models/demos/mobilenetv2)                     | 10    | [n150](https://tenstorrent.com/hardware/wormhole)        |  2,808  | 3,500      |  |
@@ -109,11 +111,13 @@
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [YOLOv4 (320x320)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 120     | 320        |             |
 | [YOLOv4 (640x640)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 50      | 180        |             |
+| [YOLOv7l (640x640)](./models/demos/yolov7)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 88      | 240        |             |
 | [YOLOv8x (640x640)](./models/demos/yolov8x)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 45      | 100        |             |
 | [YOLOv8s (640x640)](./models/demos/yolov8s)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 175      | 320        |             |
 | [YOLOv8s_world (640x640)](./models/demos/yolov8s_world)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 57      | 200        |             |
 | [YOLOv9c (640x640)](./models/demos/yolov9c)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 55      | 320        |             |
 | [YOLOv10x (640x640)](./models/experimental/yolov10)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 26      | 200        |             |
+| [YOLOv11n (640x640)](./models/experimental/yolov11)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 190      | 500        |             |
 
 ### Segmentation
 | Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |
@@ -129,7 +133,7 @@
 | Model                                               | Batch | Hardware                                           | Sentence/sec | Target sentence/sec | Release |
 |-----------------------------------------------------|-------|----------------------------------------------------|---------|----------------|---------|
 | [BERT-Large](./models/demos/metal_BERT_large_11/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 270     | 400            |         |
-| [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 233     | 360            |         |
+| [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 403     | 550            |         |
 
 ## Model Updates
 
