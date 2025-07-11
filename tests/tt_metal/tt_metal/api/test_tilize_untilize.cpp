@@ -640,7 +640,7 @@ void TilizeUntilizeBigBufferImpl(const TilizeUntilizeBigBuffersParams& params) {
         ASSERT_TRUE(std::equal(input.begin(), input.end(), converted_back_span.begin()));
     };
 
-    run_for_type(bfloat16{});
+    run_for_type(uint8_t{});
 }
 
 class TilizeUntilizeBigBufferTestsFixture : public ::testing::TestWithParam<TilizeUntilizeBigBuffersParams> {};
