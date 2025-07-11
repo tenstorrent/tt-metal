@@ -19,7 +19,7 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  test:
+  tt-metal-l2-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
