@@ -11,6 +11,7 @@
 #include "debug/waypoint.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
+#include <type_traits>
 
 namespace interleaved_addr_gen {
 
@@ -114,6 +115,38 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
         default: return ((index << datum_shift) + (index << (exp_shift)));
     };
 }
+
+// Check for get_noc_addr method
+template <typename, typename = void>
+struct has_get_noc_addr : std::false_type {};
+
+template <typename T>
+struct has_get_noc_addr<
+    T,
+    std::void_t<decltype(std::declval<T>().get_noc_addr(
+        std::declval<uint32_t>(), std::declval<uint32_t>(), std::declval<uint8_t>()))>> : std::true_type {};
+
+// Check for member variable page_size
+template <typename, typename = void>
+struct has_page_size : std::false_type {};
+
+template <typename T>
+struct has_page_size<T, std::void_t<decltype(std::declval<T>().page_size)>> : std::true_type {};
+
+// Check for log_base_2_of_page_size member variable
+template <typename, typename = void>
+struct has_log_base_2_of_page_size : std::false_type {};
+
+template <typename T>
+struct has_log_base_2_of_page_size<T, std::void_t<decltype(std::declval<T>().log_base_2_of_page_size)>>
+    : std::true_type {};
+
+// Combined addrgen traits
+template <typename T>
+struct has_required_addrgen_traits {
+    static constexpr bool value =
+        has_get_noc_addr<T>::value && (has_page_size<T>::value || has_log_base_2_of_page_size<T>::value);
+};
 
 // clang-format off
 /**
