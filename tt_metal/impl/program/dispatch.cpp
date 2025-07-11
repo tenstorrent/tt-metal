@@ -1811,8 +1811,8 @@ void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, 
     // previous launch message.
     config_buffer_mgr.init_add_buffer(0, launch_msg_buffer_num_entries - 1);
     if (hal.get_core_has_kernel_config_buffer(HalProgrammableCoreType::ACTIVE_ETH)) {
-        // TODO: Same for now
-        config_buffer_mgr.init_add_buffer(0, 1);
+        config_buffer_mgr.init_add_buffer(
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG), 1);
     } else {
         config_buffer_mgr.init_add_buffer(0, 1);
     }
