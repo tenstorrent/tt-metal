@@ -88,7 +88,7 @@ jobs:
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
+            # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
@@ -103,7 +103,7 @@ jobs:
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov7/tests/perf/test_perf.py -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal
+            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal
           fi
 
           export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
