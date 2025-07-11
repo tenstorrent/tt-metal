@@ -666,6 +666,7 @@ class TT_CCL:
         RS_memory_config=None,
         cluster_axis=1,
         use_noc1_only=False,
+        second_weight_tensor=None,
     ):
         persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
             self.reduce_scatter_buffer_idx[cluster_axis]
@@ -687,6 +688,7 @@ class TT_CCL:
             program_config=program_config,
             memory_config_mm=memory_config,
             global_cb=global_cb,
+            second_weight_tensor=second_weight_tensor,
             topology=self.model_config["CCL_TOPOLOGY"],
             use_noc1_only=use_noc1_only,
         )

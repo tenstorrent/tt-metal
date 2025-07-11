@@ -67,6 +67,8 @@ void kernel_main() {
     uint32_t sender_shard_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
 
+    // Get signal here
+
     // Bank base addresses (compute once)
     const uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
 

@@ -2000,7 +2000,7 @@ process_gather_in0_program_and_create_override_variables(
             .noc = in0_noc,
             .noc_mode = noc_mode,
             .compile_args = in0_sender_compile_time_args});
-
+    // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",

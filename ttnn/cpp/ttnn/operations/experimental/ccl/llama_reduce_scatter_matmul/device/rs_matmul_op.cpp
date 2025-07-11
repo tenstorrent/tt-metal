@@ -78,47 +78,85 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
     const std::optional<const tt::tt_metal::Tile>& output_tile,                          // default std::nullopt
     const std::optional<Tensor>& optional_output_tensor,                                 // default std::nullopt
     tt::tt_fabric::Topology topology,
-    bool use_noc1_only) {
+    bool use_noc1_only,
+    const std::optional<const ttnn::Tensor>& second_weight_tensor) {
     LlamaReduceScatterDeviceOperation rs_struct{};
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
-    return {
-        operation_attributes_t{
-            rs_struct,
-            LlamaReduceScatterDeviceOperation::operation_attributes_t{
-                .dim = (dim < 0 ? uint32_t(rs_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
-                .cross_device_semaphore = semaphore,
-                .subdevice_id = subdevice_id,
-                .cluster_axis = cluster_axis,
-                .output_mem_config = memory_config_rs,
-                .ring_devices = ring_devices,
-                .num_links = num_links,
-                .topology = topology,
-                .use_noc1_only = use_noc1_only},
-            operations::matmul::create_matmul_struct(
-                input_tensor,
-                weight_tensor,
-                /*parameters=*/
-                operations::matmul::Matmul{
-                    program_config,
-                    /*bcast_batch=*/std::nullopt,
-                    memory_config_mm.value_or(input_tensor.memory_config()),
-                    dtype.value_or(input_tensor.get_dtype()),
-                    compute_kernel_config,
-                    /*untilize_out=*/false,
-                    user_core_coord,
-                    ttnn::operations::matmul::get_fused_activation(activation),
-                    user_run_batched,
-                    transpose_a,
-                    transpose_b,
-                    output_tile,
-                    global_cb})},
-        tensor_args_t{
-            LlamaReduceScatterDeviceOperation::tensor_args_t{rs_tensor, intermediate_packet_buffer},
-            matmul_tensor_args_t{input_tensor, weight_tensor}}};
+    if (second_weight_tensor.has_value()) {
+        return {
+            operation_attributes_t{
+                rs_struct,
+                LlamaReduceScatterDeviceOperation::operation_attributes_t{
+                    .dim = (dim < 0 ? uint32_t(rs_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
+                    .cross_device_semaphore = semaphore,
+                    .subdevice_id = subdevice_id,
+                    .cluster_axis = cluster_axis,
+                    .output_mem_config = memory_config_rs,
+                    .ring_devices = ring_devices,
+                    .num_links = num_links,
+                    .topology = topology,
+                    .use_noc1_only = use_noc1_only},
+                operations::matmul::create_matmul_struct(
+                    input_tensor,
+                    weight_tensor,
+                    /*parameters=*/
+                    operations::matmul::Matmul{
+                        program_config,
+                        /*bcast_batch=*/std::nullopt,
+                        memory_config_mm.value_or(input_tensor.memory_config()),
+                        dtype.value_or(input_tensor.get_dtype()),
+                        compute_kernel_config,
+                        /*untilize_out=*/false,
+                        user_core_coord,
+                        ttnn::operations::matmul::get_fused_activation(activation),
+                        user_run_batched,
+                        transpose_a,
+                        transpose_b,
+                        output_tile,
+                        global_cb})},
+            tensor_args_t{
+                LlamaReduceScatterDeviceOperation::tensor_args_t{rs_tensor, intermediate_packet_buffer},
+                matmul_tensor_args_t{input_tensor, weight_tensor}}};
+    } else {
+        return {
+            operation_attributes_t{
+                rs_struct,
+                LlamaReduceScatterDeviceOperation::operation_attributes_t{
+                    .dim = (dim < 0 ? uint32_t(rs_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
+                    .cross_device_semaphore = semaphore,
+                    .subdevice_id = subdevice_id,
+                    .cluster_axis = cluster_axis,
+                    .output_mem_config = memory_config_rs,
+                    .ring_devices = ring_devices,
+                    .num_links = num_links,
+                    .topology = topology,
+                    .use_noc1_only = use_noc1_only},
+                operations::matmul::create_matmul_struct(
+                    input_tensor,
+                    weight_tensor,
+                    /*parameters=*/
+                    operations::matmul::Matmul{
+                        program_config,
+                        /*bcast_batch=*/std::nullopt,
+                        memory_config_mm.value_or(input_tensor.memory_config()),
+                        dtype.value_or(input_tensor.get_dtype()),
+                        compute_kernel_config,
+                        /*untilize_out=*/false,
+                        user_core_coord,
+                        ttnn::operations::matmul::get_fused_activation(activation),
+                        user_run_batched,
+                        transpose_a,
+                        transpose_b,
+                        output_tile,
+                        global_cb})},
+            tensor_args_t{
+                LlamaReduceScatterDeviceOperation::tensor_args_t{rs_tensor, intermediate_packet_buffer},
+                matmul_tensor_args_t{input_tensor, weight_tensor}}};
+    }
 }
 
 }  // namespace ttnn::operations::experimental::ccl

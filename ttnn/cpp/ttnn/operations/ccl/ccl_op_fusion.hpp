@@ -82,7 +82,7 @@ struct ReduceScatterFusedOpSignaler {
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
 
-enum class MatmulFusedOpSignalerType { ALL_GATHER, REDUCE_SCATTER, EMPTY };
+enum class MatmulFusedOpSignalerType { ALL_GATHER, REDUCE_SCATTER, EMPTY, LLAMA_REDUCE_SCATTER };
 
 // Used to propagate semaphore information from matmul to all_gather or reduce_scatter
 struct MatmulFusedOpSignaler {

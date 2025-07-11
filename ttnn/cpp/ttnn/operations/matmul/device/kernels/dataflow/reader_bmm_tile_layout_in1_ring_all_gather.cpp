@@ -146,6 +146,7 @@ void kernel_main() {
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
         cb_pop_front(sync_cb, 1);
 #endif
+        // Signal Here
     }
 
 #ifdef ENABLE_GLOBAL_CB

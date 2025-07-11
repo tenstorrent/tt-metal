@@ -41,30 +41,27 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
     tt::tt_metal::Program program{};
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
     tt::tt_metal::SubDeviceId sub_device_id = operation_attributes.rs_op.subdevice_id.value();
-    CoreRangeSet ccl_cores = llama_specific::get_custom_cores(operation_attributes.rs_op.num_links);
-    CoreRangeSet rs_cores = CoreRangeSet(std::set{::CoreRange{{1, 1}, {3, 2}}, ::CoreRange{{1, 3}, {2, 3}}});
-    rs_cores = rs_cores.merge(ccl_cores);
+    auto [part_cores, rs_cores] =
+        LlamaReduceScatterDeviceOperation::get_rs_core_grids(operation_attributes.rs_op, tensor_args.rs);
     std::optional<CoreRangeSet> optional_core_range = rs_cores;
-    return {
-        std::move(program),
-        shared_variables_t{
-            LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing(
-                operation_attributes.rs_op, mesh_coordinate, tensor_args.rs, tensor_return_value.at(1), program),
-            matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
-                program,
-                tensor_args.matmul.input_tensor,
-                {tensor_args.matmul.weight_tensor},
-                std::nullopt /*bias*/,
-                {tensor_return_value.at(0)},
-                operation_attributes.matmul.bcast_batch.value(),
-                operation_attributes.matmul.compute_kernel_config.value(),
-                operation_attributes.matmul.program_config.value(),
-                operation_attributes.matmul.untilize_out,
-                empty_fused_op_signaler,
-                operation_attributes.matmul.global_cb,
-                sub_device_id /*sub_device_id*/,
-                tt::CBIndex::c_6 /*start cb index*/,
-                optional_core_range)}};
+    auto reduce_scatter_sv = LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing(
+        operation_attributes.rs_op, mesh_coordinate, tensor_args.rs, tensor_return_value.at(1), program);
+    auto matmul_sv = matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+        program,
+        tensor_args.matmul.input_tensor,
+        {tensor_args.matmul.weight_tensor},
+        std::nullopt /*bias*/,
+        {tensor_return_value.at(0)},
+        operation_attributes.matmul.bcast_batch.value(),
+        operation_attributes.matmul.compute_kernel_config.value(),
+        operation_attributes.matmul.program_config.value(),
+        operation_attributes.matmul.untilize_out,
+        empty_fused_op_signaler,
+        operation_attributes.matmul.global_cb,
+        sub_device_id /*sub_device_id*/,
+        tt::CBIndex::c_6 /*start cb index*/,
+        optional_core_range);
+    return {std::move(program), shared_variables_t{reduce_scatter_sv, matmul_sv}};
 }
 
 void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(
