@@ -1066,6 +1066,7 @@ def test_demo_text(
                 # T3K targets
                 "T3K_Llama3.1-70B": 14,
                 "T3K_Qwen2.5-72B": 13,
+                "T3K_Qwen2.5-Coder-32B": 20,
                 "T3K_Qwen3-32B": 20,
             }
 
