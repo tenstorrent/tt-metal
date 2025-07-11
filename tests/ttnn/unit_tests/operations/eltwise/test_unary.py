@@ -927,3 +927,59 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
     golden_tensor = golden_function(in_data1)
 
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 128])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+@pytest.mark.parametrize(
+    "param",
+    {0.65, 7.7, 36.49, 58.6, 97.2},
+)
+def test_unary_hardshrink(input_shapes, param, torch_dtype, ttnn_dtype, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
+
+    output_tensor = ttnn.hardshrink(input_tensor, lambd=param)
+    golden_function = ttnn.get_golden_function(ttnn.hardshrink)
+    golden_tensor = golden_function(in_data, lambd=param)
+
+    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 5, 512, 1024])),),
+)
+@pytest.mark.parametrize(
+    "param",
+    {0.45, 7.7, 197.2, 1e5},
+)
+def test_unary_hardshrink_edge_case_ttnn(input_shapes, param, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.hardshrink(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.hardshrink)
+    golden_tensor = golden_function(in_data)
+
+    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
