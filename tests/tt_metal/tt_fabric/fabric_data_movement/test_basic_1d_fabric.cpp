@@ -447,7 +447,7 @@ void RunTestUnicastRaw(
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
@@ -588,7 +588,7 @@ void run_unicast_test_bw_chips(
         worker_mem_map.target_address,
         use_dram_dst,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
@@ -889,7 +889,7 @@ void RunTestMCastConnAPI(
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
 
@@ -1194,7 +1194,7 @@ void RunTest2DMCastConnAPI(
         0 /* use_dram_dst */,
         mcast_mode,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
 
@@ -1347,8 +1347,8 @@ void RunTestChipMCast1D(
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     assert(
         (topology == Topology::Linear || topology == Topology::Ring) &&
-        (fabric_config == tt_metal::FabricConfig::FABRIC_1D ||
-         fabric_config == tt_metal::FabricConfig::FABRIC_1D_RING));
+        (fabric_config == tt_fabric::FabricConfig::FABRIC_1D ||
+         fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING));
 
     // Find a device num_hops away in specified direction.
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);

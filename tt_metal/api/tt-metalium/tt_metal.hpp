@@ -17,20 +17,12 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/cluster_descriptor_types.h>
-
-namespace tt {
-namespace tt_metal {
-enum class FabricConfig : uint32_t;
-enum class FabricReliabilityMode : uint32_t;
-}  // namespace tt_metal
-}  // namespace tt
 
 namespace tt::tt_metal {
 class Buffer;
@@ -40,26 +32,6 @@ class Program;
 namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
-
-/**
- * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
- * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
- * for that init sequence. The number of routing planes fabric will be initialized on will be the max
- * of all the values specified by different clients. If a client wants to initialize fabric on all the
- * available routing planes, num_routing_planes can be left unspecifed.
- * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
- *
- * Return value: void
- *
- * | Argument           | Description                         | Data type         | Valid range | Required |
- * |--------------------|-------------------------------------|-------------------|-------------|----------|
- * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
- * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
- */
-void SetFabricConfig(
-    FabricConfig fabric_config,
-    FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-    std::optional<uint8_t> num_routing_planes = std::nullopt);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
