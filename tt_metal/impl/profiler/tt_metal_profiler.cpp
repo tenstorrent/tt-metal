@@ -102,9 +102,6 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
 
         writeToCoreControlBuffer(device, curr_core, ProfilerDumpState::NORMAL, control_buffer);
-        if (useFastDispatchForControlBuffers(device, ProfilerDumpState::NORMAL)) {
-            waitForDeviceCommandsToFinish(device);
-        }
     }
 #endif
 }
@@ -705,7 +702,11 @@ void DumpDeviceProfileResults(
     if (getDeviceProfilerState()) {
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
             if (tt::DevicePool::instance().is_dispatch_firmware_active() && !isGalaxyMMIODevice(device)) {
-                waitForDeviceCommandsToFinish(device);
+                if (auto mesh_device = device->get_mesh_device()) {
+                    mesh_device->mesh_command_queue().finish();
+                } else {
+                    Finish(device->command_queue());
+                }
             }
         } else if (onlyProfileDispatchCores(state)) {
             TT_ASSERT(areAllCoresDispatchCores(device, virtual_cores));
@@ -773,14 +774,8 @@ void DumpDeviceProfileResults(
     const chip_id_t device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
-    if (onlyProfileDispatchCores(state)) {
-        for (const CoreCoord& core :
-             tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
-            const CoreCoord curr_core =
-                device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
-            virtual_cores.push_back(curr_core);
-        }
-    } else {
+
+    if (!onlyProfileDispatchCores(state)) {
         for (const CoreCoord& core :
              tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
             const CoreCoord curr_core = device->worker_core_from_logical_core(core);
@@ -788,6 +783,15 @@ void DumpDeviceProfileResults(
         }
         for (const CoreCoord& core : device->get_active_ethernet_cores(true)) {
             const CoreCoord curr_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            virtual_cores.push_back(curr_core);
+        }
+    }
+
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
+        for (const CoreCoord& core :
+             tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
+            const CoreCoord curr_core =
+                device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
             virtual_cores.push_back(curr_core);
         }
     }
