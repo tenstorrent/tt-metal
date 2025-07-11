@@ -190,7 +190,7 @@ int main(int argc, char **argv) {
             std::transform(data.begin(), data.end(), data.begin(), [](float pixel) { return pixel / 255.0F - 0.5F; });
 
             auto data_tensor = ttml::autograd::create_tensor(
-                ttml::core::from_vector(data, ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
+                ttml::core::from_vector(data, ttnn::Shape({batch_size, 1, 1, num_features}), device));
 
             auto targets_tensor =
                 ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(

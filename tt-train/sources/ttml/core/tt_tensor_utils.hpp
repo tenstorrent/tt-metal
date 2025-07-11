@@ -46,8 +46,6 @@ template <class T = float>
 
 [[nodiscard]] bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor);
 
-[[nodiscard]] ttnn::Shape create_shape(const std::array<uint32_t, 4>& args);
-
 template <class T = float, ttnn::DataType TensorType = ttnn::DataType::BFLOAT16>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensor(
     const xt::xarray<T>& buffer,
