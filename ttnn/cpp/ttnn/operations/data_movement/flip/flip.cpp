@@ -57,11 +57,10 @@ ttnn::Tensor ExecuteFlip::invoke(
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
-    TT_FATAL(!dims.empty(), "Flip dimensions cannot be empty");
-    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
-
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(input_rank <= 5, "Flip operation supports tensors with rank up to 5, got rank {}", input_rank);
+    TT_FATAL(!dims.empty(), "Flip dimensions cannot be empty");
+    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
 
     // Normalize dimensions to positive indices
     SmallVector<uint32_t> normalized_dims(dims.size());

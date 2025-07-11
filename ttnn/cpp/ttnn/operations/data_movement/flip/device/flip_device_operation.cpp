@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/data_movement/permute/device/flip_device_operation.hpp"
+#include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -11,19 +11,20 @@ FlipDeviceOperation::program_factory_t FlipDeviceOperation::select_program_facto
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& dims = operation_attributes.dims;
+    const auto rank = input_tensor.get_logical_shape().rank();
+    const auto layout = input_tensor.get_layout()
 
-    if (input_tensor.get_layout() == Layout::TILE) {
+                            bool is_horizontal_flip = (dims.size() == 1) && (dims[0] == rank - 1);
+    bool is_vertical_flip = (dims.size() == 1) && (dims[0] == rank - 2);
+
+    if (layout == Layout::TILE) {
         return MultiCoreTiled{};
     }
 
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        // Check if we're only flipping the last dimension (most common case)
-        if (dims.size() == 1 && dims[0] == input_tensor.get_logical_shape().rank() - 1) {
-            return MultiCoreRowMajor{};
-        }
+    if (layout == Layout::ROW_MAJOR) {
+        return MultiCoreRowMajor{};
     }
 
-    // For complex flip patterns, use generic implementation
     return MultiCoreGeneric{};
 }
 
@@ -31,13 +32,10 @@ void FlipDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& dims = operation_attributes.dims;
-
-    // Validate input tensor is on device
-    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
-
-    // Validate tensor rank is within supported range (up to rank 5 as requested)
     const auto input_rank = input_tensor.get_logical_shape().rank();
+
     TT_FATAL(input_rank <= 5, "Flip operation supports tensors with rank up to 5, got rank {}", input_rank);
+    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
 
     // Validate flip dimensions are within tensor rank
     for (auto dim : dims) {
@@ -83,7 +81,7 @@ std::tuple<FlipDeviceOperation::operation_attributes_t, FlipDeviceOperation::ten
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     return {
-        operation_attributes_t{.dims = dims, .output_mem_config = memory_config.value_or(input_tensor.memor_config())},
+        operation_attributes_t{.dims = dims, .output_mem_config = memory_config.value_or(input_tensor.memory_config())},
         tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)}};
 }
 
