@@ -390,6 +390,8 @@ target_sources(
         cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
         cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_op.cpp
         cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.cpp
+        cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_rm_multi_core_program_factory.cpp
+        cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_tile_multi_core_program_factory.cpp
         cpp/ttnn/operations/experimental/padded_slice/padded_slice.cpp
         cpp/ttnn/operations/experimental/slice_write/device/slice_write_op.cpp
         cpp/ttnn/operations/experimental/slice_write/device/slice_write_program_factory.cpp
