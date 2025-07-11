@@ -99,24 +99,30 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     const uint32_t out0_t = 2;                     // output
     uint32_t shard_factor = 1;
 
-    // When dim=0, nd sharded, tensor shape divisible by shard, and number of
-    // shards is larger than core count, divide the work by shards.
+    // When dim=0, nd sharded, tile sizes are the same, the shards are compatible
+    // with the kernel accesses, tensor shape is divisible by shard shape, and
+    // number of shards is larger than core count, divide the work by shards.
     uint32_t input_shard_size = 1;
     uint32_t output_shard_size = 1;
     auto input_tile = input.tensor_spec().tile().get_tile_shape();
     auto output_tile = output.tensor_spec().tile().get_tile_shape();
-    bool nd_sharded = input.is_sharded() && input.nd_shard_spec().has_value() && output.nd_shard_spec().has_value() &&
-                      input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
+    bool nd_sharded = input.nd_shard_spec().has_value() && output.nd_shard_spec().has_value();
+    bool same_tiles = input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
     uint32_t units_to_divide = num_output_tiles;
     bool divide_by_shards = false;
-    if (nd_sharded && dim == 0) {
-        uint32_t tile_size = input_tile[0] * input_tile[1];
+    const auto& dspec = *output.buffer()->buffer_distribution_spec();
+    if (nd_sharded && same_tiles && dim == 0) {
         NdShardSpec input_nd_shard_spec = input.nd_shard_spec().value();
+        NdShardSpec output_nd_shard_spec = output.nd_shard_spec().value();
         const Shape& input_shard_shape = input_nd_shard_spec.shard_shape;
-        if (is_tensor_divisible_by_shard(input_shape, input_shard_shape)) {
-            const auto& dspec = *output.buffer()->buffer_distribution_spec();
+        bool compatible_shards =
+            input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR &&
+            input_nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D &&
+            output_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR &&
+            output_nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D;
+        if (compatible_shards && is_tensor_divisible_by_shard(input_shape, input_shard_shape)) {
             uint32_t num_output_shards = dspec.num_shards();
-            output_shard_size = dspec.get_shard_shape_in_pages().volume();
+            output_shard_size = dspec.shard_shape_in_pages().volume();
             bool more_shards_than_cores = num_output_shards > (num_cores_x * num_cores_y);
             if (more_shards_than_cores) {
                 divide_by_shards = true;
@@ -131,11 +137,12 @@ operation::ProgramWithCallbacks reduce_nc_factory(
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, units_to_divide, /*row_wise=*/true);
-    if (divide_by_shards) {
-        num_cols_per_core_group_1 *= output_shard_size;
-        num_cols_per_core_group_2 *= output_shard_size;
-    }
+         num_cols_per_core_group_2] =
+            divide_by_shards ? dspec.core_groups_tuple()
+                             : tt::tt_metal::split_work_to_cores(grid, units_to_divide, /*row_wise=*/true);
+    num_cols_per_core_group_1 *= shard_factor;
+    num_cols_per_core_group_2 *= shard_factor;
+
     const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format;
     const auto intermed_cb_single_tile_size = (fp32_dest_acc_en) ? single_tile_size * 2 : single_tile_size;
 
