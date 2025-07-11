@@ -23,7 +23,7 @@ class TtTransformer(LightweightModule):
         self.rotary_on_host = rotary_on_host
         assert self.vocab_size > 0
 
-        self.tt_ccl = TT_CCL(self.mesh_device)
+        self.tt_ccl = TT_CCL(self.mesh_device, self.model_config, None)
 
         self.layers = [
             TtTransformerBlock(

@@ -271,8 +271,16 @@ class TtMixtralAttention(LightweightModule):
         )
         attn_output_11BH.deallocate(True)
         # All gather
+        dim = 2
+        ag_output_shape = list(dense_out_11BH.shape)
+        ag_output_shape[dim] *= self.mesh_device.get_num_devices()
+        # print("ATTN_FWD_DECODE_AG")
+        # print(ag_output_shape)
+        # print(dense_out_11BH.dtype)
+        # print(dense_out_11BH.memory_config())
         dense_outputs_11BH = ttnn.experimental.all_gather_async(
             dense_out_11BH,
+            persistent_output_buffer=self.tt_ccl.ag_output_pbs["ATTN_FWD_DECODE_AG"],
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
@@ -415,19 +423,34 @@ class TtMixtralAttention(LightweightModule):
 
         if seq_len > 2048:  # Reshape back to intended shape
             output_11SH = ttnn.reshape(output_11SH, (1, 1, seq_len, -1))
+
+        dim = 1
+        ag_output_shape = list(output_11SH.shape)
+        ag_output_shape[dim] *= self.mesh_device.get_num_devices()
+        print("ATTN_FWD_PREFILL_AG")
+        print(ag_output_shape)
+        print(output_11SH.dtype)
+        print(output_11SH.memory_config())
+        output_buffer = self.tt_ccl.ag_output_pbs[("ATTN_FWD_PREFILL_AG", tuple(ag_output_shape))]
+        breakpoint()
+
         output_11BH_gathered = ttnn.experimental.all_gather_async(
             output_11SH,
+            persistent_output_buffer=output_buffer,
             dim=1,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
             memory_config=output_11SH.memory_config(),
             subdevice_id=self.tt_ccl.worker_sub_device_id,
         )
+
+        ttnn.synchronize_device(self.tt_ccl.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
+
         output_11SH.deallocate(True)
         output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
             output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
         )
-        output_11BH_gathered.deallocate(True)
+        # output_11BH_gathered.deallocate(True)
         return output_11BH_reduced
 
     def forward(self, xs, start_pos_ids, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"):

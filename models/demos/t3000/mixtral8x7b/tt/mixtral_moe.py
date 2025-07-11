@@ -132,22 +132,39 @@ class TtMoeLayer(LightweightModule):
 
         # All gather
         if mode == "prefill":
+            dim = 1
+            ag_output_shape = list(results_11BH.shape)
+            ag_output_shape[dim] *= self.mesh_device.get_num_devices()
+            # print("MOE_FWD_PREFILL_AG")
+            # print(ag_output_shape)
+            # print(results_11BH.dtype)
+            # print(results_11BH.memory_config())
             output_11BH_gathered = ttnn.experimental.all_gather_async(
                 results_11BH,
+                persistent_output_buffer=self.tt_ccl.ag_output_pbs["MOE_FWD_PREFILL_AG"],
                 dim=1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 subdevice_id=self.tt_ccl.worker_sub_device_id,
             )
+            ttnn.synchronize_device(self.tt_ccl.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
             results_11BH.deallocate(True)
             # Sum reduction
             output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
                 output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
             )
-            output_11BH_gathered.deallocate(True)
+            # output_11BH_gathered.deallocate(True)
         else:  # Decode mode
+            dim = 1
+            ag_output_shape = list(results_11BH.shape)
+            ag_output_shape[dim] *= self.mesh_device.get_num_devices()
+            # print("MOE_FWD_DECODE_AG")
+            # print(ag_output_shape)
+            # print(results_11BH.dtype)
+            # print(results_11BH.memory_config())
             output_11BH_gathered = ttnn.experimental.all_gather_async(
                 results_11BH,
+                persistent_output_buffer=self.tt_ccl.ag_output_pbs["MOE_FWD_DECODE_AG"],
                 dim=2,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,

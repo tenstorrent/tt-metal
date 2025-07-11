@@ -140,7 +140,6 @@ class TT_CCL:
             mem_config=mem_config,
             dtype=ttnn.DataType.BFLOAT8_B,
         )
-        print("DECODER_FWD_DECODE_AG mem_cfg: ", self.ag_output_pbs["DECODER_FWD_DECODE_AG"].memory_config())
 
         self.ag_output_pbs["ATTN_FWD_DECODE_AG"] = self.create_persistent_buffer(
             shape=[1, 1, 32, 8192],

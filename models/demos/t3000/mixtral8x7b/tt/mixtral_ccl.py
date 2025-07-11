@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 
 
@@ -9,6 +11,8 @@ class TT_CCL:
     def __init__(
         self,
         mesh_device,
+        model_config,
+        seq_len,  # if seq_len is not None, it will be used to set the size of the prefill persistent buffers
     ):
         self.mesh_device = mesh_device
         self.worker_sub_device_id = ttnn.SubDeviceId(0)
@@ -29,6 +33,14 @@ class TT_CCL:
 
         self.rs_semaphores_idx = 0
         self.rs_semaphore_handles = [[], []]
+
+        self.model_config = model_config
+
+        self.ag_output_pbs = {}
+
+        self.seq_len = 32  # TODO: Why is the falcon demo dim 2 seq_len hardcoded to 32?
+
+        self.create_persistent_buffers()
 
         for i in range(2):
             for _ in range(2):
@@ -54,6 +66,62 @@ class TT_CCL:
         current_idx = self.rs_semaphores_idx
         self.rs_semaphores_idx = (self.rs_semaphores_idx + 1) % 2
         return self.rs_semaphore_handles[current_idx]
+
+    def create_persistent_buffer(self, shape, mem_config, dtype, distributed=False):
+        if distributed:
+            shape[3] *= self.mesh_device.get_num_devices()
+            cluster_shape = list(self.mesh_device.shape)
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 3), mesh_shape=cluster_shape)
+        else:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        return ttnn.from_torch(
+            torch.zeros(shape),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+    def create_persistent_buffers(self):
+        shard_spec_32_cores_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 3),
+                ),
+            }
+        )
+
+        # prefill
+        self.ag_output_pbs["MOE_FWD_PREFILL_AG"] = self.create_persistent_buffer(
+            shape=[1, 8, 256, 4096],
+            mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.DataType.BFLOAT8_B,
+        )
+        self.ag_output_pbs[("ATTN_FWD_PREFILL_AG", tuple([1, 8, 256, 4096]))] = self.create_persistent_buffer(
+            shape=[1, 8, 256, 4096],
+            mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.DataType.BFLOAT8_B,
+        )
+        self.ag_output_pbs[("ATTN_FWD_PREFILL_AG", tuple([1, 8, 512, 4096]))] = self.create_persistent_buffer(
+            shape=[1, 8, 512, 4096],
+            mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.DataType.BFLOAT8_B,
+        )
+
+        # decode
+        self.ag_output_pbs["ATTN_FWD_DECODE_AG"] = self.create_persistent_buffer(
+            shape=[1, 1, 256, 4096],
+            mem_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.DataType.BFLOAT8_B,
+        )
+
+        self.ag_output_pbs["MOE_FWD_DECODE_AG"] = self.create_persistent_buffer(
+            shape=[1, 8, 32, 4096],
+            mem_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.DataType.BFLOAT8_B,
+        )
 
     def close(self):
         self.mesh_device.reset_sub_device_stall_group()
