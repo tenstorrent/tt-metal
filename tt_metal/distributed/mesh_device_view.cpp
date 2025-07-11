@@ -86,6 +86,7 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_row(size_t row) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     TT_FATAL(row < shape_2d_->height(), "Row index out of bounds: {}", row);
     std::vector<IDevice*> row_devices;
+    row_devices.reserve(shape_2d_->width());
     for (int col = 0; col < shape_2d_->width(); ++col) {
         const auto& coord = MeshCoordinate(row, col);
         devices_.at(coord).if_local([&row_devices](const auto& device) { row_devices.push_back(device); });
@@ -97,6 +98,7 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     TT_FATAL(col < shape_2d_->width(), "Column index out of bounds: {}", col);
     std::vector<IDevice*> col_devices;
+    col_devices.reserve(shape_2d_->height());
     for (int row = 0; row < shape_2d_->height(); ++row) {
         const auto& coord = MeshCoordinate(row, col);
         devices_.at(coord).if_local([&col_devices](const auto& device) { col_devices.push_back(device); });
@@ -269,13 +271,11 @@ MeshCoordinate MeshDeviceView::local_offset() const {
     for (const auto& [coord, maybe_device] : devices_) {
         if (maybe_device.is_local()) {
             if (!min_coord.has_value() || coord < min_coord.value()) {
-                min_coord = coord;
+                return coord;
             }
         }
     }
-
-    // If no local devices, return (0, 0) - this shouldn't happen in practice
-    return min_coord.value_or(MeshCoordinate(0, 0));
+    TT_THROW("No local devices found in mesh");
 }
 
 MeshShape MeshDeviceView::local_shape() const {
@@ -293,10 +293,7 @@ MeshShape MeshDeviceView::local_shape() const {
         }
     }
 
-    if (!min_coord.has_value() || !max_coord.has_value()) {
-        // No local devices - return empty shape
-        return MeshShape(0, 0);
-    }
+    TT_FATAL(min_coord.has_value() && max_coord.has_value(), "No local devices found in mesh");
 
     // Calculate shape from bounding box
     return MeshShape(
