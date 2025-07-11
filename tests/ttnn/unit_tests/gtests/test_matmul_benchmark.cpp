@@ -268,7 +268,9 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         per_core_M,
         per_core_N,
         /*transpose_mcast=*/false,
-        /*fused_activation=*/std::nullopt};
+        /*fused_activation=*/std::nullopt,
+        /*fuse_batch=*/true,
+        /*throttle_level=*/ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0};
 
     const ttnn::DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),

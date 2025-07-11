@@ -355,6 +355,7 @@ def test_matmul_2d_host_perf(
                     per_core_N=per_core_N,
                     transpose_mcast=False,
                     fused_activation=None,
+                    throttle_level=ttnn.MatmulThrottleLevel.LEVEL_0,
                 )
 
                 if is_grayskull():
