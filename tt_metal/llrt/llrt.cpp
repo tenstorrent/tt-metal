@@ -322,11 +322,10 @@ void send_msg_to_eth_mailbox(
     const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
 
     auto wait_for_mailbox = [&](std::function<bool(uint32_t)> cond) {
-        constexpr auto k_sleep_time = std::chrono::milliseconds{1};
+        constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
         const auto start = std::chrono::high_resolution_clock::now();
 
         while (true) {
-            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
             uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
             log_debug(tt::LogLLRuntime, "Device {}: Eth {} Mailbox {:#x}", device_id, virtual_core.str(), mailbox_val);
 
@@ -345,6 +344,7 @@ void send_msg_to_eth_mailbox(
             if (cond(mailbox_val)) {
                 break;
             }
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
             std::this_thread::sleep_for(k_sleep_time);
         }
     };
@@ -354,7 +354,6 @@ void send_msg_to_eth_mailbox(
     auto write_arg = [&](int index, uint32_t val) {
         uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(index);
         write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{val}, arg_addr);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     };
 
     const auto max_args = hal.get_eth_fw_mailbox_arg_count();
@@ -383,7 +382,7 @@ void send_msg_to_eth_mailbox(
     }
 }
 
-void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_loops) {
     constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
@@ -394,22 +393,17 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
 
     uint32_t heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
     uint32_t previous_heartbeat_val = heartbeat_val;
-
     while (heartbeat_val == previous_heartbeat_val) {
-        constexpr auto k_sleep_time = std::chrono::milliseconds{5};
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
         previous_heartbeat_val = heartbeat_val;
         heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
-        if (timeout_ms > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(k_sleep_time));
-            timeout_ms -= 1;
-            if (timeout_ms <= 0) {
+        if (timeout_loops > 0) {
+            timeout_loops--;
+            if (timeout_loops <= 0) {
                 TT_THROW(
-                    "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} to become active again. Is "
+                    "Device {}: Eth mailbox timeout waiting for active eth core {} to become active again. Is "
                     "the "
                     "firmware updated? Minimum tt-firmware version is 18.2.0",
                     device_id,
-                    timeout_ms,
                     virtual_core.str());
             }
         }

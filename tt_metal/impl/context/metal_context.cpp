@@ -561,7 +561,12 @@ void MetalContext::reset_cores(chip_id_t device_id) {
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(device_id, virtual_core), reset_val);
-            erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
+
+            // NOTE: Return to base fw by clearing launch flag is done in clear_launch_messages_on_eth_cores so the code
+            // below is not needed
+            // std::vector<uint32_t> clear_flag_data = {0};
+            // tt::llrt::write_hex_vec_to_core(
+            //     device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
         }
     }
 
@@ -601,8 +606,6 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
     }
-
-    cluster_->l1_barrier(device_id);
 }
 
 void MetalContext::assert_cores(chip_id_t device_id) {
@@ -647,7 +650,9 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             // Reset subordinate
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
             // Return primary to base FW
-            erisc_send_exit_signal(device_id, virtual_eth_core, false /* is_idle_eth */);
+            std::vector<uint32_t> clear_flag_data = {0};
+            tt::llrt::write_hex_vec_to_core(
+                device_id, virtual_eth_core, clear_flag_data, get_active_erisc_launch_flag_addr());
             // Ensure that the core has returned to base fw
             llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
         }
@@ -930,7 +935,7 @@ void MetalContext::initialize_firmware(
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
-                    true);
+                    false);  // Wait for ack is not needed because we will wait for cores to be ready
             }
 
             break;
