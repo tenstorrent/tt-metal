@@ -108,7 +108,6 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     auto output_tile = output.tensor_spec().tile().get_tile_shape();
     bool nd_sharded = input.nd_shard_spec().has_value() && output.nd_shard_spec().has_value();
     bool same_tiles = input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
-    uint32_t units_to_divide = num_output_tiles;
     bool divide_by_shards = false;
     const auto& dspec = *output.buffer()->buffer_distribution_spec();
     if (nd_sharded && same_tiles && dim == 0) {
@@ -126,7 +125,6 @@ operation::ProgramWithCallbacks reduce_nc_factory(
             bool more_shards_than_cores = num_output_shards > (num_cores_x * num_cores_y);
             if (more_shards_than_cores) {
                 divide_by_shards = true;
-                units_to_divide = num_output_shards;
                 shard_factor = output_shard_size;
             }
         }
@@ -139,7 +137,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] =
             divide_by_shards ? dspec.core_groups_tuple()
-                             : tt::tt_metal::split_work_to_cores(grid, units_to_divide, /*row_wise=*/true);
+                             : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true);
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
 
