@@ -8,9 +8,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
 #include <umd/device/tt_core_coordinates.h>
+#include <tt-metalium/fabric_types.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -20,10 +22,12 @@ class Program;
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshShape;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_fabric {
 class FabricNodeId;
+enum class RoutingDirection;
 size_t get_tt_fabric_channel_buffer_size_bytes();
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
@@ -66,6 +70,13 @@ std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
 FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
+
+std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
+    FabricNodeId fabric_node_id, RoutingDirection routing_direction);
+
+std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
+
+tt::tt_fabric::Topology get_fabric_topology();
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(

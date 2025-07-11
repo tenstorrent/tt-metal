@@ -65,6 +65,7 @@ void MAIN {
         get_compile_time_arg_val(12);  // TODO: In the future change LLK to have the option or add additional step with
                                        // checking values and indexes after the sorting
                                        // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
+    constexpr uint32_t log2Wt = get_compile_time_arg_val(13);
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -83,11 +84,8 @@ void MAIN {
             get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
         // Processing each row
-        uint32_t stages = 0;
-        for (uint32_t temp = Wt; temp > 1; temp >>= 1) {
-            stages++;
-        }
-        for (uint32_t stage = 1; stage <= stages; stage++) {
+        for (uint32_t stage = 1; stage <= log2Wt; stage++) {
+            const uint32_t m_iter = stage - 1;
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
 
@@ -109,83 +107,147 @@ void MAIN {
                             cb_wait_front(input_tensor_cb_index, 2 * one_tile);
                             cb_wait_front(index_tensor_cb_index, 2 * one_tile);
 
-                            // Reserve space for temporary buffers
-                            cb_reserve_back(input_tensor_transposed_cb_index, 2 * one_tile);
-                            cb_reserve_back(index_tensor_transposed_cb_index, 2 * one_tile);
-
                             tile_regs_acquire();
+                            if (stage == 1 && sub == 1) {
+                                // First stage and substage - transpose the data for for LLK
+                                // Process value tiles
+                                reconfig_data_format_srca(input_tensor_cb_index);
+                                transpose_wh_init_short(input_tensor_cb_index);
+                                transpose_wh_tile(input_tensor_cb_index, 0, input_dest_start);
+                                transpose_wh_tile(input_tensor_cb_index, 1, input_dest_end);
 
-                            // Transpose and copy data to registers
-                            reconfig_data_format_srca(input_tensor_cb_index);
-                            transpose_wh_init_short(input_tensor_cb_index);
-                            transpose_wh_tile(input_tensor_cb_index, 0, input_dest_start);
-                            transpose_wh_tile(input_tensor_cb_index, 1, input_dest_end);
+                                // Process index tiles
+                                reconfig_data_format_srca(index_tensor_cb_index);
+                                transpose_wh_init_short(index_tensor_cb_index);
+                                transpose_wh_tile(index_tensor_cb_index, 0, index_dest_start);
+                                transpose_wh_tile(index_tensor_cb_index, 1, index_dest_end);
+                            } else {
+                                // Intermediate step - tiles are already transposed
+                                // Process value tiles
+                                reconfig_data_format_srca(input_tensor_cb_index);
+                                copy_tile_to_dst_init_short(input_tensor_cb_index);
+                                copy_tile(input_tensor_cb_index, 0, input_dest_start);
+                                copy_tile(input_tensor_cb_index, 1, input_dest_end);
 
-                            reconfig_data_format_srca(index_tensor_cb_index);
-                            transpose_wh_init_short(index_tensor_cb_index);
-                            transpose_wh_tile(index_tensor_cb_index, 0, index_dest_start);
-                            transpose_wh_tile(index_tensor_cb_index, 1, index_dest_end);
-
-                            // llk_topk_sort -> inplace
-                            ckernel::topk_local_sort(0, (int)dir, 5);
-
-                            tile_regs_commit();
-                            tile_regs_wait();
-
-                            // pack value tiles into transposed buffer
-                            pack_reconfig_data_format(input_tensor_transposed_cb_index);
-                            pack_tile(input_dest_start, input_tensor_transposed_cb_index);
-                            pack_tile(input_dest_end, input_tensor_transposed_cb_index);
-
-                            pack_reconfig_data_format(index_tensor_transposed_cb_index);
-                            pack_tile(index_dest_start, index_tensor_transposed_cb_index);
-                            pack_tile(index_dest_end, index_tensor_transposed_cb_index);
+                                // Process index tiles
+                                reconfig_data_format_srca(index_tensor_cb_index);
+                                copy_tile_to_dst_init_short(index_tensor_cb_index);
+                                copy_tile(index_tensor_cb_index, 0, index_dest_start);
+                                copy_tile(index_tensor_cb_index, 1, index_dest_end);
+                            }
 
                             cb_pop_front(input_tensor_cb_index, 2 * one_tile);
                             cb_pop_front(index_tensor_cb_index, 2 * one_tile);
 
-                            cb_push_back(input_tensor_transposed_cb_index, 2 * one_tile);
-                            cb_push_back(index_tensor_transposed_cb_index, 2 * one_tile);
+                            uint32_t tile_input_low = input_dest_start;
+                            uint32_t tile_input_high = input_dest_end;
+                            uint32_t tile_index_low = index_dest_start;
+                            uint32_t tile_index_high = index_dest_end;
 
-                            tile_regs_release();
+                            if (sub == 1) {
+                                // Use sort LLK only the last substage to sort the last pair of tiles - speed up
+                                ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                            } else {
+                                // For all other stages use topk_merge to put the top K values in one tile, and the
+                                // bottom K values in another tile
+                                ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/32);
 
-                            // Pack and push sorted values tensor tiles
-                            acquire_dst();
+                                // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
+                                // We swap their indices when using descending order
+                                if (dir) {
+                                    tile_input_low = input_dest_end;
+                                    tile_input_high = input_dest_start;
+                                    tile_index_low = index_dest_end;
+                                    tile_index_high = index_dest_start;
+                                }
+                            }
 
-                            cb_wait_front(input_tensor_transposed_cb_index, 2 * one_tile);
-                            reconfig_data_format_srca(input_tensor_transposed_cb_index);
-                            transpose_wh_init_short(input_tensor_transposed_cb_index);
-                            transpose_wh_tile(input_tensor_transposed_cb_index, 0, input_dest_start);
-                            transpose_wh_tile(input_tensor_transposed_cb_index, 1, input_dest_end);
+                            tile_regs_commit();
+                            tile_regs_wait();
 
-                            cb_reserve_back(input_tensor_output_cb_index, one_tile);
-                            pack_reconfig_data_format(input_tensor_output_cb_index);
-                            pack_tile(input_dest_start, input_tensor_output_cb_index);
-                            pack_tile(input_dest_end, input_tensor_output_cb_index);
+                            if (stage == log2Wt && sub == 1) {
+                                // Last step of the last stage - transpose tiles back to the original format
 
-                            cb_pop_front(input_tensor_transposed_cb_index, 2 * one_tile);
-                            cb_push_back(input_tensor_output_cb_index, 2 * one_tile);
+                                // Reserve space for temporary buffers
+                                cb_reserve_back(input_tensor_transposed_cb_index, 2 * one_tile);
+                                cb_reserve_back(index_tensor_transposed_cb_index, 2 * one_tile);
 
-                            release_dst();
+                                // Process value tiles
+                                pack_reconfig_data_format(input_tensor_transposed_cb_index);
+                                pack_tile(tile_input_low, input_tensor_transposed_cb_index);
+                                pack_tile(tile_input_high, input_tensor_transposed_cb_index);
 
-                            // Pack and push adjusted index tensor tiles
-                            acquire_dst();
+                                // Process index tiles
+                                pack_reconfig_data_format(index_tensor_transposed_cb_index);
+                                pack_tile(tile_index_low, index_tensor_transposed_cb_index);
+                                pack_tile(tile_index_high, index_tensor_transposed_cb_index);
 
-                            cb_wait_front(index_tensor_transposed_cb_index, 2 * one_tile);
-                            reconfig_data_format_srca(index_tensor_transposed_cb_index);
-                            transpose_wh_init_short(index_tensor_transposed_cb_index);
-                            transpose_wh_tile(index_tensor_transposed_cb_index, 0, input_dest_start);
-                            transpose_wh_tile(index_tensor_transposed_cb_index, 1, input_dest_end);
+                                // Push tiles to synchronize unpacker and packer
+                                cb_push_back(input_tensor_transposed_cb_index, 2 * one_tile);
+                                cb_push_back(index_tensor_transposed_cb_index, 2 * one_tile);
 
-                            cb_reserve_back(index_tensor_output_cb_index, one_tile);
-                            pack_reconfig_data_format(index_tensor_output_cb_index);
-                            pack_tile(input_dest_start, index_tensor_output_cb_index);
-                            pack_tile(input_dest_end, index_tensor_output_cb_index);
+                                tile_regs_release();
 
-                            cb_pop_front(index_tensor_transposed_cb_index, 2 * one_tile);
-                            cb_push_back(index_tensor_output_cb_index, 2 * one_tile);
+                                // Pack and push sorted values tensor tiles
+                                acquire_dst();
 
-                            release_dst();
+                                cb_wait_front(input_tensor_transposed_cb_index, 2 * one_tile);
+                                reconfig_data_format_srca(input_tensor_transposed_cb_index);
+                                transpose_wh_init_short(input_tensor_transposed_cb_index);
+                                transpose_wh_tile(input_tensor_transposed_cb_index, 0, input_dest_start);
+                                transpose_wh_tile(input_tensor_transposed_cb_index, 1, input_dest_end);
+
+                                cb_reserve_back(input_tensor_output_cb_index, 2 * one_tile);
+                                pack_reconfig_data_format(input_tensor_output_cb_index);
+                                pack_tile(input_dest_start, input_tensor_output_cb_index);
+                                pack_tile(input_dest_end, input_tensor_output_cb_index);
+
+                                // Push value tiles to writer and free transposed buffer
+                                cb_pop_front(input_tensor_transposed_cb_index, 2 * one_tile);
+                                cb_push_back(input_tensor_output_cb_index, 2 * one_tile);
+
+                                release_dst();
+
+                                // Pack and push adjusted index tensor tiles
+                                acquire_dst();
+
+                                cb_wait_front(index_tensor_transposed_cb_index, 2 * one_tile);
+                                reconfig_data_format_srca(index_tensor_transposed_cb_index);
+                                transpose_wh_init_short(index_tensor_transposed_cb_index);
+                                transpose_wh_tile(index_tensor_transposed_cb_index, 0, input_dest_start);
+                                transpose_wh_tile(index_tensor_transposed_cb_index, 1, input_dest_end);
+
+                                cb_reserve_back(index_tensor_output_cb_index, 2 * one_tile);
+                                pack_reconfig_data_format(index_tensor_output_cb_index);
+                                pack_tile(input_dest_start, index_tensor_output_cb_index);
+                                pack_tile(input_dest_end, index_tensor_output_cb_index);
+
+                                // Push index tiles to writer and free transposed buffer
+                                cb_pop_front(index_tensor_transposed_cb_index, 2 * one_tile);
+                                cb_push_back(index_tensor_output_cb_index, 2 * one_tile);
+
+                                release_dst();
+                            } else {
+                                // Intermediate step - pack and push transposed tiles to be saved for the next stage
+                                cb_reserve_back(index_tensor_output_cb_index, 2 * one_tile);
+                                cb_reserve_back(input_tensor_output_cb_index, 2 * one_tile);
+
+                                // Process value tiles
+                                pack_reconfig_data_format(input_tensor_output_cb_index);
+                                pack_tile(tile_input_low, input_tensor_output_cb_index);
+                                pack_tile(tile_input_high, input_tensor_output_cb_index);
+
+                                // Process index tiles
+                                pack_reconfig_data_format(index_tensor_output_cb_index);
+                                pack_tile(tile_index_low, index_tensor_output_cb_index);
+                                pack_tile(tile_index_high, index_tensor_output_cb_index);
+
+                                // Push tiles to writer
+                                cb_push_back(input_tensor_output_cb_index, 2 * one_tile);
+                                cb_push_back(index_tensor_output_cb_index, 2 * one_tile);
+
+                                tile_regs_release();
+                            }
 
                             processing_pair_id += number_of_available_cores;
                         }  // if pair_id == processing_pair_id

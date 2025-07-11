@@ -80,6 +80,21 @@ FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id
     return control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
 }
 
+std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
+    FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, routing_direction);
+}
+
+std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
+    std::unordered_map<MeshId, MeshShape> mesh_shapes;
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    for (auto mesh_id : control_plane.get_user_physical_mesh_ids()) {
+        mesh_shapes[mesh_id] = control_plane.get_physical_mesh_shape(mesh_id);
+    }
+    return mesh_shapes;
+}
+
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
@@ -217,6 +232,11 @@ std::vector<uint32_t> get_forwarding_link_indices(
 
     return get_forwarding_link_indices_in_direction(
         src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+}
+
+tt::tt_fabric::Topology get_fabric_topology() {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_context().get_fabric_topology();
 }
 
 namespace experimental {

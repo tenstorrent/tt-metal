@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstddef>
 #include <optional>
+#include <string>
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_step2_device_operation.hpp"
@@ -82,8 +82,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
@@ -259,8 +259,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
@@ -446,8 +446,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {

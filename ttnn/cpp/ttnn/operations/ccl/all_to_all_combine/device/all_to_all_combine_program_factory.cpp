@@ -2,21 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_to_all_combine_device_operation.hpp"
-#include "ttnn/operations/ccl/all_to_all_dispatch/device/all_to_all_dispatch_device_operation.hpp"
-
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "cpp/ttnn/operations/ccl/all_to_all_combine/device/all_to_all_combine_device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
 
@@ -76,10 +70,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t num_devices = mesh_view.num_devices();
     const uint32_t hidden_size = input_shape[-1];
     const uint32_t batch_size = metadata_shape[1];
+    const uint32_t seq_size = metadata_shape[2];
     const uint32_t selected_experts_k = metadata_shape[-1];
     const uint32_t experts = mapping_shape[-2];
 
-    TT_ASSERT(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
+    TT_FATAL(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
     const uint32_t experts_per_device = experts / num_devices;
 
     const auto& input_spec = input_tensor.get_tensor_spec();
@@ -102,27 +97,27 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
-    auto input_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
-    auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
+    const auto input_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
+    const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
 
     // Anything less will lead to deadlocks. It's clear why, TODO fix it.
     const uint32_t buffering_factor = experts_per_device;
 
     // input sharded buffer
-    const auto data_cb_id = tt::CBIndex::c_0;
+    constexpr auto data_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_data_config =
         CircularBufferConfig(buffering_factor * aligned_input_page_size_bytes, {{data_cb_id, input_data_format}})
             .set_page_size(data_cb_id, aligned_input_page_size_bytes);
 
     // full mapping buffer
-    const auto mapping_tensor_cb_id = tt::CBIndex::c_1;
+    constexpr auto mapping_tensor_cb_id = tt::CBIndex::c_1;
     CircularBufferConfig cb_mapping_tensor_config =
         CircularBufferConfig(aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size_bytes);
 
     // scratch space to store and share indices of per device experts
-    const auto local_experts_cb_id = tt::CBIndex::c_2;
+    constexpr auto local_experts_cb_id = tt::CBIndex::c_2;
     using local_experts_t = uint16_t;
     const auto aligned_local_expert_page_size_bytes =
         tt::align(experts_per_device * sizeof(local_experts_t), l1_alignment);
@@ -132,14 +127,14 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
             .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
 
     // metadata page buffer
-    const auto metadata_cb_id = tt::CBIndex::c_3;
+    constexpr auto metadata_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig cb_metadata_config =
         CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
 
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
-    const auto client_interface_cb_id = tt::CBIndex::c_4;
+    constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
@@ -181,6 +176,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         data_cb_id,
         experts_per_device,
         batch_size,
+        seq_size,
         experts,  // same as num_mapping_pages
         flat_mesh_idx,
         input_page_size_bytes,
@@ -189,7 +185,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         metadata_page_size_bytes,
         input_is_dram,
         mapping_is_dram,
-        metadata_is_dram};
+        metadata_is_dram,
+        operation_attributes.locally_reduced};
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -213,6 +210,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         client_interface_cb_id,
         data_cb_id,
         batch_size,
+        seq_size,
         selected_experts_k,
         experts_per_device,
         num_devices,
@@ -223,7 +221,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         max_packet_size_bytes,
-    };
+        operation_attributes.locally_reduced};
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
@@ -233,12 +231,12 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }
-    const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
+    const auto [neighbors, directions] = common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
     std::map<std::string, std::string> writer_defines = {
-        {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
-        {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
-        {"DIRECTIONS", detail::stringify_array(directions)}};
+        {"DEST_CHIP_ID", common::stringify(dest_chip_id)},
+        {"DEST_MESH_ID", common::stringify(dest_mesh_id)},
+        {"DIRECTIONS", common::stringify(directions)}};
 
     if (axis.has_value()) {
         writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis.value());
@@ -268,7 +266,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     };
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
-        uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
+        uint32_t link_id = common::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
         const auto neighbor_fabric_id = get_fabric_node_id_from_physical_chip_id(neighbor->id());
         append_fabric_connection_rt_args(
             fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);

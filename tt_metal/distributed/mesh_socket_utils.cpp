@@ -142,7 +142,6 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint) {
     const auto& socket_connections = config.socket_connection_config;
     const auto& socket_mem_config = config.socket_mem_config;
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
 
     uint32_t config_buffer_size = is_sender ? sizeof(sender_socket_md) : sizeof(receiver_socket_md);
@@ -350,7 +349,6 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
 
-    static constexpr uint32_t NUM_SOCKET_HEADER_ELEMENTS = 1;
     // Query the size of the serialized descriptor first (this is the only element in the header)
     auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
     TT_FATAL(

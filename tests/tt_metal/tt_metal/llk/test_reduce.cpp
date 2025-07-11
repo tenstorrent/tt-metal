@@ -13,7 +13,6 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
-#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
@@ -146,7 +145,7 @@ void add_reader_writer_kernels(
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
             uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
             std::vector<uint32_t> reader_compile_args = {(std::uint32_t)true, packed_scaler_value};
-            std::map<string, string> reader_defines = {{"REDUCE_SCALER", "1"}};
+            std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
 
             auto unary_reader_kernel = tt_metal::CreateKernel(
                 program,
@@ -349,7 +348,8 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         uint(NC),
     };
 
-    std::map<string, string> reduce_defines = {{"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}};
+    std::map<std::string, std::string> reduce_defines = {
+        {"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}};
     switch (test_config.reduce_type) {
         case ReduceType::SUM: {
             reduce_defines["REDUCE_OP"] = "PoolType::SUM";

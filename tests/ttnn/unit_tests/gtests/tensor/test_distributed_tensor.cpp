@@ -28,9 +28,8 @@ TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
 
 // Returns the number of unique buffers in host-side multi-device tensor.
 int count_unique_buffers(const Tensor& tensor) {
-    const auto& storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.storage());
     std::unordered_set<const void*> buffer_addresses;
-    storage.distributed_buffer().apply(
+    tensor.host_storage().buffer().apply(
         [&buffer_addresses](const HostBuffer& buffer) { buffer_addresses.insert(buffer.view_bytes().data()); });
     return buffer_addresses.size();
 }
@@ -45,9 +44,8 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
 
     // If no device is provided, the tensor is kept on host.
-    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == StorageType::MULTI_DEVICE_HOST);
-    EXPECT_TRUE(
-        distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != StorageType::MULTI_DEVICE_HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == StorageType::HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != StorageType::HOST);
 }
 
 TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {

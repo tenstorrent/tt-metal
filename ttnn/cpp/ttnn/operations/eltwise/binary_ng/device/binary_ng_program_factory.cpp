@@ -15,12 +15,12 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
 
-// For rank > 4 i.e. dims beyond NCHW will be collapsed into a single dim
+// For rank > 5 dims will be collapsed into a single dim
 uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
-    if (out_rank >= 5 && shape.rank() >= 5) {
-        for (int i = -5; i >= -out_rank; --i) {
+    if (out_rank >= 6 && shape.rank() >= 6) {
+        for (int i = -6; i >= -out_rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
         }
@@ -28,10 +28,15 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     return nD_dim;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
-    return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
+    return {
+        shape.rank() >= 5 ? shape[-5] : 1,
+        shape[-4],
+        shape[-3],
+        shape[-2] / tile.get_height(),
+        shape[-1] / tile.get_width()};
 }
 
 std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
@@ -148,8 +153,8 @@ public:
             shard_shape[0],
             shard_shape[1]);
 
-        const auto [N, C, Ht, Wt] = get_shape_dims(tensor);
-        const auto unrolled_Ht = N * C * Ht;
+        const auto [D, N, C, Ht, Wt] = get_shape_dims(tensor);
+        const auto unrolled_Ht = D * N * C * Ht;
         last_shard_shape = {
             shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
@@ -198,10 +203,10 @@ void set_or_update_runtime_arguments(
     auto bND = b.has_value() ? extract_nD_dims(*b, out_rank) : 1;
     auto cND = extract_nD_dims(c, out_rank);
 
-    const auto [aN, aC, aHt, aWt] = get_shape_dims(a);
-    const auto [bN, bC, bHt, bWt] = b.has_value() ? get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u};
-    const auto [cN, cC, cHt, cWt] = get_shape_dims(c);
-    const uint32_t cHt_unrolled = cN * cC * cHt;
+    const auto [aD, aN, aC, aHt, aWt] = get_shape_dims(a);
+    const auto [bD, bN, bC, bHt, bWt] = b.has_value() ? get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
+    const auto [cD, cN, cC, cHt, cWt] = get_shape_dims(c);
+    const uint32_t cHt_unrolled = cD * cN * cC * cHt;
 
     const auto shard_specs = get_shard_specs(a, b, c);
     const bool has_sharding = shard_specs.has_value();
@@ -294,8 +299,8 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 18>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 21>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 16>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
@@ -336,9 +341,11 @@ void set_or_update_runtime_arguments(
                 b_num_tiles,
                 c_num_tiles,
                 c_current_shard_width,
-                bHt * bWt * bC * bN * (bND > 1),
+                bHt * bWt * bC * bN * bD * (bND > 1),
+                bHt * bWt * bC * bN * (bD > 1),
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
+                cD,
                 cN,
                 cC,
                 cHt,
@@ -362,11 +369,13 @@ void set_or_update_runtime_arguments(
                 c_start_id,
                 c_num_tiles,
                 c_current_shard_width,
+                cD,
                 cN,
                 cC,
                 cHt,
                 cWt,
                 cND,
+                0u,
                 0u,
                 0u,
                 0u,
@@ -385,16 +394,19 @@ void set_or_update_runtime_arguments(
             a_num_tiles,
             c_num_tiles,
             c_current_shard_width,
-            aHt * aWt * aC * aN * (aND > 1),
+            aHt * aWt * aC * aN * aD * (aND > 1),
+            aHt * aWt * aC * aN * (aD > 1),
             aHt * aWt * aC * (aN > 1),
             aHt * aWt * (aC > 1),
+            cD,
             cN,
             cC,
             cHt,
             cWt,
             cND,
             b.has_value() ? b->buffer()->address() : 0u,
-            bHt * bWt * bC * bN * (bND > 1),
+            bHt * bWt * bC * bN * bD * (bND > 1),
+            bHt * bWt * bC * bN * (bD > 1),
             bHt * bWt * bC * (bN > 1),
             bHt * bWt * (bC > 1),
             b_num_tiles,

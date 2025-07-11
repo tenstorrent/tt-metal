@@ -25,6 +25,7 @@
 
 namespace tt::tt_metal {
 
+namespace {
 // Helper function to validate worker_l1_size, also updates it if it's 0.
 void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
     if (worker_l1_size == 0) {
@@ -39,6 +40,14 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
         worker_l1_size,
         max_worker_l1_size);
 }
+
+// Check for environment variable override for custom mesh graph descriptor path
+const char* get_custom_mesh_graph_desc_path() {
+    const char* custom_mesh_graph_desc_path = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    return custom_mesh_graph_desc_path;
+}
+
+}  // namespace
 
 void MetalContext::reinitialize() {
     force_reinit_ = true;
@@ -108,13 +117,15 @@ void MetalContext::initialize(
         rtoptions_.set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(rtoptions_);
     }
+    watcher_server_ =
+        std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
         return;
     }
 
-    // TODO: Move FW, fabric, dispatch init here
+    // Clear state, build FW
     auto all_devices = cluster_->all_chip_ids();
     for (chip_id_t device_id : all_devices) {
         // Clear L1/DRAM if requested
@@ -157,11 +168,10 @@ void MetalContext::initialize(
     // Initialize debug tools, reset cores, init FW
     if (dprint_server_) {
         dprint_server_->attach_devices();
-    };
+    }
+    watcher_server_->init_devices();
     for (chip_id_t device_id : all_devices) {
-        // Init debug tools
         ClearNocData(device_id);
-        watcher_init(device_id);
 
         // TODO: as optimization, investigate removing all this call for already initialized devivces
         if (!rtoptions_.get_skip_reset_cores_on_init()) {
@@ -169,11 +179,10 @@ void MetalContext::initialize(
         }
 
         initialize_and_launch_firmware(device_id);
-
-        // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
-        // starts since it also writes to watcher mailboxes.
-        watcher_attach(device_id);
     }
+    // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
+    // starts since it also writes to watcher mailboxes.
+    watcher_server_->attach_devices();
 
     // Register teardown function, but only once.
     if (not teardown_registered_) {
@@ -184,6 +193,9 @@ void MetalContext::initialize(
 }
 
 void MetalContext::teardown() {
+    if (!initialized_) {
+        return;
+    }
     initialized_ = false;
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
@@ -196,8 +208,9 @@ void MetalContext::teardown() {
     }
 
     auto all_devices = cluster_->all_chip_ids();
+    watcher_server_->detach_devices();
+    watcher_server_.reset();
     for (chip_id_t device_id : all_devices) {
-        watcher_detach(device_id);
         assert_cores(device_id);
 
         cluster_->l1_barrier(device_id);
@@ -380,6 +393,9 @@ void MetalContext::teardown_fabric_config() {
     this->fabric_config_ = tt_metal::FabricConfig::DISABLED;
     this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
+    // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
+    //     rtoptions_.set_erisc_iram_enabled(false);
+    // }
     this->get_control_plane().clear_fabric_context();
 }
 
@@ -410,6 +426,10 @@ void MetalContext::set_fabric_config(
         this->teardown_fabric_config();
         return;
     }
+
+    bool enable_erisc_iram =
+        !rtoptions_.get_erisc_iram_env_var_enabled() || !rtoptions_.get_erisc_iram_env_var_disabled();
+    rtoptions_.set_erisc_iram_enabled(enable_erisc_iram);
 
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
         log_warning(
@@ -454,6 +474,19 @@ tt_metal::FabricConfig MetalContext::get_fabric_config() const {
 }
 
 void MetalContext::initialize_control_plane() {
+    if (auto* custom_mesh_graph_desc_path = get_custom_mesh_graph_desc_path(); custom_mesh_graph_desc_path != nullptr) {
+        std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path);
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Custom mesh graph descriptor file not found: {}",
+            mesh_graph_desc_path.string());
+
+        log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
+        global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
+            mesh_graph_desc_path.string());
+        return;
+    }
+
     // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
     // descriptors
     std::string mesh_graph_descriptor;
@@ -464,8 +497,8 @@ void MetalContext::initialize_control_plane() {
         case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::GALAXY:
             if (tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type) ==
-                tt::tt_fabric::FabricType::TORUS_2D) {
-                mesh_graph_descriptor = "single_galaxy_torus_2d_graph_descriptor.yaml";
+                tt::tt_fabric::FabricType::TORUS_XY) {
+                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
             } else {
                 mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
             }
@@ -544,7 +577,6 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         }
     };
 
-    auto mmio_device_id = cluster_->get_associated_mmio_device(device_id);
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
