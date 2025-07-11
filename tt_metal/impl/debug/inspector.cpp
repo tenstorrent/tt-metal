@@ -185,7 +185,7 @@ void Inspector::mesh_device_created(
         auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
         auto& mesh_device_data = data->mesh_devices_data[mesh_device->id()];
-        mesh_device_data.mesh_device = mesh_device->weak_from_this();
+        mesh_device_data.mesh_device = mesh_device;
         mesh_device_data.mesh_id = mesh_device->id();
         mesh_device_data.parent_mesh_id = parent_mesh_id;
         data->logger.log_mesh_device_created(mesh_device_data);
