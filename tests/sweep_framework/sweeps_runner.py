@@ -12,7 +12,6 @@ import json
 import enlighten
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
-import ttnn
 from multiprocessing import Process
 from faster_fifo import Queue
 from queue import Empty
@@ -109,9 +108,9 @@ def run(test_module, input_queue, output_queue):
             if MEASURE_DEVICE_PERF:
                 perf_result = gather_single_test_perf(device, status)
                 message = get_updated_message(message, perf_result)
-                output_queue.put([status, message, e2e_perf, perf_result, device_name])
+                output_queue.put([status, message, e2e_perf, perf_result])
             else:
-                output_queue.put([status, message, e2e_perf, None, device_name])
+                output_queue.put([status, message, e2e_perf, None])
     except Empty as e:
         try:
             # Run teardown in mesh_device_fixture
@@ -155,6 +154,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
             print(f"Would have executed test for vector {test_vector}")
             continue
         result = dict()
+
         result["start_time_ts"] = dt.datetime.now()
 
         # Capture the original test vector data BEFORE any modifications
@@ -186,12 +186,11 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     )
                     run(test_module, input_queue, output_queue)
                 response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf, device_perf, device_name = (
+                status, message, e2e_perf, device_perf = (
                     response[0],
                     response[1],
                     response[2],
                     response[3],
-                    response[4],
                 )
                 if status and MEASURE_DEVICE_PERF and device_perf is None:
                     result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
@@ -221,7 +220,6 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     result["e2e_perf"] = e2e_perf
                 else:
                     result["e2e_perf"] = None
-                result["device"] = device_name
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
@@ -394,6 +392,7 @@ def initialize_postgres_database():
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             initiated_by VARCHAR(255) NOT NULL,
             host VARCHAR(255),
+            device VARCHAR(255),
             run_contents VARCHAR(1024),
             git_author VARCHAR(255),
             git_branch_name VARCHAR(255),
@@ -411,7 +410,6 @@ def initialize_postgres_database():
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
             name VARCHAR(255) NOT NULL,
-            device VARCHAR(255),
             start_time_ts TIMESTAMP NOT NULL,
             end_time_ts TIMESTAMP,
             status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
@@ -447,13 +445,13 @@ def initialize_postgres_database():
         create_indexes_query = """
         CREATE INDEX IF NOT EXISTS idx_runs_initiated_by ON runs(initiated_by);
         CREATE INDEX IF NOT EXISTS idx_runs_host ON runs(host);
+        CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device);
         CREATE INDEX IF NOT EXISTS idx_runs_git_commit_hash ON runs(git_commit_hash);
         CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
         CREATE INDEX IF NOT EXISTS idx_runs_start_time_ts ON runs(start_time_ts);
 
         CREATE INDEX IF NOT EXISTS idx_tests_run_id ON tests(run_id);
         CREATE INDEX IF NOT EXISTS idx_tests_name ON tests(name);
-        CREATE INDEX IF NOT EXISTS idx_tests_device ON tests(device);
         CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);
         CREATE INDEX IF NOT EXISTS idx_tests_start_time_ts ON tests(start_time_ts);
 
@@ -491,7 +489,15 @@ def generate_error_signature(exception_message):
 
 
 def push_run(
-    initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents=None
+    initiated_by,
+    host,
+    git_author,
+    git_branch_name,
+    git_commit_hash,
+    start_time_ts,
+    status,
+    run_contents=None,
+    device=None,
 ):
     """Export run result to PostgreSQL database"""
     pg_config = get_postgres_config(POSTGRES_ENV)
@@ -502,13 +508,23 @@ def push_run(
 
         # Insert run result into the runs table
         insert_run_query = """
-        INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents, device)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """
         cursor.execute(
             insert_run_query,
-            (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents),
+            (
+                initiated_by,
+                host,
+                git_author,
+                git_branch_name,
+                git_commit_hash,
+                start_time_ts,
+                status,
+                run_contents,
+                device,
+            ),
         )
         conn.commit()
         logger.info("Successfully exported run result to PostgreSQL database")
@@ -563,14 +579,13 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
         conn = psycopg2.connect(**pg_config)
         cursor = conn.cursor()
         sweep_name = header_info[0]["sweep_name"]
-        device_name = test_results[0].get("device", None) if test_results else None
 
         test_insert_query = """
-        INSERT INTO tests (run_id, name, device, start_time_ts, end_time_ts, status)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
+        VALUES (%s, %s, %s, %s, %s)
         RETURNING id
         """
-        cursor.execute(test_insert_query, (run_id, sweep_name, device_name, test_start_time, test_end_time, "success"))
+        cursor.execute(test_insert_query, (run_id, sweep_name, test_start_time, test_end_time, "success"))
         test_id = cursor.fetchone()[0]
         # Create testcase record
         testcase_insert_query = """
@@ -677,8 +692,9 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
     git_commit_hash = git_hash()
     status = "success"
     run_start_time = dt.datetime.now()
+    device = ttnn.get_arch_name()
     run_id = push_run(
-        initiated_by, host, git_author, git_branch_name, git_commit_hash, run_start_time, status, run_contents
+        initiated_by, host, git_author, git_branch_name, git_commit_hash, run_start_time, status, run_contents, device
     )
 
     should_continue = True
@@ -772,7 +788,7 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
 def run_sweeps_json(module_names, suite_name, run_contents=None, vector_id=None):
     """Run sweeps from JSON files - supports single or multiple modules"""
     if isinstance(module_names, str):
-        # Single module
+        # this path is when we are exporting a single module
         pbar_manager = enlighten.get_manager()
         with open(READ_FILE, "r") as file:
             print(READ_FILE)
@@ -877,12 +893,7 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite, sweep_name, header_info)
                     logger.info(f"Completed tests for module {sweep_name}, suite {suite}.")
                     logger.info(f"Tests Executed - {len(results)}")
-                    if DATABASE_BACKEND == "postgres":
-                        export_test_results_postgres(
-                            header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
-                        )
-                    else:
-                        export_test_results(header_info, results)
+                    export_test_results(header_info, results)
                     module_pbar.update()
                 module_pbar.close()
             except NotFoundError as e:
@@ -930,12 +941,7 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                         )
                         logger.info(f"Completed tests for module {module_name}, suite {suite}.")
                         logger.info(f"Tests Executed - {len(results)}")
-                        if DATABASE_BACKEND == "postgres":
-                            export_test_results_postgres(
-                                header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
-                            )
-                        else:
-                            export_test_results(header_info, results)
+                        export_test_results(header_info, results)
                 else:
                     logger.info(f"Executing tests for module {module_name}, suite {suite_name}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite_name)
@@ -944,12 +950,7 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                     )
                     logger.info(f"Completed tests for module {module_name}, suite {suite_name}.")
                     logger.info(f"Tests Executed - {len(results)}")
-                    if DATABASE_BACKEND == "postgres":
-                        export_test_results_postgres(
-                            header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
-                        )
-                    else:
-                        export_test_results(header_info, results)
+                    export_test_results(header_info, results)
             except Exception as e:
                 logger.info(e)
 
@@ -1068,13 +1069,14 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
         git_branch = get_git_branch()
         initiated_by = get_initiated_by()
         host = get_hostname()
+        device = ttnn.get_arch_name()
 
         # Create a new run record
         run_insert_query = """
         INSERT INTO runs (
             initiated_by, host, git_author, git_branch_name, git_commit_hash,
-            start_time_ts, end_time_ts, status, run_contents
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            start_time_ts, end_time_ts, status, run_contents, device
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """
 
@@ -1088,6 +1090,7 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
             run_end_time,
             "success",  # Will be updated after processing all results
             run_contents,
+            device,
         )
 
         cursor.execute(run_insert_query, run_values)
@@ -1113,19 +1116,17 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
             test_end_time = (
                 max(r.get("end_time_ts") for _, r in test_results_group) if test_results_group else dt.datetime.now()
             )
-            device_name = test_results_group[0][1].get("device") if test_results_group else None
 
             test_insert_query = """
             INSERT INTO tests (
-                run_id, name, device, start_time_ts, end_time_ts, status
-            ) VALUES (%s, %s, %s, %s, %s, %s)
+                run_id, name, start_time_ts, end_time_ts, status
+            ) VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """
 
             test_values = (
                 run_id,
                 sweep_name,
-                device_name,
                 test_start_time,
                 test_end_time,
                 "success",  # Will be updated after processing all testcases
@@ -1147,33 +1148,30 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
                 # Create testcase record
                 testcase_insert_query = """
                 INSERT INTO sweep_testcases (
-                    test_id, name, device, start_time_ts, end_time_ts,
+                    test_id, name, start_time_ts, end_time_ts,
                     status, suite_name, test_vector, message, exception,
-                    e2e_perf, device_perf
+                    e2e_perf, device_perf, error_signature
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """
 
-                # Parse timestamp
-                timestamp_str = result.get("timestamp")
-                start_time = (
-                    dt.datetime.strptime(timestamp_str, "%Y-%m-%d_%H-%M-%S") if timestamp_str else dt.datetime.now()
-                )
+                exception_text = result.get("exception", None)
+                error_sig = generate_error_signature(exception_text)
 
                 testcase_values = (
                     test_id,
                     f"{sweep_name}_{header.get('vector_id', 'unknown')}",
-                    result.get("device"),
-                    start_time,
-                    None,  # end_time_ts - could be calculated if we track duration
+                    result.get("start_time_ts"),
+                    result.get("end_time_ts"),
                     db_status,
                     header.get("suite_name"),
-                    json.dumps(result.get("original_vector_data")),  # test_vector now stores original vector data
+                    json.dumps(result.get("original_vector_data")),
                     result.get("message"),
-                    result.get("exception"),
+                    exception_text,
                     result.get("e2e_perf"),
                     json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                    error_sig,
                 )
 
                 cursor.execute(testcase_insert_query, testcase_values)
@@ -1312,9 +1310,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--database",
         required=False,
-        default="elasticsearch",
-        choices=["elasticsearch", "postgres"],
-        help="Database backend for storing results. Available options: ['elasticsearch', 'postgres']",
+        default="elastic",
+        choices=["elastic", "postgres"],
+        help="Database backend for storing results. Available options: ['elastic', 'postgres']",
     )
     parser.add_argument(
         "--postgres-env",
@@ -1412,24 +1410,22 @@ if __name__ == "__main__":
             logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
 
     # Determine which execution path to take
-    if READ_FILE:
-        # Using explicit read-file argument
-        run_sweeps_json(module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
-    elif DATABASE_BACKEND == "postgres" and args.module_name and not args.read_file:
-        # Using PostgreSQL with module names but no read-file - use automatic file discovery
-        run_sweeps_json(module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
-    elif DATABASE_BACKEND == "postgres" and not args.module_name:
-        # Using PostgreSQL with no module names specified - use automatic file discovery
-        all_module_names = list(get_all_modules())
-        if skip_modules_set:
-            module_names = [name for name in all_module_names if name not in skip_modules_set]
-        else:
-            module_names = all_module_names
+    use_json_runner = READ_FILE or DATABASE_BACKEND == "postgres"
 
-        logger.info("Running modules:")
-        for module_name in module_names:
-            logger.info(f"  {module_name}")
-        run_sweeps_json(module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
+    if use_json_runner:
+        effective_module_names = module_names
+        # For postgres, if no modules are specified, find all available modules
+        if DATABASE_BACKEND == "postgres" and not module_names:
+            all_module_names = list(get_all_modules())
+            if skip_modules_set:
+                effective_module_names = [name for name in all_module_names if name not in skip_modules_set]
+            else:
+                effective_module_names = all_module_names
+
+            logger.info("Running modules:")
+            for module_name in effective_module_names:
+                logger.info(f"  {module_name}")
+        run_sweeps_json(effective_module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
     else:
         # Exporting results to Elasticsearch
         logger.info(f"Exporting results to Elasticsearch")
