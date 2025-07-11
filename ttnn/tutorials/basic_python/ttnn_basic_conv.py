@@ -21,7 +21,7 @@ def main():
         device: ttnn.Device,
     ) -> ttnn.Tensor:
         # Permute input from PyTorch BCHW (batch, channel, height, width)
-        # to BHWC (batch, height, width, channel) which TTNN expects
+        # to NHWC (batch, height, width, channel) which TTNN expects
         permuted_input = ttnn.permute(input_tensor, (0, 2, 3, 1))
 
         # Get shape after permutation

@@ -44,7 +44,7 @@ def main():
 
     def conv_pool_stage(
         input_tensor: ttnn.Tensor,
-        input_BHWC: ttnn.Shape,
+        input_NHWC: ttnn.Shape,
         conv_outchannels: int,
         weights: dict,
         weight_str: str,
@@ -56,8 +56,8 @@ def main():
         """
         Perform convolution + activation + max pooling using TT-NN.
         Args:
-            input_tensor: Input TT tensor in BHWC format.
-            input_BHWC: Tuple representing (Batch, Height, Width, Channels) of the input tensor.
+            input_tensor: Input TT tensor in NHWC format.
+            input_NHWC: Tuple representing (Batch, Height, Width, Channels) of the input tensor.
             conv_outchannels: Number of output channels for the convolution layer.
             weights: Dictionary containing model weights and biases.
             weight_str: Key name for convolution weights in the weights dict.
@@ -88,15 +88,15 @@ def main():
             logger.info(f"  input_tensor shape: {input_tensor.shape}")
             logger.info(f"  weight_tensor shape: {W.shape}")
             logger.info(f"  bias_tensor shape: {B.shape}")
-            logger.info(f"  in_channels: {input_BHWC[3]}")
+            logger.info(f"  in_channels: {input_NHWC[3]}")
             logger.info(f"  out_channels: {conv_outchannels}")
             logger.info(f"  device: {device}")
             logger.info(f"  kernel_size: {conv_kernel_size}")
             logger.info(f"  stride: {conv_stride}")
             logger.info(f"  padding: {conv_padding}")
-            logger.info(f"  batch_size: {input_BHWC[0]}")
-            logger.info(f"  input_height: {input_BHWC[1]}")
-            logger.info(f"  input_width: {input_BHWC[2]}")
+            logger.info(f"  batch_size: {input_NHWC[0]}")
+            logger.info(f"  input_height: {input_NHWC[1]}")
+            logger.info(f"  input_width: {input_NHWC[2]}")
             logger.info(f"  conv_config: {conv_config}")
             logger.info(f"  groups: {0}")
 
@@ -105,15 +105,15 @@ def main():
             input_tensor=input_tensor,
             weight_tensor=W,
             bias_tensor=B,
-            in_channels=input_BHWC[3],
+            in_channels=input_NHWC[3],
             out_channels=conv_outchannels,
             device=device,
             kernel_size=conv_kernel_size,
             stride=conv_stride,
             padding=conv_padding,
-            batch_size=input_BHWC[0],
-            input_height=input_BHWC[1],
-            input_width=input_BHWC[2],
+            batch_size=input_NHWC[0],
+            input_height=input_NHWC[1],
+            input_width=input_NHWC[2],
             conv_config=conv_config,
             groups=0,
         )
@@ -128,9 +128,9 @@ def main():
         if log_first_sample:
             logger.info("Input parameters to max_pool2d:")
             logger.info(f"  input shape: {conv1_out.shape}")
-            logger.info(f"  batch_size: {input_BHWC[0]}")
-            logger.info(f"  input_h: {input_BHWC[1]}")
-            logger.info(f"  input_w: {input_BHWC[2]}")
+            logger.info(f"  batch_size: {input_NHWC[0]}")
+            logger.info(f"  input_h: {input_NHWC[1]}")
+            logger.info(f"  input_w: {input_NHWC[2]}")
             logger.info(f"  channels: {conv_outchannels}")
             logger.info(f"  kernel_size: {max_pool2d_kernel_size}")
             logger.info(f"  stride: {max_pool2d_stride}")
@@ -141,9 +141,9 @@ def main():
         # Perform max pooling
         max_pool2d_out = ttnn.max_pool2d(
             conv1_out,
-            batch_size=input_BHWC[0],
-            input_h=input_BHWC[1],
-            input_w=input_BHWC[2],
+            batch_size=input_NHWC[0],
+            input_h=input_NHWC[1],
+            input_w=input_NHWC[2],
             channels=conv_outchannels,
             kernel_size=max_pool2d_kernel_size,
             stride=max_pool2d_stride,
@@ -169,7 +169,7 @@ def main():
 
         # Convert image to TT tensor
         ttnn_image = ttnn.from_torch(image, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
-        ttnn_image_permuated = ttnn.permute(ttnn_image, (0, 2, 3, 1))  # BCHW -> BHWC
+        ttnn_image_permuated = ttnn.permute(ttnn_image, (0, 2, 3, 1))  # NCHW -> NHWC
 
         # Only log details for first sample
         log_this = i == 0
@@ -203,7 +203,7 @@ def main():
         # Flatten for FC layers
         B, H, W, C = conv2_pool.shape
         out_flat = ttnn.to_torch(conv2_pool)  # Convert back to torch
-        out_flat = out_flat.permute(0, 3, 1, 2).contiguous().view(B, -1)  # BHWC -> BCHW -> Flatten
+        out_flat = out_flat.permute(0, 3, 1, 2).contiguous().view(B, -1)  # NHWC -> NCHW -> Flatten
 
         # Prepare fully connected layers
         W3 = weights["fc1.weight"]
