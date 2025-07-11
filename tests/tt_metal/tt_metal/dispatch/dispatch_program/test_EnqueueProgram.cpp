@@ -1344,10 +1344,10 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestRuntimeArgsCorrectlySentS
 }
 
 auto CommandQueueFabricConfigsToTest = ::testing::Values(
-    tt::tt_metal::FabricConfig::FABRIC_1D,
-    tt::tt_metal::FabricConfig::FABRIC_1D_RING,
-    tt::tt_metal::FabricConfig::FABRIC_2D,
-    tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+    tt::tt_fabric::FabricConfig::FABRIC_1D,
+    tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+    tt::tt_fabric::FabricConfig::FABRIC_2D,
+    tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
 
 INSTANTIATE_TEST_SUITE_P(
     CommandQueueMultiDevice, DISABLED_CommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);

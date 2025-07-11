@@ -47,7 +47,7 @@ public:
         TT_FATAL(
             *(tt::tt_metal::MetalContext::instance().get_distributed_context().size()) > 1,
             "Multi-Host Routing tests require multiple hosts in the system");
-        this->DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
     void TearDown() override {

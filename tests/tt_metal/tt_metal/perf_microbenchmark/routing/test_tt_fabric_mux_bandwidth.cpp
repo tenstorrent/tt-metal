@@ -345,8 +345,8 @@ int main(int argc, char** argv) {
         sizeof(tt::tt_fabric::PacketHeader) + test_params.packet_payload_size_bytes;
     test_params.buffer_size_bytes_header_only_channel = sizeof(tt::tt_fabric::PacketHeader);
 
-    tt::tt_metal::detail::SetFabricConfig(
-        tt::tt_metal::FabricConfig::FABRIC_1D, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_fabric::SetFabricConfig(
+        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     std::vector<chip_id_t> all_device_ids;
     for (unsigned int id = 0; id < num_devices; id++) {
@@ -493,8 +493,8 @@ int main(int argc, char** argv) {
     tt::tt_metal::Finish(cq);
 
     tt::tt_metal::detail::CloseDevices(devices);
-    tt::tt_metal::detail::SetFabricConfig(
-        tt::tt_metal::FabricConfig::DISABLED, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_fabric::SetFabricConfig(
+        tt::tt_fabric::FabricConfig::DISABLED, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
     log_info(tt::LogTest, "Collecting results");
 

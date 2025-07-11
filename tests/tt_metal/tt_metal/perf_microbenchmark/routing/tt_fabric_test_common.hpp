@@ -14,6 +14,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
@@ -62,7 +63,7 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
     static constexpr uint32_t EW_DIM = 1;
     static constexpr uint32_t NS_DIM = 0;
 
-    static const std::unordered_map<std::pair<Topology, RoutingType>, tt::tt_metal::FabricConfig, pair_hash>
+    static const std::unordered_map<std::pair<Topology, RoutingType>, tt::tt_fabric::FabricConfig, pair_hash>
         topology_to_fabric_config_map;
 
 public:
@@ -88,7 +89,7 @@ public:
             available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
         }
 
-        current_fabric_config_ = tt::tt_metal::FabricConfig::DISABLED;
+        current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
     }
 
     std::vector<MeshCoordinate> get_available_device_coordinates() const { return this->available_device_coordinates_; }
@@ -133,11 +134,11 @@ public:
 
     void close_devices() {
         mesh_device_->close();
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
         mesh_coordinate_to_node_id_.clear();
         node_id_to_mesh_coordinate_.clear();
-        current_fabric_config_ = tt::tt_metal::FabricConfig::DISABLED;
+        current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
         are_devices_open_ = false;
     }
 
@@ -837,7 +838,7 @@ private:
     RoutingType routing_type_;
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
-    tt::tt_metal::FabricConfig current_fabric_config_;
+    tt::tt_fabric::FabricConfig current_fabric_config_;
     std::vector<MeshCoordinate> available_device_coordinates_;
     std::vector<FabricNodeId> available_node_ids_;
     std::shared_ptr<MeshDevice> mesh_device_;
@@ -846,8 +847,8 @@ private:
     std::shared_ptr<MeshWorkload> mesh_workload_;
     bool are_devices_open_ = false;
 
-    void open_devices_internal(tt::tt_metal::FabricConfig fabric_config) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config);
+    void open_devices_internal(tt::tt_fabric::FabricConfig fabric_config) {
+        tt::tt_fabric::SetFabricConfig(fabric_config);
         mesh_device_ = MeshDevice::create(mesh_shape_);
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
