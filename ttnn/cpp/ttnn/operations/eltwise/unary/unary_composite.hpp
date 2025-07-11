@@ -191,10 +191,6 @@ constexpr auto normalize_hw = ttnn::register_operation<
 constexpr auto hardswish = ttnn::register_operation<
     "ttnn::hardswish",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSWISH>>();
-constexpr auto hardsigmoid = ttnn::register_operation<
-    "ttnn::hardsigmoid",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>();
-
 constexpr auto hardtanh = ttnn::register_operation<
     "ttnn::hardtanh",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
