@@ -120,6 +120,12 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     }
 }
 
+// This returns the current contiguous bytes to the end of the fifo
+// This does not take into account the amount the amount reserved
+uint32_t socket_get_contiguous_bytes(const SocketSenderInterface& socket) {
+    return socket.downstream_fifo_curr_size + socket.downstream_fifo_addr - socket.write_ptr;
+}
+
 #ifndef COMPILE_FOR_TRISC
 void socket_notify_receiver(const SocketSenderInterface& socket) {
     // TODO: Store noc encoding in struct?
@@ -230,6 +236,12 @@ void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
         socket.bytes_acked += num_bytes;
     }
 #endif
+}
+
+// This returns the current contiguous bytes to the end of the fifo
+// This does not take into account the amount the amount waited for
+uint32_t socket_get_contiguous_bytes(const SocketReceiverInterface& socket, uint32_t num_pages) {
+    return socket.fifo_curr_size + socket.fifo_addr - socket.read_ptr;
 }
 
 void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t cb_id) {

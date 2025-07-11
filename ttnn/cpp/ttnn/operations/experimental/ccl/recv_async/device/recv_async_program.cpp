@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-///
-#include <algorithm>
 
 #include "recv_async_op.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/kernel.hpp>
 #include <ttnn/tensor/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
@@ -38,22 +37,25 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     }
 
     // TODO: These parameters should be derived from the expected tensor/socket configuration
-    auto aligned_page_size = output_tensor.buffer()->aligned_page_size();
+    auto max_alignment = std::max(
+        target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
+        output_tensor.buffer()->alignment());
+    auto output_page_size = output_tensor.buffer()->aligned_page_size();
+    auto socket_aligned_page_size = tt::align(output_page_size, max_alignment);
     auto num_pages = output_tensor.buffer()->num_pages();
     auto fabric_max_payload_size = tt::round_down(
         std::min(
             tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),
-        output_tensor.buffer()->alignment());
-    auto num_pages_per_packet = fabric_max_payload_size / aligned_page_size;
-    uint32_t num_whole_packets = 0, num_pages_remainder = 0, num_whole_packets_per_page = 0, partial_packet_size = 0;
+        max_alignment);
+    auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
+    uint32_t num_whole_packets = 0, num_pages_remainder = 0, socket_block_size = 0;
     if (num_pages_per_packet > 0) {
         num_whole_packets = num_pages / num_pages_per_packet;
         num_pages_remainder = num_pages % num_pages_per_packet;
-    }
-    if (aligned_page_size > fabric_max_payload_size) {
-        num_whole_packets_per_page = aligned_page_size / fabric_max_payload_size;
-        partial_packet_size = aligned_page_size % fabric_max_payload_size;
+        socket_block_size = num_pages_per_packet * socket_aligned_page_size;
+    } else {
+        socket_block_size = socket_aligned_page_size;
     }
 
     uint32_t packet_header_cb_num_pages = 1;  // One for sync
@@ -70,52 +72,162 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         CreateCircularBuffer(program, receiver_core_coord, cb_packet_header_config);
 
     const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer());
-    auto compile_time_args = output_accessor_args.get_compile_time_args();
+    auto output_accessor_compile_time_args = output_accessor_args.get_compile_time_args();
 
-    std::vector<uint32_t> writer_compile_args = {
-        packet_header_cb_index,      // fabric_packet_header_cb_id
-        num_pages,                   // num_pages
-        aligned_page_size,           // page_size
-        num_pages_per_packet,        // num_pages_per_packet
-        num_whole_packets,           // num_whole_packets
-        num_pages_remainder,         // num_pages_remainder
-        num_whole_packets_per_page,  // num_whole_packets_per_page
-        partial_packet_size,         // partial_packet_size
-        fabric_max_payload_size,     // fabric_max_payload_size
-    };
-    writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
+    tt::CBIndex scratch_buffer_cb_index = tt::CBIndex::c_1;
+    bool socket_storage_in_dram =
+        mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;
+    bool use_local_storage = !socket_storage_in_dram;
+    uint32_t num_blocks = 0;
+    uint32_t num_pages_per_block = 0;
+    uint32_t block_remainder_pages = 0;
+    if (!use_local_storage) {
+        if (num_pages_per_packet > 0) {
+            num_blocks = num_whole_packets;
+            num_pages_per_block = num_pages_per_packet;
+            block_remainder_pages = num_pages_remainder;
+        } else {
+            num_blocks = num_pages;
+            num_pages_per_block = 1;
+            block_remainder_pages = 0;
+        }
+        auto data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+        tt::tt_metal::CircularBufferConfig cb_scratch_buffer_config =
+            tt::tt_metal::CircularBufferConfig(
+                2 * num_pages_per_block * socket_aligned_page_size, {{scratch_buffer_cb_index, data_format}})
+                .set_page_size(scratch_buffer_cb_index, socket_aligned_page_size);
+        tt::tt_metal::CBHandle cb_scratch_buffer_worker =
+            CreateCircularBuffer(program, receiver_core_coord, cb_scratch_buffer_config);
+    }
 
-    auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/recv_async/device/kernels/receiver_writer.cpp",
-        receiver_core_coord,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
-
-    std::vector<uint32_t> writer_rt_args = {
-        mesh_socket.get_config_buffer()->address(), output_tensor.buffer()->address()};
-
+    tt::tt_metal::KernelHandle reader_kernel = 0;
+    tt::tt_metal::KernelHandle writer_kernel = 0;
     auto link_indices = tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+    if (use_local_storage) {
+        std::vector<uint32_t> writer_compile_args = {
+            packet_header_cb_index,    // fabric_packet_header_cb_id
+            num_pages,                 // num_pages
+            output_page_size,          // output_page_size
+            socket_block_size,         // socket_block_size
+            socket_aligned_page_size,  // socket_page_size
+            num_pages_per_packet,      // num_pages_per_packet
+            num_whole_packets,         // num_whole_packets
+            num_pages_remainder,       // num_pages_remainder
+        };
+        writer_compile_args.insert(
+            writer_compile_args.end(),
+            output_accessor_compile_time_args.begin(),
+            output_accessor_compile_time_args.end());
 
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        receiver_fabric_node_id, sender_fabric_node_id, link_indices[0], program, receiver_core_coord, writer_rt_args);
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/recv_async/device/kernels/receiver_inplace_writer.cpp",
+            receiver_core_coord,
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
-    tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, receiver_core_coord, writer_rt_args);
+        std::vector<uint32_t> writer_rt_args = {
+            mesh_socket.get_config_buffer()->address(), output_tensor.buffer()->address()};
 
-    auto override_runtime_arguments_callback =
-        [receiver_core_coord, worker_writer_kernel_id](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& mesh_socket = static_cast<const ttnn::RecvAsync*>(operation)->mesh_socket;
-            auto& writer_runtime_args = GetRuntimeArgs(program, worker_writer_kernel_id, receiver_core_coord);
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            receiver_fabric_node_id,
+            sender_fabric_node_id,
+            link_indices[0],
+            program,
+            receiver_core_coord,
+            writer_rt_args);
 
-            writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-            writer_runtime_args[1] = input_tensors[0].buffer()->address();
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel, receiver_core_coord, writer_rt_args);
+    } else {
+        TT_ASSERT(num_blocks * num_pages_per_block + block_remainder_pages == num_pages, "Blocks and pages mismatch");
+        std::vector<uint32_t> reader_compile_args = {
+            packet_header_cb_index,    // fabric_packet_header_cb_id
+            scratch_buffer_cb_index,   // scratch_buffer_cb_id
+            socket_block_size,         // socket_block_size
+            socket_aligned_page_size,  // socket_page_size
+            num_blocks,                // num_blocks
+            num_pages_per_block,       // num_pages_per_block
+            block_remainder_pages,     // block_remainder_pages
+            socket_storage_in_dram,    // socket_storage_in_dram
+        };
+        reader_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/recv_async/device/kernels/receiver_reader.cpp",
+            receiver_core_coord,
+            tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+
+        // TODO: This should be derived from the expected tensor/socket configuration
+        uint32_t bank_id = 0;  //
+        std::vector<uint32_t> reader_rt_args = {mesh_socket.get_config_buffer()->address(), bank_id};
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            receiver_fabric_node_id,
+            sender_fabric_node_id,
+            link_indices[0],
+            program,
+            receiver_core_coord,
+            reader_rt_args);
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel, receiver_core_coord, reader_rt_args);
+
+        std::vector<uint32_t> writer_compile_args = {
+            scratch_buffer_cb_index,  // scratch_buffer_cb_id
+            num_pages,                // num_pages
+            output_page_size,         // page_size
+        };
+        writer_compile_args.insert(
+            writer_compile_args.end(),
+            output_accessor_compile_time_args.begin(),
+            output_accessor_compile_time_args.end());
+
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/recv_async/device/kernels/receiver_writer.cpp",
+            receiver_core_coord,
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+
+        std::vector<uint32_t> writer_rt_args = {
+            output_tensor.buffer()->address(),
+            0  // start_page_index
         };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel, receiver_core_coord, writer_rt_args);
+    }
+
+    if (use_local_storage) {
+        auto override_runtime_arguments_callback =
+            [receiver_core_coord, writer_kernel](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                const auto& mesh_socket = static_cast<const ttnn::RecvAsync*>(operation)->mesh_socket;
+                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel, receiver_core_coord);
+
+                writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
+                writer_runtime_args[1] = input_tensors[0].buffer()->address();
+            };
+
+        return {
+            .program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    } else {
+        auto override_runtime_arguments_callback =
+            [receiver_core_coord, reader_kernel, writer_kernel](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                const auto& mesh_socket = static_cast<const ttnn::RecvAsync*>(operation)->mesh_socket;
+                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel, receiver_core_coord);
+                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel, receiver_core_coord);
+
+                reader_runtime_args[0] = mesh_socket.get_config_buffer()->address();
+                writer_runtime_args[0] = input_tensors[0].buffer()->address();
+            };
+
+        return {
+            .program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    }
 }
 
 }  // namespace ttnn
