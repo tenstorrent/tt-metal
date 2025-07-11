@@ -87,7 +87,10 @@ class RMSNorm(AbstractModule):
         stats_memcfg = None
         is_distributed = False
         if norm_category == "attention_norm" or norm_category == "mlp_norm":
-            assert list(mesh_device.shape) == [8, 4], "Only 8x4 mesh devices are supported for Decoder RMSNorm"
+            assert list(mesh_device.shape) == [
+                8,
+                4,
+            ], f"Only 8x4 mesh devices are supported for Decoder RMSNorm, got {list(mesh_device.shape)}"
             is_distributed = True
             output_memcfg = None
             stats_memcfg = ttnn.create_sharded_memory_config(
