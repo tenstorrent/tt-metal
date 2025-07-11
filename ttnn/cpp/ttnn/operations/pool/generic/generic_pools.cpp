@@ -72,6 +72,7 @@ static Tensor pool2d_invoke(
     uint32_t num_cores_nhw = 0;
     uint32_t num_cores_c = 0;
     uint32_t channels_padded = input_padded_shape[3];
+    uint32_t output_channels_padded = tt::round_up(input_tensor_shape[3], 32);
 
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
     if (!out_memory_config.shard_spec().has_value()) {
@@ -135,10 +136,8 @@ static Tensor pool2d_invoke(
     uint32_t output_shard_width_padded =
         input_tensor.dtype() == DataType::BFLOAT8_B
             ? tt::round_up(channels / num_cores_c, tt::constants::TILE_WIDTH)
-            : tt::round_up(
-                  channels_padded / num_cores_c *
-                      tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype())),
-                  tt::constants::TILE_WIDTH);
+            : tt::round_up(channels_padded / num_cores_c, tt::constants::TILE_WIDTH) *
+                  tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));

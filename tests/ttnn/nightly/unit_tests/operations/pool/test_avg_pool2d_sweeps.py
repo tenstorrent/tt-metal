@@ -38,7 +38,7 @@ parameters = {
         [1, 16, 2, 2, 2, 2, 2, 2, 0, 0, False, True],
         [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
         [1, 384, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
-        [257, 1, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 257, 5, 5, 2, 2, 2, 2, 0, 0, False, True],
         [1, 7, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
     ]
 }
@@ -70,7 +70,7 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
         ceil_mode=ceil_mode,
-        divisor_override=1,
+        divisor_override=None,
         count_include_pad=count_include_pad,
         shard_scheme=None,
     )
