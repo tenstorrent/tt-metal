@@ -12,6 +12,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
+
 namespace ttnn {
 
 namespace operations {
@@ -71,6 +73,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -110,6 +113,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -129,6 +133,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     CoreCoord compute_with_storage_grid_size,
     tt::tt_metal::DataType output_dtype,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -147,6 +152,7 @@ struct MatmulMultiCoreReuseProgramConfig {
     std::size_t out_subblock_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
+    compute_throttle_utils::ThrottleLevel throttle_level = compute_throttle_utils::ThrottleLevel::LEVEL_0;
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
@@ -161,6 +167,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast;
     std::optional<UnaryWithParam> fused_activation;
     bool fuse_batch = true;
+    compute_throttle_utils::ThrottleLevel throttle_level = compute_throttle_utils::ThrottleLevel::LEVEL_0;
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
@@ -179,6 +186,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers;
     bool untilize_out;
+    compute_throttle_utils::ThrottleLevel throttle_level = compute_throttle_utils::ThrottleLevel::LEVEL_0;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
