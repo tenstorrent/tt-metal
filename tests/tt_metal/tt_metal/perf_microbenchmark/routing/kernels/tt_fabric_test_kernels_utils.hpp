@@ -1243,5 +1243,89 @@ private:
     }
 };
 
+/* ********************
+ * SyncKernelConfig   *
+ **********************/
+template <
+    uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
+    bool IS_2D_FABRIC,
+    bool USE_DYNAMIC_ROUTING,
+    uint8_t NUM_LOCAL_SYNC_CORES>
+struct SyncKernelConfig {
+    static SyncKernelConfig build_from_args(size_t& arg_idx) { return SyncKernelConfig(arg_idx); }
+
+    void global_sync() {
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            sync_fabric_connections()[i].open();
+        }
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            line_sync_configs()[i].global_sync_start();
+        }
+        // only need one of the config to check for the acks
+        line_sync_configs()[0].global_sync_finish();
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            sync_fabric_connections()[i].close();
+        }
+    }
+
+    void local_sync() { local_sync_config().local_sync(); }
+
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return memory_map.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return memory_map.result_buffer_size; }
+
+    CommonMemoryMap memory_map;
+    alignas(WorkerToFabricEdmSender)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> sync_fabric_connections_storage;
+    alignas(LineSyncConfig)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfig)> line_sync_configs_storage;
+    alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
+        std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
+
+    // Helper accessors
+    WorkerToFabricEdmSender* sync_fabric_connections() {
+        return reinterpret_cast<WorkerToFabricEdmSender*>(sync_fabric_connections_storage.data());
+    }
+    LineSyncConfig* line_sync_configs() { return reinterpret_cast<LineSyncConfig*>(line_sync_configs_storage.data()); }
+    LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
+        return *reinterpret_cast<LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>*>(local_sync_config_storage.data());
+    }
+
+private:
+    SyncKernelConfig(size_t& arg_idx) {
+        // Parse memory map args (common only)
+        memory_map = CommonMemoryMap::build_from_args(arg_idx);
+
+        // Initialize sync fabric connections using placement new
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            auto sync_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            new (&sync_fabric_connections()[i]) WorkerToFabricEdmSender(sync_connection);
+        }
+
+        // Initialize line sync configurations
+        uint32_t line_sync_val = get_arg_val<uint32_t>(arg_idx++);
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            // For sync kernel, we allocate packet headers from a simple base address
+            // since we don't need the complex memory management of SenderKernelMemoryMap
+            uint32_t packet_header_address =
+                memory_map.result_buffer_base + memory_map.result_buffer_size + i * sizeof(PACKET_HEADER_TYPE);
+            new (&line_sync_configs()[i])
+                LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
+
+            // setup packet header fields
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+                arg_idx, packet_header_address);
+        }
+
+        // Initialize local sync config
+        uint32_t sync_address = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t sync_val = get_arg_val<uint32_t>(arg_idx++);
+        new (&local_sync_config()) LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>(sync_address, sync_val);
+
+        // setup core coordinates
+        local_sync_config().setup_core_coordinates(arg_idx);
+    }
+};
+
 }  // namespace fabric_tests
 }  // namespace tt::tt_fabric

@@ -28,6 +28,8 @@ const std::string default_sender_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sender.cpp";
 const std::string default_receiver_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_receiver.cpp";
+const std::string default_sync_kernel_src =
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sync.cpp";
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
@@ -477,38 +479,32 @@ inline void TestDevice::create_sync_kernel() {
 
     auto& [sync_core, sync_sender] = *sync_senders_.begin();
 
-    uint32_t is_mater_sync_core = 1;
-    uint32_t num_test_traffic_fabric_connections = 0;
-    uint32_t num_test_traffic_configs = 0;
-
-    // get ct args
+    // Simplified compile-time args for sync kernel
     std::vector<uint32_t> ct_args = {
         is_2d_fabric,
         use_dynamic_routing,
-        num_test_traffic_fabric_connections,        /* num fabric connections */
-        num_test_traffic_configs,                   /* num regular traffic configs (sync core has none) */
-        (uint32_t)benchmark_mode_,                  /* benchmark mode */
-        (uint32_t)global_sync_,                     /* line sync enabled */
-        is_mater_sync_core,                         /* is master sync core */
-        static_cast<uint32_t>(senders_.size() + 1), /* num local sync cores (all senders + sync core) */
-        sync_sender.global_sync_configs_.size() /* num sync configs */};
+        sync_sender.sync_fabric_connections_.size(), /* num sync fabric connections */
+        static_cast<uint32_t>(senders_.size() + 1)   /* num local sync cores (all senders + sync core) */
+    };
 
-    // memory map args
-    std::vector<uint32_t> memory_map_args = sender_memory_map_->get_memory_map_args();
+    // Memory map args (only need common memory map for result buffer)
+    std::vector<uint32_t> memory_map_args;
+    memory_map_args.push_back(sender_memory_map_->get_result_buffer_address());
+    memory_map_args.push_back(sender_memory_map_->get_result_buffer_size());
 
-    // Sync fabric connection args (no regular fabric connections for sync core)
+    // Sync fabric connection args
     std::vector<uint32_t> sync_fabric_connection_args;
     if (!sync_sender.sync_fabric_connections_.empty()) {
         sync_fabric_connection_args = generate_fabric_connection_args(sync_core, sync_sender.sync_fabric_connections_);
     }
 
-    // Add line sync runtime args (both global and local sync)
+    // Global sync args
     std::vector<uint32_t> global_sync_args;
 
-    // ===== GLOBAL SYNC ARGS =====
     // Expected sync value for global sync
-    global_sync_args.push_back(this->global_sync_val_);  // Use the stored line sync value from test config
+    global_sync_args.push_back(this->global_sync_val_);
 
+    // Add sync routing args for each sync config
     for (size_t i = 0; i < sync_sender.global_sync_configs_.size(); ++i) {
         const auto& [sync_config, fabric_conn_idx] = sync_sender.global_sync_configs_[i];
 
@@ -525,39 +521,30 @@ inline void TestDevice::create_sync_kernel() {
         global_sync_args.insert(global_sync_args.end(), sync_traffic_args.begin(), sync_traffic_args.end());
     }
 
-    // ===== LOCAL SYNC ARGS =====
-    // Add local sync configuration args
-    uint32_t local_sync_val =
-        static_cast<uint32_t>(senders_.size() + 1);  // Expected sync value (all senders + sync core)
-    global_sync_args.push_back(sender_memory_map_->get_local_sync_address());
-    global_sync_args.push_back(local_sync_val);
+    // Local sync args
+    std::vector<uint32_t> local_sync_args;
+    uint32_t local_sync_val = static_cast<uint32_t>(senders_.size() + 1);  // Expected sync value
+    local_sync_args.push_back(sender_memory_map_->get_local_sync_address());
+    local_sync_args.push_back(local_sync_val);
 
     // Add sync core's own NOC encoding first
     uint32_t sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(this->coord_, sync_core);
-    global_sync_args.push_back(sync_core_noc_encoding);
+    local_sync_args.push_back(sync_core_noc_encoding);
 
     // Add other sender core coordinates for local sync
     for (const auto& [sender_core, _] : this->senders_) {
         uint32_t sender_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(this->coord_, sender_core);
-        global_sync_args.push_back(sender_noc_encoding);
+        local_sync_args.push_back(sender_noc_encoding);
     }
 
-    // No traffic config mapping or traffic config args for sync core
-    std::vector<uint32_t> traffic_config_to_fabric_connection_args;
-    std::vector<uint32_t> traffic_config_args;
-
+    // Assemble runtime args
     std::vector<uint32_t> rt_args;
     rt_args.reserve(
-        memory_map_args.size() + sync_fabric_connection_args.size() + global_sync_args.size() +
-        traffic_config_to_fabric_connection_args.size() + traffic_config_args.size());
+        memory_map_args.size() + sync_fabric_connection_args.size() + global_sync_args.size() + local_sync_args.size());
     rt_args.insert(rt_args.end(), memory_map_args.begin(), memory_map_args.end());
     rt_args.insert(rt_args.end(), sync_fabric_connection_args.begin(), sync_fabric_connection_args.end());
     rt_args.insert(rt_args.end(), global_sync_args.begin(), global_sync_args.end());
-    rt_args.insert(
-        rt_args.end(),
-        traffic_config_to_fabric_connection_args.begin(),
-        traffic_config_to_fabric_connection_args.end());
-    rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
+    rt_args.insert(rt_args.end(), local_sync_args.begin(), local_sync_args.end());
 
     // create sync kernel
     sync_sender.create_kernel(coord_, ct_args, rt_args, {});
@@ -572,22 +559,17 @@ inline void TestDevice::create_sender_kernels() {
     // all local senders + one sync core
     uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size()) + 1;
 
-    uint32_t is_mater_sync_core = 0;
-    uint32_t num_sync_fabric_connections = 0;
-
     for (const auto& [core, sender] : this->senders_) {
-        // get ct args
-        // TODO: fix these- number of fabric connections, mappings etc
+        // Simplified compile-time args for sender kernel (no sync master functionality)
         std::vector<uint32_t> ct_args = {
             is_2d_fabric,
             use_dynamic_routing,
             sender.fabric_connections_.size(), /* num fabric connections */
-            sender.configs_.size(),
-            (uint32_t)benchmark_mode_, /* benchmark mode */
-            (uint32_t)global_sync_,    /* sync */
-            is_mater_sync_core,        /* master sync core */
-            num_local_sync_cores,      /* num local sync cores */
-            num_sync_fabric_connections /* num sync fabric connections */};
+            sender.configs_.size(),            /* num traffic configs */
+            (uint32_t)benchmark_mode_,         /* benchmark mode */
+            (uint32_t)global_sync_,            /* line sync enabled */
+            num_local_sync_cores               /* num local sync cores */
+        };
 
         // Get memory layout from sender memory map
         TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
@@ -599,12 +581,6 @@ inline void TestDevice::create_sender_kernels() {
         std::vector<uint32_t> fabric_connection_args;
         if (!sender.fabric_connections_.empty()) {
             fabric_connection_args = generate_fabric_connection_args(core, sender.fabric_connections_);
-        }
-
-        // Add sync fabric connection args
-        std::vector<uint32_t> sync_fabric_connection_args;
-        if (!sender.sync_fabric_connections_.empty()) {
-            sync_fabric_connection_args = generate_fabric_connection_args(core, sender.sync_fabric_connections_);
         }
 
         // Add local sync args for regular senders (they participate as sync receivers)
@@ -651,7 +627,8 @@ inline void TestDevice::create_sender_kernels() {
 
         // Pre-calculate total rt_args size to avoid reallocations
         const size_t total_rt_args_size = memory_map_args.size() + fabric_connection_args.size() +
-                                          traffic_config_to_fabric_connection_args.size() + traffic_config_args.size();
+                                          local_sync_args.size() + traffic_config_to_fabric_connection_args.size() +
+                                          traffic_config_args.size();
 
         std::vector<uint32_t> rt_args;
         rt_args.reserve(total_rt_args_size);
@@ -739,7 +716,7 @@ inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTr
 inline void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config) {
     // Create sync sender if it doesn't exist
     if (this->sync_senders_.find(logical_core) == this->sync_senders_.end()) {
-        this->sync_senders_.emplace(logical_core, TestSender(logical_core, this, default_sender_kernel_src));
+        this->sync_senders_.emplace(logical_core, TestSender(logical_core, this, default_sync_kernel_src));
     }
     this->sync_senders_.at(logical_core).add_sync_config(std::move(sync_config));
 }

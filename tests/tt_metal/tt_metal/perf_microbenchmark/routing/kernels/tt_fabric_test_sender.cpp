@@ -10,18 +10,16 @@ constexpr uint8_t NUM_FABRIC_CONNECTIONS = get_compile_time_arg_val(2);
 constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(3);
 constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(4);
 constexpr bool LINE_SYNC = get_compile_time_arg_val(5);
-constexpr bool MASTER_SYNC_CORE = get_compile_time_arg_val(6);
-constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(7);
-constexpr uint8_t NUM_SYNC_FABRIC_CONNECTIONS = get_compile_time_arg_val(8);
+constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(6);
 
 using SenderKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig<
     NUM_FABRIC_CONNECTIONS,
-    NUM_SYNC_FABRIC_CONNECTIONS,
+    0,  // No sync fabric connections in regular sender
     NUM_TRAFFIC_CONFIGS,
     IS_2D_FABRIC,
     USE_DYNAMIC_ROUTING,
     LINE_SYNC,
-    MASTER_SYNC_CORE,
+    false,  // Not master sync core
     NUM_LOCAL_SYNC_CORES>;
 
 void kernel_main() {
@@ -33,16 +31,9 @@ void kernel_main() {
         sender_config.get_result_buffer_address(), sender_config.get_result_buffer_size());
     tt::tt_fabric::fabric_tests::write_test_status(sender_config.get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
 
-    // add line sync here
+    // Local sync (as participant, not master)
     if constexpr (LINE_SYNC) {
-        if constexpr (MASTER_SYNC_CORE) {
-            sender_config.global_sync();
-            sender_config.local_sync();
-            // master sync core doesn't process any subsequent traffic.
-            return;
-        } else {
-            sender_config.local_sync();
-        }
+        sender_config.local_sync();
     }
 
     sender_config.open_connections();
