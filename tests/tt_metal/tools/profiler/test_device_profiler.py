@@ -222,7 +222,7 @@ def test_dispatch_cores():
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [600, 1310, 2330],
+        "Tensix CQ Dispatch": [600, 760, 1310, 2330],
         "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
         "dispatch_total_cq_cmd_op_time": [103],
         "dispatch_go_send_wait_time": [103],
