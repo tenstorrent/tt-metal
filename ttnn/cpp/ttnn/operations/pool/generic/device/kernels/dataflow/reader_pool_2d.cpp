@@ -216,24 +216,19 @@ void kernel_main() {
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
     // we only need to initialize the in_cb if we will not fill each multibuffering chunk with max_rows worth of data
-    constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multi_buffering_factor;
+    // constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multi_buffering_factor;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (need_to_initialize_in_cb || is_avg_pool) {
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            cb_push_back(clear_value_cb_id, 1);
-        }
-        if constexpr (reader_id == 1) {
-            cb_wait_front(clear_value_cb_id, 1);
-        }
-        // for avg pool clear_out_tiles runs in loop, no need to initialize
-        // but always initialize for small kernels
-        if (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
-        }
+    if constexpr (reader_id == 0) {
+        fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+        cb_push_back(clear_value_cb_id, 1);
     }
+    if constexpr (reader_id == 1) {
+        cb_wait_front(clear_value_cb_id, 1);
+    }
+    // TODO we don't always need to initialize the in_cb
+    clear_out_tiles<in_cb_id, clear_value_cb_id>();
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
