@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     // tensor parallel is not supported yet
-    three_tier_arch::initialize_device(true, enable_tp);
+    three_tier_arch::initialize_device(ddp, enable_tp);
 
     auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);

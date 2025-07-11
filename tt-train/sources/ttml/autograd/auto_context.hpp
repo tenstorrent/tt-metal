@@ -56,7 +56,7 @@ public:
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
     void open_device(
-        const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(1, 8),
+        const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(2, 4),
         const std::vector<int>& device_ids = std::vector<int>{});
 
     void close_device();

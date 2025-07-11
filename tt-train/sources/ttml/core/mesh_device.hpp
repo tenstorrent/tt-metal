@@ -24,5 +24,6 @@ public:
 
 private:
     std::shared_ptr<ttnn::distributed::MeshDevice> m_mesh_device;
+    std::shared_ptr<ttnn::distributed::MeshDevice> m_sub_mesh;  // For sub-meshes, if needed
 };
 }  // namespace ttml::core
