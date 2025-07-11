@@ -12,9 +12,9 @@ FlipDeviceOperation::program_factory_t FlipDeviceOperation::select_program_facto
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& dims = operation_attributes.dims;
     const auto rank = input_tensor.get_logical_shape().rank();
-    const auto layout = input_tensor.get_layout()
+    const auto layout = input_tensor.get_layout();
 
-                            bool is_horizontal_flip = (dims.size() == 1) && (dims[0] == rank - 1);
+    bool is_horizontal_flip = (dims.size() == 1) && (dims[0] == rank - 1);
     bool is_vertical_flip = (dims.size() == 1) && (dims[0] == rank - 2);
 
     if (layout == Layout::TILE) {

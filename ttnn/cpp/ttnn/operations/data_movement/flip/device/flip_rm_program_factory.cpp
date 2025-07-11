@@ -10,12 +10,12 @@
 namespace ttnn::operations::data_movement {
 
 namespace detail {
-uint32_t num_pages(const ttnn::Tensor& input_tensor) {
+static uint32_t num_pages(const ttnn::Tensor& input_tensor) {
     const auto& shape = input_tensor.logical_shape();
     return shape.volume() / shape[-1];
 }
 
-uint32_t page_size(const ttnn::Tensor& input_tensor) {
+static uint32_t page_size(const ttnn::Tensor& input_tensor) {
     auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                 ? tt::tt_metal::hal::get_dram_alignment()
                                 : tt::tt_metal::hal::get_l1_alignment();
@@ -23,7 +23,7 @@ uint32_t page_size(const ttnn::Tensor& input_tensor) {
     return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
 }
 
-std::vector<uint32_t> get_row_strides(const ttnn::Shape& shape) {
+static std::vector<uint32_t> get_row_strides(const ttnn::Shape& shape) {
     std::vector<uint32_t> strides(shape.rank());
     strides[shape.rank() - 1] = 1;
     strides[shape.rank() - 2] = 1;
@@ -47,10 +47,12 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
     bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
 
     Program program{};
     IDevice* device = input_tensor.device();
 
+    uint32_t N = operation_attributes.dims.size();
     uint32_t num_input_pages = detail::num_pages(input_tensor);
     uint32_t num_input_pages_to_read = 2;  // how do we know?
     uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
@@ -82,8 +84,8 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id,
-         .unary_writer_kernel_id = unary_writer_kernel_id,
+        {.unary_reader_kernel_id = reader_kernel_id,
+         .unary_writer_kernel_id = writer_kernel_id,
          .core_range = all_cores},
     };
 }
