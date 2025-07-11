@@ -432,6 +432,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (uint32_t)pool_type,
         one_scalar_per_core,
         config_cb_id,
+        in_nbytes_c,
+        in_nbytes_padded_c,
         params.multi_buffering_factor,
         stride_w};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
