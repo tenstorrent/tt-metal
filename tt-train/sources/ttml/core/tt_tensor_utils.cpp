@@ -227,10 +227,6 @@ bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
     return tensor.tensor_attributes != nullptr;
 }
 
-ttnn::Shape create_shape(const std::array<uint32_t, 4>& args) {
-    return ttnn::Shape{args};
-}
-
 void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name) {
     if (tensor.dtype() == ttnn::DataType::BFLOAT16 || tensor.dtype() == ttnn::DataType::FLOAT32) {
         print_tensor_stats_<float>(tensor, name);

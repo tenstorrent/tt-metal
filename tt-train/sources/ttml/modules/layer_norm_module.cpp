@@ -9,10 +9,8 @@
 namespace ttml::modules {
 
 void LayerNormLayer::initialize_tensors(uint32_t features) {
-    m_gamma =
-        autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, features}), &autograd::ctx().get_device()));
-    m_beta =
-        autograd::create_tensor(core::zeros(core::create_shape({1, 1, 1, features}), &autograd::ctx().get_device()));
+    m_gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
+    m_beta = autograd::create_tensor(core::zeros(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
 }
 
 LayerNormLayer::LayerNormLayer(uint32_t features, bool use_composite_op) : m_use_composite_op(use_composite_op) {
