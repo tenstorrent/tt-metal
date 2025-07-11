@@ -21,7 +21,6 @@ namespace ttnn::operations::matmul {
 using ttnn::operations::unary::UnaryWithParam;
 
 void py_module(py::module& module) {
-    // Add the ThrottleLevel enum binding
     py::enum_<ttnn::operations::compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
         Enum for controlling matmul compute throttling.
 
