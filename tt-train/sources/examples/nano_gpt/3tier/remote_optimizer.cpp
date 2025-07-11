@@ -7,7 +7,7 @@
 #include "common.hpp"
 
 RemoteOptimizer::RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) :
-    ttml::optimizers::OptimizerBase(std::move(parameters)), m_socket_manager(SocketType::MPI) {
+    ttml::optimizers::OptimizerBase(std::move(parameters)), m_socket_manager(SocketType::FABRIC) {
     fmt::println("RemoteOptimizer creation starts with {} parameters", m_parameters.size());
 
     m_aggregator_rank = ttml::core::distributed::Rank{aggregator_rank};
