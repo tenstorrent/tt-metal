@@ -206,6 +206,18 @@ void create_drainer_kernel(
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
 
+    auto dispatch_core_type =
+        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config().get_core_type();
+    uint32_t dummy_eth_channel = [&]() -> uint32_t {
+        if (dispatch_core_type == CoreType::WORKER) {
+            return 0;
+        } else if (dispatch_core_type == CoreType::ETH) {
+            return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+        } else {
+            TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(dispatch_core_type));
+        }
+    }();
+
     std::vector<uint32_t> drainer_ct_args = {
         drainer_kernel_config->num_buffers_full_size_channel,
         drainer_kernel_config->buffer_size_bytes_full_size_channel,
@@ -215,7 +227,7 @@ void create_drainer_kernel(
         drainer_kernel_config->get_connection_handshake_address(drainer_channel_type, 0),
         drainer_kernel_config->get_flow_control_address(drainer_channel_type, 0),
         drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),
-        drainer_logical_core.y,
+        dummy_eth_channel,
     };
     std::vector<uint32_t> drainer_rt_args = {};
 
