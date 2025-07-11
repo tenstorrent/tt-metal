@@ -255,7 +255,7 @@ struct EdmChannelWorkerInterface {
         invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address;
-        if constexpr (true || MY_ETH_CHANNEL == USE_DYNAMIC_CREDIT_ADDR) {
+        if constexpr (MY_ETH_CHANNEL == USE_DYNAMIC_CREDIT_ADDR) {
             // This address notification from client is forcibly enabled.
             // because IDLE_ETH potentially become a EDM client and EDM itself doesn't know client core type.
             // IDLE_ETH doesn't have tensix_fabric_connections_l1_info_t on fixed L1 region

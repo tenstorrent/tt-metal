@@ -178,13 +178,7 @@ void kernel_main() {
         fabric_router_status_address,
         local_fabric_router_status_address);
 
-    if constexpr (CORE_TYPE == ProgrammableCoreType::TENSIX) {
-        fabric_connection.open();
-    } else {
-        // IDLE_ETH doesn't have statically allocated credits on L1
-        // so treated as legacy client
-        fabric_connection.open<true>();
-    }
+    fabric_connection.open<CORE_TYPE == ProgrammableCoreType::IDLE_ETH>();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 

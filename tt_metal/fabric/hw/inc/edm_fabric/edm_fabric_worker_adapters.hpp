@@ -368,7 +368,7 @@ struct WorkerToFabricEdmSenderImpl {
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
                 0xf,
                 WORKER_HANDSHAKE_NOC);
-        } else if constexpr (true || legacy_client) {
+        } else if constexpr (legacy_client) {
             // This address notification is forcibly enabled.
             // because IDLE_ETH potentially become a EDM client and EDM itself doesn't know client core type.
             // IDLE_ETH doesn't have tensix_fabric_connections_l1_info_t on fixed L1 region
