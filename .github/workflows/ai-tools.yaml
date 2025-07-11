@@ -1,20 +1,27 @@
 name: AI Assistant
+
 on:
   issue_comment:
     types: [created]
   pull_request_review_comment:
     types: [created]
   issues:
-    types: [opened, assigned, labeled]
+    types: [opened, assigned]
   pull_request_review:
     types: [submitted]
 
 jobs:
-  claude-response:
+  claude-code-action:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@tt-ai')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@tt-ai')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@tt-ai')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@tt-ai'))
     runs-on: [arch-wormhole_b0, in-service, n300]
     permissions:
       contents: read
       pull-requests: read
+      issues: read
       id-token: write
 
     steps:
@@ -28,5 +35,5 @@ jobs:
           anthropic_api_key: ${{ secrets.AAK }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           trigger_phrase: "@tt-ai"
-          max_turns: "5"
           allowed_tools: "Bash(./build_metal.sh --debug)"
+          timeout_minutes: "30"
