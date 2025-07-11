@@ -7,6 +7,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "tt-metalium/constants.hpp"
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -23,14 +24,16 @@ int main() {
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
     // Initialize a device
-    IDevice* device = CreateDevice(0);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
     // In Metalium, submitting operations to the device is done through a command queue. This includes
     // uploading/downloading data to/from the device, and executing programs.
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
     // same kernel at a given time. Metalium allows you to run different kernels on different cores
     // simultaneously.
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
@@ -41,17 +44,17 @@ int main() {
     constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,               // Device which owns the buffer
-        .size = single_tile_size,       // Size of the buffer in bytes
+    distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size,  // Number of bytes when round-robin between banks. Usually this is the same
                                         // as the tile size for efficiency.
         .buffer_type = tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
-
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = single_tile_size,       // Size of the buffer in bytes
+    };
     // Create 3 buffers in DRAM to hold the 2 input tiles and 1 output tile.
-    auto src0_dram_buffer = CreateBuffer(dram_config);
-    auto src1_dram_buffer = CreateBuffer(dram_config);
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
     // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are
     // used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute
@@ -117,8 +120,8 @@ int main() {
     // is not released before the operation is complete.
     // In this case, we will wait for the program to finish eventually in the same scope, so we can set it
     // to false safely.
-    EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
+    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
@@ -126,12 +129,13 @@ int main() {
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
 
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     // Read the results from the destination DRAM buffer into host memory.
     std::vector<bfloat16> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     // compare the results with the expected values.
     bool success = true;
@@ -148,5 +152,5 @@ int main() {
     } else {
         fmt::print("Success: Result matches expected value!\n");
     }
-    CloseDevice(device);
+    mesh_device->close();
 }
