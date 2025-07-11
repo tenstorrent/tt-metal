@@ -100,7 +100,7 @@ class TT_CCL:
         self.ag_output_pbs["DECODER_FWD_PREFILL_AG"] = self.create_persistent_buffer(
             shape=[1, 1, self.seq_len, 8192],
             mem_config=self.model_config["DEFAULT_MEMCFG"],
-            dtype=self.default_dtype,
+            dtype=self.model_config["BFP8_DTYPE"],
         )
         self.ag_output_pbs["ATTN_FWD_PREFILL_AG"] = self.create_persistent_buffer(
             shape=[1, 1, self.seq_len, 8192],
@@ -122,7 +122,7 @@ class TT_CCL:
         self.ag_output_pbs["MODEL_FWD_PREFILL_AG"] = self.create_persistent_buffer(
             shape=[1, 1, self.seq_len, 8192],
             mem_config=self.model_config["DEFAULT_MEMCFG"],
-            dtype=self.default_dtype,
+            dtype=self.model_config["BFP8_DTYPE"],
         )
 
         # decode
