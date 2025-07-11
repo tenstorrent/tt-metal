@@ -78,8 +78,9 @@ struct WorkerToFabricEdmSenderImpl {
         uint32_t edm_copy_of_wr_counter_addr;
         volatile uint32_t* writer_send_sem_addr;
 
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
+        // remove redundant nested constructor to avoid copy
         if constexpr (my_core_type == ProgrammableCoreType::TENSIX) {
-            // TODO: pass fabric_connection_info_t to avoid copy
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
                 reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
