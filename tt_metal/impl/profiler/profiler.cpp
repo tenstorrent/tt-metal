@@ -923,8 +923,8 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     } else if (packet_type == kernel_profiler::TS_DATA) {
         using EMD = KernelProfilerNocEventMetadata;
         EMD ev_md(data);
-        std::variant<EMD::LocalNocEvent, EMD::FabricNoCEvent, EMD::FabricRoutingFields> ev_md_contents =
-            ev_md.getContents();
+        std::variant<EMD::LocalNocEvent, EMD::FabricNoCEvent, EMD::FabricNoCScatterEvent, EMD::FabricRoutingFields>
+            ev_md_contents = ev_md.getContents();
         if (std::holds_alternative<EMD::LocalNocEvent>(ev_md_contents)) {
             auto local_noc_event = std::get<EMD::LocalNocEvent>(ev_md_contents);
 
@@ -982,12 +982,6 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"timestamp", timestamp},
             };
 
-            // For scatter write operations, include additional scatter information
-            if (ev_md.noc_xfer_type == EMD::NocEventType::FABRIC_UNICAST_SCATTER_WRITE) {
-                data["scatter_address_index"] = fabric_noc_event.mcast_end_dst_x;
-                data["scatter_total_addresses"] = fabric_noc_event.mcast_end_dst_y;
-            }
-
             // handle dst coordinates correctly for different NocEventType
             if (KernelProfilerNocEventMetadata::isFabricUnicastEventType(ev_md.noc_xfer_type)) {
                 auto phys_coord =
@@ -1004,6 +998,31 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 data["mcast_end_x"] = phys_end_coord.x;
                 data["mcast_end_y"] = phys_end_coord.y;
             }
+
+            noc_trace_json_log.push_back(std::move(data));
+        } else if (std::holds_alternative<EMD::FabricNoCScatterEvent>(ev_md_contents)) {
+            EMD::FabricNoCScatterEvent fabric_noc_scatter_event = std::get<EMD::FabricNoCScatterEvent>(ev_md_contents);
+
+            nlohmann::ordered_json data = {
+                {"run_host_id", run_host_id},
+                {"op_name", opname},
+                {"proc", risc_name},
+                {"sx", core_x},
+                {"sy", core_y},
+                {"type", magic_enum::enum_name(ev_md.noc_xfer_type)},
+                {"routing_fields_type", magic_enum::enum_name(fabric_noc_scatter_event.routing_fields_type)},
+                {"timestamp", timestamp},
+            };
+
+            // add dst coordinates
+            auto phys_coord = getPhysicalAddressFromVirtual(
+                device_id, {fabric_noc_scatter_event.dst_x, fabric_noc_scatter_event.dst_y});
+            data["dx"] = phys_coord.x;
+            data["dy"] = phys_coord.y;
+
+            // For scatter write operations, include additional scatter information
+            data["num_chunks"] = fabric_noc_scatter_event.num_chunks;
+            data["chunk_size"] = fabric_noc_scatter_event.chunk_size;
 
             noc_trace_json_log.push_back(std::move(data));
         } else if (std::holds_alternative<EMD::FabricRoutingFields>(ev_md_contents)) {
@@ -1186,12 +1205,24 @@ void DeviceProfiler::serializeJsonNocTraces(
             }
 
             if (KernelProfilerNocEventMetadata::isFabricUnicastEventType(noc_xfer_type.value())) {
-                modified_write_event["dx"] = fabric_event.at("dx").get<int>();
-                modified_write_event["dy"] = fabric_event.at("dy").get<int>();
+                modified_write_event["dst"] = {
+                    {"dx", fabric_event.at("dx").get<int>()},
+                    {"dy", fabric_event.at("dy").get<int>()},
+                    {"num_bytes", modified_write_event.at("num_bytes").get<int>()}};
+            } else if (KernelProfilerNocEventMetadata::isFabricScatterEventType(noc_xfer_type.value())) {
+                // add all chunks for scatter write and compute last chunk size
+                modified_write_event["dst"] = fabric_event.at("chunks");
+                int last_chunk_size = modified_write_event.at("num_bytes").get<int>();
+                for (auto chunk : fabric_event.at("chunks")) {
+                    last_chunk_size -= chunk.at("num_bytes").get<int>();
+                }
+                modified_write_event["dst"].back()["num_bytes"] = last_chunk_size;
             } else {
                 log_error(tt::LogMetal, "[profiler noc tracing] Noc multicasts in fabric events are not supported!");
                 return std::nullopt;
             }
+            modified_write_event.erase("dx");
+            modified_write_event.erase("dy");
 
             // replace the type with fabric event type
             modified_write_event["type"] = fabric_event["type"];
@@ -1206,23 +1237,49 @@ void DeviceProfiler::serializeJsonNocTraces(
                 "[profiler noc tracing] JSON parsing error during event coalescing for event in op '{}': {}",
                 fabric_event.value("op_name", "N/A"),
                 e.what());
+            log_info(tt::LogMetal, "{}", fabric_routing_fields_event.dump(2));
             return std::nullopt;
         }
     };
+
+    log_info(tt::LogMetal, "------------processing profiling events----------");
 
     // coalesce fabric events into single logical trace events with extra 'fabric_send' metadata
     std::unordered_map<RuntimeID, nlohmann::json::array_t> processed_events_by_opname;
     for (auto& [runtime_id, events] : events_by_opname) {
         nlohmann::json::array_t coalesced_events;
+        // log_info(tt::LogMetal, "------------runtime id: {}----------", runtime_id);
         for (size_t i = 0; i < events.size(); /* manual increment */) {
-            const auto& current_event = events[i];
+            // log_info(tt::LogMetal, "------------event index: {}----------", i);
+            // log_info(tt::LogMetal, "{}", events[i].dump(2));
+            auto& current_event = events[i];
 
             bool fabric_event_group_detected =
                 (current_event.contains("type") && current_event["type"].get<std::string>().starts_with("FABRIC_") &&
                  (i + 2 < events.size()));
+            bool fabric_scatter_event_detected =
+                current_event.contains("type") &&
+                current_event["type"].get<std::string>() == "FABRIC_UNICAST_SCATTER_WRITE" &&
+                (i + current_event["num_chunks"].get<int>() + 1 < events.size());
             if (fabric_event_group_detected) {
+                if (fabric_scatter_event_detected) {
+                    // use copy of current_event???
+                    int num_chunks = current_event["num_chunks"].get<int>();
+                    nlohmann::ordered_json chunks = nlohmann::json::array();
+                    for (int j = 0; j < num_chunks; j++) {
+                        chunks.push_back({
+                            {"dx", events[i + j]["dx"]},
+                            {"dy", events[i + j]["dy"]},
+                            {"num_bytes", events[i + j]["chunk_size"]},
+                        });
+                    }
+                    current_event["chunks"] = chunks;
+                    current_event.erase("dx");
+                    current_event.erase("dy");
+                    i += num_chunks - 1;
+                }
                 if (auto maybe_fabric_event =
-                        process_fabric_event_group_if_valid(events[i], events[i + 1], events[i + 2]);
+                        process_fabric_event_group_if_valid(current_event, events[i + 1], events[i + 2]);
                     maybe_fabric_event) {
                     coalesced_events.push_back(maybe_fabric_event.value());
                 }
