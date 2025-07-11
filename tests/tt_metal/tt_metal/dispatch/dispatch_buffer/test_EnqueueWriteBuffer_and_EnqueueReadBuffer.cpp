@@ -841,7 +841,8 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpa
         log_info(tt::LogTest, "Running On Device {}", device->id());
         uint32_t command_completion_region_size = device->sysmem_manager().get_completion_queue_size(0);
 
-        uint32_t first_buffer_size = tt::round_up(command_completion_region_size * 0.95, large_page_size);
+        uint32_t first_buffer_size =
+            tt::round_up(static_cast<uint32_t>(command_completion_region_size * 0.95), large_page_size);
 
         uint32_t space_after_first_buffer = command_completion_region_size - first_buffer_size;
         // leave only small_page_size * 2 B of space in the completion queue
