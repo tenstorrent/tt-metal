@@ -114,10 +114,10 @@ public:
         tt::tt_metal::FabricReliabilityMode reliability_mode =
             tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
     }
 
-    virtual ~BaseFabricFixture() { tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED); }
+    virtual ~BaseFabricFixture() { tt::tt_fabric::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED); }
 
     virtual void SetupDevices() = 0;
     virtual void TearDown() = 0;
@@ -221,13 +221,13 @@ public:
         tt::tt_metal::FabricReliabilityMode reliability_mode =
             tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
         this->SetupDevices();
     }
 
     ~Fabric1DDeviceInitFixture() {
         TearDown();
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 };
 

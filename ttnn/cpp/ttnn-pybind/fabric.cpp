@@ -8,7 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/fabric.hpp>
 
 namespace ttnn::fabric {
 
@@ -33,7 +33,7 @@ void py_bind_fabric_api(py::module& module) {
 
     module.def(
         "set_fabric_config",
-        &tt::tt_metal::detail::SetFabricConfig,
+        &tt::tt_fabric::SetFabricConfig,
         py::arg("config"),
         py::arg("reliability_mode") = tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         py::arg("num_planes") = std::nullopt);

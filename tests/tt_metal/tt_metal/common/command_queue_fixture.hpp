@@ -277,11 +277,11 @@ protected:
         // Enable Fabric Dispatch
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
-        tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::SetFabricConfig(GetParam(), tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         CommandQueueMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
-            tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
         }
     }
 
@@ -290,7 +290,7 @@ protected:
             return;
         }
         CommandQueueMultiDeviceFixture::TearDown();
-        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(original_fd_fabric_en_);
     }
 };

@@ -311,17 +311,17 @@ void DevicePool::initialize(
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric() && any_remote_devices) {
-        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-        if (fabric_config == FabricConfig::DISABLED) {
-            tt::tt_metal::detail::SetFabricConfig(
-                FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+        tt::tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            tt::tt_fabric::SetFabricConfig(
+                tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
             // Call initialize again because previously it was a no-op
             tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-            fabric_config = FabricConfig::FABRIC_1D;
+            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
         } else {
             // Use the same mode
-            tt::tt_metal::detail::SetFabricConfig(
-                fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+            tt::tt_fabric::SetFabricConfig(
+                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         }
         log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
     }
@@ -918,7 +918,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     }
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(FabricConfig::DISABLED);
     }
 
     return pass;

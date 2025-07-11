@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
@@ -78,7 +79,27 @@ std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_me
 
 tt::tt_fabric::Topology get_fabric_topology();
 
-FabricConfig GetFabricConfig();
+/**
+ * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
+ * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
+ * for that init sequence. The number of routing planes fabric will be initialized on will be the max
+ * of all the values specified by different clients. If a client wants to initialize fabric on all the
+ * available routing planes, num_routing_planes can be left unspecifed.
+ * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
+ *
+ * Return value: void
+ *
+ * | Argument           | Description                         | Data type         | Valid range | Required |
+ * |--------------------|-------------------------------------|-------------------|-------------|----------|
+ * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
+ * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
+ */
+void SetFabricConfig(
+    tt_metal::FabricConfig fabric_config,
+    tt_metal::FabricReliabilityMode reliability_mode = tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+    std::optional<uint8_t> num_routing_planes = std::nullopt);
+
+tt_metal::FabricConfig GetFabricConfig();
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(
