@@ -39,7 +39,6 @@
 #include <tt_stl/span.hpp>
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
-#include "watcher_server.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -218,7 +217,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     } catch (std::runtime_error& e) {
         std::string expected =
             "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
-        expected += tt::watcher_get_log_file_name();
+        expected += MetalContext::instance().watcher_server()->log_file_name();
         const std::string error = std::string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
         EXPECT_TRUE(error.find(expected) != std::string::npos);
@@ -348,10 +347,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     log_info(LogTest, "Expected error: {}", expected);
     std::string exception = "";
     do {
-        exception = get_watcher_exception_message();
+        exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception == "");
     log_info(LogTest, "Reported error: {}", exception);
-    EXPECT_EQ(get_watcher_exception_message(), expected);
+    EXPECT_EQ(MetalContext::instance().watcher_server()->exception_message(), expected);
 }
 
 void RunTestEth(WatcherFixture* fixture, IDevice* device, watcher_features_t feature) {

@@ -20,23 +20,10 @@ table TensorShard {
     mesh_coordinate: tt.tt_metal.distributed.flatbuffer.MeshCoordinate;
 }
 
-union TensorType {
-    ReplicatedTensor = 1,
-    ShardedTensor = 2,
-}
-
-table ReplicatedTensor {
-    buffer: TensorBuffer;
-}
-
-table ShardedTensor {
-    mesh_shape: MeshShape;
-    shards: [TensorShard];
-}
-
 table Tensor {
     tensor_spec: TensorSpec;
-    tensor_type: TensorType;
+    mesh_shape: MeshShape;
+    shards: [TensorShard];
 }
 
 root_type Tensor;

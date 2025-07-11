@@ -19,6 +19,7 @@ struct ExecuteAllToAllCombine {
         const ttnn::Tensor& expert_mapping_tensor,
         const ttnn::Tensor& expert_metadata_tensor,
         const GlobalSemaphore& global_semaphore,
+        bool locally_reduced = 1,
         uint32_t num_links = 1,
         tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,

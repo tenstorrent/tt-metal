@@ -32,3 +32,12 @@ Use the following command to run the model :
 ```
 pytest --disable-warnings tests/ttnn/integration_tests/yolov6l/test_ttnn_yolov6l.py
 ```
+
+### Performant Model with Trace+2CQ
+- end-2-end perf is 59 FPS
+
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/yolov6l/tests/perf/test_perf_yolov6l.py::test_perf_yolov6l
+```

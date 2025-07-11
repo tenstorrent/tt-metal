@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from itertools import takewhile
 from typing import Sequence
 
 import torch
@@ -9,8 +10,9 @@ import torch
 import ttnn
 
 # Constants
-TILE_SIZE = 32
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
+MAX_BATCH_SIZE = 32
+SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 
 
 # Compute kernel configurations
@@ -58,6 +60,203 @@ COMPUTE_KERNEL_CONFIG_SDPA = ttnn.WormholeComputeKernelConfig(
 )
 
 
+# Helper math functions
+def even_int_div(a: int, b: int) -> int:
+    """Integer division that raises an error if b does not divide a without a remainder."""
+    assert a % b == 0
+    return a // b
+
+
+def find_all_divisors(n):
+    """Generates all the divisors of n, from smallest to largest."""
+    complementary_divisors = []  # This is all the divisors larger than sqrt(n)
+    for divisor in range(1, int(math.sqrt(n)) + 1):
+        if n % divisor == 0:
+            complementary_divisors.append(n // divisor)
+            yield divisor
+    for complementary_divisor in reversed(complementary_divisors):
+        yield complementary_divisor
+
+
+def find_largest_divisor(n, max_divisor=8):
+    """Find the largest divisor of n that is <= max_divisor."""
+    return max(takewhile(lambda x: x <= max_divisor, find_all_divisors(n)), default=1)
+
+
+# DRAM-sharded-matmul helper functions
+def get_activation_sharding_core_counts_for_dram_matmul(activation_width: int, max_num_cores: int) -> set[int]:
+    """Get the set of core counts on which the activation tensor can be sharded for DRAM matmul.
+    Currently, the DRAM sharded matmul does not yet support padded activation shards. This means that,
+    since the activation tensor is width sharded, the width dimension `activation_width` has to be divisible by
+    the number of cores the activation is sharded over. This can however be different for input and output activations.
+    """
+    return set(
+        takewhile(lambda x: x <= max_num_cores, find_all_divisors(ttnn.core.divup(activation_width, ttnn.TILE_SIZE)))
+    )
+
+
+def get_dram_sharded_matmul_config(m: int, k: int, n: int, input_num_shards: int, output_num_shards: int):
+    # TODO: add documentation
+    m_tiles = ttnn.core.divup(m, ttnn.TILE_SIZE)
+    k_tiles = ttnn.core.divup(k, ttnn.TILE_SIZE)
+    n_tiles = ttnn.core.divup(n, ttnn.TILE_SIZE)
+
+    assert (
+        k_tiles % input_num_shards == 0
+    ), "The input tensor must evenly shard across input_num_shards (without padding)"
+    assert (
+        n_tiles % output_num_shards == 0
+    ), "The output tensor must evenly shard across output_num_shards (without padding)"
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=find_largest_divisor(
+            even_int_div(k_tiles, input_num_shards)
+        ),  # in0_block_w has to divide k_tiles evenly
+        per_core_M=m_tiles,
+        per_core_N=even_int_div(n_tiles, output_num_shards),
+        fused_activation=None,
+    )
+
+
+def dram_sharded_weight_config(k, n, dram_grid_size):
+    """Create DRAM-sharded memory config for width-sharded tensors"""
+    dram_cores = dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
+    assert dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
+    dram_weight_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
+            )
+        }
+    )
+
+    shard_spec = ttnn.ShardSpec(
+        dram_weight_grid,
+        (k, ttnn.core.roundup(ttnn.core.divup(n, dram_cores), ttnn.TILE_SIZE)),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+
+# Helper functions for other matmul configurations
+def matmul_config(
+    m: int,
+    k: int,
+    n: int,
+    grid_size: tuple[int, int],
+    in0_block_w: int = None,
+    fuse_batch: bool = False,
+    fused_activation=None,
+    per_core_M=None,
+    per_core_N=None,
+):
+    if per_core_M is None:
+        per_core_M = ttnn.core.divup(m, ttnn.TILE_SIZE * grid_size[1])
+    if per_core_N is None:
+        per_core_N = ttnn.core.divup(n, ttnn.TILE_SIZE * grid_size[0])
+
+    out_subblock_h = 1
+    out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)  # TODO: Needed for TG hang workaround
+
+    in0_block_w = find_largest_divisor(k // (ttnn.TILE_SIZE * grid_size[1])) if not in0_block_w else in0_block_w
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=fuse_batch,
+    )
+
+
+def matmul_1d_config(
+    m,
+    k,
+    n,
+    grid=ttnn.CoreGrid(x=8, y=8),
+    act=None,
+    is_fp32_accumulate=False,
+    overwrite_per_core_k=None,
+    overwrite_subblock_w=None,
+    overwrite_subblock_h=None,
+):
+    """Generate 1D matmul program config."""
+    tile_width = 32
+    tile_height = 32
+
+    if n // tile_width // grid.num_cores < 1:
+        # use less number of cores in case we have more N num tiles than cores
+        grid_y = n // tile_width // grid.x
+        grid = ttnn.CoreGrid(x=grid.x, y=grid_y)
+
+    per_core_m = m // tile_height
+    per_core_k = find_largest_divisor(k // (ttnn.TILE_SIZE * grid.num_cores))
+    per_core_n = ttnn.core.divup(n, tile_width * grid.num_cores)
+
+    if is_fp32_accumulate:
+        max_subblock_w_h = 4
+    else:
+        max_subblock_w_h = 8
+
+    # find the largest value between 1 and 8 that is a factor of per_core_n
+    # e.g. if per_core_n is 14, then out_subblock_w = 7
+    out_subblock_w = max([i for i in range(1, max_subblock_w_h + 1) if per_core_n % i == 0])
+
+    # find the largest value that is a factor of per_core_m such that
+    # out_subblock_w * out_subblock_h <= 8
+    out_subblock_h = max(
+        [i for i in range(1, max_subblock_w_h + 1) if per_core_m % i == 0 and i * out_subblock_w <= max_subblock_w_h]
+    )
+
+    if overwrite_per_core_k is not None:
+        per_core_k = overwrite_per_core_k
+
+    if overwrite_subblock_w is not None:
+        out_subblock_w = overwrite_subblock_w
+
+    if overwrite_subblock_h is not None:
+        out_subblock_h = overwrite_subblock_h
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=per_core_k,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=act,
+        mcast_in0=True,
+    )
+
+
+def matmul_1d_config_from_tensor_shapes(
+    in0_shape,
+    in1_shape,
+    grid=ttnn.CoreGrid(x=8, y=8),
+    act=None,
+    is_fp32_accumulate=False,
+    overwrite_subblock_w=None,
+    overwrite_subblock_h=None,
+):
+    """Generate 1D matmul program config from tensor shapes."""
+    m, k, n = in0_shape[0] * in0_shape[1] * in0_shape[2], in0_shape[3], in1_shape[3]
+    return matmul_1d_config(
+        m,
+        k,
+        n,
+        grid,
+        act,
+        is_fp32_accumulate,
+        overwrite_subblock_w=overwrite_subblock_w,
+        overwrite_subblock_h=overwrite_subblock_h,
+    )
+
+
 def get_dram_weight_grid(mesh_device):
     """Create DRAM weight grid from mesh device."""
     dram_grid_size = mesh_device.dram_grid_size()
@@ -86,52 +285,16 @@ def create_dram_sharded_mem_config(k, n, mesh_device):
     dram_grid_size = mesh_device.dram_grid_size()
     dram_cores = dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
     assert dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
-    padded_size = math.ceil(n / (TILE_SIZE * dram_cores)) * (TILE_SIZE * dram_cores)
+    padded_size = ttnn.core.roundup(n, ttnn.TILE_SIZE * dram_cores)
     shard_spec = ttnn.ShardSpec(
         get_dram_weight_grid(mesh_device), (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
     )
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
 
-def matmul_config(
-    m: int,
-    k: int,
-    n: int,
-    grid_size: tuple[int, int],
-    in0_block_w: int = None,
-    fuse_batch: bool = False,
-    fused_activation=None,
-    per_core_M=None,
-    per_core_N=None,
-):
-    """Generate matmul multi-core reuse multicast program config."""
-    if per_core_M is None:
-        per_core_M = math.ceil(m / (TILE_SIZE * grid_size[1]))
-    if per_core_N is None:
-        per_core_N = math.ceil(n / (TILE_SIZE * grid_size[0]))
-
-    out_subblock_h = 1
-    out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)
-
-    if in0_block_w is None:
-        in0_block_w = find_largest_divisor(k // (TILE_SIZE * grid_size[1]))
-
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-        transpose_mcast=False,
-        fused_activation=fused_activation,
-        fuse_batch=fuse_batch,
-    )
-
-
 def dram_shard_core_grid_for_k(k: int) -> ttnn.CoreGrid:
     """Calculate core grid for DRAM sharding based on k dimension."""
-    rows, cols = find_grid(k // TILE_SIZE)
+    rows, cols = find_grid(k // ttnn.TILE_SIZE)
     return ttnn.CoreGrid(x=cols, y=rows)
 
 
@@ -202,7 +365,7 @@ def find_prefill_grid(row_tiles, col_tiles):
 
 def dram_shard_core_grid_for_k_and_n(k: int, n: int) -> ttnn.CoreGrid:
     """Calculate core grid for DRAM sharding based on k and n dimensions."""
-    rows, cols = find_grid_k_n(k // TILE_SIZE, n // TILE_SIZE)
+    rows, cols = find_grid_k_n(k // ttnn.TILE_SIZE, n // ttnn.TILE_SIZE)
     return ttnn.CoreGrid(x=cols, y=rows)
 
 
@@ -244,115 +407,6 @@ def find_grid_k_n(K, N):
     )
 
 
-def find_largest_divisor(n, max_divisor=8):
-    """Find the largest divisor of n that is <= max_divisor."""
-    for i in range(max_divisor, 0, -1):
-        if n % i == 0:
-            return i
-    return 1  # Fallback to 1 if no divisor found
-
-
-def dram_matmul_config(m: int, k: int, n: int, num_cores=None):
-    """Generate DRAM sharded matmul program config."""
-    # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
-    if num_cores is None:
-        num_cores = dram_shard_core_grid_for_k_and_n(k, n).num_cores
-        assert (
-            k % (TILE_SIZE * num_cores) == 0
-        ), f"k must be divisible by tile_size * num_cores: {k} % {TILE_SIZE * num_cores} != 0"
-
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=find_largest_divisor(k // (TILE_SIZE * num_cores)),
-        per_core_M=math.ceil(m / TILE_SIZE),
-        per_core_N=math.ceil(n / (TILE_SIZE * num_cores)),
-        fused_activation=None,
-    )
-
-
-def matmul_1d_config(
-    m,
-    k,
-    n,
-    grid=ttnn.CoreGrid(x=8, y=8),
-    act=None,
-    is_fp32_accumulate=False,
-    overwrite_per_core_k=None,
-    overwrite_subblock_w=None,
-    overwrite_subblock_h=None,
-):
-    """Generate 1D matmul program config."""
-    tile_width = 32
-    tile_height = 32
-
-    if n // tile_width // grid.num_cores < 1:
-        # use less number of cores in case we have more N num tiles than cores
-        grid_y = n // tile_width // grid.x
-        grid = ttnn.CoreGrid(x=grid.x, y=grid_y)
-
-    per_core_m = m // tile_height
-    per_core_k = find_largest_divisor(k // (TILE_SIZE * grid.num_cores))
-    per_core_n = math.ceil(n / tile_width / grid.num_cores)
-
-    if is_fp32_accumulate:
-        max_subblock_w_h = 4
-    else:
-        max_subblock_w_h = 8
-
-    # find the largest value between 1 and 8 that is a factor of per_core_n
-    # e.g. if per_core_n is 14, then out_subblock_w = 7
-    out_subblock_w = max([i for i in range(1, max_subblock_w_h + 1) if per_core_n % i == 0])
-
-    # find the largest value that is a factor of per_core_m such that
-    # out_subblock_w * out_subblock_h <= 8
-    out_subblock_h = max(
-        [i for i in range(1, max_subblock_w_h + 1) if per_core_m % i == 0 and i * out_subblock_w <= max_subblock_w_h]
-    )
-
-    if overwrite_per_core_k is not None:
-        per_core_k = overwrite_per_core_k
-
-    if overwrite_subblock_w is not None:
-        out_subblock_w = overwrite_subblock_w
-
-    if overwrite_subblock_h is not None:
-        out_subblock_h = overwrite_subblock_h
-
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(grid.x, grid.y),
-        in0_block_w=per_core_k,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=per_core_m,
-        per_core_N=per_core_n,
-        fuse_batch=True,
-        fused_activation=act,
-        mcast_in0=True,
-    )
-
-
-def matmul_1d_config_from_tensor_shapes(
-    in0_shape,
-    in1_shape,
-    grid=ttnn.CoreGrid(x=8, y=8),
-    act=None,
-    is_fp32_accumulate=False,
-    overwrite_subblock_w=None,
-    overwrite_subblock_h=None,
-):
-    """Generate 1D matmul program config from tensor shapes."""
-    m, k, n = in0_shape[0] * in0_shape[1] * in0_shape[2], in0_shape[3], in1_shape[3]
-    return matmul_1d_config(
-        m,
-        k,
-        n,
-        grid,
-        act,
-        is_fp32_accumulate,
-        overwrite_subblock_w=overwrite_subblock_w,
-        overwrite_subblock_h=overwrite_subblock_h,
-    )
-
-
 def create_sharded_norm_config(grid, dim, tile_padded_batch_rows):
     """Helper function to create LayerNormShardedMultiCoreProgramConfig for RMS NORM.
 
@@ -361,7 +415,7 @@ def create_sharded_norm_config(grid, dim, tile_padded_batch_rows):
         dim (int): Model dimension
         tile_padded_batch_rows (int): Padded batch size to tile size
     """
-    block_w = dim // grid.num_cores // TILE_SIZE
+    block_w = dim // grid.num_cores // ttnn.TILE_SIZE
     # Find largest value <= 4 that evenly divides block_w
     subblock_w = 4
     while subblock_w > 0:
@@ -371,66 +425,14 @@ def create_sharded_norm_config(grid, dim, tile_padded_batch_rows):
     return ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[grid.x, grid.y],
         subblock_w=subblock_w,
-        block_h=tile_padded_batch_rows // TILE_SIZE,
+        block_h=tile_padded_batch_rows // ttnn.TILE_SIZE,
         block_w=block_w,
         inplace=False,
     )
 
 
-def dram_sharded_weight_config(k, n, dram_grid_size):
-    """Create DRAM-sharded memory config for width-sharded tensors"""
-    dram_cores = dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
-    assert dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
-    dram_weight_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
-            )
-        }
-    )
-    padding_multiple = TILE_SIZE * dram_cores
-    padded_size = math.ceil(n / padding_multiple) * padding_multiple
-    shard_spec = ttnn.ShardSpec(dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-
-
-def matmul_config(
-    m: int,
-    k: int,
-    n: int,
-    grid_size: tuple[int, int],
-    in0_block_w: int = None,
-    fuse_batch: bool = False,
-    fused_activation=None,
-    per_core_M=None,
-    per_core_N=None,
-):
-    if per_core_M is None:
-        per_core_M = math.ceil(m / (TILE_SIZE * grid_size[1]))
-    if per_core_N is None:
-        per_core_N = math.ceil(n / (TILE_SIZE * grid_size[0]))
-
-    out_subblock_h = 1
-    out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)  # TODO: Needed for TG hang workaround
-
-    in0_block_w = find_largest_divisor(k // (TILE_SIZE * grid_size[1])) if not in0_block_w else in0_block_w
-
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-        transpose_mcast=False,
-        fused_activation=fused_activation,
-        fuse_batch=fuse_batch,
-    )
-
-
 def dram_shard_core_grid_for_k_and_n(k: int, n: int) -> ttnn.CoreGrid:
-    rows, cols = find_grid_k_n(k // TILE_SIZE, n // TILE_SIZE)
+    rows, cols = find_grid_k_n(k // ttnn.TILE_SIZE, n // ttnn.TILE_SIZE)
     return ttnn.CoreGrid(x=cols, y=rows)
 
 
@@ -477,18 +479,17 @@ def base_model_name(hf_config):
     return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
 
 
-def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int] | None = None) -> torch.Tensor:
+def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
     """Dequantize a pytorch tensor using the provided scale."""
     assert tensor.ndim == inv_scale.ndim and tensor.dtype == torch.float8_e4m3fn and inv_scale.dtype == torch.float32
-    if block_shape is not None:
-        assert len(block_shape) == tensor.ndim and all(
-            inv_scale.shape[i] * block_shape[i] == tensor.shape[i] for i in range(tensor.ndim)
-        )
-    else:
-        assert all(tensor.shape[i] % inv_scale.shape[i] == 0 for i in range(tensor.ndim))
-    for i in range(inv_scale.ndim):
-        inv_scale = inv_scale.repeat_interleave(tensor.shape[i] // inv_scale.shape[i], dim=i)
-    return tensor.bfloat16() * inv_scale.bfloat16()
+    assert len(block_shape) == tensor.ndim and all(
+        inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
+    )
+    for i, block_dim in enumerate(block_shape):
+        inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
+    tensor = tensor.bfloat16() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].bfloat16()
+    del inv_scale
+    return tensor
 
 
 def sub_state_dict(state_dict, prefix):
@@ -501,8 +502,3 @@ def save_and_get_path(path, tensor):
     ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return str(path)
-
-
-def round_to_nearest_tile_size(value):
-    """Round a value to the nearest multiple of TILE_SIZE."""
-    return math.ceil(value / TILE_SIZE) * TILE_SIZE

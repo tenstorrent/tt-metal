@@ -207,6 +207,7 @@ jobs:
       run: |
         mkdir clang-tidy-result
     - name: Analyze
+      timeout-minutes: 60 # Big PRs will have a LOT to scan, but most should be well under this.
       shell: bash
       run: |
         set -euo pipefail
@@ -233,8 +234,6 @@ jobs:
         #       For now disable it b/c it fails if it finds things in non-user code and/or NOLINT's.
         # # Draw attention to this step (make it an error) if there are fixes to be addressed.
         # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
-
-      timeout-minutes: 5
     - name: Run clang-tidy-pr-comments action
       if: ${{ !cancelled() }}
       uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818 # v1.8.0

@@ -142,6 +142,8 @@ private:
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
+    std::vector<uint32_t> mem_read_alignments_;
+    std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
     uint32_t num_nocs_;
     uint32_t noc_addr_node_id_bits_;
@@ -268,6 +270,9 @@ public:
     uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
 
     uint32_t get_alignment(HalMemType memory_type) const;
+    uint32_t get_read_alignment(HalMemType memory_type) const;
+    uint32_t get_write_alignment(HalMemType memory_type) const;
+
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
 
@@ -385,6 +390,18 @@ inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
     uint32_t index = utils::underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_.size());
     return this->mem_alignments_[index];
+}
+
+inline uint32_t Hal::get_read_alignment(HalMemType memory_type) const {
+    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    TT_ASSERT(index < this->mem_read_alignments_.size());
+    return this->mem_read_alignments_[index];
+}
+
+inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
+    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    TT_ASSERT(index < this->mem_write_alignments_.size());
+    return this->mem_write_alignments_[index];
 }
 
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {

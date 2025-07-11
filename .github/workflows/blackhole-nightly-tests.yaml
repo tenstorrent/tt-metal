@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       runner-label:
-        description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
+        description: 'Valid inputs: ["P100", "P150b"] (both cards), ["P100"] (P100 only), ["P150b"] (P150 only)'
         required: false
         type: string
-        default: '["P100", "P150"]'
+        default: '["P100", "P150b"]'
   workflow_call:
     inputs:
       runner-label:
-        description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
+        description: 'Valid inputs: ["P100", "P150b"] (both cards), ["P100"] (P100 only), ["P150b"] (P150 only)'
         required: false
         type: string
-        default: '["P100", "P150"]'
+        default: '["P100", "P150b"]'
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
+        card_type: ["P100", "P150"]  # Cannot use P150b yet because CIv2 is using LFC and not MLPerf
     secrets: inherit
     with:
       runner-label: ${{ matrix.card_type }}
@@ -47,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
+        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150b"]') }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.card_type }}
@@ -61,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
+        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150b"]') }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.card_type }}
@@ -77,7 +77,7 @@ jobs:
       fail-fast: false
     with:
       arch: blackhole
-      runner-label: P150
+      runner-label: P150b
       timeout: 10
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

@@ -44,6 +44,7 @@
 #include <env_lib.hpp>
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -201,7 +202,9 @@ MeshDevice::MeshDevice(
     parent_mesh_(std::move(parent_mesh)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
-    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {}
+    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {
+    Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
+}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -370,7 +373,10 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
     return submeshes;
 }
 
-MeshDevice::~MeshDevice() { close(); }
+MeshDevice::~MeshDevice() {
+    Inspector::mesh_device_destroyed(this);
+    close();
+}
 
 IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     for (auto device : this->get_devices()) {
@@ -827,6 +833,7 @@ bool MeshDevice::initialize(
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(this, cq_id));
         }
     }
+    Inspector::mesh_device_initialized(this);
     return true;
 }
 

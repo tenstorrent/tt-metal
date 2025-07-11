@@ -6,6 +6,7 @@ import pytest
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
 import ttnn
 import torch
+from models.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -108,6 +109,7 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
+@skip_for_blackhole("Not fully tested on Blackhole")
 @pytest.mark.parametrize(
     "input_layout, dtype",
     [[ttnn.TILE_LAYOUT, ttnn.bfloat8_b], [ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16]],

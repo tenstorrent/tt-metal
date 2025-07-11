@@ -30,18 +30,31 @@ public:
     virtual ~IDeviceInfoProvider() = default;
     virtual FabricNodeId get_fabric_node_id(chip_id_t physical_chip_id) const = 0;
     virtual FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const = 0;
+    virtual FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const = 0;
     virtual MeshCoordinate get_device_coord(const FabricNodeId& node_id) const = 0;
     virtual uint32_t get_worker_noc_encoding(const MeshCoordinate& device_coord, CoreCoord logical_core) const = 0;
     virtual uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual CoreCoord get_worker_grid_size() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_all_node_ids() const = 0;
-    virtual uint32_t get_l1_unreserved_base(const FabricNodeId& node_id) const = 0;
-    virtual uint32_t get_l1_unreserved_size(const FabricNodeId& node_id) const = 0;
+    virtual uint32_t get_l1_unreserved_base() const = 0;
+    virtual uint32_t get_l1_unreserved_size() const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
     virtual bool is_2d_fabric() const = 0;
     virtual bool use_dynamic_routing() const = 0;
+
+    // Data reading helpers
+    virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const = 0;
+    virtual void zero_out_buffer_on_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const = 0;
 };
 
 class IRouteManager {

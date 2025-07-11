@@ -63,5 +63,5 @@ class TtGEGLU(nn.Module):
             compute_kernel_config=self.compute_config,
         )
         ttnn.deallocate(input_tensor)
-        hidden_states = ttnn.mul_(hidden_states, gate)
+        hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False)
         return hidden_states

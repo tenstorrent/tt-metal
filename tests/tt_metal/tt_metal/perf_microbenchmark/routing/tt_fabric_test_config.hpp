@@ -32,6 +32,10 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
+// Helper template for static_assert in visitor - must be defined before use
+template <class>
+inline constexpr bool always_false_v = false;
+
 // Helper functions and mappings for converting between string representations in YAML
 // and their corresponding enum types.
 namespace detail {
@@ -106,16 +110,73 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"full_ring_multicast", HighLevelTrafficPattern::FullRingMulticast},
     {"half_ring_multicast", HighLevelTrafficPattern::HalfRingMulticast},
 });
+// Optimized string concatenation utility to avoid multiple allocations
+template <typename... Args>
+inline void append_with_separator(std::string& target, std::string_view separator, Args&&... args) {
+    // Calculate total size needed
+    size_t total_size = target.size();
+    auto add_size = [&total_size, &separator](const auto& arg) {
+        if constexpr (std::is_arithmetic_v<std::decay_t<decltype(arg)>>) {
+            // For numeric types, estimate string length (conservative estimate)
+            total_size += separator.size() + 20;  // 20 chars should handle most numeric types
+        } else {
+            // For string types
+            total_size += separator.size() + std::string(arg).size();
+        }
+    };
+
+    // fold expression: calls add_size for each argument to calculate total size
+    // For args (a, b, c), this expands to: add_size(a), add_size(b), add_size(c)
+    (add_size(args), ...);
+
+    // Reserve space to avoid reallocations
+    target.reserve(total_size);
+
+    // Append each argument with separator
+    auto append_arg = [&target, &separator](const auto& arg) {
+        target += separator;
+        if constexpr (std::is_arithmetic_v<std::decay_t<decltype(arg)>>) {
+            target += std::to_string(arg);
+        } else {
+            target += std::string(arg);
+        }
+    };
+
+    // fold expression: calls append_arg for each argument in sequence
+    // For args (a, b, c), this expands to: append_arg(a), append_arg(b), append_arg(c)
+    (append_arg(args), ...);
+}
 
 }  // namespace detail
 
+// Helper function to resolve DeviceIdentifier to FabricNodeId
+inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id, const IDeviceInfoProvider& provider) {
+    return std::visit(
+        [&provider](const auto& id) -> FabricNodeId {
+            using T = std::decay_t<decltype(id)>;
+            if constexpr (std::is_same_v<T, FabricNodeId>) {
+                return id;  // Already resolved
+            } else if constexpr (std::is_same_v<T, chip_id_t>) {
+                return provider.get_fabric_node_id(id);
+            } else if constexpr (std::is_same_v<T, std::pair<MeshId, chip_id_t>>) {
+                return FabricNodeId{id.first, id.second};
+            } else if constexpr (std::is_same_v<T, std::pair<MeshId, MeshCoordinate>>) {
+                return provider.get_fabric_node_id(id.first, id.second);
+            } else {
+                static_assert(always_false_v<T>, "Unsupported DeviceIdentifier type");
+            }
+        },
+        device_id);
+}
+
 struct ParsedYamlConfig {
-    std::vector<TestConfig> test_configs;
+    std::vector<ParsedTestConfig> test_configs;
     std::optional<AllocatorPolicies> allocation_policies;
 };
 
-inline TrafficPatternConfig merge_patterns(const TrafficPatternConfig& base, const TrafficPatternConfig& specific) {
-    TrafficPatternConfig merged;
+template <typename TrafficPatternType>
+inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const TrafficPatternType& specific) {
+    TrafficPatternType merged;
 
     merged.ftype = specific.ftype.has_value() ? specific.ftype : base.ftype;
     merged.ntype = specific.ntype.has_value() ? specific.ntype : base.ntype;
@@ -129,17 +190,26 @@ inline TrafficPatternConfig merge_patterns(const TrafficPatternConfig& base, con
     if (specific.destination.has_value()) {
         if (base.destination.has_value()) {
             // Both have destinations, merge them.
-            DestinationConfig merged_dest;
-            const auto& base_dest = base.destination.value();
+            auto merged_dest = base.destination.value();  // Start with base as default
             const auto& spec_dest = specific.destination.value();
 
-            merged_dest.device = spec_dest.device.has_value() ? spec_dest.device : base_dest.device;
-            merged_dest.core = spec_dest.core.has_value() ? spec_dest.core : base_dest.core;
-            merged_dest.hops = spec_dest.hops.has_value() ? spec_dest.hops : base_dest.hops;
-            merged_dest.target_address =
-                spec_dest.target_address.has_value() ? spec_dest.target_address : base_dest.target_address;
-            merged_dest.atomic_inc_address =
-                spec_dest.atomic_inc_address.has_value() ? spec_dest.atomic_inc_address : base_dest.atomic_inc_address;
+            // Override with specific values if they exist
+            if (spec_dest.device.has_value()) {
+                merged_dest.device = spec_dest.device;
+            }
+            if (spec_dest.core.has_value()) {
+                merged_dest.core = spec_dest.core;
+            }
+            if (spec_dest.hops.has_value()) {
+                merged_dest.hops = spec_dest.hops;
+            }
+            if (spec_dest.target_address.has_value()) {
+                merged_dest.target_address = spec_dest.target_address;
+            }
+            if (spec_dest.atomic_inc_address.has_value()) {
+                merged_dest.atomic_inc_address = spec_dest.atomic_inc_address;
+            }
+
             merged.destination = merged_dest;
         } else {
             // Only specific has a destination, use it directly.
@@ -155,24 +225,23 @@ inline TrafficPatternConfig merge_patterns(const TrafficPatternConfig& base, con
 
 class YamlConfigParser {
 public:
-    YamlConfigParser(IDeviceInfoProvider& device_info_provider) : device_info_provider_(device_info_provider) {}
+    YamlConfigParser() {}
 
     ParsedYamlConfig parse_file(const std::string& yaml_config_path);
 
 private:
-    IDeviceInfoProvider& device_info_provider_;
-
-    FabricNodeId parse_device_identifier(const YAML::Node& node);
-    DestinationConfig parse_destination_config(const YAML::Node& dest_yaml);
-    TrafficPatternConfig parse_traffic_pattern_config(const YAML::Node& pattern_yaml);
-    SenderConfig parse_sender_config(const YAML::Node& sender_yaml, const TrafficPatternConfig& defaults);
+    DeviceIdentifier parse_device_identifier(const YAML::Node& node);
+    ParsedDestinationConfig parse_destination_config(const YAML::Node& dest_yaml);
+    ParsedTrafficPatternConfig parse_traffic_pattern_config(const YAML::Node& pattern_yaml);
+    ParsedSenderConfig parse_sender_config(const YAML::Node& sender_yaml, const ParsedTrafficPatternConfig& defaults);
     TestFabricSetup parse_fabric_setup(const YAML::Node& fabric_setup_yaml);
-    TestConfig parse_test_config(const YAML::Node& test_yaml);
+    ParsedTestConfig parse_test_config(const YAML::Node& test_yaml);
     AllocatorPolicies parse_allocator_policies(const YAML::Node& policies_yaml);
     CoreAllocationConfig parse_core_allocation_config(const YAML::Node& config_yaml, CoreAllocationConfig base_config);
 
     // Parsing helpers
     CoreCoord parse_core_coord(const YAML::Node& node);
+    MeshCoordinate parse_mesh_coord(const YAML::Node& node);
     MeshId parse_mesh_id(const YAML::Node& yaml_node);
     template <typename T>
     T parse_scalar(const YAML::Node& yaml_node);
@@ -190,12 +259,11 @@ private:
 
 class CmdlineParser {
 public:
-    CmdlineParser(const std::vector<std::string>& input_args, IDeviceInfoProvider& device_info_provider) :
-        input_args_(input_args), device_info_provider_(device_info_provider) {}
+    CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
 
     std::optional<std::string> get_yaml_config_path();
-    void apply_overrides(std::vector<TestConfig>& test_configs);
-    std::vector<TestConfig> generate_default_configs();
+    void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
+    std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
     bool dump_built_tests();
     std::string get_built_tests_dump_file_name(const std::string& default_file_name);
@@ -204,7 +272,6 @@ public:
 
 private:
     const std::vector<std::string>& input_args_;
-    IDeviceInfoProvider& device_info_provider_;
 };
 
 const std::string no_default_test_yaml_config = "";
@@ -239,18 +306,29 @@ inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_con
     return result;
 }
 
-inline FabricNodeId YamlConfigParser::parse_device_identifier(const YAML::Node& node) {
+inline DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& node) {
     if (node.IsScalar()) {
         chip_id_t chip_id = parse_scalar<chip_id_t>(node);
-        return this->device_info_provider_.get_fabric_node_id(chip_id);
+        return chip_id;
     } else if (node.IsSequence() && node.size() == 2) {
-        return FabricNodeId{parse_scalar<MeshId>(node[0]), parse_scalar<chip_id_t>(node[1])};
+        MeshId mesh_id = parse_mesh_id(node[0]);
+        if (node[1].IsScalar()) {
+            // Format: [mesh_id, chip_id]
+            chip_id_t chip_id = parse_scalar<chip_id_t>(node[1]);
+            return std::make_pair(mesh_id, chip_id);
+        } else if (node[1].IsSequence()) {
+            // Format: [mesh_id, [row, col]]
+            MeshCoordinate mesh_coord = parse_mesh_coord(node[1]);
+            return std::make_pair(mesh_id, mesh_coord);
+        }
     }
-    TT_THROW("Unsupported device identifier format. Expected scalar chip_id or sequence [mesh_id, chip_id].");
+    TT_THROW(
+        "Unsupported device identifier format. Expected scalar chip_id, sequence [mesh_id, chip_id], or sequence "
+        "[mesh_id, [row, col]].");
 }
 
-inline DestinationConfig YamlConfigParser::parse_destination_config(const YAML::Node& dest_yaml) {
-    DestinationConfig config;
+inline ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::Node& dest_yaml) {
+    ParsedDestinationConfig config;
     if (dest_yaml["device"]) {
         config.device = parse_device_identifier(dest_yaml["device"]);
     }
@@ -277,10 +355,10 @@ inline DestinationConfig YamlConfigParser::parse_destination_config(const YAML::
     return config;
 }
 
-inline TrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const YAML::Node& pattern_yaml) {
+inline ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const YAML::Node& pattern_yaml) {
     TT_FATAL(pattern_yaml.IsMap(), "Expected pattern to be a map");
 
-    TrafficPatternConfig config;
+    ParsedTrafficPatternConfig config;
     if (pattern_yaml["ftype"]) {
         config.ftype =
             detail::chip_send_type_mapper.from_string(parse_scalar<std::string>(pattern_yaml["ftype"]), "ftype");
@@ -310,12 +388,12 @@ inline TrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const
     return config;
 }
 
-inline SenderConfig YamlConfigParser::parse_sender_config(
-    const YAML::Node& sender_yaml, const TrafficPatternConfig& defaults) {
+inline ParsedSenderConfig YamlConfigParser::parse_sender_config(
+    const YAML::Node& sender_yaml, const ParsedTrafficPatternConfig& defaults) {
     TT_FATAL(sender_yaml.IsMap(), "Expected sender to be a map");
     TT_FATAL(sender_yaml["device"] && sender_yaml["patterns"], "Sender config missing required keys");
 
-    SenderConfig config;
+    ParsedSenderConfig config;
     config.device = parse_device_identifier(sender_yaml["device"]);
     if (sender_yaml["core"]) {
         config.core = parse_core_coord(sender_yaml["core"]);
@@ -325,14 +403,14 @@ inline SenderConfig YamlConfigParser::parse_sender_config(
     TT_FATAL(patterns_yaml.IsSequence(), "Expected patterns to be a sequence");
     config.patterns.reserve(patterns_yaml.size());
     for (const auto& pattern_node : patterns_yaml) {
-        TrafficPatternConfig specific_pattern = parse_traffic_pattern_config(pattern_node);
+        ParsedTrafficPatternConfig specific_pattern = parse_traffic_pattern_config(pattern_node);
         config.patterns.push_back(merge_patterns(defaults, specific_pattern));
     }
     return config;
 }
 
-inline TestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
-    TestConfig test_config;
+inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
+    ParsedTestConfig test_config;
 
     test_config.name = parse_scalar<std::string>(test_yaml["name"]);
     log_info(tt::LogTest, "name: {}", test_config.name);
@@ -369,7 +447,7 @@ inline TestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yam
         test_config.senders.reserve(senders_yaml.size());
         for (const auto& sender_node : senders_yaml) {
             test_config.senders.push_back(
-                parse_sender_config(sender_node, test_config.defaults.value_or(TrafficPatternConfig{})));
+                parse_sender_config(sender_node, test_config.defaults.value_or(ParsedTrafficPatternConfig{})));
         }
     }
 
@@ -450,7 +528,7 @@ inline std::optional<std::string> CmdlineParser::get_yaml_config_path() {
     return std::nullopt;
 }
 
-inline void CmdlineParser::apply_overrides(std::vector<TestConfig>& test_configs) {
+inline void CmdlineParser::apply_overrides(std::vector<ParsedTestConfig>& test_configs) {
     bool is_default_test = (test_configs.size() == 1 && test_configs[0].name == "DefaultCommandLineTest");
 
     if (!is_default_test) {
@@ -472,7 +550,7 @@ inline void CmdlineParser::apply_overrides(std::vector<TestConfig>& test_configs
         log_info(LogTest, "Overriding num_packets for all patterns with: {}", num_packets_override);
         for (auto& config : test_configs) {
             if (!config.defaults.has_value()) {
-                config.defaults = TrafficPatternConfig{};
+                config.defaults = ParsedTrafficPatternConfig{};
             }
             config.defaults->num_packets = num_packets_override;
         }
@@ -483,14 +561,14 @@ inline void CmdlineParser::apply_overrides(std::vector<TestConfig>& test_configs
         log_info(LogTest, "Overriding payload_size for all patterns with: {}", payload_size_override);
         for (auto& config : test_configs) {
             if (!config.defaults.has_value()) {
-                config.defaults = TrafficPatternConfig{};
+                config.defaults = ParsedTrafficPatternConfig{};
             }
             config.defaults->size = payload_size_override;
         }
     }
 }
 
-inline std::vector<TestConfig> CmdlineParser::generate_default_configs() {
+inline std::vector<ParsedTestConfig> CmdlineParser::generate_default_configs() {
     log_info(LogTest, "No YAML config provided. Generating a default test configuration from command-line args.");
 
     TestFabricSetup fabric_setup;
@@ -502,7 +580,7 @@ inline std::vector<TestConfig> CmdlineParser::generate_default_configs() {
         log_info(LogTest, "No topology specified via --topology, defaulting to Linear.");
     }
 
-    TestConfig default_test;
+    ParsedTestConfig default_test;
 
     if (test_args::has_command_option(input_args_, "--pattern")) {
         log_info(LogTest, "Generating a high-level pattern test from command line.");
@@ -524,17 +602,17 @@ inline std::vector<TestConfig> CmdlineParser::generate_default_configs() {
         std::string src_device_str = test_args::get_command_option(input_args_, "--src-device", "0");
         std::string dst_device_str = test_args::get_command_option(input_args_, "--dst-device", "1");
 
-        FabricNodeId src_device_id = this->device_info_provider_.get_fabric_node_id(std::stoul(src_device_str));
-        FabricNodeId dst_device_id = this->device_info_provider_.get_fabric_node_id(std::stoul(dst_device_str));
+        chip_id_t src_device_id = std::stoul(src_device_str);
+        chip_id_t dst_device_id = std::stoul(dst_device_str);
 
-        TrafficPatternConfig pattern = {.destination = DestinationConfig{.device = dst_device_id}};
-        SenderConfig sender = {.device = src_device_id, .patterns = {pattern}};
+        ParsedTrafficPatternConfig pattern = {.destination = ParsedDestinationConfig{.device = dst_device_id}};
+        ParsedSenderConfig sender = {.device = src_device_id, .patterns = {pattern}};
         default_test.senders = {sender};
     }
 
     default_test.name = "DefaultCommandLineTest";
     default_test.fabric_setup = fabric_setup;
-    default_test.defaults = TrafficPatternConfig{};
+    default_test.defaults = ParsedTrafficPatternConfig{};
     default_test.defaults->ftype = ChipSendType::CHIP_UNICAST;
     default_test.defaults->ntype = NocSendType::NOC_UNICAST_WRITE;
 
@@ -631,6 +709,12 @@ inline CoreCoord YamlConfigParser::parse_core_coord(const YAML::Node& node) {
     return CoreCoord(parse_scalar<size_t>(node[0]), parse_scalar<size_t>(node[1]));
 }
 
+inline MeshCoordinate YamlConfigParser::parse_mesh_coord(const YAML::Node& node) {
+    TT_FATAL(node.IsSequence() && node.size() == 2, "Expected mesh coordinates to be a sequence of [row, col]");
+    std::vector<uint32_t> coords = {parse_scalar<uint32_t>(node[0]), parse_scalar<uint32_t>(node[1])};
+    return MeshCoordinate(coords);
+}
+
 inline MeshId YamlConfigParser::parse_mesh_id(const YAML::Node& yaml_node) {
     uint32_t mesh_id = yaml_node.as<uint32_t>();
     return MeshId{mesh_id};
@@ -725,11 +809,11 @@ public:
     TestConfigBuilder(IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager, std::mt19937& gen) :
         device_info_provider_(device_info_provider), route_manager_(route_manager), gen_(gen) {}
 
-    std::vector<TestConfig> build_tests(const std::vector<TestConfig>& raw_configs) {
+    std::vector<TestConfig> build_tests(const std::vector<ParsedTestConfig>& raw_configs) {
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
-            std::vector<TestConfig> parametrized_configs = this->expand_parametrizations(raw_config);
+            std::vector<ParsedTestConfig> parametrized_configs = this->expand_parametrizations(raw_config);
 
             // For each newly generated parametrized config, expand its high-level patterns
             for (auto& p_config : parametrized_configs) {
@@ -740,11 +824,80 @@ public:
                     std::make_move_iterator(expanded_tests.end()));
             }
         }
+
         return built_tests;
     }
 
 private:
-    std::vector<TestConfig> expand_high_level_patterns(TestConfig& p_config) {
+    // Convert ParsedTestConfig to TestConfig by resolving device identifiers
+    TestConfig resolve_test_config(const ParsedTestConfig& parsed_test) {
+        TestConfig resolved_test;
+        resolved_test.name = parsed_test.name;
+        resolved_test.fabric_setup = parsed_test.fabric_setup;
+        resolved_test.on_missing_param_policy = parsed_test.on_missing_param_policy;
+        resolved_test.parametrization_params = parsed_test.parametrization_params;
+        resolved_test.patterns = parsed_test.patterns;
+        resolved_test.bw_calc_func = parsed_test.bw_calc_func;
+        resolved_test.seed = parsed_test.seed;
+
+        // Resolve defaults
+        if (parsed_test.defaults.has_value()) {
+            resolved_test.defaults = resolve_traffic_pattern(parsed_test.defaults.value());
+        }
+
+        // Resolve senders
+        resolved_test.senders.reserve(parsed_test.senders.size());
+        for (const auto& parsed_sender : parsed_test.senders) {
+            resolved_test.senders.push_back(resolve_sender_config(parsed_sender));
+        }
+
+        return resolved_test;
+    }
+
+    SenderConfig resolve_sender_config(const ParsedSenderConfig& parsed_sender) {
+        SenderConfig resolved_sender;
+        resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
+        resolved_sender.core = parsed_sender.core;
+
+        resolved_sender.patterns.reserve(parsed_sender.patterns.size());
+        for (const auto& parsed_pattern : parsed_sender.patterns) {
+            resolved_sender.patterns.push_back(resolve_traffic_pattern(parsed_pattern));
+        }
+
+        return resolved_sender;
+    }
+
+    TrafficPatternConfig resolve_traffic_pattern(const ParsedTrafficPatternConfig& parsed_pattern) {
+        TrafficPatternConfig resolved_pattern;
+        resolved_pattern.ftype = parsed_pattern.ftype;
+        resolved_pattern.ntype = parsed_pattern.ntype;
+        resolved_pattern.size = parsed_pattern.size;
+        resolved_pattern.num_packets = parsed_pattern.num_packets;
+        resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
+        resolved_pattern.atomic_inc_wrap = parsed_pattern.atomic_inc_wrap;
+        resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
+
+        if (parsed_pattern.destination.has_value()) {
+            resolved_pattern.destination = resolve_destination_config(parsed_pattern.destination.value());
+        }
+
+        return resolved_pattern;
+    }
+
+    DestinationConfig resolve_destination_config(const ParsedDestinationConfig& parsed_dest) {
+        DestinationConfig resolved_dest;
+        if (parsed_dest.device.has_value()) {
+            resolved_dest.device = resolve_device_identifier(parsed_dest.device.value(), device_info_provider_);
+        }
+        resolved_dest.core = parsed_dest.core;
+        resolved_dest.hops = parsed_dest.hops;
+        resolved_dest.target_address = parsed_dest.target_address;
+        resolved_dest.atomic_inc_address = parsed_dest.atomic_inc_address;
+
+        return resolved_dest;
+    }
+
+    std::vector<TestConfig> expand_high_level_patterns(ParsedTestConfig& p_config) {
         std::vector<TestConfig> expanded_tests;
 
         p_config.parametrization_params.reset();  // Clear now-used params before final expansion
@@ -767,11 +920,12 @@ private:
 
         expanded_tests.reserve(max_iterations);
         for (uint32_t i = 0; i < max_iterations; ++i) {
-            TestConfig iteration_test = p_config;
+            ParsedTestConfig iteration_test = p_config;
             iteration_test.patterns.reset();  // Will be expanded into concrete senders.
 
             if (max_iterations > 1) {
-                iteration_test.name += "_iter_" + std::to_string(i);
+                // Use optimized string concatenation utility
+                detail::append_with_separator(iteration_test.name, "_", "iter", i);
             }
 
             iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
@@ -800,57 +954,71 @@ private:
             // After expansion and resolution, apply universal transformations like mcast splitting.
             split_all_multicast_patterns(iteration_test);
 
-            validate_test(iteration_test);
-            expanded_tests.push_back(iteration_test);
+            // Convert to resolved TestConfig
+            TestConfig resolved_test = resolve_test_config(iteration_test);
+
+            validate_test(resolved_test);
+            expanded_tests.push_back(resolved_test);
         }
         return expanded_tests;
     }
 
-    std::vector<TestConfig> expand_parametrizations(const TestConfig& raw_config) {
-        std::vector<TestConfig> parametrized_configs;
+    std::vector<ParsedTestConfig> expand_parametrizations(const ParsedTestConfig& raw_config) {
+        std::vector<ParsedTestConfig> parametrized_configs;
         parametrized_configs.push_back(raw_config);
 
         if (raw_config.parametrization_params.has_value()) {
             for (const auto& [param_name, values_variant] : raw_config.parametrization_params.value()) {
-                std::vector<TestConfig> next_level_configs;
+                std::vector<ParsedTestConfig> next_level_configs;
+
+                // Pre-calculate total size to avoid reallocations
+                size_t total_new_configs = 0;
+                if (std::holds_alternative<std::vector<std::string>>(values_variant)) {
+                    const auto& values = std::get<std::vector<std::string>>(values_variant);
+                    total_new_configs = parametrized_configs.size() * values.size();
+                } else if (std::holds_alternative<std::vector<uint32_t>>(values_variant)) {
+                    const auto& values = std::get<std::vector<uint32_t>>(values_variant);
+                    total_new_configs = parametrized_configs.size() * values.size();
+                }
+                next_level_configs.reserve(total_new_configs);
 
                 for (const auto& current_config : parametrized_configs) {
                     // Handle string-based parameters
                     if (std::holds_alternative<std::vector<std::string>>(values_variant)) {
                         const auto& values = std::get<std::vector<std::string>>(values_variant);
-                        next_level_configs.reserve(next_level_configs.size() + values.size());
                         for (const auto& value : values) {
-                            TestConfig next_config = current_config;
-                            next_config.name += "_" + param_name + "_" + value;
+                            next_level_configs.emplace_back(current_config);
+                            auto& next_config = next_level_configs.back();
+                            // Use optimized string concatenation utility
+                            detail::append_with_separator(next_config.name, "_", param_name, value);
 
-                            TrafficPatternConfig param_default;
+                            ParsedTrafficPatternConfig param_default;
                             if (param_name == "ftype") {
                                 param_default.ftype = detail::chip_send_type_mapper.from_string(value, "ftype");
                             } else if (param_name == "ntype") {
                                 param_default.ntype = detail::noc_send_type_mapper.from_string(value, "ntype");
                             }
-                            next_config.defaults =
-                                merge_patterns(current_config.defaults.value_or(TrafficPatternConfig{}), param_default);
-                            next_level_configs.push_back(next_config);
+                            next_config.defaults = merge_patterns(
+                                current_config.defaults.value_or(ParsedTrafficPatternConfig{}), param_default);
                         }
                     }
                     // Handle integer-based parameters
                     else if (std::holds_alternative<std::vector<uint32_t>>(values_variant)) {
                         const auto& values = std::get<std::vector<uint32_t>>(values_variant);
-                        next_level_configs.reserve(next_level_configs.size() + values.size());
                         for (const auto& value : values) {
-                            TestConfig next_config = current_config;
-                            next_config.name += "_" + param_name + "_" + std::to_string(value);
+                            next_level_configs.emplace_back(current_config);
+                            auto& next_config = next_level_configs.back();
+                            // Use optimized string concatenation utility
+                            detail::append_with_separator(next_config.name, "_", param_name, value);
 
-                            TrafficPatternConfig param_default;
+                            ParsedTrafficPatternConfig param_default;
                             if (param_name == "size") {
                                 param_default.size = value;
                             } else if (param_name == "num_packets") {
                                 param_default.num_packets = value;
                             }
-                            next_config.defaults =
-                                merge_patterns(current_config.defaults.value_or(TrafficPatternConfig{}), param_default);
-                            next_level_configs.push_back(next_config);
+                            next_config.defaults = merge_patterns(
+                                current_config.defaults.value_or(ParsedTrafficPatternConfig{}), param_default);
                         }
                     }
                 }
@@ -958,8 +1126,8 @@ private:
     }
 
     void expand_patterns_into_test(
-        TestConfig& test, const std::vector<HighLevelPatternConfig>& patterns, uint32_t iteration_idx) {
-        const auto& defaults = test.defaults.value_or(TrafficPatternConfig{});
+        ParsedTestConfig& test, const std::vector<HighLevelPatternConfig>& patterns, uint32_t iteration_idx) {
+        const auto& defaults = test.defaults.value_or(ParsedTrafficPatternConfig{});
 
         for (const auto& pattern : patterns) {
             if (pattern.iterations.has_value() && iteration_idx >= pattern.iterations.value()) {
@@ -984,19 +1152,19 @@ private:
         }
     }
 
-    void expand_all_to_all_unicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+    void expand_all_to_all_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding all_to_all_unicast pattern for test: {}", test.name);
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs = this->route_manager_.get_all_to_all_unicast_pairs();
         add_senders_from_pairs(test, pairs, base_pattern);
     }
 
-    void expand_full_device_random_pairing(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+    void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding full_device_random_pairing pattern for test: {}", test.name);
         auto random_pairs = this->route_manager_.get_full_device_random_pairs(this->gen_);
         add_senders_from_pairs(test, random_pairs, base_pattern);
     }
 
-    void expand_all_to_all_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+    void expand_all_to_all_multicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding all_to_all_multicast pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
@@ -1004,24 +1172,30 @@ private:
         for (const auto& src_node : devices) {
             auto hops = this->route_manager_.get_full_mcast_hops(src_node);
 
-            TrafficPatternConfig specific_pattern;
-            specific_pattern.destination = DestinationConfig{.hops = hops};
+            ParsedTrafficPatternConfig specific_pattern;
+            specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
             specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
             auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
 
-            auto it = std::find_if(
-                test.senders.begin(), test.senders.end(), [&](const SenderConfig& s) { return s.device == src_node; });
+            auto it = std::find_if(test.senders.begin(), test.senders.end(), [&](const ParsedSenderConfig& s) {
+                // Compare FabricNodeId with DeviceIdentifier
+                if (std::holds_alternative<FabricNodeId>(s.device)) {
+                    return std::get<FabricNodeId>(s.device) == src_node;
+                }
+                return false;
+            });
 
             if (it != test.senders.end()) {
-                it->patterns.push_back(merged_pattern);
+                it->patterns.emplace_back(std::move(merged_pattern));
             } else {
-                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
     }
 
-    void expand_unidirectional_linear_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+    void expand_unidirectional_linear_multicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding unidirectional_linear_multicast pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear_multicast because no devices were found.");
@@ -1036,18 +1210,18 @@ private:
 
                 auto hops = this->route_manager_.get_unidirectional_linear_mcast_hops(src_node, dim);
 
-                TrafficPatternConfig specific_pattern;
-                specific_pattern.destination = DestinationConfig{.hops = hops};
+                ParsedTrafficPatternConfig specific_pattern;
+                specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
                 specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
-                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
     }
 
     void expand_full_or_half_ring_multicast(
-        TestConfig& test, const TrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
         log_info(LogTest, "Expanding full_or_half_ring_multicast pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
@@ -1069,51 +1243,58 @@ private:
             auto hops = this->route_manager_.get_full_or_half_ring_mcast_hops(
                 src_node, dst_node_forward, dst_node_backward, pattern_type);
 
-            TrafficPatternConfig specific_pattern;
-            specific_pattern.destination = DestinationConfig{.hops = hops};
+            ParsedTrafficPatternConfig specific_pattern;
+            specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
             specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
             auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
 
-            auto it = std::find_if(
-                test.senders.begin(), test.senders.end(), [&](const SenderConfig& s) { return s.device == src_node; });
+            auto it = std::find_if(test.senders.begin(), test.senders.end(), [&](const ParsedSenderConfig& s) {
+                // Compare FabricNodeId with DeviceIdentifier
+                if (std::holds_alternative<FabricNodeId>(s.device)) {
+                    return std::get<FabricNodeId>(s.device) == src_node;
+                }
+                return false;
+            });
 
             if (it != test.senders.end()) {
                 it->patterns.push_back(merged_pattern);
             } else {
-                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
     }
 
     void add_senders_from_pairs(
-        TestConfig& test,
+        ParsedTestConfig& test,
         const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
-        const TrafficPatternConfig& base_pattern) {
-        std::map<FabricNodeId, std::vector<TrafficPatternConfig>> generated_senders;
+        const ParsedTrafficPatternConfig& base_pattern) {
+        std::map<FabricNodeId, std::vector<ParsedTrafficPatternConfig>> generated_senders;
 
         for (const auto& pair : pairs) {
-            FabricNodeId src_node = pair.first;
-            FabricNodeId dst_node = pair.second;
+            const auto& src_node = pair.first;
+            const auto& dst_node = pair.second;
 
-            TrafficPatternConfig specific_pattern;
-            specific_pattern.destination = DestinationConfig{.device = dst_node};
+            ParsedTrafficPatternConfig specific_pattern;
+            specific_pattern.destination = ParsedDestinationConfig{.device = dst_node};
             specific_pattern.ftype = ChipSendType::CHIP_UNICAST;
 
-            generated_senders[src_node].push_back(merge_patterns(base_pattern, specific_pattern));
+            // Use try_emplace to avoid creating empty vectors unnecessarily
+            auto [it, inserted] = generated_senders.try_emplace(src_node);
+            it->second.emplace_back(merge_patterns(base_pattern, specific_pattern));
         }
 
         test.senders.reserve(test.senders.size() + generated_senders.size());
         for (const auto& [src_node, patterns] : generated_senders) {
-            test.senders.push_back(SenderConfig{.device = src_node, .patterns = patterns});
+            test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = patterns});
         }
     }
 
-    void split_all_multicast_patterns(TestConfig& test) {
+    void split_all_multicast_patterns(ParsedTestConfig& test) {
         // This function iterates through all sender patterns and splits any multi-direction
         // multicast hops.
         for (auto& sender : test.senders) {
-            std::vector<TrafficPatternConfig> new_patterns;
+            std::vector<ParsedTrafficPatternConfig> new_patterns;
             bool sender_was_modified = false;
 
             for (size_t i = 0; i < sender.patterns.size(); ++i) {
@@ -1141,13 +1322,13 @@ private:
                     }
                     // Add the newly split patterns.
                     for (const auto& split_hop : split_hops_vec) {
-                        TrafficPatternConfig new_pattern = pattern;
+                        ParsedTrafficPatternConfig new_pattern = pattern;
                         new_pattern.destination->hops = split_hop;
-                        new_patterns.push_back(new_pattern);
+                        new_patterns.emplace_back(std::move(new_pattern));
                     }
                 } else if (sender_was_modified) {
                     // We are in copy-mode because a previous pattern was split.
-                    new_patterns.push_back(pattern);
+                    new_patterns.emplace_back(pattern);
                 }
             }
 
@@ -1157,7 +1338,7 @@ private:
         }
     }
 
-    void resolve_missing_params(TestConfig& test) {
+    void resolve_missing_params(ParsedTestConfig& test) {
         if (test.on_missing_param_policy.has_value() && test.on_missing_param_policy.value() == "randomize") {
             for (auto& sender : test.senders) {
                 for (auto& pattern : sender.patterns) {
@@ -1178,13 +1359,16 @@ private:
 
                     if (!pattern.destination.has_value()) {
                         if (pattern.ftype.value() == ChipSendType::CHIP_UNICAST) {
+                            // Need to resolve sender.device to FabricNodeId for route manager
+                            FabricNodeId sender_node = resolve_device_identifier(sender.device, device_info_provider_);
                             FabricNodeId dst_node =
-                                this->route_manager_.get_random_unicast_destination(sender.device, this->gen_);
-                            pattern.destination = DestinationConfig{.device = dst_node};
+                                this->route_manager_.get_random_unicast_destination(sender_node, this->gen_);
+                            pattern.destination = ParsedDestinationConfig{.device = dst_node};
                         } else if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
                             // For multicast, the random default is an mcast to all devices.
-                            auto hops = this->route_manager_.get_full_mcast_hops(sender.device);
-                            pattern.destination = DestinationConfig{.hops = hops};
+                            FabricNodeId sender_node = resolve_device_identifier(sender.device, device_info_provider_);
+                            auto hops = this->route_manager_.get_full_mcast_hops(sender_node);
+                            pattern.destination = ParsedDestinationConfig{.hops = hops};
                         }
                     }
                 }

@@ -16,21 +16,24 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_yolov6l(device, reset_seeds):
     model = load_torch_model_yolov6l()
 
-    torch_input = torch.randn(1, 3, 640, 480)
+    torch_input = torch.randn(1, 3, 640, 640)
+
+    n, c, h, w = torch_input.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+    ttnn_x = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_x = ttnn_x.to(device, input_mem_config)
 
     parameters = create_yolov6l_model_parameters(model, torch_input, device)
 
     ttnn_model = TtYolov6l(device, parameters, parameters.model_args)
 
-    input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
-    ttnn_input = ttnn.from_torch(
-        input_tensor,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    output = ttnn_model(ttnn_input)
+    output = ttnn_model(ttnn_x)
 
     torch_output = model(torch_input)
 

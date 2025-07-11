@@ -104,8 +104,7 @@ Tensor tensor_pad(
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
-    TT_ASSERT(
-        is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor), "Tensor must be on host for padding");
+    TT_ASSERT(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (input_tensor.layout() != Layout::ROW_MAJOR) {
         log_warning(

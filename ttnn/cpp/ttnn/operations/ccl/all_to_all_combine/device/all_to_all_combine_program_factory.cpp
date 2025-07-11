@@ -97,27 +97,27 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
-    auto input_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
-    auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
+    const auto input_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
+    const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
 
     // Anything less will lead to deadlocks. It's clear why, TODO fix it.
     const uint32_t buffering_factor = experts_per_device;
 
     // input sharded buffer
-    const auto data_cb_id = tt::CBIndex::c_0;
+    constexpr auto data_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_data_config =
         CircularBufferConfig(buffering_factor * aligned_input_page_size_bytes, {{data_cb_id, input_data_format}})
             .set_page_size(data_cb_id, aligned_input_page_size_bytes);
 
     // full mapping buffer
-    const auto mapping_tensor_cb_id = tt::CBIndex::c_1;
+    constexpr auto mapping_tensor_cb_id = tt::CBIndex::c_1;
     CircularBufferConfig cb_mapping_tensor_config =
         CircularBufferConfig(aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size_bytes);
 
     // scratch space to store and share indices of per device experts
-    const auto local_experts_cb_id = tt::CBIndex::c_2;
+    constexpr auto local_experts_cb_id = tt::CBIndex::c_2;
     using local_experts_t = uint16_t;
     const auto aligned_local_expert_page_size_bytes =
         tt::align(experts_per_device * sizeof(local_experts_t), l1_alignment);
@@ -127,14 +127,14 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
             .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
 
     // metadata page buffer
-    const auto metadata_cb_id = tt::CBIndex::c_3;
+    constexpr auto metadata_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig cb_metadata_config =
         CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
 
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
-    const auto client_interface_cb_id = tt::CBIndex::c_4;
+    constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
@@ -185,7 +185,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         metadata_page_size_bytes,
         input_is_dram,
         mapping_is_dram,
-        metadata_is_dram};
+        metadata_is_dram,
+        operation_attributes.locally_reduced};
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -220,6 +221,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         max_packet_size_bytes,
+        common::get_linearized_index(mesh_coordinate, mesh_view),
+        (uint32_t)tt::tt_fabric::get_fabric_topology(),
+        operation_attributes.locally_reduced,
     };
 
     // fabric routing info

@@ -64,7 +64,7 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
             }
         }
     }
-    TT_ASSERT(false, "Could not find downstream device of Device {}", device_id);
+    TT_FATAL(false, "Could not find downstream device of Device {}", device_id);
     return device_id;
 }
 
