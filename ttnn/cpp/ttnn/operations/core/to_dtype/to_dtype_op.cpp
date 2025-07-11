@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "ttnn/operations/core/to_dtype/transform_type.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::core {
 namespace detail {
@@ -57,9 +56,7 @@ Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& d
     }
 
     const auto& transform_type = detail::get_dtype_conversion_function(input_tensor.dtype(), dtype);
-    return tt::tt_metal::is_multi_device_host_tensor(input_tensor)
-               ? transform(input_tensor, [&](const ttnn::Tensor& tensor) { return transform_type(tensor, dtype); })
-               : transform_type(input_tensor, dtype);
+    return transform_type(input_tensor, dtype);
 };
 
 }  // namespace ttnn::operations::core
