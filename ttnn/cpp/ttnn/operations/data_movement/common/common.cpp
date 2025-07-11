@@ -303,30 +303,47 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
 
     // limit number of cores to max aggregate bw to avoid congestion
     int num_dram_channels = (arch == tt::ARCH::WORMHOLE_B0) ? 12 : 8;
-    if (input_is_dram || output_is_dram) {
-        uint32_t dram_transaction_size = std::max(input_transaction_size, output_transaction_size);
-        if (!input_is_dram) {
-            dram_transaction_size = output_transaction_size;
-        } else if (!output_is_dram) {
-            dram_transaction_size = input_transaction_size;
+
+    float input_total_bytes = (float)num_read_transactions * input_transaction_size;
+    float output_total_bytes = (float)num_write_transactions * output_transaction_size;
+
+    if (input_is_dram && output_is_dram) {
+        uint32_t input_effective_cores =
+            get_effective_dram_cores(input_transaction_size, num_cores, num_dram_channels, index, dram_bw);
+        uint32_t output_effective_cores =
+            get_effective_dram_cores(output_transaction_size, num_cores, num_dram_channels, index, dram_bw);
+
+        num_cores = input_effective_cores;
+        if (num_read_transactions < num_write_transactions) {  // to do permute specific
+            num_cores = output_effective_cores;
         }
-        num_cores = get_effective_dram_cores(dram_transaction_size, num_cores, num_dram_channels, index, dram_bw);
+    } else if (input_is_dram) {
+        num_cores = get_effective_dram_cores(input_transaction_size, num_cores, num_dram_channels, index, dram_bw);
+    } else if (output_is_dram) {
+        num_cores = get_effective_dram_cores(output_transaction_size, num_cores, num_dram_channels, index, dram_bw);
     }
     // local noc transactions for l1 sharded tensors
     bool is_local = input_is_sharded && !input_is_dram && output_is_sharded && !output_is_dram &&
                     (output_tensor.memory_config().shard_spec().value().grid ==
                      input_tensor.memory_config().shard_spec().value().grid);
 
-    if (!input_is_dram || !output_is_dram) {
-        uint32_t l1_transaction_size = std::max(input_transaction_size, output_transaction_size);
-        if (input_is_dram) {
-            l1_transaction_size = output_transaction_size;
-        } else if (output_is_dram) {
-            l1_transaction_size = input_transaction_size;
+    if (!input_is_dram && !output_is_dram) {
+        uint32_t input_effective_cores =
+            get_effective_l1_cores(input_transaction_size, num_cores, index, false, l1_read_far_bw, l1_write_far_bw);
+        uint32_t output_effective_cores =
+            get_effective_l1_cores(output_transaction_size, num_cores, index, true, l1_read_far_bw, l1_write_far_bw);
+        num_cores = input_effective_cores;
+        if (num_read_transactions < num_write_transactions) {  // to do permute specific
+            num_cores = output_effective_cores;
         }
-        num_cores = get_effective_l1_cores(
-            l1_transaction_size, num_cores, index, !output_is_dram, l1_read_far_bw, l1_write_far_bw);
+    } else if (!input_is_dram) {
+        num_cores =
+            get_effective_l1_cores(input_transaction_size, num_cores, index, false, l1_read_far_bw, l1_write_far_bw);
+    } else if (!output_is_dram) {
+        num_cores =
+            get_effective_l1_cores(output_transaction_size, num_cores, index, true, l1_read_far_bw, l1_write_far_bw);
     }
+
     num_cores = is_local ? input_tensor.memory_config().shard_spec().value().grid.num_cores() : num_cores;
 
     // parallelize work over cores

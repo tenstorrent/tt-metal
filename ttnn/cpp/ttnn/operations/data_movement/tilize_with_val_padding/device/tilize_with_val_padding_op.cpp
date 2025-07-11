@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "tilize_with_val_padding_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -78,6 +79,25 @@ std::vector<ttnn::TensorSpec> TilizeWithValPadding::compute_output_specs(
         input_shape,
         TensorLayout::fromPaddedShape(
             output_dtype, PageConfig(Layout::TILE), output_mem_config, input_shape, output_padded_shape))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+TilizeWithValPadding::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles_bw = common_tm_bw_model(input_tensor, output_tensor);
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
+    uint32_t num_tiles = input_tensor.physical_volume() / single_tile_size;
+    int compute_cycles = num_tiles * 32;  // 32 cycles per tile
+    int ideal_dev_clock_cycles = std::max(compute_cycles, ideal_dev_clock_cycles_bw);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
