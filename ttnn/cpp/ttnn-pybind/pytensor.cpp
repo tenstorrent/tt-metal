@@ -32,6 +32,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -366,59 +367,68 @@ Tensor convert_python_tensor_to_tt_tensor(
     return output;
 }
 
-template <typename T>
-HostBuffer create_row_major_host_buffer(
-    HostBuffer host_buffer, const ttnn::TensorSpec& tensor_spec, const bool padded_output) {
-    TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec().has_value() ||
-            tensor_spec.memory_config().nd_shard_spec().has_value(),
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-
-    if (padded_output) {
-        if (tensor_spec.layout() == Layout::TILE) {
-            auto data = tensor_impl::convert_layout_tile_to_row_major(
-                tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::make_const_span(host_buffer.view_as<T>()));
-            return HostBuffer(std::move(data));
-        }
-        return host_buffer;
+// Wrapper around HostBuffer that provides a row-major view of the data, handles padding / logical view, and provides
+// `shape` and `data_type` information.
+struct RowMajorHostBuffer {
+    static RowMajorHostBuffer create_padded(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
+        tt::stl::Span<const uint32_t> shape_view = tensor_spec.padded_shape().view();
+        return RowMajorHostBuffer{
+            .buffer = std::move(buffer),
+            .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
+            .data_type = tensor_spec.data_type(),
+        };
     }
 
-    // No modifications needed; direclty return buffer
-    if (tensor_impl::logical_matches_physical(tensor_spec)) {
-        return host_buffer;
+    static RowMajorHostBuffer create_logical(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
+        tt::stl::Span<const uint32_t> shape_view = tensor_spec.logical_shape().view();
+        return RowMajorHostBuffer{
+            .buffer = std::move(buffer),
+            .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
+            .data_type = tensor_spec.data_type(),
+        };
     }
 
-    auto typed_view = host_buffer::get_as<const T>(host_buffer);
-    auto logical_data = tensor_impl::decode_tensor_data(typed_view, tensor_spec);
+    HostBuffer buffer;
+    std::vector<uint32_t> shape;
+    ttnn::DataType data_type = ttnn::DataType::INVALID;
+};
 
-    return HostBuffer(std::move(logical_data));
-}
-
-HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padded_output) {
-    TT_ASSERT(is_cpu_tensor(tt_tensor) || is_multi_device_host_tensor(tt_tensor), "Tensor must be on host for padding");
-
+// Converts a TT tensor to a RowMajorHostBuffer.
+//
+// If `padded_output` is true, the returned buffer will be padded to the tile size.
+// If `padded_output` is false, the returned buffer will be in logical view.
+RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
     const auto& tensor_spec = tt_tensor.tensor_spec();
-    auto convert_to_logical = [&tensor_spec, padded_output](const HostBuffer& buffer) {
+
+    // Performs logical data conversion on the concrete data type.
+    auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
+        if (padded_output) {
+            if (tensor_spec.layout() == Layout::TILE) {
+                auto row_major_data = tensor_impl::convert_layout_tile_to_row_major(
+                    tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
+                return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
+            }
+            return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);
+        }
+
+        // No modifications needed; direclty return buffer
+        if (tensor_impl::logical_matches_physical(tensor_spec)) {
+            return RowMajorHostBuffer::create_logical(std::move(host_buffer), tensor_spec);
+        }
+
+        auto logical_data = tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
+        return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
+    };
+
+    auto convert_to_logical = [&tensor_spec, &dispatch_to_concrete](const HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
-            case DataType::UINT8: {
-                return create_row_major_host_buffer<uint8_t>(buffer, tensor_spec, padded_output);
-            }
-            case DataType::UINT16: {
-                return create_row_major_host_buffer<uint16_t>(buffer, tensor_spec, padded_output);
-            }
-            case DataType::INT32: {
-                return create_row_major_host_buffer<int32_t>(buffer, tensor_spec, padded_output);
-            }
-            case DataType::UINT32: {
-                return create_row_major_host_buffer<uint32_t>(buffer, tensor_spec, padded_output);
-            }
-            case DataType::FLOAT32: {
-                return create_row_major_host_buffer<float>(buffer, tensor_spec, padded_output);
-            }
-            case DataType::BFLOAT16: {
-                return create_row_major_host_buffer<::bfloat16>(buffer, tensor_spec, padded_output);
-            }
+            case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
+            case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(buffer);
+            case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(buffer);
+            case DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(buffer);
+            case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(buffer);
+            case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(buffer);
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B: {
                 const auto& tile = tensor_spec.tile();
@@ -429,25 +439,23 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
                                                : unpack_bfp4_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
                 auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
-                return create_row_major_host_buffer<float>(input_float_buffer, tensor_spec, padded_output);
+                return dispatch_to_concrete.template operator()<float>(input_float_buffer);
             }
-            default: {
-                TT_THROW("Unsupported DataType: {}", tt_dtype);
-                break;
-            }
+            case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_dtype);
         }
+        TT_THROW("Unreachable");
     };
 
     return convert_to_logical(std::visit(
         tt::stl::overloaded{
-            [](const HostStorage& storage) { return storage.buffer; },
-            [](const MultiDeviceHostStorage& storage) {
+            [](const HostStorage& storage) {
                 std::vector<HostBuffer> buffers;
-                storage.distributed_buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                 TT_FATAL(
                     buffers.size() == 1,
-                    "Can't get a single buffer from multi device host storage of size: {}",
-                    buffers.size());
+                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
+                    "to concatenate multi-device shards.",
+                    storage.buffer().shape());
                 return buffers.front();
             },
             [&tt_tensor](auto&&) -> HostBuffer {
@@ -459,19 +467,44 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
         tt_tensor.storage()));
 }
 
-py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool padded_output = false) {
-    GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", tt_tensor, padded_output);
+// Overload that converts a distributed tensor to a RowMajorHostBuffer.
+//
+// The returned buffer will be in logical view.
+RowMajorHostBuffer convert_to_row_major_host_buffer(
+    const Tensor& tt_tensor, const ttnn::distributed::MeshToTensor& mesh_composer) {
+    auto dispatch_to_concrete = [&mesh_composer]<typename T>(const Tensor& tt_tensor) {
+        auto [data, shape] = mesh_composer.compose<T>(tt_tensor);
+        tt::stl::Span<const uint32_t> shape_view = shape.view();
+        return RowMajorHostBuffer{
+            .buffer = HostBuffer(std::move(data)),
+            .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
+            .data_type = tt_tensor.dtype(),
+        };
+    };
 
-    // TODO: Remove padded_output flag which supports old behaviour of returning tensors with padded shape.
-    // Need to update tests to not use tensor.to_torch_with_padded_shape()
-    HostBuffer buffer = get_host_buffer_from_tensor(tt_tensor, padded_output);
+    switch (tt_tensor.dtype()) {
+        case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tt_tensor);
+        case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tt_tensor);
+        case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tt_tensor);
+        case DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(tt_tensor);
+        case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tt_tensor);
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+        case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
+        case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
+    }
+    TT_THROW("Unreachable");
+}
+
+py::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major_host_buffer) {
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", row_major_host_buffer);
 
     py::object torch = py::module_::import("torch");
     auto frombuffer = torch.attr("frombuffer");
 
     py::object torch_dtype = [&]() {
-        switch (tt_tensor.tensor_spec().data_type()) {
+        switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return torch.attr("uint8");
             case DataType::UINT16: return torch.attr("int16");
             case DataType::INT32: return torch.attr("int32");
@@ -485,38 +518,30 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
         TT_THROW("Unreachable");
     }();
 
-    auto logical_shape = tt_tensor.logical_shape();
-    auto view = logical_shape.view();
-    std::vector<uint32_t> torch_shape(view.begin(), view.end());
     auto tensor = [&]() {
-        if (tt_tensor.physical_volume() == 0) {
+        if (row_major_host_buffer.buffer.view_bytes().empty()) {
             auto pytorch_empty = torch.attr("empty");
-            return pytorch_empty(torch_shape, py::arg("dtype") = torch_dtype);
+            return pytorch_empty(row_major_host_buffer.shape, py::arg("dtype") = torch_dtype);
         }
-        return frombuffer(buffer, py::arg("dtype") = torch_dtype);
+        return frombuffer(row_major_host_buffer.buffer, py::arg("dtype") = torch_dtype);
     }();
 
-    if (padded_output) {
-        const auto& shape = tt_tensor.padded_shape();
-        torch_shape = std::vector<std::uint32_t>(shape.cbegin(), shape.cend());
-    }
-    tensor = tensor.attr("reshape")(torch_shape);
+    tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
     tensor = tensor.attr("contiguous")();
 
     GraphTracker::instance().track_function_end(tensor);
     return tensor;
 }
 
-py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
-    GraphTracker::instance().track_function_start("tt::tt_metal::detail::convert_tt_tensor_to_numpy_tensor", tt_tensor);
-
-    auto buffer = get_host_buffer_from_tensor(tt_tensor, false);
+py::object convert_tt_tensor_to_numpy_tensor(const RowMajorHostBuffer& row_major_host_buffer) {
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::detail::convert_tt_tensor_to_numpy_tensor", row_major_host_buffer);
 
     py::object np = py::module_::import("numpy");
     auto frombuffer = np.attr("frombuffer");
 
     py::object np_dtype = [&]() {
-        switch (tt_tensor.tensor_spec().data_type()) {
+        switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return np.attr("ubyte");
             case DataType::UINT16: return np.attr("int16");
             case DataType::INT32: return np.attr("int32");
@@ -530,11 +555,8 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
         TT_THROW("Unreachable");
     }();
 
-    auto logical_shape = tt_tensor.logical_shape();
-    auto view = logical_shape.view();
-    std::vector<uint32_t> np_shape(view.begin(), view.end());
-    auto tensor = frombuffer(buffer, py::arg("dtype") = np_dtype);
-    tensor = tensor.attr("reshape")(np_shape);
+    auto tensor = frombuffer(row_major_host_buffer.buffer, py::arg("dtype") = np_dtype);
+    tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
     tensor = np.attr("ascontiguousarray")(tensor);
     GraphTracker::instance().track_function_end(tensor);
     return tensor;
@@ -1399,7 +1421,10 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "to_torch_with_padded_shape",
             [](const Tensor& self) -> py::object {
-                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_torch_tensor(self, true);
+                using namespace CMAKE_UNIQUE_NAMESPACE;
+
+                auto buffer = convert_to_row_major_host_buffer(self, /*padded_output=*/true);
+                return convert_tt_tensor_to_torch_tensor(buffer);
             },
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
@@ -1414,9 +1439,14 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to_torch",
-            [](const Tensor& self) -> py::object {
-                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_torch_tensor(self);
+            [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> py::object {
+                using namespace CMAKE_UNIQUE_NAMESPACE;
+
+                auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
+                                            : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                return convert_tt_tensor_to_torch_tensor(buffer);
             },
+            py::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to torch tensor.
 
@@ -1429,9 +1459,14 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to_numpy",
-            [](const Tensor& self) -> py::object {
-                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_numpy_tensor(self);
+            [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> py::object {
+                using namespace CMAKE_UNIQUE_NAMESPACE;
+
+                auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
+                                            : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                return convert_tt_tensor_to_numpy_tensor(buffer);
             },
+            py::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to numpy tensor.
 
@@ -1447,8 +1482,17 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self) -> HostBuffer {
                 return std::visit(
                     tt::stl::overloaded{
-                        [](const HostStorage& s) -> HostBuffer { return s.buffer; },
-                        [&](auto&&) -> HostBuffer {
+                        [](const HostStorage& s) -> HostBuffer {
+                            std::vector<HostBuffer> buffers;
+                            s.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+                            TT_FATAL(
+                                buffers.size() == 1,
+                                "Can't get a single buffer from host storage distributed over mesh shape {}. Did you "
+                                "forget to use mesh composer to concatenate tensor shards?",
+                                s.buffer().shape());
+                            return buffers.front();
+                        },
+                        [&](const DeviceStorage& s) -> HostBuffer {
                             TT_THROW(
                                 "{} doesn't support buffer method",
                                 tt::stl::get_active_type_name_in_variant(self.storage()));

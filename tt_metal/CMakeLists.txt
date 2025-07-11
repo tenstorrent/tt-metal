@@ -143,6 +143,7 @@ target_sources(
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/fabric_edm_types.hpp
+            api/tt-metalium/edm_fabric_counters.hpp
             core_descriptors/blackhole_140_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
             core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml
@@ -156,9 +157,21 @@ target_sources(
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             fabric/hw/inc/fabric_routing_mode.h
+            fabric/hw/inc/tt_fabric_utils.h
             fabric/hw/inc/noc_addr.h
+            fabric/hw/inc/tt_fabric_mux.hpp
+            fabric/hw/inc/tt_fabric_mux_interface.hpp
             fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp
             fabric/hw/inc/edm_fabric/named_types.hpp
+            fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp
+            fabric/hw/inc/edm_fabric/edm_handshake.hpp
+            fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
+            fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
+            fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
+            fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
+            fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp
+            fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp
+            fabric/hw/inc/edm_fabric/edm_fabric_tmp_utils.hpp
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_relay.hpp
@@ -173,6 +186,7 @@ target_sources(
             include/compute_kernel_api/common_globals.h
             include/compute_kernel_api/compute_kernel_hw_startup.h
             include/compute_kernel_api/eltwise_binary.h
+            include/compute_kernel_api/eltwise_unary/comp.h
             include/compute_kernel_api/eltwise_unary/eltwise_unary.h
             include/compute_kernel_api/eltwise_unary/exp.h
             include/compute_kernel_api/eltwise_unary/negative.h
@@ -222,6 +236,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cdf.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_clamp.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_comp.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_converter.h
@@ -236,6 +251,8 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_max.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_max_int32.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_mul_int.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_polyval.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_negative.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_power.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_quant.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_recip.h
@@ -251,14 +268,17 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_tanh_derivative.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_trigonometry.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_silu.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_typecast.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_common.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary_sfpu.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary_sfpu_params.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpi.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_matmul.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_reduce.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_transpose_dest.h
@@ -298,6 +318,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cdf.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_clamp.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_comp.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_converter.h
@@ -312,6 +333,8 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_max.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_max_int32.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_mul_int.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_polyval.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_negative.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_power.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_quant.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_recip.h
@@ -328,14 +351,17 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_tanh_derivative.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_topk.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_trigonometry.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_silu.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_typecast.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu_params.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpi.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_reduce.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_transpose_dest.h
@@ -358,6 +384,8 @@ target_sources(
             impl/dispatch/kernels/packet_mux.cpp
             impl/dispatch/kernels/vc_eth_tunneler.cpp
             impl/dispatch/kernels/vc_packet_router.cpp
+            fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp
+            fabric/impl/kernels/tt_fabric_mux.cpp
             kernels/compute/blank.cpp
             kernels/compute/eltwise_binary.cpp
             kernels/compute/eltwise_sfpu.cpp

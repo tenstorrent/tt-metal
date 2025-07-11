@@ -10,6 +10,7 @@
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tests/ttnn/unit_tests/gtests/accessor/common.hpp"
 
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -76,11 +77,11 @@ void test_single_core_reshard(
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer, params.crta_config);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer, params.crta_config);
 
-    std::vector<uint32_t> input_compile_time_args = input_accessor_args.compile_time_args;
+    std::vector<uint32_t> input_compile_time_args = input_accessor_args.get_compile_time_args();
     input_compile_time_args.push_back(cb_in0_idx);
     input_compile_time_args.push_back(aligned_page_size);
 
-    std::vector<uint32_t> output_compile_time_args = output_accessor_args.compile_time_args;
+    std::vector<uint32_t> output_compile_time_args = output_accessor_args.get_compile_time_args();
     output_compile_time_args.push_back(cb_in0_idx);
     output_compile_time_args.push_back(aligned_page_size);
 
@@ -104,12 +105,12 @@ void test_single_core_reshard(
             .compile_args = output_compile_time_args,
         });
 
-    std::vector<uint32_t> input_runtime_args = input_accessor_args.runtime_args;
+    std::vector<uint32_t> input_runtime_args = input_accessor_args.get_common_runtime_args();
     input_runtime_args.push_back(input_buffer->address());
     input_runtime_args.push_back(input_buffer->num_pages());
     SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
 
-    std::vector<uint32_t> output_runtime_args = output_accessor_args.runtime_args;
+    std::vector<uint32_t> output_runtime_args = output_accessor_args.get_common_runtime_args();
     output_runtime_args.push_back(output_buffer->address());
     output_runtime_args.push_back(output_buffer->num_pages());
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
@@ -243,24 +244,12 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     std::vector<InputOutputBufferParams> test_params;
     for (const auto& base_param : base_params) {
         // All combinations of runtime/static arguments
-        for (uint8_t i = 0; i < 1 << 5; ++i) {
-            tensor_accessor::ArgsConfig config(i);
-            if (config.test(tensor_accessor::ArgConfig::RuntimeRank) and
-                (!config.test(tensor_accessor::ArgConfig::RuntimeTensorShape) or
-                 !config.test(tensor_accessor::ArgConfig::RuntimeShardShape))) {
-                // If rank is runtime, tensor and shard shapes must also be runtime
-                continue;
-            }
-            if (config.test(tensor_accessor::ArgConfig::RuntimeNumBanks) and
-                !config.test(tensor_accessor::ArgConfig::RuntimeBankCoords)) {
-                // If number of banks is runtime, bank coordinates must also be runtime
-                continue;
-            }
-
+        auto all_args_combinations = get_all_sharded_args_configs();
+        for (const auto& arg_config : all_args_combinations) {
             for (int src_interleaved = 0; src_interleaved <= 1; ++src_interleaved) {
                 for (int dst_interleaved = 0; dst_interleaved <= 1; ++dst_interleaved) {
                     auto p = base_param;
-                    p.crta_config = config;
+                    p.crta_config = arg_config;
                     if (src_interleaved) {
                         p.input_shard_spec = std::nullopt;
                     }

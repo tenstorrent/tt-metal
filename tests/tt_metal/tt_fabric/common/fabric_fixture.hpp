@@ -40,13 +40,23 @@ class ControlPlaneFixture : public ::testing::Test {
 
 class BaseFabricFixture : public ::testing::Test {
 public:
-    tt::ARCH arch_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
-    std::vector<tt::tt_metal::IDevice*> devices_;
-    bool slow_dispatch_;
+    inline static tt::ARCH arch_;
+    inline static std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
+    inline static std::vector<tt::tt_metal::IDevice*> devices_;
+    inline static bool slow_dispatch_;
 
     const std::vector<tt::tt_metal::IDevice*>& get_devices() const { return devices_; }
-    void SetUpDevices(tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
+
+    void SetUp() override {
+        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (num_devices < 2) {
+            log_info(tt::LogTest, "Skipping fabric tests as there are less than 2 devices available");
+            GTEST_SKIP();
+        }
+    }
+
+    static void DoSetUpTestSuite(
+        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -54,7 +64,7 @@ public:
             log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
         // Set up all available devices
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices; id++) {
@@ -67,6 +77,15 @@ public:
             devices_.push_back(device);
         }
     }
+
+    static void DoTearDownTestSuite() {
+        tt::tt_metal::detail::CloseDevices(devices_map_);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+    }
+
+    static void SetUpTestSuite() { TT_THROW("SetUpTestSuite not implemented in BaseFabricFixture"); }
+
+    static void TearDownTestSuite() { TT_THROW("TearDownTestSuite not implemented in BaseFabricFixture"); }
 
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
@@ -87,40 +106,56 @@ public:
             tt::tt_metal::Finish(cq);
         }
     }
-
-    void TearDown() override {
-        tt::tt_metal::detail::CloseDevices(devices_map_);
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
-    }
 };
 
 class Fabric1DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D); }
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_1D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
 class Fabric2DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D); }
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class NightlyFabric2DFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
 class Fabric2DDynamicFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class NightlyFabric2DDynamicFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
 class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
 public:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-        this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
 private:
     void SetUp() override {}
 
     void TearDown() override {
-        BaseFabricFixture::TearDown();
+        BaseFabricFixture::DoTearDownTestSuite();
         tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph();
     }
 };
@@ -147,7 +182,7 @@ void RunTestUnicastRaw(
     bool enable_fabric_tracing = false);
 
 void RunTestUnicastConnAPI(
-    BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
+    BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E, bool use_dram_dst = false);
 
 void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
 
@@ -158,6 +193,13 @@ void RunTestMCastConnAPI(
     RoutingDirection bwd_dir = RoutingDirection::E,
     uint32_t bwd_hops = 1);
 
+void RunTest2DMCastConnAPI(
+    BaseFabricFixture* fixture,
+    RoutingDirection trunk_dir,
+    uint32_t trunk_hops,
+    uint32_t branch_east_hops,
+    uint32_t branch_west_hops);
+
 void RunTestChipMCast1D(
     BaseFabricFixture* fixture,
     RoutingDirection dir,
@@ -165,8 +207,7 @@ void RunTestChipMCast1D(
     uint32_t range,
     bool enable_fabric_tracing = false);
 
-void RunTestLineMcast(
-    BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);
+void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

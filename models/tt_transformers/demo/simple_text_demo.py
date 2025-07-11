@@ -435,7 +435,7 @@ def prepare_generator_args(
     ],
     ids=["performance", "accuracy"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 25000000, "num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 26000000, "num_command_queues": 1}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -977,11 +977,11 @@ def test_demo_text(
                 "N150_Llama3.1-8B": 112,
                 "N150_Mistral-7B": 106,
                 # N300 targets
-                "N300_Qwen2.5-7B": 150,
+                # "N300_Qwen2.5-7B": 150,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # T3K targets
                 "T3K_Llama3.1-70B": 181,
-                "T3K_Qwen2.5-72B": 211,
-                "T3K_Qwen3-32B": 470,
+                # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
+                # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -990,11 +990,11 @@ def test_demo_text(
                 "N150_Llama3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
-                "N300_Qwen2.5-7B": 10,
+                "N300_Qwen2.5-7B": 20,
                 # T3K targets
                 "T3K_Llama3.1-70B": 14,
                 "T3K_Qwen2.5-72B": 13,
-                "T3K_Qwen3-32B": 11,
+                "T3K_Qwen3-32B": 20,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets

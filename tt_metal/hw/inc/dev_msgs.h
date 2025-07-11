@@ -144,25 +144,23 @@ struct kernel_config_msg_t {
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint8_t pad1[2];
-    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
-
     volatile uint8_t mode;  // dispatch mode host/dev
+    volatile uint8_t pad1[1];
+    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint32_t local_cb_mask;
+
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
-    volatile uint8_t max_local_cb_end_index;
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
-    volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     // 32 bit program/launch_msg_id used by the performance profiler
     // [9:0]: physical device id
     // [30:10]: program id
     // [31:31]: 0 (specifies that this id corresponds to a program running on device)
     volatile uint32_t host_assigned_id;
+    volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
+    volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     volatile uint8_t enables;
-
-    volatile uint8_t pad2[2];
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
@@ -175,6 +173,7 @@ static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t)
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
 struct go_msg_t {
@@ -344,8 +343,8 @@ struct addressable_core_t {
 // This is the max number of non tensix cores between WH and BH that can be queried through Virtual Coordinates.
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
 // Currently sized for BH (first term is DRAM, second term is PCIe and last term is eth). On WH only Eth and Tensix
-// cores are virtualized BH = DRAM(8) + 1 PCIe + Eth(12) vs. WH = Eth(16)
-constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 21;
+// cores are virtualized BH = DRAM(8*2) + 1 PCIe + Eth(12) vs. WH = Eth(16)
+constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
 // This is the max number of Non Worker Cores across BH and WH.
 // BH = DRAM(8) + 1 PCIe + Eth(12) vs. WH = DRAM(18) + 1 PCIe + Eth(16)
 constexpr static std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
@@ -367,6 +366,7 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
+    uint8_t pad;
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;

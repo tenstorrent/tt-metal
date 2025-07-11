@@ -14,4 +14,5 @@ tt::tt_metal::operation::ProgramWithCallbacks padded_slice_multi_core(
     const ttnn::Shape& output_tensor_end,
     const ttnn::Shape& step);
 
+uint32_t get_num_cores_channels_from_sharded_tensor(const Tensor& tensor);
 }  // namespace ttnn::operations::experimental::detail

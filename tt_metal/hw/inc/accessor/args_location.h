@@ -10,6 +10,10 @@
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "const.h"
 
+// Forward declared from dataflow_api.h
+template <typename T>
+T get_common_arg_val(int arg_idx);
+
 namespace tensor_accessor {
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET = UNKNOWN>
@@ -67,17 +71,12 @@ struct ArgsOffsets {
         is_sharded ? (BankCoordsCTAOffset + (bank_coords_is_crta ? 0 : PhysicalNumBanksCT) - CTA_OFFSET) : 1;
 
 private:
-    [[no_unique_address]] uint32_t crta_offset_rt_;
+    uint32_t crta_offset_rt_;
 
 public:
-    constexpr ArgsOffsets() {
-        if constexpr (CRTA_OFFSET == UNKNOWN) {
-            crta_offset_rt_ = 0;
-        }
-    }
-    constexpr explicit ArgsOffsets(uint32_t crta_offset) {
+    constexpr ArgsOffsets() : crta_offset_rt_(0) {}
+    constexpr explicit ArgsOffsets(uint32_t crta_offset) : crta_offset_rt_(crta_offset) {
         static_assert(CRTA_OFFSET == UNKNOWN, "Do not pass crta_offset when CRTA_OFFSET is known");
-        crta_offset_rt_ = crta_offset;
     }
     constexpr uint32_t crta_offset() const {
         if constexpr (CRTA_OFFSET != UNKNOWN) {

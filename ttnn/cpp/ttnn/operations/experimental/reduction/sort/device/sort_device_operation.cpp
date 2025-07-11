@@ -15,11 +15,34 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t Wt = input_tensor_shape[3] / tile_width;
-    if (Wt > WT_THRESHOLD) {
-        // Multi-core implementation
-        return sort::program::SortProgramFactorySingleRowMultiCore{};
+
+    // Device number of cores
+    const auto device = tensor_args.input_tensor.device();
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
+
+    const auto input_dtype = tensor_args.input_tensor.dtype();
+    const auto output_specs = compute_output_specs(attributes, tensor_args);
+    const auto index_dtype = output_specs[1].data_type();
+
+    const uint32_t total_number_of_tiles_for_hybrid_approach =
+        total_number_of_cores * sort::program::SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
+                                    total_number_of_cores,
+                                    Wt,
+                                    input_dtype,
+                                    index_dtype,
+                                    sort::program::SortProgramFactoryCrossCoreDataExchange::
+                                        CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
+
+    if (Wt <= WT_THRESHOLD) {
+        // Single-core implementation
+        return sort::program::SortProgramFactorySingleRowSingleCore{};
+    } else if (Wt <= total_number_of_tiles_for_hybrid_approach) {
+        // Hybrid implementation
+        return sort::program::SortProgramFactoryCrossCoreDataExchange{};
     }
-    return sort::program::SortProgramFactorySingleRowSingleCore{};
+    // DRAM implementation
+    return sort::program::SortProgramFactorySingleRowMultiCore{};
 }
 
 void SortDeviceOperation::validate_on_program_cache_hit(
@@ -85,6 +108,17 @@ void SortDeviceOperation::validate_on_program_cache_miss(
                 "input tensor shape: {}",
                 output_indices_shape,
                 input_tensor_shape);
+            TT_FATAL(
+                tensor_args.output_tensors.at(0)->dtype() == tensor_args.input_tensor.dtype(),
+                "Output values tensor dtype must be the same as input tensor dtype. Got output values tensor dtype: {} "
+                "and input tensor dtype: {}",
+                tensor_args.output_tensors.at(0)->dtype(),
+                tensor_args.input_tensor.dtype());
+            TT_FATAL(
+                tensor_args.output_tensors.at(1)->dtype() == DataType::UINT16 ||
+                    tensor_args.output_tensors.at(1)->dtype() == DataType::UINT32,
+                "Output indices tensor dtype must be UINT16 or UINT32. Got output indices tensor dtype: {}",
+                tensor_args.output_tensors.at(1)->dtype());
         }
     }
 }
@@ -101,8 +135,13 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     auto values_spec = TensorSpec(
         output_shape,
         TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(Layout::TILE), attributes.output_mem_config));
-    auto index_spec = TensorSpec(
-        output_shape, TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), attributes.output_mem_config));
+
+    DataType index_dtype = DataType::UINT16;
+    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max()) {
+        index_dtype = DataType::UINT32;
+    }
+    auto index_spec =
+        TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), attributes.output_mem_config));
 
     return {values_spec, index_spec};
 }
@@ -116,8 +155,8 @@ SortDeviceOperation::tensor_return_value_t SortDeviceOperation::create_output_te
     }
     auto output_specs = compute_output_specs(attributes, tensor_args);
     return {
-        create_device_tensor(output_specs[0], tensor_args.input_tensor.device()),
-        create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),
+        create_device_tensor(output_specs[0], tensor_args.input_tensor.device()),  // Value tensor
+        create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),  // Index tensor
     };
 }
 

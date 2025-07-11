@@ -27,7 +27,10 @@ class FabricContext;
 // mesh and local mesh rank (HostRankId rename - #24178) in the mesh graph
 // descriptor.
 struct LocalMeshBinding {
-    MeshId mesh_id;
+    // Can bind multiple meshes to a single host. Most use-cases
+    // only require a 1:1 host to mesh mapping. At least one mesh_id
+    // is guaranteed to be present in this vector.
+    std::vector<MeshId> mesh_ids;
     HostRankId host_rank;
 };
 
@@ -44,6 +47,7 @@ public:
     explicit ControlPlane(
         const std::string& mesh_graph_desc_yaml_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
     ~ControlPlane();
 
     // Printing functions
@@ -63,8 +67,9 @@ public:
 
     std::vector<MeshId> get_user_physical_mesh_ids() const;
 
-    // Query for the MeshId and HostRankId of the local mesh; returns std::nullopt if binding is not set
-    MeshId get_local_mesh_id_binding() const;
+    // Queries for the MeshId(s) and HostRankId owned by the local rank. A vector of MeshIds allows
+    // a single host to bind to multiple meshes.
+    std::vector<MeshId> get_local_mesh_id_bindings() const;
     HostRankId get_local_host_rank_id_binding() const;
 
     // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
@@ -113,6 +118,7 @@ public:
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         FabricNodeId fabric_node_id) const;
+
     eth_chan_directions get_eth_chan_direction(FabricNodeId fabric_node_id, int chan) const;
     // TODO: remove this converter, we should consolidate the directions here
     eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
@@ -139,7 +145,8 @@ public:
 
     // Get all intermesh ethernet links in the system
     // Returns: map of chip_id -> vector of (eth_core, channel)
-    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links() const;
+    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links()
+        const;
 
     // Check if a specific ethernet core is an intermesh link
     bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
@@ -183,6 +190,9 @@ private:
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
     // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
     IntermeshLinkTable intermesh_link_table_;
+
+    std::unordered_map<MeshId, std::map<EthChanDescriptor, EthChanDescriptor>> peer_intermesh_link_tables_;
+
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
     // custom logic to order eth channels
     void order_ethernet_channels();
@@ -190,7 +200,11 @@ private:
     routing_plane_id_t get_routing_plane_id(
         chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
-    std::map<FabricNodeId, chip_id_t> get_physical_chip_mapping_from_mesh_graph_desc_file(
+    std::vector<chip_id_t> get_mesh_physical_chip_ids(
+        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
+        std::optional<chip_id_t> nw_corner_chip_id = std::nullopt) const;
+
+    std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping(
         const std::string& mesh_graph_desc_file);
 
     // Tries to get a valid downstream channel from the candidate_target_chans
@@ -212,9 +226,6 @@ private:
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
 
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size, chip_id_t nw_chip_physical_chip_id) const;
-
     std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
         FabricNodeId fabric_node_id, chan_id_t chan_id) const;
 
@@ -223,15 +234,29 @@ private:
 
     void write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
+    void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
 
     // Populate the local intermesh link to remote intermesh link table
     void generate_local_intermesh_link_table();
+
+    // All to All exchange of intermesh link tables between all hosts in the system
+    void exchange_intermesh_link_tables();
 
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
 
     // Check if intermesh links are available by reading SPI ROM config from first chip
     bool is_intermesh_enabled() const;
+
+    // Check if the provided mesh is local to this host
+    bool is_local_mesh(MeshId mesh_id) const;
+
+    void assign_direction_to_fabric_eth_core(
+        const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);
+
+    void assign_intermesh_link_directions_to_local_host(const FabricNodeId& fabric_node_id);
+
+    void assign_intermesh_link_directions_to_remote_host(const FabricNodeId& fabric_node_id);
 
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context

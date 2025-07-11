@@ -737,27 +737,11 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
-void validate_weight_and_bias_tensors(
-    const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor) {
-    TT_ASSERT(!ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE));
-    TT_ASSERT(weight_tensor.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(weight_tensor.logical_shape().rank() == 4);
-    // TODO: enable this assert
-    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.padded_shape());
-    if (bias_tensor.has_value()) {
-        TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
-        TT_ASSERT(bias_tensor.value().logical_shape().rank() == 4);
-        TT_ASSERT(bias_tensor.value().layout() == Layout::ROW_MAJOR);
-        // TODO: enable this assert
-        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().padded_shape());
-    }
-}
-
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const string& activation,
+    const std::string& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c) {
     if (height_sharded) {
@@ -808,6 +792,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const CoreCoord& compute_grid_size,
     Layout input_layout,
     tt_metal::DataType input_datatype,
+    tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t groups,
@@ -907,6 +892,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             kernel_size,
             conv_config,
             input_datatype,
+            output_datatype,
             enable_bias,
             conv_is_1d_deptwise);
 
@@ -915,7 +901,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         uint32_t input_nhw = tt::div_up(batch_size * input_height * input_width, tt::constants::TILE_HEIGHT);
         uint32_t input_c = tt::div_up(in_channels_aligned, tt::constants::TILE_WIDTH);
         uint32_t approx_input_size =
-            input_nhw * input_c * tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
+            input_nhw * input_c * tt::tile_size(datatype_to_dataformat_converter(output_datatype));
         uint32_t approx_input_size_per_core = approx_input_size / input_parallel_config.grid.num_cores();
 
         l1_usage.tensor_allocation_size += approx_input_size_per_core;
@@ -1011,6 +997,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     const DataType input_datatype,
+    const DataType output_datatype,
     const bool enable_bias,
     bool is_1d_depthwise_conv) {
     // Input shard doesn't affect L1 usage calculation.
@@ -1023,6 +1010,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         kernel_size,
         conv_config,
         input_datatype,
+        output_datatype,
         dummy_input_shard_shape,
         enable_bias,
         is_1d_depthwise_conv);
@@ -1047,31 +1035,26 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
 
-// Common folding operation for both input and weight tensors
 template <typename T>
 ttnn::Tensor fold_tensor(
     const ttnn::Tensor& tensor,
     T* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor) {
+    std::array<uint32_t, 4> padding_n4) {
     // Validation checks
     TT_FATAL(
-        stride[0] == kernel_size[0] && stride[1] == kernel_size[1], "Stride must be equal to kernel size for folding");
-    if (is_weight_tensor) {
-        TT_FATAL(!tensor.memory_config().is_l1(), "Weight tensor must not be in L1 memory");
-    } else {
-        TT_FATAL(!tensor.memory_config().is_l1(), "Input tensor must not be in L1 memory for folding");
-    }
+        !tensor.memory_config().is_l1(),
+        "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
     TT_FATAL(
         padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
-        "Padding must be 0 for folding");
-    if (!dtype.has_value()) {
-        dtype = tensor.dtype();
-    }
-    TT_FATAL(dtype.value() != tt_metal::DataType::BFLOAT8_B, "Conv2D DRAM folding currently doesn't support BFLOAT8_B");
+        "Conv2D kernel stride folding: Padding must be 0 for folding");
+    TT_FATAL(
+        tensor.dtype() != tt_metal::DataType::BFLOAT8_B,
+        "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
+    TT_FATAL(
+        stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1],
+        "Conv2D kernel stride folding: Stride must be less than or equal to kernel size");
 
     // Move to device if needed
     ttnn::Tensor tensor_on_device = tensor;
@@ -1079,16 +1062,8 @@ ttnn::Tensor fold_tensor(
         tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
     }
 
-    if (is_weight_tensor) {
-        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 2, 3, 1}));
-    }
-
     // Core folding operation
-    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
-
-    if (is_weight_tensor) {
-        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 3, 1, 2}));
-    }
+    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, 0, 0, 0);
 
     return tensor_on_device;
 }
@@ -1109,13 +1084,16 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     input_width = input_width / stride[1];
     in_channels = in_channels * stride[0] * stride[1];
 
+    auto kernel_h = tt::div_up(kernel_size[0], stride[0]);
+    auto kernel_w = tt::div_up(kernel_size[1], stride[1]);
+
     return KernelStrideFoldingResult{
         .input_height = input_height,
         .input_width = input_width,
         .in_channels = in_channels,
         .stride = {1, 1},
-        .kernel_size = {1, 1},
-        .mm_conv = true};
+        .kernel_size = {kernel_h, kernel_w},
+        .mm_conv = (kernel_size[0] == stride[0] && kernel_size[1] == stride[1])};
 }
 
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<IDevice>(
@@ -1194,18 +1172,14 @@ template ttnn::Tensor fold_tensor<IDevice>(
     tt::tt_metal::IDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor);
+    std::array<uint32_t, 4> padding_n4);
 
 template ttnn::Tensor fold_tensor<MeshDevice>(
     const ttnn::Tensor& tensor,
     tt::tt_metal::distributed::MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor);
+    std::array<uint32_t, 4> padding_n4);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     tt::stl::reflection::operator<<(os, config);

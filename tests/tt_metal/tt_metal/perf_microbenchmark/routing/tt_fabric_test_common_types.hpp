@@ -17,10 +17,45 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
+// Device identifier that can be resolved later (used during parsing)
+using DeviceIdentifier = std::variant<
+    FabricNodeId,                      // Already resolved
+    chip_id_t,                         // Physical chip ID
+    std::pair<MeshId, chip_id_t>,      // [mesh_id, chip_id]
+    std::pair<MeshId, MeshCoordinate>  // [mesh_id, [row, col]]
+    >;
+
 // A map to hold various parametrization options parsed from the YAML.
 using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
 using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
 
+// Parsed structures (before resolution) - use DeviceIdentifier
+struct ParsedDestinationConfig {
+    std::optional<DeviceIdentifier> device;
+    std::optional<CoreCoord> core;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
+    std::optional<uint32_t> target_address;
+    std::optional<uint32_t> atomic_inc_address;
+};
+
+struct ParsedTrafficPatternConfig {
+    std::optional<ChipSendType> ftype;
+    std::optional<NocSendType> ntype;
+    std::optional<uint32_t> size;
+    std::optional<uint32_t> num_packets;
+    std::optional<ParsedDestinationConfig> destination;
+    std::optional<uint16_t> atomic_inc_val;
+    std::optional<uint16_t> atomic_inc_wrap;
+    std::optional<uint32_t> mcast_start_hops;
+};
+
+struct ParsedSenderConfig {
+    DeviceIdentifier device = FabricNodeId(MeshId{0}, 0);
+    std::optional<CoreCoord> core;
+    std::vector<ParsedTrafficPatternConfig> patterns;
+};
+
+// Resolved structures (after resolution) - use FabricNodeId
 struct DestinationConfig {
     std::optional<FabricNodeId> device;
     std::optional<CoreCoord> core;
@@ -51,6 +86,15 @@ enum class RoutingType {
     Dynamic,
 };
 
+enum class HighLevelTrafficPattern {
+    AllToAllUnicast,
+    FullDeviceRandomPairing,
+    AllToAllMulticast,
+    UnidirectionalLinearMulticast,
+    FullRingMulticast,
+    HalfRingMulticast,
+};
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology;
     std::optional<RoutingType> routing_type;
@@ -59,6 +103,19 @@ struct TestFabricSetup {
 struct HighLevelPatternConfig {
     std::string type;
     std::optional<uint32_t> iterations;
+};
+
+struct ParsedTestConfig {
+    std::string name;
+    TestFabricSetup fabric_setup;
+    std::optional<std::string> on_missing_param_policy;
+    std::optional<ParsedTrafficPatternConfig> defaults;
+    std::optional<ParametrizationOptionsMap> parametrization_params;
+    // A test can be defined by either a concrete list of senders or a high-level pattern.
+    std::optional<std::vector<HighLevelPatternConfig>> patterns;
+    std::vector<ParsedSenderConfig> senders;
+    std::optional<std::string> bw_calc_func;
+    uint32_t seed;
 };
 
 struct TestConfig {

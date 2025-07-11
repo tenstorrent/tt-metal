@@ -5,6 +5,8 @@
 #include "buffer_distribution_spec.hpp"
 #include "assert.hpp"
 
+#include <tt-metalium/math.hpp>
+
 #include <algorithm>
 
 namespace tt::tt_metal {
@@ -139,28 +141,63 @@ BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
     tt::tt_metal::Shape shard_shape,
     tt::tt_metal::Shape2D page_shape,
     CoreRangeSet core_range_set,
-    ShardOrientation shard_orientation) {
+    ShardOrientation shard_orientation,
+    ShardDistributionStrategy shard_distribution_strategy) {
     auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(tensor_shape, page_shape);
     auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(shard_shape, page_shape);
-    return BufferDistributionSpec(tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation);
+    return BufferDistributionSpec(
+        tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
 }
 
 BufferDistributionSpec::BufferDistributionSpec(
     tt::tt_metal::Shape tensor_shape_in_pages,
     tt::tt_metal::Shape shard_shape_in_pages,
     CoreRangeSet core_range_set,
-    ShardOrientation shard_orientation) :
+    ShardOrientation shard_orientation,
+    ShardDistributionStrategy shard_distribution_strategy) :
     shard_orientation_(shard_orientation) {
-    cores_ = corerange_to_cores(
-        core_range_set, core_range_set.num_cores(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
-    if (tensor_shape_in_pages.volume() != 0) {
-        TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
-    }
     std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
         CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
+
+    cores_ = compute_core_list(core_range_set, shard_distribution_strategy);
+    if (tensor_shape_in_pages_.volume() != 0) {
+        TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
+    }
+}
+
+std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
+    const CoreRangeSet& core_range_set, ShardDistributionStrategy shard_distribution_strategy) {
+    if (shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
+        return corerange_to_cores(
+            core_range_set, core_range_set.num_cores(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
+    }
+
+    TT_FATAL(shard_shape_in_pages_.rank() <= 2, "2D grid distribution is only supported for 2D sharding!");
+    TT_FATAL(
+        core_range_set.ranges().size() == 1, "2D grid distribution is only supported for one contiguous core grid!");
+    auto core_grid = core_range_set.ranges()[0];
+
+    uint32_t num_shards_along_width = std::max(div_up(tensor_shape_in_pages_[-1], shard_shape_in_pages_[-1]), 1u);
+    uint32_t num_shards_along_height = std::max(div_up(tensor_shape_in_pages_[-2], shard_shape_in_pages_[-2]), 1u);
+    if (shard_orientation_ != ShardOrientation::ROW_MAJOR) {
+        std::swap(num_shards_along_width, num_shards_along_height);
+    }
+    TT_FATAL(
+        num_shards_along_width <= core_grid.grid_size().x,
+        "Number of shards along width must not exceed core grid width!");
+    TT_FATAL(
+        num_shards_along_height <= core_grid.grid_size().y,
+        "Number of shards along height must not exceed core grid height!");
+
+    CoreRange trimmed_core_grid = CoreRange(
+        core_grid.start_coord,
+        {core_grid.start_coord.x + num_shards_along_width - 1, core_grid.start_coord.y + num_shards_along_height - 1});
+
+    return corerange_to_cores(
+        trimmed_core_grid, trimmed_core_grid.size(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
 }
 
 size_t BufferDistributionSpec::num_shards() const {
@@ -240,7 +277,6 @@ UncompressedBufferPageMapping compute_page_mapping(
 
     size_t num_shards_per_core = (num_shards + cores.size() - 1) / cores.size();
     size_t shard_pages = shard_shape.volume();
-    size_t dev_pages = cores.size() * num_shards_per_core * shard_pages;
 
     page_mapping.core_host_page_indices.resize(cores.size());
     for (size_t i = 0; i < cores.size(); i++) {

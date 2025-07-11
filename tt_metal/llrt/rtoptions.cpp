@@ -180,7 +180,6 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     using_slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-    fd_fabric_en = getenv(TT_METAL_FD_FABRIC_DEMO) != nullptr;
 
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
@@ -208,8 +207,10 @@ RunTimeOptions::RunTimeOptions() {
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
     }
 
-    if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
-        this->erisc_iram_enabled = true;
+    if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
+        bool disabled = strcmp(str, "0") == 0;
+        this->erisc_iram_enabled = !disabled;
+        this->erisc_iram_enabled_env_var = !disabled;
     }
     this->fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
