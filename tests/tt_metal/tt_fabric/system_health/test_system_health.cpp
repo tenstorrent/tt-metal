@@ -187,6 +187,12 @@ TEST(Cluster, ReportSystemHealth) {
     std::vector<std::uint32_t> read_vec;
     auto retrain_count_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+    auto crc_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
+    auto corr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
+    auto uncorr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
     if (unique_chip_ids.empty()) {
         // Temporary patch to workaround unique chip ids not being set for non-6U systems
         for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
@@ -211,6 +217,11 @@ TEST(Cluster, ReportSystemHealth) {
                 chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
             std::stringstream eth_ss;
             cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
+            cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, crc_addr);
+            cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, corr_addr);
+            cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, corr_addr + 4);
+            cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, uncorr_addr);
+            cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, uncorr_addr + 4);
             eth_ss << " eth channel " << std::dec << (uint32_t)chan << " " << eth_core.str();
             std::string connection_type = get_connector_str(chip_id, eth_core, chan, cluster_type);
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
@@ -219,6 +230,8 @@ TEST(Cluster, ReportSystemHealth) {
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
                            << connected_chip_id;
+                    eth_ss << " CRC " << read_vec[1] << " Corrected: " << ((uint64_t)read_vec[2] << 32) + read_vec[3]
+                           << " Uncorrected: " << ((uint64_t)read_vec[4] << 32) + read_vec[5];
                     if (cluster_type == tt::ClusterType::GALAXY) {
                         eth_ss << " " << get_ubb_id_str(connected_chip_id);
                     }
@@ -228,6 +241,8 @@ TEST(Cluster, ReportSystemHealth) {
                         cluster.get_connected_ethernet_core_to_remote_mmio_device(std::make_tuple(chip_id, eth_core));
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
                            << connected_chip_unique_id;
+                    eth_ss << " CRC " << read_vec[1] << " Corrected: " << ((uint64_t)read_vec[2] << 32) + read_vec[3]
+                           << " Uncorrected: " << ((uint64_t)read_vec[4] << 32) + read_vec[5];
                     if (cluster_type == tt::ClusterType::GALAXY) {
                         eth_ss << " " << get_ubb_id_str(connected_chip_unique_id);
                     }
