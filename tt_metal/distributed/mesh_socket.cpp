@@ -103,7 +103,7 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
         fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
     }
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
-    point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
+    // point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
