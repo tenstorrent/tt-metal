@@ -153,7 +153,7 @@ class MistralVisionTower(LightweightModule):
         patch_embeds = ttnn.concat(reshaped_patches, dim=0)
 
         # ln_pre RMS Norm
-        mode = "decode"  # if self.max_seq_len <= 32 else "prefill"
+        mode = "prefill"  # if self.max_seq_len <= 32 else "prefill"
         patch_embeds = self.ln_pre(patch_embeds, mode=mode)
 
         # # positional embeddings
@@ -171,8 +171,5 @@ class MistralVisionTower(LightweightModule):
         )
 
         patch_embeds = ttnn.unsqueeze(patch_embeds, 0)
-        out = self.transformer(
-            patch_embeds,
-            mask=attention_mask,
-        )
+        out = self.transformer(patch_embeds, mask=attention_mask, position_embeddings=position_embeddings)
         return out

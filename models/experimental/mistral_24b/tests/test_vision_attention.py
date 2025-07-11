@@ -12,7 +12,7 @@ import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
-from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
+from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 
 
 @torch.no_grad()
@@ -66,20 +66,54 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
 
     dim = model_args.vision_dim
     pt_attention_input = torch.randn(batch_size, seq_len, dim)
+    attention_mask = torch.zeros(batch_size, 1, seq_len, seq_len)
 
     B, T, D = pt_attention_input.shape
     cos = torch.ones((1, T, head_dim))
     sin = torch.zeros((1, T, head_dim))
+
+    # attention_mask = torch.load("ref_attention_mask.pt")
+    # pt_attention_input = torch.load("ref_patch_embeds.pt")
+    # position_embeddings = torch.load("ref_position_embeddings.pt")
 
     attention_input = model_args.prepare_residual_tensor_prefill(
         pt_attention_input,
         force_replicated=True,
     )
 
-    tt_out = tt_model(attention_input)
+    # cos, sin = position_embeddings
+
+    cos_t = ttnn.from_torch(
+        cos,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    sin_t = ttnn.from_torch(
+        sin,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_mask = ttnn.from_torch(
+        attention_mask,
+        device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_out = tt_model(attention_input, position_embeddings=(cos_t, sin_t), mask=tt_mask)
     tt_output_torch = ttnn.to_torch(tt_out, device=mesh_device)[0, :, :, :]
 
-    reference_output = reference_model(pt_attention_input, position_embeddings=(cos, sin))[0]
+    reference_output = reference_model(pt_attention_input, attention_mask, position_embeddings=(cos, sin))[0]
     pcc_required = 0.99
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

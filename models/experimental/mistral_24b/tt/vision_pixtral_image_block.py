@@ -7,7 +7,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm as RMSNorm
 
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
+from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 
 
@@ -68,9 +68,11 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             dtype=dtype,
         )
 
-    def forward(self, x_input, mask=None):
-        mode = "decode"
-        attn_out = self.attention(self.attention_norm(x_input, mode=mode), mask=mask)
+    def forward(self, x_input, mask=None, position_embeddings=None):
+        mode = "prefill"
+        attn_out = self.attention(
+            self.attention_norm(x_input, mode=mode), position_embeddings=position_embeddings, mask=mask
+        )
         res = ttnn.add(x_input, attn_out)
         mlp_out = self.mlp(self.ffn_norm(res, mode=mode))
         out = ttnn.add(res, mlp_out)

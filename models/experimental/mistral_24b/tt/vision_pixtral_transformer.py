@@ -37,7 +37,7 @@ class TtPixtralTransformer(LightweightModule):
             for i in tqdm(range(layers), desc=f"Loading vision transformer layers")
         ]
 
-    def forward(self, x, return_intermediate=None, mask=None):
+    def forward(self, x, return_intermediate=None, mask=None, position_embeddings=None):
         """
         Different from reference impl in that if return_intermediates, it returns
         a list of intermediate tensors rather than a stack of intermediates.
@@ -47,7 +47,7 @@ class TtPixtralTransformer(LightweightModule):
         for idx, r in enumerate(self.resblocks):
             if return_intermediate is not None and idx in return_intermediate:
                 out.append(x)
-            x = r(x, mask=mask)
+            x = r(x, mask=mask, position_embeddings=position_embeddings)
         if return_intermediate is not None:
             return x, out
         return x

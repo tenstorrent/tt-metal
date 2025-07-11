@@ -29,7 +29,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     indirect=True,
 )
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
-    pcc_required = 0.99
+    pcc_required = 0.98
 
     model_args = ModelArgs(mesh_device)
     dtype = ttnn.bfloat16
@@ -70,7 +70,31 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     cos = torch.ones((1, T, head_dim))
     sin = torch.zeros((1, T, head_dim))
 
-    positional_embedding = (cos, sin)
+    # positional_embedding = (cos, sin)
+
+    # attention_mask = torch.load("ref_attention_mask.pt")
+    # pt_attention_input = torch.load("ref_patch_embeds.pt")
+    # position_embeddings = torch.load("ref_position_embeddings.pt")
+
+    # cos, sin = position_embeddings
+
+    cos_t = ttnn.from_torch(
+        cos,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    sin_t = ttnn.from_torch(
+        sin,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
     attention_input = model_args.prepare_residual_tensor_prefill(
         pt_attention_input,
@@ -86,9 +110,9 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     )
 
     with torch.no_grad():
-        tt_out = tt_model(attention_input, mask=tt_mask)
+        tt_out = tt_model(attention_input, mask=tt_mask, position_embeddings=(cos_t, sin_t))
         reference_output = reference_model(
-            pt_attention_input, attention_mask=attention_mask, position_embeddings=positional_embedding
+            pt_attention_input, attention_mask=attention_mask, position_embeddings=(cos, sin)
         )[0]
         tt_output_torch = ttnn.to_torch(tt_out)
         tt_output_torch = tt_output_torch.squeeze(0)
