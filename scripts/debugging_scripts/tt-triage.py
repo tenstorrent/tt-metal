@@ -7,14 +7,15 @@
 Script Name: tt-triage.py
 
 Usage:
-    tt-triage [--halt-on-error] [-v | --verbose] [-V | --vverbose] [--dev=<device_id>]...
+    tt-triage [--halt-on-error] [--inspector-log-path=<inspector_log_path>] [-v | --verbose] [-V | --vverbose] [--dev=<device_id>]...
 
 Options:
-    -h --help         Show this screen.
-    --dev=<device_id> Specify the device id       [default: all]
-    -v --verbose      Print verbose output.       [default: False]
-    -V --vverbose     Print more verbose output.  [default: False]
-    --halt-on-error   Halt on first error.        [default: False]
+    -h --help                                  Show this screen.
+    --dev=<device_id>                          Specify the device id. 'all' is also an option  [default: in_use]
+    -v --verbose                               Print verbose output.                           [default: False]
+    -V --vverbose                              Print more verbose output.                      [default: False]
+    --inspector-log-path=<inspector_log_path>  Path to the inspector log directory.
+    --halt-on-error                            Halt on first error.                            [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -31,7 +32,7 @@ from collections import namedtuple
 import time
 import os
 import sys
-from parse_inspector_logs import InspectorData
+from parse_inspector_logs import get_data as get_inspector_data, InspectorData
 
 RST = "\033[0m"
 BLUE = "\033[34m"  # For good values
@@ -655,26 +656,27 @@ def main(argv=None):
     device_ids = list(context.devices.keys())
 
     # Fetch inspector data
-    metal_home = os.environ.get("TT_METAL_HOME")
-    if metal_home is None:
-        raiseTTTriageError("TT_METAL_HOME is not set. Please set it to the path of the metal directory.")
-        return
-
-    log_directory = os.path.join(os.environ.get("TT_METAL_HOME", ""), "generated", "inspector")
-    if not os.path.exists(log_directory):
-        print(
-            f"  {ORANGE}Inspector directory {log_directory} does not exist. Running tests that don't include it.{RST}"
-        )
+    inspector_log_directory = args["--inspector-log-path"]
+    try:
+        inspector_data = get_inspector_data(inspector_log_directory)
+    except:
         inspector_data = None
-    else:
-        inspector_data = InspectorData(log_directory)
+        print(f"  {ORANGE}Inspector directory does not exist. Running tests that don't include it.{RST}")
 
     # Populate integer array with device ids
-    if len(args["--dev"]) == 1 and args["--dev"][0].lower() == "all":
+    if len(args["--dev"]) == 1 and args["--dev"][0].lower() == "in_use":
         if inspector_data is not None:
             device_ids = inspector_data.devices_in_use
+            if len(device_ids) == 0:
+                print(
+                    f"{ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
+                )
+                device_ids = [int(id) for id in context.devices.keys()]
         else:
+            print(f"{ORANGE}Inspector data not found. Using all available devices.{RST}")
             device_ids = [int(id) for id in context.devices.keys()]
+    elif len(args["--dev"]) == 1 and args["--dev"][0].lower() == "all":
+        device_ids = [int(id) for id in context.devices.keys()]
     else:
         device_ids = [int(id) for id in args["--dev"]]
 
