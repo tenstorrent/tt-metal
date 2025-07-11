@@ -20,22 +20,22 @@ UncompressedBufferPageMapping compute_page_mapping(
 class BufferDistributionSpec {
 public:
     static BufferDistributionSpec from_shard_spec(
-        tt::tt_metal::Shape tensor_shape,
-        tt::tt_metal::Shape shard_shape,
-        tt::tt_metal::Shape2D page_shape,
+        Shape tensor_shape,
+        Shape shard_shape,
+        Shape2D page_shape,
         CoreRangeSet core_range_set,
         ShardOrientation shard_orientation,
         ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
 
     BufferDistributionSpec(
-        tt::tt_metal::Shape tensor_shape_in_pages,
-        tt::tt_metal::Shape shard_shape_in_pages,
+        Shape tensor_shape_in_pages,
+        Shape shard_shape_in_pages,
         CoreRangeSet core_range_set,
         ShardOrientation shard_orientation,
         ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
 
-    tt::tt_metal::Shape tensor_shape_in_pages() const { return tensor_shape_in_pages_; }
-    tt::tt_metal::Shape shard_shape_in_pages() const { return shard_shape_in_pages_; }
+    const Shape& tensor_shape_in_pages() const { return tensor_shape_in_pages_; }
+    const Shape& shard_shape_in_pages() const { return shard_shape_in_pages_; }
 
     size_t num_shards() const;
     size_t max_num_shards_per_core() const;
@@ -66,8 +66,8 @@ private:
         const CoreRangeSet& core_range_set, ShardDistributionStrategy shard_distribution_strategy);
     void init_precomputed_data();
 
-    tt::tt_metal::Shape tensor_shape_in_pages_;
-    tt::tt_metal::Shape shard_shape_in_pages_;
+    Shape tensor_shape_in_pages_;
+    Shape shard_shape_in_pages_;
     ShardOrientation shard_orientation_ = ShardOrientation::ROW_MAJOR;
 
     std::vector<CoreCoord> cores_;
