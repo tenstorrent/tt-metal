@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
@@ -45,8 +45,9 @@ void MAIN {
     // init pack, compute and unpack
 
     ckernel::topk_tile_init();
-    transpose_wh_init(input_cb_index, input_transposed_cb_index);
-    transpose_wh_init(index_cb_index, index_transposed_cb_index);
+    compute_kernel_hw_startup(input_cb_index, index_transposed_cb_index);
+    transpose_init(input_cb_index);
+    transpose_init(index_cb_index);
 
     bool switch_dir = (K == 64);
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
