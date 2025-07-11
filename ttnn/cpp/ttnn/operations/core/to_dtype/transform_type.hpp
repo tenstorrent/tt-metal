@@ -90,9 +90,8 @@ tt::tt_metal::Tensor transform_type(const tt::tt_metal::Tensor& input_tensor, co
         return postprocess_vector<DstType>(std::move(output_vector), input_tensor);
     });
 
-    auto layout = dst_type == tt::tt_metal::DataType::BFLOAT4_B or dst_type == tt::tt_metal::DataType::BFLOAT8_B
-                      ? Layout::TILE
-                      : input_tensor.layout();
+    auto layout =
+        std::is_same_v<DstType, bfloat4_b> || std::is_same_v<DstType, bfloat8_b> ? Layout::TILE : input_tensor.layout();
 
     auto spec = TensorSpec(
         input_tensor.logical_shape(),
