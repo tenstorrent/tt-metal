@@ -195,13 +195,15 @@ void kernel_main() {
             uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
             uint16_t top_left_local_index = reader_indices_ptr[counter++];
             DPRINT << "top_left_local_index" << top_left_local_index << ENDL();
-            uint32_t h_multiples = 0;
+
             for (uint32_t h = 0; h < window_h; ++h) {
                 for (uint32_t w = 0; w < window_w; ++w) {
                     const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
                     DPRINT << "stick_offset " << stick_offset << ENDL();
                     const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_padded_c);
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
+                    DPRINT << "in_nbytes_padded_c " << in_nbytes_padded_c << ENDL();
+                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_padded_c);
+                    DPRINT << "in_aligned_nbytes_c " << in_aligned_nbytes_c << ENDL();
                     out_l1_write_addr += in_aligned_nbytes_c;
                 }
             }
