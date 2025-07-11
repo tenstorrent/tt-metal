@@ -253,7 +253,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
 
     const uint32_t num_input_tiles =
         (everything_fits_in_l1 | everything_except_gamma_fits_in_l1) ? Wt : twice_block_size;
-    const uint32_t num_gamma_tiles = everything_except_gamma_fits_in_l1 ? Wt : twice_block_size;
+    const uint32_t num_gamma_tiles = everything_fits_in_l1 ? Wt : twice_block_size;
 
     auto data_format = input_data_format;
     auto precise_data_format = tt::DataFormat::Float32;

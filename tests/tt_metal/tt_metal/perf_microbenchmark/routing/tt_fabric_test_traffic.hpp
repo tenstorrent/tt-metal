@@ -224,6 +224,7 @@ struct TestTrafficSenderConfig {
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
     uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
+    uint32_t payload_buffer_size;  // Add payload buffer size field
 
     std::vector<uint32_t> get_args() const;
 };
@@ -233,6 +234,7 @@ struct TestTrafficReceiverConfig {
     uint32_t sender_id;
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
+    uint32_t payload_buffer_size;  // Add payload buffer size field
 
     std::vector<uint32_t> get_args() const;
 };
@@ -241,10 +243,8 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
     std::vector<uint32_t> args;
     args.reserve(20);  // Reserve a reasonable upper bound to avoid reallocations
 
-    // TODO: get the payload buffer size from the config
-    uint32_t payload_buffer_size = 0x10000;
     const auto metadata =
-        SenderMetadataFields(this->parameters.num_packets, this->parameters.seed, payload_buffer_size);
+        SenderMetadataFields(this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size);
     const auto metadata_args = metadata.get_args();
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 
@@ -347,10 +347,8 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     std::vector<uint32_t> args;
     args.reserve(10);  // Reserve a reasonable upper bound to avoid reallocations
 
-    // TODO: get the payload buffer size from the config
-    uint32_t payload_buffer_size = 0x10000;
     const auto metadata =
-        ReceiverMetadataFields(this->parameters.num_packets, this->parameters.seed, payload_buffer_size);
+        ReceiverMetadataFields(this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size);
     const auto metadata_args = metadata.get_args();
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 

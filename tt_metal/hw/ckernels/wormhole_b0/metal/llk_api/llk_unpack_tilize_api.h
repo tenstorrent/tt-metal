@@ -57,6 +57,10 @@ inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uin
     std::uint32_t operand_id = get_operand_id(operand);
     unpack_config_u config = {0};
 
+    // Revert Z and Y dim value back to default.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(4);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0x0000ffff>(1);
+
     config.f.out_data_format = (uint)unpack_dst_format[operand_id];
     config.f.throttle_mode = 2;
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));

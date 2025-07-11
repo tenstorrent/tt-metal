@@ -95,65 +95,47 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
     auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.tensor_spec(), builder);
 
-    if (const auto* host_storage = std::get_if<tt::tt_metal::HostStorage>(&storage); host_storage != nullptr) {
-        buffers.push_back(host_storage->buffer);
+    const auto& host_storage = tensor.host_storage();
 
-        auto inline_storage =
-            ttnn::flatbuffer::InlineFileStorage(/*offset=*/0, host_storage->buffer.view_bytes().size());
+    std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
+    // Used to deduplicate buffer addresses for replicated tensor data.
+    std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
+    uint64_t next_buffer_offset = 0;
+    for (const auto& coord : host_storage.buffer().shard_coords()) {
+        // Iterate over local populated shards.
+        if (const auto& buffer = host_storage.buffer().get_shard(coord); buffer.has_value()) {
+            const auto* buffer_address = buffer->view_bytes().data();
+            const std::size_t buffer_size = buffer->view_bytes().size();
 
-        auto replicated_tensor = ttnn::flatbuffer::CreateReplicatedTensor(
-            builder, ttnn::flatbuffer::TensorBuffer::InlineFileStorage, builder.CreateStruct(inline_storage).Union());
-
-        auto tensor_offset = ttnn::flatbuffer::CreateTensor(
-            builder, tensor_spec_offset, ttnn::flatbuffer::TensorType::ReplicatedTensor, replicated_tensor.Union());
-
-        return tensor_offset;
-    } else {
-        const auto* multi_device_storage = std::get_if<tt::tt_metal::MultiDeviceHostStorage>(&storage);
-        TT_FATAL(multi_device_storage != nullptr, "Sharded tensor requires MultiDeviceHostStorage");
-
-        std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
-        // Used to deduplicate buffer addresses for replicated tensor data.
-        std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
-        uint64_t next_buffer_offset = 0;
-        for (const auto& coord : multi_device_storage->distributed_buffer().shard_coords()) {
-            // Iterate over local populated shards.
-            if (const auto& buffer = multi_device_storage->distributed_buffer().get_shard(coord); buffer.has_value()) {
-                const auto* buffer_address = buffer->view_bytes().data();
-                const std::size_t buffer_size = buffer->view_bytes().size();
-
-                uint64_t shard_buffer_offset = next_buffer_offset;
-                if (auto [it, inserted] = buffer_to_offset.try_emplace(buffer_address, shard_buffer_offset); inserted) {
-                    // Encountered a new buffer, add it to the buffers vector.
-                    next_buffer_offset += buffer_size;
-                    buffers.push_back(*buffer);
-                } else {
-                    // Point to the existing buffer.
-                    shard_buffer_offset = it->second;
-                }
-
-                auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
-                auto mesh_coord_offset = to_flatbuffer(coord, builder);
-
-                auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
-                    builder,
-                    ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
-                    builder.CreateStruct(inline_storage).Union(),
-                    mesh_coord_offset);
-
-                shards_vector.push_back(shard_offset);
+            uint64_t shard_buffer_offset = next_buffer_offset;
+            if (auto [it, inserted] = buffer_to_offset.try_emplace(buffer_address, shard_buffer_offset); inserted) {
+                // Encountered a new buffer, add it to the buffers vector.
+                next_buffer_offset += buffer_size;
+                buffers.push_back(*buffer);
+            } else {
+                // Point to the existing buffer.
+                shard_buffer_offset = it->second;
             }
+
+            auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
+            auto mesh_coord_offset = to_flatbuffer(coord, builder);
+
+            auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
+                builder,
+                ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
+                builder.CreateStruct(inline_storage).Union(),
+                mesh_coord_offset);
+
+            shards_vector.push_back(shard_offset);
         }
-        auto shards = builder.CreateVector(shards_vector);
-
-        auto mesh_shape_offset = to_flatbuffer(multi_device_storage->distributed_buffer().shape(), builder);
-
-        auto sharded_tensor = ttnn::flatbuffer::CreateShardedTensor(builder, mesh_shape_offset, shards);
-        auto tensor_offset = ttnn::flatbuffer::CreateTensor(
-            builder, tensor_spec_offset, ttnn::flatbuffer::TensorType::ShardedTensor, sharded_tensor.Union());
-
-        return tensor_offset;
     }
+    auto shards = builder.CreateVector(shards_vector);
+
+    auto mesh_shape_offset = to_flatbuffer(host_storage.buffer().shape(), builder);
+
+    auto tensor_offset = ttnn::flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards);
+
+    return tensor_offset;
 }
 
 Tensor from_flatbuffer(
@@ -162,71 +144,49 @@ Tensor from_flatbuffer(
     tt::tt_metal::MemoryPin memory_pin) {
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
-    switch (fb_tensor->tensor_type_type()) {
-        case ttnn::flatbuffer::TensorType::NONE: TT_THROW("Invalid TensorType");
-        case ttnn::flatbuffer::TensorType::ReplicatedTensor: {
-            auto replicated = fb_tensor->tensor_type_as_ReplicatedTensor();
+    const auto* mesh_shape = fb_tensor->mesh_shape();
+    TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for tensor");
+    const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
 
-            auto* inline_storage = replicated->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
-            TT_FATAL(inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
+    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(ttnn_mesh_shape);
+    for (size_t i = 0; i < fb_tensor->shards()->size(); ++i) {
+        const auto* shard = fb_tensor->shards()->Get(i);
 
-            const uint64_t offset = inline_storage->offset();
-            const uint64_t size = inline_storage->size();
+        const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
+        TT_FATAL(inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
 
-            tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
-                size, spec, tt::stl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
-            return Tensor(std::move(host_buffer), spec);
-        }
-        case ttnn::flatbuffer::TensorType::ShardedTensor: {
-            const auto* sharded = fb_tensor->tensor_type_as_ShardedTensor();
+        const uint64_t offset = inline_storage->offset();
+        const uint64_t size = inline_storage->size();
 
-            const auto* mesh_shape = sharded->mesh_shape();
-            TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for sharded tensor");
-            const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
+        tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
+            size, spec, tt::stl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
 
-            auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(ttnn_mesh_shape);
-            for (size_t i = 0; i < sharded->shards()->size(); ++i) {
-                const auto* shard = sharded->shards()->Get(i);
-
-                const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
-                TT_FATAL(
-                    inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
-
-                const uint64_t offset = inline_storage->offset();
-                const uint64_t size = inline_storage->size();
-
-                tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
-                    size, spec, tt::stl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
-
-                TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
-                const auto coord = from_flatbuffer(shard->mesh_coordinate());
-                distributed_buffer.emplace_shard(
-                    coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
-            }
-
-            // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used
-            // directly in Tensor storage.
-            const auto strategy = [&]() -> tt::tt_metal::DistributedTensorConfig {
-                std::unordered_set<const std::byte*> buffer_addresses;
-                distributed_buffer.apply([&buffer_addresses](const tt::tt_metal::HostBuffer& shard) {
-                    buffer_addresses.insert(shard.view_bytes().data());
-                });
-                if (buffer_addresses.size() == 1) {
-                    return tt::tt_metal::ReplicateTensor();
-                } else if (ttnn_mesh_shape.dims() == 2) {
-                    return tt::tt_metal::ShardTensor2D{
-                        tt::tt_metal::ShardMesh{.y = ttnn_mesh_shape[0], .x = ttnn_mesh_shape[1]}};
-                } else {
-                    return tt::tt_metal::AllGatherTensor{};
-                }
-            }();
-
-            tt::tt_metal::MultiDeviceHostStorage multi_device_storage{std::move(distributed_buffer)};
-
-            return Tensor(std::move(multi_device_storage), spec, strategy);
-        }
+        TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
+        const auto coord = from_flatbuffer(shard->mesh_coordinate());
+        distributed_buffer.emplace_shard(
+            coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
     }
-    TT_THROW("Unreachable");
+
+    // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used
+    // directly in Tensor storage.
+    const auto strategy = [&]() -> tt::tt_metal::DistributedTensorConfig {
+        std::unordered_set<const std::byte*> buffer_addresses;
+        distributed_buffer.apply([&buffer_addresses](const tt::tt_metal::HostBuffer& shard) {
+            buffer_addresses.insert(shard.view_bytes().data());
+        });
+        if (buffer_addresses.size() == 1) {
+            return tt::tt_metal::ReplicateTensor();
+        } else if (ttnn_mesh_shape.dims() == 2) {
+            return tt::tt_metal::ShardTensor2D{
+                tt::tt_metal::ShardMesh{.y = ttnn_mesh_shape[0], .x = ttnn_mesh_shape[1]}};
+        } else {
+            return tt::tt_metal::AllGatherTensor{};
+        }
+    }();
+
+    tt::tt_metal::HostStorage host_storage{std::move(distributed_buffer)};
+
+    return Tensor(std::move(host_storage), spec, strategy);
 }
 
 }  // namespace ttnn

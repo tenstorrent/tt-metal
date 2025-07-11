@@ -17,6 +17,7 @@
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_fabric_test_traffic.hpp"
 #include "tt_fabric_test_allocator.hpp"
+#include "tt_fabric_test_memory_map.hpp"
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
@@ -38,6 +39,7 @@ using TestConfigBuilder = tt::tt_fabric::fabric_tests::TestConfigBuilder;
 using YamlConfigParser = tt::tt_fabric::fabric_tests::YamlConfigParser;
 using CmdlineParser = tt::tt_fabric::fabric_tests::CmdlineParser;
 using YamlTestConfigSerializer = tt::tt_fabric::fabric_tests::YamlTestConfigSerializer;
+using ParsedTestConfig = tt::tt_fabric::fabric_tests::ParsedTestConfig;
 
 using Topology = tt::tt_fabric::Topology;
 using FabricConfig = tt::tt_metal::FabricConfig;
@@ -64,14 +66,21 @@ public:
     void compile_programs();
     void launch_programs();
     void wait_for_prorgams();
+    void validate_results();
     void close_devices();
 
 private:
     void add_traffic_config(const TestTrafficConfig& traffic_config);
+    void initialize_memory_maps();
 
     std::shared_ptr<TestFixture> fixture_;
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
     std::unique_ptr<tt::tt_fabric::fabric_tests::GlobalAllocator> allocator_;
+
+    // Uniform memory maps shared across all devices
+    tt::tt_fabric::fabric_tests::SenderMemoryMap sender_memory_map_;
+    tt::tt_fabric::fabric_tests::ReceiverMemoryMap receiver_memory_map_;
+    tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies_;
 };
 
 void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
@@ -102,6 +111,9 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_rep_coord, dst_logical_core);
     uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
+    // Get payload buffer size from receiver memory map (cached during initialization)
+    uint32_t payload_buffer_size = receiver_memory_map_.get_payload_chunk_size();
+
     TestTrafficSenderConfig sender_config = {
         .parameters = traffic_config.parameters,
         .src_node_id = traffic_config.src_node_id,
@@ -110,13 +122,15 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .dst_logical_core = dst_logical_core,
         .target_address = target_address,
         .atomic_inc_address = atomic_inc_address,
-        .dst_noc_encoding = dst_noc_encoding};
+        .dst_noc_encoding = dst_noc_encoding,
+        .payload_buffer_size = payload_buffer_size};
 
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters,
         .sender_id = sender_id,
         .target_address = target_address,
-        .atomic_inc_address = atomic_inc_address};
+        .atomic_inc_address = atomic_inc_address,
+        .payload_buffer_size = payload_buffer_size};
 
     src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
     for (const auto& dst_node_id : dst_node_ids) {
@@ -128,14 +142,46 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
 void TestContext::init(
     std::shared_ptr<TestFixture> fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
     fixture_ = std::move(fixture);
-    this->allocator_ =
-        std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(*this->fixture_, *this->fixture_, policies);
+    allocation_policies_ = policies;
+
+    // Initialize memory maps for all available devices
+    initialize_memory_maps();
+
+    // Create allocator with memory maps
+    this->allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
+        *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
+}
+
+void TestContext::initialize_memory_maps() {
+    // Get uniform L1 memory layout (same across all devices)
+    uint32_t l1_unreserved_base = this->fixture_->get_l1_unreserved_base();
+    uint32_t l1_unreserved_size = this->fixture_->get_l1_unreserved_size();
+    uint32_t l1_alignment = this->fixture_->get_l1_alignment();
+    uint32_t default_payload_chunk_size = allocation_policies_.default_payload_chunk_size.value_or(
+        tt::tt_fabric::fabric_tests::detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
+    uint32_t max_configs_per_core = std::max(
+        allocation_policies_.sender_config.max_configs_per_core,
+        allocation_policies_.receiver_config.max_configs_per_core);
+
+    // Create memory maps directly using constructors
+    sender_memory_map_ = tt::tt_fabric::fabric_tests::SenderMemoryMap(
+        l1_unreserved_base, l1_unreserved_size, l1_alignment, max_configs_per_core);
+
+    receiver_memory_map_ = tt::tt_fabric::fabric_tests::ReceiverMemoryMap(
+        l1_unreserved_base, l1_unreserved_size, l1_alignment, default_payload_chunk_size, max_configs_per_core);
+
+    // Validate memory maps
+    if (!sender_memory_map_.is_valid() || !receiver_memory_map_.is_valid()) {
+        TT_THROW("Invalid memory map configuration");
+    }
 }
 
 void TestContext::setup_devices() {
     const auto& available_coords = this->fixture_->get_available_device_coordinates();
     for (const auto& coord : available_coords) {
-        test_devices_.emplace(coord, TestDevice(coord, this->fixture_, this->fixture_));
+        // Create TestDevice with access to memory maps
+        test_devices_.emplace(
+            coord, TestDevice(coord, this->fixture_, this->fixture_, &sender_memory_map_, &receiver_memory_map_));
     }
 }
 
@@ -163,6 +209,12 @@ void TestContext::compile_programs() {
 void TestContext::launch_programs() { fixture_->run_programs(); }
 
 void TestContext::wait_for_prorgams() { fixture_->wait_for_programs(); }
+
+void TestContext::validate_results() {
+    for (const auto& [_, test_device] : test_devices_) {
+        test_device.validate_results();
+    }
+}
 
 void TestContext::close_devices() { fixture_->close_devices(); }
 
@@ -216,19 +268,19 @@ int main(int argc, char** argv) {
     auto fixture = std::make_shared<TestFixture>();
     fixture->init();
 
-    // fixture is passed to both the parsers since it implements the device interface
-    CmdlineParser cmdline_parser(input_args, *fixture);
+    // Parse command line and YAML configurations
+    CmdlineParser cmdline_parser(input_args);
 
     if (cmdline_parser.has_help_option()) {
         cmdline_parser.print_help();
         return 0;
     }
 
-    std::vector<TestConfig> raw_test_configs;
+    std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
 
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
-        YamlConfigParser yaml_parser(*fixture);
+        YamlConfigParser yaml_parser;
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
         raw_test_configs = std::move(parsed_yaml.test_configs);
         if (parsed_yaml.allocation_policies.has_value()) {
@@ -280,8 +332,12 @@ int main(int argc, char** argv) {
     for (auto& test_config : raw_test_configs) {
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
-        test_context.open_devices(test_config.fabric_setup.topology, test_config.fabric_setup.routing_type.value());
+        const auto& topology = test_config.fabric_setup.topology;
+        const auto& routing_type = test_config.fabric_setup.routing_type.value();
+        log_info(tt::LogTest, "Opening devices with topology: {} and routing type: {}", topology, routing_type);
+        test_context.open_devices(topology, routing_type);
 
+        log_info(tt::LogTest, "Building tests");
         auto built_tests = builder.build_tests({test_config});
 
         for (auto& built_test : built_tests) {
@@ -305,6 +361,9 @@ int main(int argc, char** argv) {
 
             test_context.wait_for_prorgams();
             log_info(tt::LogTest, "Test {} Finished.", built_test.name);
+
+            test_context.validate_results();
+            log_info(tt::LogTest, "Test {} Results validated.", built_test.name);
 
             test_context.reset_devices();
         }

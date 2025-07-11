@@ -90,7 +90,7 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
 
     ASSERT_TRUE(num_devices > 0);
     vector<chip_id_t> ids;
-    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -109,7 +109,7 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     }
     ASSERT_TRUE(num_devices > 0);
     vector<chip_id_t> ids;
-    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();

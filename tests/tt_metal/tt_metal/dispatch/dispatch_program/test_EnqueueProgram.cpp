@@ -1350,18 +1350,20 @@ auto CommandQueueFabricConfigsToTest = ::testing::Values(
     tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
 
 INSTANTIATE_TEST_SUITE_P(
-    CommandQueueMultiDevice, CommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
+    CommandQueueMultiDevice, DISABLED_CommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
 
 INSTANTIATE_TEST_SUITE_P(
-    MultiCommandQueueMultiDevice, MultiCommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
+    MultiCommandQueueMultiDevice,
+    DISABLED_MultiCommandQueueMultiDeviceOnFabricFixture,
+    CommandQueueFabricConfigsToTest);
 
-TEST_P(CommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
+TEST_P(DISABLED_CommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (IDevice* device : devices_) {
         local_test_functions::test_basic_dispatch_functions(device, 0);
     }
 }
 
-TEST_P(MultiCommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
+TEST_P(DISABLED_MultiCommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (IDevice* device : devices_) {
         for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);

@@ -53,7 +53,7 @@ void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_fe
             num_devices));
     }
 
-    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
+    auto weight_shape = ttnn::Shape({1, 1, out_features, in_features});
 
     uint32_t rank = 4U;
     auto mesh_shape = device->shape();
@@ -65,7 +65,7 @@ void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_fe
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, ttnn::Layout::TILE, mapper.get()));
 
     if (has_bias) {
-        auto bias_shape = core::create_shape({1, 1, 1, out_features});
+        auto bias_shape = ttnn::Shape({1, 1, 1, out_features});
         m_bias = ttml::autograd::create_tensor();
         init::uniform_init(m_bias, bias_shape, init::UniformRange{-init_k, init_k});
     }
@@ -103,7 +103,7 @@ void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out
             num_devices));
     }
 
-    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
+    auto weight_shape = ttnn::Shape({1, 1, out_features, in_features});
 
     uint32_t rank = 4U;
     auto mesh_shape = device->shape();
@@ -115,7 +115,7 @@ void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, ttnn::Layout::TILE, mapper.get()));
 
     if (has_bias) {
-        auto bias_shape = core::create_shape({1, 1, 1, out_features});
+        auto bias_shape = ttnn::Shape({1, 1, 1, out_features});
         auto bias = init::uniform_init(bias_shape, init::UniformRange{-init_k, init_k});
         mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 1U);
         m_bias = autograd::create_tensor(

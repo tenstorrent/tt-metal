@@ -10,6 +10,7 @@ target_sources(
         compute_kernel/compute_kernel_config.cpp
         core.cpp
         to_layout/to_layout_op.cpp
+        to_dtype/to_dtype_op.cpp
 )
 
 target_include_directories(ttnn_op_core PRIVATE ${FixmeOpIncDirs})

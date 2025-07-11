@@ -392,7 +392,6 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         TT_THROW("deprecated code path for ");
     }
 
-   public:
     std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
     uint32_t get_worker_slice_size_bytes(std::size_t worker_index) {
         TT_ASSERT(this->worker_slice_shapes.size() > worker_index, "Invalid worker index {} in `worker_slice_shapes` of size {}", worker_index, worker_slice_shapes.size());

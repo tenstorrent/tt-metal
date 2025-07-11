@@ -59,14 +59,12 @@ private:
     const std::string path_;
     ElfFile& owner_;
 
-private:
     class Weakener;
 
 public:
     Impl(ElfFile& owner, std::string_view path) : owner_(owner), path_(std::string(path)) {}
     ~Impl() = default;
 
-public:
     void LoadImage();
     void WeakenDataSymbols(std::span<std::string_view const> strong_names);
     void XIPify();
@@ -132,7 +130,6 @@ private:
         return symbol.st_shndx < GetShdrs().size() && GetSegmentIx(GetShdr(symbol.st_shndx)) > 0;
     }
 
-private:
     template <typename T = std::byte>
     [[nodiscard]] static T* ByteOffset(std::byte* base, size_t offset = 0) {
         return reinterpret_cast<T*>(base + offset);

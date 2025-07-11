@@ -27,7 +27,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
         throw std::logic_error("All reduce supports only 4D tensors");
     }
 
-    auto reshaped_tensor = ttnn::reshape(tensor, core::create_shape({1, shape[0] * shape[1], shape[2], shape[3]}));
+    auto reshaped_tensor = ttnn::reshape(tensor, ttnn::Shape({1, shape[0] * shape[1], shape[2], shape[3]}));
     auto gathered_tensor = ttnn::all_gather(reshaped_tensor, 0);
 
     auto reduced_tensor = ttnn::moreh_sum(

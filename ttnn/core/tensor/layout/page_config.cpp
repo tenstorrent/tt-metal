@@ -26,6 +26,10 @@ size_t rm_element_size_bytes(DataType dtype) {
         default: TT_THROW("Unsupported data type!");
     }
 }
+
+// Maximum possible device memory alignment for all devices and buffer types.
+constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -81,6 +85,16 @@ Tile PageConfig::get_tile() const {
     return std::visit([&](const auto& config) { return config.get_tile(); }, config_);
 }
 
+Alignment PageConfig::get_required_shard_shape_alignment() const {
+    return std::visit(
+        [&](const auto& config) constexpr { return config.get_required_shard_shape_alignment(); }, config_);
+}
+
+Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
+    return std::visit(
+        [&](const auto& config) constexpr { return config.get_recommended_shard_shape_alignment(dtype); }, config_);
+}
+
 TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment TilePageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
@@ -126,6 +140,14 @@ size_t TilePageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType d
 }
 
 const Tile& TilePageConfig::get_tile() const { return tile_; }
+
+Alignment TilePageConfig::get_recommended_shard_shape_alignment(DataType) const {
+    return get_required_shard_shape_alignment();
+}
+
+Alignment TilePageConfig::get_required_shard_shape_alignment() const {
+    return Alignment({tile_.get_height(), tile_.get_width()});
+}
 
 RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
@@ -200,5 +222,13 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
 }
 
 const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
+
+Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
+
+Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
+    auto element_size_bytes = CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
+    auto alignment_bytes = std::lcm(CMAKE_UNIQUE_NAMESPACE::RECOMMENDED_MEMORY_ALIGNMENT_BYTES, element_size_bytes);
+    return Alignment({alignment_bytes / element_size_bytes});
+}
 
 }  // namespace tt::tt_metal

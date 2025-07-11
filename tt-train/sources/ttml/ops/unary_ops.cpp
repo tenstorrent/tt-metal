@@ -107,7 +107,7 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
 }
 
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
-    auto shape = core::create_shape({1, 1, 1, 1});
+    auto shape = ttnn::Shape({1, 1, 1, 1});
     autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));
     ttnn::moreh_mean(
         tensor->get_value(),
@@ -140,7 +140,7 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
         return tensor;
     }
     auto out = ttml::autograd::create_tensor();
-    auto repeats = core::create_shape({new_batch_dim, 1, 1, 1});
+    auto repeats = ttnn::Shape({new_batch_dim, 1, 1, 1});
     // currently assuming tensor came with shape: {1,X,Y,Z} and we want to get {B,X,Y,Z}
     out->set_value(ttnn::repeat(tensor->get_value(), repeats));
 

@@ -125,6 +125,7 @@ void MAIN {
         cb_push_back(synchronization_cb_index, one_tile);
 
         for (uint32_t stage = 2; stage <= stages; stage++) {
+            const uint32_t m_iter = stage - 1;
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
                 for (uint32_t i = 0; i < Wt; i++) {
@@ -154,18 +155,37 @@ void MAIN {
                         copy_tile(input_tensor_transposed_cb_index, left_tile_id, input_dest_start);
                         copy_tile(input_tensor_transposed_cb_index, right_tile_id, input_dest_end);
 
-                        ckernel::topk_local_sort(0, (int)dir, 5);
+                        uint32_t tile_input_low = input_dest_start;
+                        uint32_t tile_input_high = input_dest_end;
+                        uint32_t tile_index_low = index_dest_start;
+                        uint32_t tile_index_high = index_dest_end;
+
+                        if (sub == 1) {
+                            // Use sort LLK only the last stage to sort the last pair of tiles - speed up
+                            ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                        } else {
+                            ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/64);
+
+                            // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
+                            // We swap their indices when using descending order
+                            if (dir) {
+                                tile_input_low = input_dest_end;
+                                tile_input_high = input_dest_start;
+                                tile_index_low = index_dest_end;
+                                tile_index_high = index_dest_start;
+                            }
+                        }
 
                         tile_regs_commit();
                         tile_regs_wait();
 
                         pack_reconfig_data_format(input_tensor_transposed_cb_index);
-                        pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
-                        pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
+                        pack_tile<true>(tile_input_low, input_tensor_transposed_cb_index, left_tile_id);
+                        pack_tile<true>(tile_input_high, input_tensor_transposed_cb_index, right_tile_id);
 
                         pack_reconfig_data_format(index_tensor_transposed_cb_index);
-                        pack_tile<true>(index_dest_start, index_tensor_transposed_cb_index, left_tile_id);
-                        pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
+                        pack_tile<true>(tile_index_low, index_tensor_transposed_cb_index, left_tile_id);
+                        pack_tile<true>(tile_index_high, index_tensor_transposed_cb_index, right_tile_id);
 
                         cb_push_back(synchronization_cb_index, one_tile);
 

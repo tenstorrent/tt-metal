@@ -172,7 +172,8 @@ AllToAllDispatchDeviceOperation::invoke(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     tt::tt_metal::SubDeviceId subdevice_id,
-    const std::optional<GlobalSemaphore>& global_semaphore) {
+    const std::optional<GlobalSemaphore>& global_semaphore,
+    AllToAllTransferType impl) {
     return {
         operation_attributes_t{
             .subdevice_id = std::move(subdevice_id),
@@ -180,7 +181,8 @@ AllToAllDispatchDeviceOperation::invoke(
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .cross_device_semaphore = global_semaphore},
+            .cross_device_semaphore = global_semaphore,
+            .impl = impl},
         tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

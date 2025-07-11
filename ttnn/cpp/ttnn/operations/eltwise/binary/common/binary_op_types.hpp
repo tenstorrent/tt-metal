@@ -32,6 +32,7 @@ enum class BinaryOpType {
     BITWISE_OR,
     LEFT_SHIFT,
     RIGHT_SHIFT,
+    LOGICAL_RIGHT_SHIFT,
     QUANT,
     REQUANT,
     DEQUANT,

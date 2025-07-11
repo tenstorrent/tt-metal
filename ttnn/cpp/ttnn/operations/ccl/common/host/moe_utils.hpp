@@ -34,4 +34,6 @@ std::string stringify(const T& vec) {
     return result;
 }
 
+uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const ttnn::MeshDeviceView& mesh_view);
+
 }  // namespace ttnn::operations::ccl::common

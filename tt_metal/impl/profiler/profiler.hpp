@@ -354,8 +354,6 @@ bool onlyProfileDispatchCores(ProfilerDumpState state);
 
 bool isGalaxyMMIODevice(const IDevice* device);
 
-void waitForDeviceCommandsToFinish(IDevice* device);
-
 }  // namespace tt_metal
 
 }  // namespace tt

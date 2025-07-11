@@ -13,9 +13,13 @@
 namespace detail{
 
 // (experts // devices, batch, seq, hidden_size)
-template <uint32_t Batch, uint32_t Seq>
+template <uint32_t Batch, uint32_t Seq, bool LocallyReduced>
 inline uint32_t get_input_data_page_idx(const uint32_t e, const uint32_t bs) {
-    return e * Batch*Seq + bs;
+    if constexpr (LocallyReduced){
+        return bs;
+    } else {
+        return e * Batch*Seq + bs;
+    }
 }
 
 template <uint32_t DeviceIdx, uint32_t NumMappingPages, uint32_t MappingPageSizeBytes, bool MappingIsDram>
@@ -56,6 +60,7 @@ void kernel_main() {
     constexpr bool input_is_dram = get_compile_time_arg_val(13);
     constexpr bool mapping_is_dram = get_compile_time_arg_val(14);
     constexpr bool metadata_is_dram = get_compile_time_arg_val(15);
+    constexpr bool locally_reduced = get_compile_time_arg_val(16);
 
     const auto mapping_tensor_addr = get_arg_val<uint32_t>(0);
     const auto metadata_tensor_addr = get_arg_val<uint32_t>(1);
@@ -93,9 +98,8 @@ void kernel_main() {
 
         for (uint32_t e = 0; e < num_local_experts; ++e) {
             const auto & expert_idx = local_experts_ptr[e];
-            const auto[found, k] = detail::find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
-            if (found) {
-                const uint32_t input_data_page_idx = detail::get_input_data_page_idx<batch_size,seq_size>(e, bs);
+            if (detail::find_if<uint16_t, selected_experts_k, false>(metadata_ptr, expert_idx)) {
+                const uint32_t input_data_page_idx = detail::get_input_data_page_idx<batch_size,seq_size,locally_reduced>(e, bs);
 
                 cb_reserve_back(data_cb_id,1);
                 const uint32_t data_l1_addr=get_write_ptr(data_cb_id);
@@ -104,6 +108,10 @@ void kernel_main() {
                 noc_async_read_barrier();
 
                 cb_push_back(data_cb_id, 1);
+
+                if constexpr (locally_reduced){
+                    break;
+                }
             }
         }
         cb_push_back(metadata_cb_id,1);
