@@ -19,7 +19,7 @@
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 
-namespace tt::watcher {
+namespace tt::tt_metal {
 
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
@@ -35,11 +35,7 @@ struct stack_usage_info_t {
 
 class WatcherDeviceReader {
 public:
-    WatcherDeviceReader(
-        FILE* f,
-        chip_id_t device_id,
-        std::vector<std::string>& kernel_names,
-        void (*set_watcher_exception_message)(const std::string&));
+    WatcherDeviceReader(FILE* f, chip_id_t device_id, const std::vector<std::string>& kernel_names);
     ~WatcherDeviceReader();
     void Dump(FILE* file = nullptr);
 
@@ -66,8 +62,7 @@ private:
 
     FILE* f;
     chip_id_t device_id;
-    std::vector<std::string>& kernel_names;
-    void (*set_watcher_exception_message)(const std::string&);
+    const std::vector<std::string>& kernel_names;
 
     // Information that needs to be kept around on a per-dump basis
     std::set<std::pair<CoreCoord, riscv_id_t>> paused_cores;
@@ -76,4 +71,4 @@ private:
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
 };
 
-}  // namespace tt::watcher
+}  // namespace tt::tt_metal
