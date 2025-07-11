@@ -169,6 +169,11 @@ KernelHandle FDKernel::configure_kernel_variant(
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
+    if (MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        // TG specific fabric routing
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+        defines["GALAXY_CLUSTER"] = "1";
+    }
 
     if (GetCoreType() == CoreType::WORKER) {
         return tt::tt_metal::CreateKernel(
