@@ -136,39 +136,28 @@ def run_tt_image_gen(
             tt_scheduler,
             latent_model_input,
             input_shape,
-            tt_prompt_embeds[iter],  # ovo sharduj
-            tt_time_ids,  # ovo sharduj
-            ttnn.unsqueeze(tt_text_embeds[iter], dim=0),  # ovo sharduj, ostalo repliciraj
+            tt_prompt_embeds[iter],
+            tt_time_ids,
+            tt_text_embeds[iter],
             t,
             i,
         )
         C, H, W = noise_shape
 
         unet_outputs.append(noise_pred)
-        mem_config = ttnn.create_sharded_memory_config(
-            shape=(2, 1, H * W, 8),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-
+        noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
         noise_pred = ttnn.to_layout(noise_pred, ttnn.ROW_MAJOR_LAYOUT)
         noise_pred = ttnn.pad(noise_pred, [(0, 0), (0, 0), (0, 0), (0, 4)], 0)
-        noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
-
-        noise_pred = ttnn.all_gather(noise_pred, dim=0, memory_config=mem_config)
-        noise_pred = ttnn.to_memory_config(noise_pred, ttnn.DRAM_MEMORY_CONFIG)
+        noise_pred = ttnn.all_gather(noise_pred, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
+        noise_pred = noise_pred[..., :4]
 
         # perform guidance
-        noise_pred_uncond, noise_pred_text = noise_pred[0], noise_pred[1]
+        noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         ttnn.deallocate(noise_pred_uncond)
         ttnn.deallocate(noise_pred_text)
-
-        noise_pred = noise_pred[..., :4]
-        noise_pred = ttnn.unsqueeze(noise_pred, dim=0)
 
         tt_latents = tt_scheduler.step(
             noise_pred, tt_scheduler.timesteps[i], tt_latents, **tt_extra_step_kwargs, return_dict=False
@@ -193,7 +182,7 @@ def run_tt_image_gen(
         ttnn.deallocate(tt_latents)
         ttnn.synchronize_device(ttnn_device)
     else:
-        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))
+        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:1, ...]
         B, C, H, W = input_shape
         latents = latents.reshape(batch_size * B, H, W, C)
         latents = torch.permute(latents, (0, 3, 1, 2))

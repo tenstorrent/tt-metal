@@ -190,7 +190,9 @@ class TtDecoder(nn.Module):
         C = self.conv_out_params["output_channels"]
 
         # Convert to torch
-        hidden_states = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        hidden_states = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))[
+            :1, ...
+        ].float()
         hidden_states = hidden_states.reshape(self.batch_size * B, H, W, C)
         hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
 
