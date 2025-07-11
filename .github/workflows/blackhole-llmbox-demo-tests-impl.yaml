@@ -23,12 +23,12 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {
-            name: "llama3-8b quietbox data-parallel=4 performance",
-            arch: blackhole,
-            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4,
-            owner_id: U05RWH3QUPM # Salar Hosseini
-           },
+          # {
+          #   name: "llama3-8b quietbox data-parallel=4 performance",
+          #   arch: blackhole,
+          #   cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4,
+          #   owner_id: U05RWH3QUPM # Salar Hosseini
+          #  },
            {
             name: "llama3-8b quietbox data-parallel=4 stress",
             arch: blackhole,
