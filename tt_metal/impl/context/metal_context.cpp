@@ -606,6 +606,8 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
     }
+
+    cluster_->l1_barrier(device_id);
 }
 
 void MetalContext::assert_cores(chip_id_t device_id) {
