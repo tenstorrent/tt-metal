@@ -1194,7 +1194,7 @@ void RunTest2DMCastConnAPI(
         0 /* use_dram_dst */,
         mcast_mode,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
 

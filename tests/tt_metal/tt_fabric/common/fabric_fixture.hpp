@@ -123,7 +123,7 @@ protected:
 
 class NightlyFabric2DFixture : public BaseFabricFixture {
 protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D); }
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
@@ -135,7 +135,7 @@ protected:
 
 class NightlyFabric2DDynamicFixture : public BaseFabricFixture {
 protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
