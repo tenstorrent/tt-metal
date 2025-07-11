@@ -36,7 +36,8 @@ uint32_t get_cycles_for_transaction_size(
     std::map<uint32_t, std::array<float, 2>> l1_read_far_bw,
     std::map<uint32_t, std::array<float, 2>> l1_write_far_bw,
     std::map<uint32_t, std::array<float, 2>> dram_bw);
-int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, bool output_only = false);
+int common_tm_bw_model(
+    const Tensor& input_tensor, const Tensor& output_tensor, bool output_only = false, int compute_cycles = 0);
 
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,

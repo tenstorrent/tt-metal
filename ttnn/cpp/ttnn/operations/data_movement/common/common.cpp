@@ -187,7 +187,7 @@ uint32_t get_cycles_for_transaction_size(
     return cycles + latency_cyles;
 }
 
-int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, bool output_only) {
+int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, bool output_only, int compute_cycles) {
     std::map<uint32_t, std::array<float, 2>> dram_bw = {
         {16, {0.436, 0.651}},
         {32, {0.868, 1.295}},
@@ -378,8 +378,11 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
 
     // Use max(read, write) to account for overlap
     int ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
-
-    return ideal_dev_clock_cycles;
+    int total_compute_cycles = 0;
+    if (compute_cycles > 0) {
+        total_compute_cycles = std::ceil((float)compute_cycles / (float)num_cores);
+    }
+    return std::max(ideal_dev_clock_cycles, total_compute_cycles);
 }
 
 uint32_t get_estimated_size_of_cbs(
