@@ -22,6 +22,7 @@ void kernel_main() {
     const uint32_t signal_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_id = get_arg_val<uint32_t>(
         arg_idx++);  // core id, corresponds to the id of which device it expect data from, will be reset later
+    const uint32_t ring_index = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t aggregated_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
     DPRINT << "core_id: " << core_id << ENDL();
 

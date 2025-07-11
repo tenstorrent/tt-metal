@@ -40,11 +40,13 @@ void kernel_main() {
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t intermediate_first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t ring_index = get_arg_val<uint32_t>(arg_idx++);
     DPRINT << "tensor_address0: " << tensor_address0 << ENDL();
     DPRINT << "num_tiles_per_core: " << num_tiles_per_core << ENDL();
     DPRINT << "num_tiles_to_read: " << num_tiles_to_read << ENDL();
     DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << ENDL();
     DPRINT << "num_cores: " << num_cores << ENDL();
+    DPRINT << "ring_index: " << ring_index << ENDL();
     DPRINT << ENDL();
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;

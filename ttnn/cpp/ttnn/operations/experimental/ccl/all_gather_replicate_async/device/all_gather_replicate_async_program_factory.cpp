@@ -217,7 +217,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         intermediate_tensor_cores,
         {
             semaphore.address(),  // sem_address
-            0,  // core id, corresponds to the id of which device it expect data from, will be reset later
+            0,           // core id, corresponds to the id of which device it expect data from, will be reset later
+            ring_index,  // device id
             aggregated_tensor.buffer()->address(),
         });
     // Kernel Runtime Args
@@ -229,7 +230,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     // Set runtime args for each core
     for (uint32_t i = 0; i < intermediate_cores_vec.size(); i++) {
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_receiver_kernel_id, {intermediate_cores_vec[i]}, {semaphore.address(), i});
+            program,
+            worker_receiver_kernel_id,
+            {intermediate_cores_vec[i]},
+            {semaphore.address(), i, ring_index, aggregated_tensor.buffer()->address()});
     }
     log_info(tt::LogOp, "LLONG cores_per_device: {}", cores_per_device);
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
@@ -302,6 +306,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             input_first_core_tile_start_offset,         // first_core_tile_start_offset
             intermediate_first_core_tile_start_offset,  // intermediate_first_core_tile_start_offset
             input_tensor_cores_x.size(),                // num_cores it reads from
+            ring_index,                                 // ring_index
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
