@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -1632,9 +1632,7 @@ public:
         const ProgramTransferInfo& program_transfer_info,
         bool has_multicast_launch_cmds,
         bool has_unicast_launch_cmds) {
-        const auto& noc_data_start_idx =
-            device->noc_data_start_index(sub_device_id, has_multicast_launch_cmds, has_unicast_launch_cmds);
-        const auto& num_noc_mcast_txns = has_multicast_launch_cmds ? device->num_noc_mcast_txns(sub_device_id) : 0;
+        const auto& noc_data_start_idx = device->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
         const auto& num_noc_unicast_txns = has_unicast_launch_cmds ? device->num_noc_unicast_txns(sub_device_id) : 0;
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
@@ -1667,7 +1665,7 @@ public:
             MetalContext::instance()
                 .dispatch_mem_map(constants.dispatch_core_type)
                 .get_dispatch_stream_index(sub_device_index),
-            num_noc_mcast_txns,
+            has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
             noc_data_start_idx,
             dispatcher_for_go_signal);
@@ -2455,7 +2453,7 @@ void reset_worker_dispatch_state_on_device(
                 expected_num_workers_completed[i],
                 *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
-                device->num_noc_mcast_txns(sub_device_id),
+                device->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 device->num_noc_unicast_txns(sub_device_id),
                 device->noc_data_start_index(sub_device_id),
                 dispatcher_for_go_signal);
@@ -2580,6 +2578,112 @@ ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
 
     return ExpectedNumWorkerUpdates{
         .previous = previous_expected_num_workers_completed, .current = num_workers, .wrapped = wrapped};
+}
+
+static_assert(
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 == go_message_num_entries,
+    "Max number of dispatch message entries + 1 must be equal to the number of go message entries");
+
+void set_core_go_message_mapping_on_device(
+    IDevice* device,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+    SystemMemoryManager& manager,
+    uint8_t cq_id) {
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    uint32_t go_msg_size =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    calculator.add_dispatch_write_linear<true, true>(go_msg_size);
+    calculator.add_dispatch_wait();
+
+    std::vector<std::pair<const void*, uint32_t>> data;
+    std::vector<CQDispatchWritePackedMulticastSubCmd> sub_cmds;
+    std::vector<std::pair<uint32_t, uint32_t>> payload;
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    auto dispatch_core_type = dispatch_core_config.get_core_type();
+    uint32_t noc_index = k_dispatch_downstream_noc;
+    uint32_t max_prefetch_command_size =
+        MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
+    uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
+
+    for (size_t i = 0; i < core_go_message_mapping.size(); ++i) {
+        auto& [core_range_set, go_msg_offset] = core_go_message_mapping[i];
+        for (auto& core_range : core_range_set.ranges()) {
+            CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+            CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+            CoreRange core_range_virtual{virtual_start, virtual_end};
+            sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
+                .noc_xy_addr = device->get_noc_multicast_encoding(noc_index, core_range_virtual),
+                .num_mcast_dests = (uint32_t)core_range.size()});
+            data.emplace_back(&go_msg_offset, sizeof(uint32_t));
+        }
+    }
+    if (sub_cmds.size() > 0) {
+        calculator.insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
+            sub_cmds.size(), sizeof(uint32_t), max_prefetch_command_size, packed_write_max_unicast_sub_cmds, payload);
+    }
+
+    calculator.add_dispatch_wait();
+
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+
+    const auto& compute_grid_size = device->compute_with_storage_grid_size();
+
+    CoreRange all_core_range_logical{{0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}};
+    CoreCoord virtual_start =
+        device->virtual_core_from_logical_core(all_core_range_logical.start_coord, CoreType::WORKER);
+    CoreCoord virtual_end = device->virtual_core_from_logical_core(all_core_range_logical.end_coord, CoreType::WORKER);
+    CoreRange all_core_range_virtual{virtual_start, virtual_end};
+
+    // Write done to all indices on all tensix cores. All cores should already be idle at this point, but they may have
+    // garbage in the GO message entries they aren't using.
+    std::vector<uint32_t> go_data(go_message_num_entries, RUN_MSG_DONE);
+    TT_ASSERT(
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) %
+            MetalContext::instance().hal().get_alignment(HalMemType::L1) ==
+        0);
+    command_sequence.add_dispatch_write_linear<true, true>(
+        all_core_range_logical.size(),
+        device->get_noc_multicast_encoding(noc_index, all_core_range_virtual),
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG),
+        go_msg_size,
+        go_data.data());
+    // Wait for previous writes before updating index.
+    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+
+    // Write go index to all cores.
+    if (sub_cmds.size() > 0) {
+        TT_ASSERT(
+            MetalContext::instance().hal().get_dev_addr(
+                HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG_INDEX) %
+                MetalContext::instance().hal().get_alignment(HalMemType::L1) ==
+            0);
+        uint32_t go_msg_index_addr = MetalContext::instance().hal().get_dev_addr(
+            HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG_INDEX);
+        uint32_t go_msg_index_size = MetalContext::instance().hal().get_dev_size(
+            HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG_INDEX);
+        uint32_t curr_sub_cmd_idx = 0;
+        for (const auto& [num_sub_cmds_in_cmd, payload_sizeB] : payload) {
+            command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+                CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_GO_MSG_INDEX,
+                num_sub_cmds_in_cmd,
+                go_msg_index_addr,
+                go_msg_index_size,
+                payload_sizeB,
+                sub_cmds,
+                data,
+                packed_write_max_unicast_sub_cmds,
+                curr_sub_cmd_idx);
+            curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+        }
+    }
+    // Ensure go message index is received before writing out data for the next program.
+    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+    TT_ASSERT(command_sequence.size_bytes() == command_sequence.write_offset_bytes());
+    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
+    manager.fetch_queue_reserve_back(cq_id);
+    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
 template uint32_t program_base_addr_on_core<ProgramImpl, IDevice*>(ProgramImpl&, IDevice*, HalProgrammableCoreType);

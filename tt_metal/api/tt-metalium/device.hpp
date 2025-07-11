@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -199,9 +199,9 @@ public:
     uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
     uint64_t get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
-    virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
+    virtual bool has_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
-    virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const = 0;
+    virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const = 0;
 
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;

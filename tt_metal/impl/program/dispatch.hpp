@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -194,6 +194,12 @@ void reset_expected_num_workers_completed_on_device(
 //
 ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
     uint32_t num_workers, uint32_t num_additional_workers);
+
+void set_core_go_message_mapping_on_device(
+    IDevice* device,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+    SystemMemoryManager& manager,
+    uint8_t cq_id);
 
 }  // namespace program_dispatch
 

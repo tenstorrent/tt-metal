@@ -2418,6 +2418,8 @@ void configure_for_single_chip(
         {"TO_DEV_ID", "0"},
         {"ROUTER_DIRECTION", "0"},
         {"FABRIC_2D", "0"},
+        {"WORKER_MCAST_GRID", "0"},
+        {"NUM_WORKER_CORES_TO_MCAST", "0"},
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;

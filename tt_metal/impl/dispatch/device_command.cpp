@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -356,15 +356,10 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t wait_count,
     uint32_t go_signal,
     uint32_t wait_stream,
-    uint8_t num_mcast_txns,
+    uint8_t multicast_go_offset,
     uint8_t num_unicast_txns,
     uint8_t noc_data_start_index,
     DispatcherSelect dispatcher_type) {
-    TT_ASSERT(
-        num_mcast_txns <= std::numeric_limits<uint8_t>::max(),
-        "Number of mcast destinations {} exceeds maximum {}",
-        num_mcast_txns,
-        std::numeric_limits<uint8_t>::max());
     TT_ASSERT(
         num_unicast_txns <= std::numeric_limits<uint8_t>::max(),
         "Number of unicast destinations {} exceeds maximum {}",
@@ -380,7 +375,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->base.cmd_id = CQ_DISPATCH_CMD_SEND_GO_SIGNAL;
         mcast_cmd->mcast.go_signal = go_signal;
         mcast_cmd->mcast.wait_count = wait_count;
-        mcast_cmd->mcast.num_mcast_txns = num_mcast_txns;
+        mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
         mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
         mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
         mcast_cmd->mcast.wait_stream = wait_stream;
@@ -559,7 +554,9 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
         initialize_set_go_signal_noc_data_cmd(set_go_signal_noc_data_cmd_dst);
     }
     uint32_t* noc_mcast_unicast_data_dst = this->reserve_space<uint32_t*>(data_sizeB);
-    this->memcpy(noc_mcast_unicast_data_dst, noc_mcast_unicast_data.data(), data_sizeB);
+    if (data_sizeB > 0) {
+        this->memcpy(noc_mcast_unicast_data_dst, noc_mcast_unicast_data.data(), data_sizeB);
+    }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
 
