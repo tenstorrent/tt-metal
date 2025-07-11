@@ -145,26 +145,17 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
 
-    // Only need fabric routers in the same tunnel for dispatch
+    // For TG need to skip the direction on the remote devices directly connected to the MMIO devices as we have only
+    // one outgoing eth chan to the mmio device
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    bool is_galaxy = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     auto skip_direction = [&](const FabricNodeId& node_id, const RoutingDirection direction) -> bool {
-        if (!is_galaxy) {
-            return false;
-        }
         const auto& neighbors = this->get_chip_neighbors(node_id, direction);
         if (neighbors.empty()) {
             return false;
         }
 
-        // Get physical chip ID to check if this is an MMIO chip
-        auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(node_id);
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        bool is_mmio_chip = cluster.get_cluster_desc()->is_chip_mmio_capable(physical_chip_id);
-
-        // For MMIO chips, allow multiple neighbor meshes (multiple tunnels)
-        // For non-MMIO chips, skip if there are multiple neighbor meshes (inter-mesh connections)
-        if (!is_mmio_chip && (neighbors.size() > 1 || neighbors.begin()->first != node_id.mesh_id)) {
+        // The remote devices connected directly to the mmio will have both intra-mesh and inter-mesh neighbors
+        if (neighbors.size() > 1 || neighbors.begin()->first != node_id.mesh_id) {
             return true;
         }
 
@@ -200,14 +191,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         return MeshCoordinate(coord_x, coord_y);
     };
 
-    // For galaxy initialize all meshes due to workaround for dispatch on fabric
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    std::vector<MeshId> user_meshes;
-    if (tt_metal::IsGalaxyCluster()) {
-        user_meshes = {MeshId{0}, MeshId{1}, MeshId{2}, MeshId{3}, MeshId{4}};
-    } else {
-        user_meshes = this->get_user_physical_mesh_ids();
-    }
+    const auto user_meshes = this->get_user_physical_mesh_ids();
     if (reliability_mode == tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         for (auto mesh_id : user_meshes) {
             size_t num_chips_in_mesh = intra_mesh_connectivity[mesh_id.get()].size();
@@ -638,14 +622,17 @@ chan_id_t ControlPlane::get_downstream_eth_chan_id(
         }
     }
 
-    /* TODO: for now disable collapsing routing planes until we add the corresponding logic for
-        connecting the routers on these planes
+    // TODO: for now disable collapsing routing planes until we add the corresponding logic for
+    //     connecting the routers on these planes
     // If no match found, return a channel from candidate_target_chans
-    while (src_routing_plane_id >= candidate_target_chans.size()) {
-        src_routing_plane_id = src_routing_plane_id % candidate_target_chans.size();
+    // Enabled for TG Dispatch on Fabric
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+        while (src_routing_plane_id >= candidate_target_chans.size()) {
+            src_routing_plane_id = src_routing_plane_id % candidate_target_chans.size();
+        }
+        return candidate_target_chans[src_routing_plane_id];
     }
-    return candidate_target_chans[src_routing_plane_id];
-    */
 
     return eth_chan_magic_values::INVALID_DIRECTION;
 };
@@ -776,6 +763,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             }
         }
     }
+
     // Printing, only enabled with log_debug
     this->print_routing_tables();
 }
@@ -950,10 +938,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
 
     // Trim the ethernet channels that don't map to live fabric routing planes.
     // NOTE: This MUST be called after ordering ethernet channels
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    if (!tt_metal::IsGalaxyCluster()) {
-        this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
-    }
+    this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
     this->convert_fabric_routing_table_to_chip_routing_table();
 }
