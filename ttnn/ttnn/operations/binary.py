@@ -509,4 +509,14 @@ def _golden_function_prelu(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.prelu, golden_function=_golden_function_prelu)
 
 
+def _golden_function_logical_right_shift(input_tensor_a, shift_amt, *args, **kwargs):
+    import torch
+
+    t1_uint = input_tensor_a.to(torch.int64) & 0xFFFFFFFF
+    result = (t1_uint >> shift_amt).to(torch.int32)
+    return result
+
+
+ttnn.attach_golden_function(ttnn.logical_right_shift, golden_function=_golden_function_logical_right_shift)
+
 __all__ = []
