@@ -6,14 +6,6 @@ set(PERF_MICROBENCH_TESTS_SRCS
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
     ethernet/test_ethernet_hop_latencies_no_edm.cpp
-    routing/test_tx_rx.cpp
-    routing/test_mux_demux.cpp
-    routing/test_vc_mux_demux.cpp
-    routing/test_mux_demux_2level.cpp
-    routing/test_vc_uni_tunnel.cpp
-    routing/test_vc_bi_tunnel_2ep.cpp
-    routing/test_vc_bi_tunnel_4ep.cpp
-    routing/test_vc_loopback_tunnel.cpp
     routing/test_tt_fabric_sanity.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
     routing/test_tt_fabric_multi_hop_sanity.cpp

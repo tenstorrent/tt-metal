@@ -103,18 +103,6 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchSBuffer) {
     EXPECT_EQ(settings.dispatch_s_buffer_pages_, expected_page_count);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsSetTunnelerBuffer) {
-    const uint32_t hw_cqs = 2;
-    const uint32_t expected_buffer_bytes = 0x2000;
-    const uint32_t expected_page_count =
-        expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings::initialize(tt::tt_metal::MetalContext::instance().get_cluster());
-    auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
-    settings.tunneling_buffer_size(expected_buffer_bytes);
-    EXPECT_EQ(settings.tunneling_buffer_size_, expected_buffer_bytes);
-    EXPECT_EQ(settings.tunneling_buffer_pages_, expected_page_count);
-}
-
 TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     if (MetalContext::instance().hal().get_programmable_core_type_index(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
@@ -142,7 +130,6 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     // Modify settings
     settings.prefetch_q_entries(prefetch_q_entries);
     settings.prefetch_d_buffer_size(prefetch_d_size);
-    settings.tunneling_buffer_size(mux_size);
     settings.prefetch_cmddat_q_size(cmddat_size);
     settings.dispatch_s_buffer_size(dispatch_s_size);
     settings.prefetch_max_cmd_size(max_cmd_size);
@@ -154,7 +141,6 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     auto& settings_2 = DispatchSettings::get(CoreType::ETH, hw_cqs);
     EXPECT_NE(settings_2.prefetch_q_entries_, prefetch_q_entries);
     EXPECT_NE(settings_2.prefetch_d_buffer_size_, prefetch_d_size);
-    EXPECT_NE(settings_2.tunneling_buffer_size_, mux_size);
     EXPECT_NE(settings_2.prefetch_cmddat_q_size_, cmddat_size);
     EXPECT_NE(settings_2.dispatch_s_buffer_size_, dispatch_s_size);
     EXPECT_NE(settings_2.prefetch_max_cmd_size_, max_cmd_size);
@@ -165,7 +151,6 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     auto& settings_3 = DispatchSettings::get(core_type, hw_cqs);
     EXPECT_EQ(settings_3.prefetch_q_entries_, prefetch_q_entries);
     EXPECT_EQ(settings_3.prefetch_d_buffer_size_, prefetch_d_size);
-    EXPECT_EQ(settings_3.tunneling_buffer_size_, mux_size);
     EXPECT_EQ(settings_3.prefetch_cmddat_q_size_, cmddat_size);
     EXPECT_EQ(settings_3.dispatch_s_buffer_size_, dispatch_s_size);
     EXPECT_EQ(settings_3.prefetch_max_cmd_size_, max_cmd_size);
