@@ -252,6 +252,7 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
     "ttnn_function",
     [
         ttnn.bitwise_left_shift,
+        ttnn.logical_left_shift,
     ],
 )
 @pytest.mark.parametrize(
@@ -261,7 +262,7 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
         ttnn.uint32,
     ],
 )
-def test_bitwise_left_shift(device, ttnn_function, ttnn_dtype):
+def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
     x_torch = torch.tensor([[99, 3, 100, 1, 72, 0, -100, 22, 12, 1000]], dtype=torch.int32)
     y_torch = torch.tensor([[1, 2, 31, 4, 5, 0, -20, 1, -3, -25]], dtype=torch.int32)
     if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
