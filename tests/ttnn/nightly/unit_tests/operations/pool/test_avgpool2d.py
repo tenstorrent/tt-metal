@@ -111,6 +111,15 @@ def run_avg_pool2d(
     ## Assertion
     pcc_thresh = 0.99
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    # TTNN only supports scalars in Bfloat16, so we cannot support rtol lower than 0.01
+    # for instance, a 3x3 kernel uses scalar 1/9 = 0.111, which in Bfloat16 is 0.11084
+    # so if we fill the tensor with 1s, Torch gets 9 * 0.111 = 0.999 which converted back
+    # to Bfloat16 rounds to 1.0 but TTNN gets 9 * 0.11084 = 0.99756 which converted back
+    # to Bfloat16 rounds to 0.9961, so the rdiff in this case is 0.0039
+    # since the atol default is 0.016 we don't see this issue for low magnitude values, but
+    # when using small divisor overrides with large kernels we see much large values which
+    # overwhelm the atol and the rtol becomes significant
+    rtol = 0.01
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
@@ -179,10 +188,10 @@ def run_avg_pool2d(
     ],
 )
 @pytest.mark.parametrize(
-    "use_divisor_override",
+    "divisor_override",
     [
-        False,
-        True,
+        None,
+        5,
     ],
 )
 @pytest.mark.parametrize(
@@ -206,14 +215,14 @@ def test_run_avg_pool2d(
     stride,
     padding,
     ceil_mode,
-    use_divisor_override,
+    divisor_override,
     count_include_pad,
     shard_scheme,
 ):
     if (
         shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED
         and (tuple(input_shape) == (2, 512, 112, 32) or tuple(input_shape) == (1, 512, 112, 32))
-        and use_divisor_override == False
+        and divisor_override == None
         and (ceil_mode == True or count_include_pad == False)
     ):
         pytest.skip("Not enough L1 space for the correct calculation of the elements, use different kind of sharding")
@@ -222,19 +231,6 @@ def test_run_avg_pool2d(
         pytest.skip(
             "Known issue with this combination of parameters - RuntimeError: pad should be at most half of kernel size."
         )
-    # set divisor override based on kernel size to avoid floating point precision issues
-    divisor_override = None
-    if use_divisor_override:
-        if kernel_size[0] == 2:
-            divisor_override = 10
-        elif kernel_size[0] == 3:
-            divisor_override = 15
-        elif kernel_size[0] == 5:
-            divisor_override = 30
-        elif kernel_size[0] == 9:
-            divisor_override = 100
-        else:
-            pytest.skip("Unsupported kernel size for divisor override")
     run_avg_pool2d(
         device,
         tensor_map,

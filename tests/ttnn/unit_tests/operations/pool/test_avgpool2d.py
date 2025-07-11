@@ -61,10 +61,10 @@ def tensor_map():
     ],
 )
 @pytest.mark.parametrize(
-    "use_divisor_override",
+    "divisor_override",
     [
-        False,
-        True,
+        None,
+        5,
     ],
 )
 @pytest.mark.parametrize(
@@ -93,7 +93,7 @@ def test_avg_pool2d_post_commit(
     padding,
     ceil_mode,
     use_program_cache,
-    use_divisor_override,
+    divisor_override,
     count_include_pad,
     shard_scheme,
     dtype,
@@ -105,17 +105,6 @@ def test_avg_pool2d_post_commit(
         pytest.skip("Skipping, only run shapes [1, 320, 48, 48] and [1, 320, 47, 47] with kernel size (36, 36)")
     if dtype == ttnn.bfloat8_b and input_shape != [1, 320, 48, 48] and input_shape != [1, 320, 47, 47]:
         pytest.skip("Skipping, only run shapes [1, 320, 48, 48] and [1, 320, 47, 47] with bfloat8_b dtype")
-    # set divisor override based on kernel size to avoid floating point precision issues
-    divisor_override = None
-    if use_divisor_override:
-        if kernel_size[0] == 3:
-            divisor_override = 15
-        elif kernel_size[0] == 9:
-            divisor_override = 100
-        elif kernel_size[0] == 36:
-            divisor_override = 2000
-        else:
-            pytest.skip("Unsupported kernel size for divisor override")
     run_avg_pool2d(
         device=device,
         tensor_map=tensor_map,
