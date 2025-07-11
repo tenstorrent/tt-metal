@@ -122,7 +122,7 @@ void get_mcast_receivers(
             auto curr_fabric_node_id = node;
             for (uint32_t i = 0; i < mcast_ref[trunk_direction].size(); i++) {
                 auto neighbors = control_plane.get_intra_chip_neighbors(curr_fabric_node_id, trunk_direction);
-                if (neighbors.size() > 0) {
+                if (!neighbors.empty()) {
                     FabricNodeId rx_node_id(MeshId{curr_fabric_node_id.mesh_id}, neighbors[0]);
                     mcast_receiver_physical_device_ids.push_back(
                         control_plane.get_physical_chip_id_from_fabric_node_id(rx_node_id));
