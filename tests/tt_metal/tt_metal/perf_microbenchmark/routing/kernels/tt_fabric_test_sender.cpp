@@ -14,12 +14,10 @@ constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(6);
 
 using SenderKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig<
     NUM_FABRIC_CONNECTIONS,
-    0,  // No sync fabric connections in regular sender
     NUM_TRAFFIC_CONFIGS,
     IS_2D_FABRIC,
     USE_DYNAMIC_ROUTING,
     LINE_SYNC,
-    false,  // Not master sync core
     NUM_LOCAL_SYNC_CORES>;
 
 void kernel_main() {
