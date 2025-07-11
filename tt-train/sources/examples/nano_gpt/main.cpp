@@ -729,7 +729,7 @@ int main(int argc, char **argv) {
 
                     auto targets_tt_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                         targets,
-                        ttml::core::create_shape({batch_size, sequence_length}),
+                        ttnn::Shape({batch_size, sequence_length}),
                         device,
                         ttnn::Layout::ROW_MAJOR,
                         mapper.get());
