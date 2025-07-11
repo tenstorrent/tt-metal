@@ -51,7 +51,8 @@ jobs:
       - name: DEBUG output the needful
         run: |
           echo ${{ inputs.runner }}
-          echo ${{ (contains(inputs.runner, 'viommu') }}
+          echo ${{ contains(inputs.runner, 'viommu') }}
+          echo ${{ (contains(inputs.runner, 'viommu') && '') }}
           echo ${{ (contains(inputs.runner, 'viommu') && '') || '/dev/hugepages-1G:/dev/hugepages-1G' }}
 
       - name: Install packages
