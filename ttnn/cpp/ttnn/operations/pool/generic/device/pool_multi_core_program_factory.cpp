@@ -276,6 +276,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t out_nbytes = datum_size(out_df);
 
     const uint32_t in_nbytes_c = in_c / num_shards_c * in_nbytes;  // row of input (channels)
+    const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * in_nbytes;  // row of input (channels)
     const uint32_t in_aligned_nbytes_c =
         tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
     const uint32_t out_nbytes_c = in_c / num_shards_c * out_nbytes;  // row of output (channels)
@@ -359,13 +360,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     uint32_t clear_value_cb_id = 32;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT) {
-        // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
-        // is needed only if we use more then 16 sticks per tile for reduction.
-        clear_value_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
-    }
+    // if (max_rows_for_reduction == tt::constants::TILE_HEIGHT) {
+    //  CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
+    //  is needed only if we use more then 16 sticks per tile for reduction.
+    clear_value_cb_id = next_cb_index++;
+    tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
+    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
+    //}
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -540,7 +541,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (uint32_t)pool_type,
         one_scalar_per_core,
         config_cb_id,
-        in_nbytes_c};
+        in_nbytes_c,
+        in_nbytes_padded_c};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
