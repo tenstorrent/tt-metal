@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-///
-#include <algorithm>
 
 #include "send_async_op.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -22,11 +20,13 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
     CoreCoord sender_core_coord;
+    CoreCoord receiver_core_coord;
     tt::tt_fabric::FabricNodeId sender_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_fabric::FabricNodeId receiver_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     for (const auto& connection : socket_connection_config) {
         if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
             sender_core_coord = connection.sender_core.core_coord;
+            receiver_core_coord = connection.receiver_core.core_coord;
             sender_fabric_node_id =
                 input_tensor.mesh_device()->get_device_fabric_node_id(connection.sender_core.device_coord);
             receiver_fabric_node_id = mesh_socket.get_fabric_node_id(
@@ -34,23 +34,29 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
             break;
         }
     }
-
-    auto aligned_page_size = input_tensor.buffer()->aligned_page_size();
+    auto max_alignment = std::max(
+        target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
+        input_tensor.buffer()->alignment());
+    auto input_page_size = input_tensor.buffer()->aligned_page_size();
+    auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
     auto num_pages = input_tensor.buffer()->num_pages();
     auto fabric_max_payload_size = tt::round_down(
         std::min(
             tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),
-        input_tensor.buffer()->alignment());
-    auto num_pages_per_packet = fabric_max_payload_size / aligned_page_size;
-    uint32_t num_whole_packets = 0, num_pages_remainder = 0, num_whole_packets_per_page = 0, partial_packet_size = 0;
+        max_alignment);
+    auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
+    uint32_t num_whole_packets = 0, num_pages_remainder = 0, num_whole_packets_per_page = 0, partial_packet_size = 0,
+             aligned_partial_packet_size = 0, socket_block_size = 0;
     if (num_pages_per_packet > 0) {
         num_whole_packets = num_pages / num_pages_per_packet;
         num_pages_remainder = num_pages % num_pages_per_packet;
-    }
-    if (aligned_page_size > fabric_max_payload_size) {
-        num_whole_packets_per_page = aligned_page_size / fabric_max_payload_size;
-        partial_packet_size = aligned_page_size % fabric_max_payload_size;
+        socket_block_size = num_pages_per_packet * socket_aligned_page_size;
+    } else {
+        num_whole_packets_per_page = input_page_size / fabric_max_payload_size;
+        partial_packet_size = input_page_size % fabric_max_payload_size;
+        aligned_partial_packet_size = tt::align(partial_packet_size, max_alignment);
+        socket_block_size = socket_aligned_page_size;
     }
 
     uint32_t cb_num_pages = 2;
@@ -79,12 +85,16 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     tt::tt_metal::CBHandle cb_packet_header_worker =
         CreateCircularBuffer(program, sender_core_coord, cb_packet_header_config);
 
+    bool socket_storage_in_dram =
+        mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;
+
     const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
     std::vector<uint32_t> reader_compile_args = {
         src0_cb_index,               // cb0_id
         num_pages,                   // num_pages
-        aligned_page_size,           // page_size
+        input_page_size,             // input_page_size
+        socket_aligned_page_size,    // socket_page_size
         num_pages_per_packet,        // num_pages_per_packet
         num_whole_packets,           // num_whole_packets
         num_pages_remainder,         // num_pages_remainder
@@ -107,13 +117,15 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         src0_cb_index,               // cb0_id
         packet_header_cb_index,      // fabric_packet_header_cb_id
         num_pages,                   // num_pages
-        aligned_page_size,           // page_size
+        socket_block_size,           // socket_block_size
+        socket_aligned_page_size,    // socket_page_size
         num_pages_per_packet,        // num_pages_per_packet
         num_whole_packets,           // num_whole_packets
         num_pages_remainder,         // num_pages_remainder
         num_whole_packets_per_page,  // num_whole_packets_per_page
         partial_packet_size,         // partial_packet_size
         fabric_max_payload_size,     // fabric_max_payload_size
+        socket_storage_in_dram,      // is_dram
     };
 
     auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -122,7 +134,14 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         sender_core_coord,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
-    std::vector<uint32_t> writer_rt_args = {mesh_socket.get_config_buffer()->address()};
+    // TODO: These parameters should be derived from the expected tensor/socket configuration
+    uint32_t bank_id = 0;
+    if (!socket_storage_in_dram) {
+        bank_id = target_device->allocator()->get_bank_ids_from_logical_core(
+            mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
+    }
+
+    std::vector<uint32_t> writer_rt_args = {mesh_socket.get_config_buffer()->address(), bank_id};
 
     auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
     TT_FATAL(

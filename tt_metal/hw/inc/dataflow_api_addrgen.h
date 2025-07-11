@@ -444,10 +444,10 @@ FORCE_INLINE uint64_t
 get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
     uint64_t noc_addr = 0;
     if constexpr (DRAM) {
-        noc_addr = dram_bank_to_noc_xy[noc_index][bank_id];
+        noc_addr = dram_bank_to_noc_xy[noc][bank_id];
         bank_address_offset += bank_to_dram_offset[bank_id];
     } else {
-        noc_addr = l1_bank_to_noc_xy[noc_index][bank_id];
+        noc_addr = l1_bank_to_noc_xy[noc][bank_id];
     }
     return (noc_addr << NOC_ADDR_COORD_SHIFT) | (bank_address_offset);
 }
