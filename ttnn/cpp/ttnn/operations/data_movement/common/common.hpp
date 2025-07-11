@@ -33,8 +33,8 @@ uint32_t get_cycles_for_transaction_size(
     int index,
     bool is_read,
     std::map<uint32_t, std::array<float, 2>> l1_local_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_read_far_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_write_far_bw,
+    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
+    std::map<uint32_t, std::array<float, 2>> l1_write_bw,
     std::map<uint32_t, std::array<float, 2>> dram_bw);
 int common_tm_bw_model(
     const Tensor& input_tensor, const Tensor& output_tensor, bool output_only = false, int compute_cycles = 0);

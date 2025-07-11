@@ -98,13 +98,13 @@ uint32_t get_effective_l1_cores(
     uint32_t num_cores,
     int index,
     bool is_write,
-    std::map<uint32_t, std::array<float, 2>> l1_read_far_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_write_far_bw) {
+    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
+    std::map<uint32_t, std::array<float, 2>> l1_write_bw) {
     const uint32_t max_l1_cores = (index == 0) ? (8 + 8) : (9 + 12);
 
     float achieved_l1_bw;
     float max_bw = index == 0 ? 28.0f : 33.0f;
-    auto tr_type = is_write ? l1_write_far_bw : l1_read_far_bw;
+    auto tr_type = is_write ? l1_write_bw : l1_read_bw;
     if (transaction_size < 1024) {
         achieved_l1_bw = interpolate_transaction_bw(transaction_size, tr_type, index);
     } else {
@@ -155,19 +155,19 @@ uint32_t get_cycles_for_transaction_size(
     int index,
     bool is_read,
     std::map<uint32_t, std::array<float, 2>> l1_local_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_read_far_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_write_far_bw,
+    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
+    std::map<uint32_t, std::array<float, 2>> l1_write_bw,
     std::map<uint32_t, std::array<float, 2>> dram_bw) {
-    auto transaction_type = is_local ? l1_local_bw : (is_read ? l1_read_far_bw : l1_write_far_bw);
+    auto transaction_type = is_local ? l1_local_bw : (is_read ? l1_read_bw : l1_write_bw);
     if (is_dram) {
         transaction_type = dram_bw;
     }
     uint32_t latency_cyles = 1;
     if (transaction_type == l1_local_bw) {
         latency_cyles = index == 0 ? 56 : 52;
-    } else if (transaction_type == l1_read_far_bw) {
+    } else if (transaction_type == l1_read_bw) {
         latency_cyles = index == 0 ? 259 : 278;
-    } else if (transaction_type == l1_write_far_bw) {
+    } else if (transaction_type == l1_write_bw) {
         latency_cyles = index == 0 ? 256 : 279;
     } else if (transaction_type == dram_bw) {
         latency_cyles = index == 0 ? 358 : 1737;
@@ -203,7 +203,7 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         {32768, {27.758, 23.702}},
         {65536, {28.694, 26.328}}};
 
-    std::map<uint32_t, std::array<float, 2>> l1_read_far_bw = {
+    std::map<uint32_t, std::array<float, 2>> l1_read_bw = {
         {16, {0.868, 1.176}},
         {32, {1.724, 2.319}},
         {64, {3.477, 4.649}},
@@ -218,7 +218,7 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         {32768, {28.618, 34.456}},
         {65536, {28.7, 34.452}}};
 
-    std::map<uint32_t, std::array<float, 2>> l1_write_far_bw = {
+    std::map<uint32_t, std::array<float, 2>> l1_write_bw = {
         {16, {0.681, 0.897}},
         {32, {1.254, 1.781}},
         {64, {2.709, 3.553}},
@@ -304,17 +304,17 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
     // limit number of cores to max aggregate bw to avoid congestion
     int num_dram_channels = (arch == tt::ARCH::WORMHOLE_B0) ? 12 : 8;
 
-    float input_total_bytes = (float)num_read_transactions * input_transaction_size;
-    float output_total_bytes = (float)num_write_transactions * output_transaction_size;
-
     if (input_is_dram && output_is_dram) {
         uint32_t input_effective_cores =
             get_effective_dram_cores(input_transaction_size, num_cores, num_dram_channels, index, dram_bw);
         uint32_t output_effective_cores =
             get_effective_dram_cores(output_transaction_size, num_cores, num_dram_channels, index, dram_bw);
 
+        auto updated_input_transactions = std::ceil((float)num_read_transactions / (float)input_effective_cores);
+        auto updated_output_transactions = std::ceil((float)num_write_transactions / (float)output_effective_cores);
+
         num_cores = input_effective_cores;
-        if (num_read_transactions < num_write_transactions) {  // to do permute specific
+        if (updated_input_transactions < updated_output_transactions) {  // to do permute specific
             num_cores = output_effective_cores;
         }
     } else if (input_is_dram) {
@@ -329,19 +329,20 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
 
     if (!input_is_dram && !output_is_dram) {
         uint32_t input_effective_cores =
-            get_effective_l1_cores(input_transaction_size, num_cores, index, false, l1_read_far_bw, l1_write_far_bw);
+            get_effective_l1_cores(input_transaction_size, num_cores, index, false, l1_read_bw, l1_write_bw);
         uint32_t output_effective_cores =
-            get_effective_l1_cores(output_transaction_size, num_cores, index, true, l1_read_far_bw, l1_write_far_bw);
+            get_effective_l1_cores(output_transaction_size, num_cores, index, true, l1_read_bw, l1_write_bw);
+        auto updated_input_transactions = std::ceil((float)num_read_transactions / (float)input_effective_cores);
+        auto updated_output_transactions = std::ceil((float)num_write_transactions / (float)output_effective_cores);
+
         num_cores = input_effective_cores;
-        if (num_read_transactions < num_write_transactions) {  // to do permute specific
+        if (updated_input_transactions < updated_output_transactions) {  // to do permute specific
             num_cores = output_effective_cores;
         }
     } else if (!input_is_dram) {
-        num_cores =
-            get_effective_l1_cores(input_transaction_size, num_cores, index, false, l1_read_far_bw, l1_write_far_bw);
+        num_cores = get_effective_l1_cores(input_transaction_size, num_cores, index, false, l1_read_bw, l1_write_bw);
     } else if (!output_is_dram) {
-        num_cores =
-            get_effective_l1_cores(output_transaction_size, num_cores, index, true, l1_read_far_bw, l1_write_far_bw);
+        num_cores = get_effective_l1_cores(output_transaction_size, num_cores, index, true, l1_read_bw, l1_write_bw);
     }
 
     num_cores = is_local ? input_tensor.memory_config().shard_spec().value().grid.num_cores() : num_cores;
@@ -359,8 +360,8 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         index,
         true,
         l1_local_bw,
-        l1_read_far_bw,
-        l1_write_far_bw,
+        l1_read_bw,
+        l1_write_bw,
         dram_bw);
 
     auto total_write_cycles = get_cycles_for_transaction_size(
@@ -372,8 +373,8 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         index,
         false,
         l1_local_bw,
-        l1_read_far_bw,
-        l1_write_far_bw,
+        l1_read_bw,
+        l1_write_bw,
         dram_bw);
 
     // Use max(read, write) to account for overlap
