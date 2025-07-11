@@ -24,9 +24,9 @@ RMSNormLayer::RMSNormLayer(uint32_t features, float epsilon, bool use_composite)
 
 autograd::TensorPtr RMSNormLayer::operator()(const autograd::TensorPtr& tensor) {
     if (m_use_composite) {
-        return ops::rmsnorm(tensor, m_gamma, m_epsilon);
-    } else {
         return ops::rmsnorm_composite(tensor, m_gamma, m_epsilon);
+    } else {
+        return ops::rmsnorm(tensor, m_gamma, m_epsilon);
     }
 }
 
