@@ -35,6 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
     uint32_t out_subblock_h,
@@ -58,8 +59,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     using tt::tt_metal::TensorMemoryLayout;
 
     // currently only support transpose of the full tile
@@ -1365,6 +1365,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -1376,8 +1377,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
@@ -1487,6 +1487,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         Nt,
         Kt,
         bcast_batch,
+        throttle_level,
         in0_block_w,
         in0_last_ktile_w,
         out_subblock_h,
@@ -1510,8 +1511,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         bias_data_format,
         output_data_format,
         untilize_out,
-        fused_op_signaler,
-        throttle_level);
+        fused_op_signaler);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
@@ -1522,6 +1522,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     bool broadcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -1545,6 +1546,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         broadcast_batch,
         compute_with_storage_grid_size,
         compute_kernel_config,
+        throttle_level,
         in0_block_w,
         out_subblock_h,
         out_subblock_w,
@@ -1556,8 +1558,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         transpose_mcast,
         std::move(fused_activation),
         untilize_out,
-        empty_fused_op_signaler,
-        ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0);
+        empty_fused_op_signaler);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
@@ -1583,6 +1584,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         broadcast_batch,
         config.compute_with_storage_grid_size,
         compute_kernel_config,
+        config.throttle_level,
         config.in0_block_w,
         config.out_subblock_h,
         config.out_subblock_w,
@@ -1594,8 +1596,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         config.transpose_mcast,
         config.fused_activation,
         untilize_out,
-        fused_op_signaler,
-        config.throttle_level);
+        fused_op_signaler);
 }
 
 }  // namespace matmul
