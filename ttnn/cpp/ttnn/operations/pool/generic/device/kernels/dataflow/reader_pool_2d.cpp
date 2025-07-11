@@ -74,12 +74,12 @@ template <
     bool is_avg_pool,
     bool wide_reduction,
     uint32_t clear_value_cb_id,
-    uint32_t in_cb_ntiles>
+    uint32_t in_cb_ntiles,
+    bool is_large_kernel>
 FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time.
-    constexpr bool is_large_kernel = (window_h * window_w) > max_rows_for_reduction;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_write_inc =
@@ -211,6 +211,7 @@ void kernel_main() {
     uint32_t scalar_value = 0;
 
     constexpr uint32_t window_size_hw = window_h * window_w;
+    constexpr bool is_large_kernel = (window_h * window_w) > max_rows_for_reduction;
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
@@ -229,7 +230,7 @@ void kernel_main() {
         }
         // for avg pool clear_out_tiles runs in loop, no need to initialize
         // but always initialize for small kernels
-        if (!is_avg_pool || (interm_reduction_chunks == 1 && remaining_elems)) {
+        if (!is_avg_pool || !is_large_kernel) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
         }
     }
@@ -308,7 +309,8 @@ void kernel_main() {
                 is_avg_pool,
                 wide_reduction,
                 clear_value_cb_id,
-                in_cb_ntiles>(ind, in_l1_read_base_addr);
+                in_cb_ntiles,
+                is_large_kernel>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -333,6 +335,7 @@ void kernel_main() {
             is_avg_pool,
             wide_reduction,
             clear_value_cb_id,
-            in_cb_ntiles>(0, in_l1_read_base_addr);
+            in_cb_ntiles,
+            is_large_kernel>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()
