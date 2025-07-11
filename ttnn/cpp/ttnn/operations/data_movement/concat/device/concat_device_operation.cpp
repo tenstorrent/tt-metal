@@ -47,7 +47,11 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         if (in_ref.layout() == Layout::TILE and in_ref.logical_shape()[dim] != in_ref.padded_shape()[dim]) {
             warn_about_alignment = true;
         }
-        TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
+        TT_FATAL(
+            curr_shape == shape_first,
+            "concat tensors differ in shape across non-concat dimensions. Got {} and {}",
+            in_ref,
+            first_input);
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
         if (shard_first) {
             TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
