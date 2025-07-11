@@ -102,11 +102,31 @@ class AllReduceConfig(OpConfigBase):
 
 
 @dataclass
-class AllGatherConfig(OpConfigBase):
-    """Common parameters for a ttnn.all_gather op"""
+class AllGatherAsyncConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_gather_async op"""
 
-    memory_config: ttnn.MemoryConfig
     mesh_device: ConfigDevice
+    cluster_axis: int
+    dim: int
+    multi_device_global_semaphore: object
+    num_links: int
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+    topology: ttnn.Topology = ttnn.Topology.Linear
+
+
+@dataclass
+class ReduceScatterAsyncConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.reduce_scatter_async op"""
+
+    mesh_device: ConfigDevice
+    cluster_axis: int
+    dim: int
+    from_remote_multi_device_global_semaphore: object
+    to_remote_multi_device_global_semaphore: object
+    math_op: ttnn.ReduceType
+    num_links: int
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+    topology: ttnn.Topology = ttnn.Topology.Linear
 
 
 @dataclass

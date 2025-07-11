@@ -33,13 +33,6 @@ Tensor tensor_reshape(
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 
-    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    if (is_multi_device_host_tensor(input_tensor)) {
-        return transform(input_tensor, [&](const Tensor& tensor_shard) {
-            return tensor_reshape(tensor_shard, new_logical_shape, new_padded_shape);
-        });
-    }
-
     const auto output_memory_config = infer_output_memory_config(input_tensor.memory_config(), new_padded_shape);
     auto new_spec = ttnn::TensorSpec(
         new_logical_shape,
@@ -112,7 +105,7 @@ Tensor tensor_reshape(
             } else if constexpr (std::is_same_v<T, tt::tt_metal::HostStorage>) {
                 return Tensor(tensor.storage(), new_spec, tensor.distributed_tensor_config());
             } else {
-                TT_THROW("Unsupported storage type");
+                static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported storage type");
             }
         },
         input_tensor.storage());

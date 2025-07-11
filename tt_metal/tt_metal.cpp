@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -487,7 +487,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     }
 }
 
-DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint64_t bank_index, uint64_t page_index) {
+DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint32_t bank_index, uint32_t page_index) {
     DeviceAddr addr = 0;
     if (buffer.is_dram()) {
         uint32_t num_banks = buffer.allocator()->get_num_banks(buffer.buffer_type());
@@ -502,23 +502,23 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    size_t host_buffer_size_bytes = host_buffer.size();
+    uint32_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
         host_buffer_size_bytes,
         buffer.size());
 
-    size_t page_size = buffer.page_size();
-    size_t num_pages = buffer.num_pages();
+    uint32_t page_size = buffer.page_size();
+    uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    size_t bank_index = 0;
-    size_t data_index = 0;
+    auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    uint32_t bank_index = 0;
+    int data_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
-    for (size_t page_index = 0; page_index < num_pages; page_index++) {
+    for (int page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
@@ -562,17 +562,17 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
 }
 
 void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
-    size_t page_size = buffer.page_size();
-    size_t num_pages = buffer.num_pages();
+    uint32_t page_size = buffer.page_size();
+    uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
-    size_t bank_index = 0;
+    uint32_t bank_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
-    for (size_t page_index = 0; page_index < num_pages; page_index++) {
+    for (int page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         page.clear();
         switch (buffer.buffer_type()) {
@@ -956,6 +956,16 @@ IDevice* CreateDevice(
     const std::vector<uint32_t>& l1_bank_remap,
     const size_t worker_l1_size) {
     ZoneScoped;
+
+    // MMIO devices do not support dispatch on galaxy cluster
+    // Suggest the user to use the CreateDevices API
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        TT_FATAL(
+            !(tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
+              tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
+            "Galaxy cluster does not support dispatch on mmio devices. Please use CreateDevices API to open all "
+            "devices for dispatch.");
+    }
 
     tt::DevicePool::initialize(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
