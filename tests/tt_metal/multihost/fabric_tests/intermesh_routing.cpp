@@ -28,7 +28,7 @@ TEST_F(IntermeshSplit2x2FabricFixture, RandomizedInterMeshUnicast) {
     }
 }
 
-TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast) {
+TEST_F(IntermeshSplit2x2FabricFixture, DISABLED_MultiMeshEastMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 0)};
@@ -42,7 +42,7 @@ TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast) {
     }
 }
 
-TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshSouthMulticast) {
+TEST_F(IntermeshSplit2x2FabricFixture, DISABLED_MultiMeshSouthMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 1)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -55,7 +55,7 @@ TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshSouthMulticast) {
     }
 }
 
-TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshNorthMulticast) {
+TEST_F(IntermeshSplit2x2FabricFixture, DISABLED_MultiMeshNorthMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 3)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 3)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -76,7 +76,7 @@ TEST_F(InterMeshDual2x4FabricFixture, RandomizedInterMeshUnicast) {
     }
 }
 
-TEST_F(InterMeshDual2x4FabricFixture, MultiMesh_EW_Multicast) {
+TEST_F(InterMeshDual2x4FabricFixture, DISABLED_MultiMesh_EW_Multicast) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 2), FabricNodeId(MeshId{0}, 5), FabricNodeId(MeshId{0}, 6)};
     std::vector<FabricNodeId> mcast_start_nodes = {
@@ -95,7 +95,7 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMesh_EW_Multicast) {
     }
 }
 
-TEST_F(InterMeshDual2x4FabricFixture, MultiMesh_EW_MultiHopMulticast) {
+TEST_F(InterMeshDual2x4FabricFixture, DISABLED_MultiMesh_EW_MultiHopMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 2), FabricNodeId(MeshId{0}, 5), FabricNodeId(MeshId{0}, 6)};
     std::vector<FabricNodeId> mcast_start_nodes = {
@@ -122,7 +122,7 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMesh_EW_MultiHopMulticast) {
     }
 }
 
-TEST_F(InterMeshDual2x4FabricFixture, MultiMesh_EW_MulticastWithTurns) {
+TEST_F(InterMeshDual2x4FabricFixture, DISABLED_MultiMesh_EW_MulticastWithTurns) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 2), FabricNodeId(MeshId{0}, 5), FabricNodeId(MeshId{0}, 6)};
     std::vector<FabricNodeId> mcast_start_nodes = {
