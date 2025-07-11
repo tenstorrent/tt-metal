@@ -17,8 +17,6 @@
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
-#include "fabric_types.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "mux.hpp"
@@ -66,7 +64,7 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
             }
         }
     }
-    TT_ASSERT(false, "Could not find downstream device of Device {}", device_id);
+    TT_FATAL(false, "Could not find downstream device of Device {}", device_id);
     return device_id;
 }
 
@@ -146,16 +144,16 @@ CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const
 }
 
 KernelHandle FDKernel::configure_kernel_variant(
-    const string& path,
+    const std::string& path,
     const std::vector<uint32_t>& compile_args,
-    std::map<string, string> defines_in,
+    std::map<std::string, std::string> defines_in,
     bool is_active_eth_core,
     bool send_to_brisc,
     bool force_watcher_no_inline,
     KernelBuildOptLevel opt_level) {
     uint32_t programmable_core_type_index = get_programmable_core_type_index(GetCoreType(), is_active_eth_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };

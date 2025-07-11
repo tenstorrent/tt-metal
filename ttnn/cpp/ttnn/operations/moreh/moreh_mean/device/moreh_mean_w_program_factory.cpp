@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -85,7 +86,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(CBIndex::c_16), static_cast<uint32_t>(is_dram(output))};
 
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     if (do_mask_w) {
         reader_defines["DO_MASK_W"] = "1";
     }
@@ -105,10 +106,10 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
-    string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp";
+    std::string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp";
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::W;
-    std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
     }

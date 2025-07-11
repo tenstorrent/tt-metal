@@ -30,7 +30,6 @@ template <typename T>
 constexpr T get_common_arg_val(size_t idx);
 
 constexpr uint32_t get_arg_val(int arg_idx);
-constexpr uint32_t get_common_arg_addr(int arg_idx);
 
 #define noc_index 0
 #define ASSERT(condition, ...)

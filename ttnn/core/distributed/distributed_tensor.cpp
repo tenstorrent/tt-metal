@@ -261,7 +261,7 @@ public:
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
                 distributed_buffer.emplace_shard(remap_fn(coord), [&b = replicated_buffer]() { return b; });
             }
-            return Tensor(tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), tensor_spec, config());
+            return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), tensor_spec, config());
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -365,7 +365,7 @@ private:
             }
         }
 
-        return Tensor(tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), shard_spec, config());
+        return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), shard_spec, config());
     }
 
     // MeshDevice parameters.
@@ -395,8 +395,7 @@ public:
 
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
-        const auto src_buffer =
-            std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.cpu().storage()).distributed_buffer();
+        const auto& src_buffer = tensor.cpu().host_storage().buffer();
 
         auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
         auto dst_buffer = tt::tt_metal::DistributedHostBuffer::create(distribution_shape_);

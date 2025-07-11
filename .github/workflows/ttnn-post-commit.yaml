@@ -70,7 +70,7 @@ jobs:
         os: ["ubuntu-22.04"]
         test-group:
           - name: ttnn group 1
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
+            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3
@@ -101,7 +101,7 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        (github.event.pull_request.head.repo.fork == true || inputs.runner-label == 'P150b') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     container:

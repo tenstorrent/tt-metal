@@ -21,6 +21,8 @@
 #include "tt_fabric_test_traffic.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common.hpp"
+#include "tt_fabric_test_memory_map.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 const std::string default_sender_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sender.cpp";
@@ -35,11 +37,6 @@ namespace fabric_tests {
 // forward declaration
 struct TestDevice;
 
-// for now keep the memory map same for both senders and receivers
-struct TestWorkerMemoryMap {
-    uint32_t worker_usable_address;
-};
-
 enum class TestWorkerType : uint8_t { SENDER, RECEIVER };
 
 struct TestWorker {
@@ -52,13 +49,13 @@ public:
         const std::vector<uint32_t>& rt_args,
         const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const;
     void collect_results();
-    void validate_results();
+    virtual bool validate_results(std::vector<uint32_t>& data) const = 0;
     void dump_results();
 
 protected:
     CoreCoord logical_core_;
     uint32_t worker_id_;
-    std::string_view kernel_src_;
+    std::string kernel_src_;
     TestDevice* test_device_ptr_;
 };
 
@@ -67,8 +64,7 @@ public:
     TestSender(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSenderConfig config);
     void connect_to_fabric_router();
-
-    TestWorkerMemoryMap memory_map_;
+    bool validate_results(std::vector<uint32_t>& data) const override;
 
     // stores traffic config and the correspoding fabric_connection idx to use
     std::vector<std::pair<TestTrafficSenderConfig, uint32_t>> configs_;
@@ -87,8 +83,8 @@ public:
         std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficReceiverConfig config);
     bool is_shared_receiver();
+    bool validate_results(std::vector<uint32_t>& data) const override;
 
-    TestWorkerMemoryMap memory_map_;
     bool is_shared_;
     std::vector<TestTrafficReceiverConfig> configs_;
 };
@@ -98,7 +94,9 @@ public:
     TestDevice(
         const MeshCoordinate& coord,
         std::shared_ptr<IDeviceInfoProvider> device_info_provider,
-        std::shared_ptr<IRouteManager> route_manager);
+        std::shared_ptr<IRouteManager> route_manager,
+        const SenderMemoryMap* sender_memory_map = nullptr,
+        const ReceiverMemoryMap* receiver_memory_map = nullptr);
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id();
     uint32_t add_fabric_connection(RoutingDirection direction, const std::vector<uint32_t>& link_indices);
@@ -107,16 +105,21 @@ public:
     void create_kernels();
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
+    void validate_results() const;
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
     std::vector<uint32_t> get_fabric_connection_args(CoreCoord core, RoutingDirection direction, uint32_t link_idx);
     void create_sender_kernels();
     void create_receiver_kernels();
+    void validate_sender_results() const;
+    void validate_receiver_results() const;
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;
     std::shared_ptr<IRouteManager> route_manager_;
+    const SenderMemoryMap* sender_memory_map_;
+    const ReceiverMemoryMap* receiver_memory_map_;
 
     FabricNodeId fabric_node_id_ = FabricNodeId(MeshId{0}, 0);
 
@@ -137,13 +140,15 @@ inline TestWorker::TestWorker(
     CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     logical_core_(logical_core), test_device_ptr_(test_device_ptr) {
     if (kernel_src.has_value()) {
-        this->kernel_src_ = kernel_src.value();
+        this->kernel_src_ = std::string(kernel_src.value());
     }
 
     // populate worker id
 }
 
-inline void TestWorker::set_kernel_src(const std::string_view& kernel_src) { this->kernel_src_ = kernel_src; }
+inline void TestWorker::set_kernel_src(const std::string_view& kernel_src) {
+    this->kernel_src_ = std::string(kernel_src);
+}
 
 inline void TestWorker::create_kernel(
     const MeshCoordinate& device_coord,
@@ -152,7 +157,7 @@ inline void TestWorker::create_kernel(
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const {
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
-        std::string(this->kernel_src_),
+        this->kernel_src_,
         {this->logical_core_},
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -230,6 +235,32 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
 
 inline void TestSender::connect_to_fabric_router() {}
 
+inline bool TestSender::validate_results(std::vector<uint32_t>& data) const {
+    bool pass = data[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS;
+    if (!pass) {
+        const auto status = tt_fabric_status_to_string(data[TT_FABRIC_STATUS_INDEX]);
+        log_error(tt::LogTest, "Sender on core {} failed with status: {}", this->logical_core_, status);
+        return false;
+    }
+
+    uint32_t num_expected_packets = 0;
+    for (const auto& [config, _] : this->configs_) {
+        num_expected_packets += config.parameters.num_packets;
+    }
+    pass &= data[TT_FABRIC_WORD_CNT_INDEX] == num_expected_packets;
+    if (!pass) {
+        log_error(
+            tt::LogTest,
+            "Sender on core {} expected to send {} packets, sent {}",
+            this->logical_core_,
+            num_expected_packets,
+            data[TT_FABRIC_WORD_CNT_INDEX]);
+        return false;
+    }
+
+    return pass;
+}
+
 /* **********************
  * TestReceiver Methods *
  ************************/
@@ -239,9 +270,37 @@ inline TestReceiver::TestReceiver(
     // TODO: init mem map?
 }
 
-inline void TestReceiver::add_config(TestTrafficReceiverConfig config) { this->configs_.push_back(config); }
+inline void TestReceiver::add_config(TestTrafficReceiverConfig config) {
+    this->configs_.emplace_back(std::move(config));
+}
 
 inline bool TestReceiver::is_shared_receiver() { return this->is_shared_; }
+
+inline bool TestReceiver::validate_results(std::vector<uint32_t>& data) const {
+    bool pass = data[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS;
+    if (!pass) {
+        const auto status = tt_fabric_status_to_string(data[TT_FABRIC_STATUS_INDEX]);
+        log_error(tt::LogTest, "Receiver on core {} failed with status: {}", this->logical_core_, status);
+        return false;
+    }
+
+    uint32_t num_expected_packets = 0;
+    for (const auto& config : this->configs_) {
+        num_expected_packets += config.parameters.num_packets;
+    }
+    pass &= data[TT_FABRIC_WORD_CNT_INDEX] == num_expected_packets;
+    if (!pass) {
+        log_error(
+            tt::LogTest,
+            "Receiver on core {} expected to receive {} packets, received {}",
+            this->logical_core_,
+            num_expected_packets,
+            data[TT_FABRIC_WORD_CNT_INDEX]);
+        return false;
+    }
+
+    return pass;
+}
 
 /* ********************
  * TestDevice Methods *
@@ -249,8 +308,14 @@ inline bool TestReceiver::is_shared_receiver() { return this->is_shared_; }
 inline TestDevice::TestDevice(
     const MeshCoordinate& coord,
     std::shared_ptr<IDeviceInfoProvider> device_info_provider,
-    std::shared_ptr<IRouteManager> route_manager) :
-    coord_(coord), device_info_provider_(std::move(device_info_provider)), route_manager_(std::move(route_manager)) {
+    std::shared_ptr<IRouteManager> route_manager,
+    const SenderMemoryMap* sender_memory_map,
+    const ReceiverMemoryMap* receiver_memory_map) :
+    coord_(coord),
+    device_info_provider_(std::move(device_info_provider)),
+    route_manager_(std::move(route_manager)),
+    sender_memory_map_(sender_memory_map),
+    receiver_memory_map_(receiver_memory_map) {
     program_handle_ = tt::tt_metal::CreateProgram();
     fabric_node_id_ = device_info_provider_->get_fabric_node_id(coord);
 
@@ -342,13 +407,12 @@ inline void TestDevice::create_sender_kernels() {
             sender.configs_.size(),
             0 /* benchmark mode */};
 
-        // memory map args
-        // TODO: move to the right place
-        uint32_t packet_header_region_base = 0x30000;
-        uint32_t payload_buffer_region_base = 0x40000;
-        uint32_t highest_usable_address = 0x100000;
-        std::vector<uint32_t> memory_allocator_args = {
-            packet_header_region_base, payload_buffer_region_base, highest_usable_address};
+        // Get memory layout from sender memory map
+        TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
+        TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
+
+        // Get all memory map arguments in one call
+        std::vector<uint32_t> memory_map_args = sender_memory_map_->get_memory_map_args();
 
         std::vector<uint32_t> fabric_connection_args;
         if (!sender.fabric_connections_.empty()) {
@@ -373,21 +437,24 @@ inline void TestDevice::create_sender_kernels() {
 
         std::vector<uint32_t> traffic_config_args;
         if (!sender.configs_.empty()) {
-            const auto& first_traffic_args = sender.configs_[0].first.get_args();
+            // Estimate total size based on first config to reduce reallocations
+            const auto first_traffic_args = sender.configs_[0].first.get_args();
             traffic_config_args.reserve(sender.configs_.size() * first_traffic_args.size());
             traffic_config_args.insert(traffic_config_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
             for (size_t i = 1; i < sender.configs_.size(); ++i) {
-                const auto& traffic_args = sender.configs_[i].first.get_args();
+                const auto traffic_args = sender.configs_[i].first.get_args();
                 traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
             }
         }
 
+        // Pre-calculate total rt_args size to avoid reallocations
+        const size_t total_rt_args_size = memory_map_args.size() + fabric_connection_args.size() +
+                                          traffic_config_to_fabric_connection_args.size() + traffic_config_args.size();
+
         std::vector<uint32_t> rt_args;
-        rt_args.reserve(
-            memory_allocator_args.size() + fabric_connection_args.size() +
-            traffic_config_to_fabric_connection_args.size() + traffic_config_args.size());
-        rt_args.insert(rt_args.end(), memory_allocator_args.begin(), memory_allocator_args.end());
+        rt_args.reserve(total_rt_args_size);
+        rt_args.insert(rt_args.end(), memory_map_args.begin(), memory_map_args.end());
         rt_args.insert(rt_args.end(), fabric_connection_args.begin(), fabric_connection_args.end());
         rt_args.insert(
             rt_args.end(),
@@ -396,7 +463,7 @@ inline void TestDevice::create_sender_kernels() {
         rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
 
         // create kernel
-        sender.create_kernel(coord_, ct_args, rt_args, {});
+        sender.create_kernel(coord_, std::move(ct_args), std::move(rt_args), {});
         log_info(tt::LogTest, "created sender kernel on core: {}", core);
     }
 }
@@ -407,23 +474,35 @@ inline void TestDevice::create_receiver_kernels() {
         // TODO: fix these
         std::vector<uint32_t> ct_args = {receiver.configs_.size(), 0 /* benchmark mode */};
 
+        // Get memory layout from receiver memory map
+        TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
+        TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
+
+        // Get all memory map arguments in one call
+        std::vector<uint32_t> memory_map_args = receiver_memory_map_->get_memory_map_args();
+
         std::vector<uint32_t> traffic_config_args;
         if (!receiver.configs_.empty()) {
-            const auto& first_traffic_args = receiver.configs_[0].get_args();
+            // Estimate total size based on first config to reduce reallocations
+            const auto first_traffic_args = receiver.configs_[0].get_args();
             traffic_config_args.reserve(receiver.configs_.size() * first_traffic_args.size());
             traffic_config_args.insert(traffic_config_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
             for (size_t i = 1; i < receiver.configs_.size(); ++i) {
-                const auto& traffic_args = receiver.configs_[i].get_args();
+                const auto traffic_args = receiver.configs_[i].get_args();
                 traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
             }
         }
 
+        // Pre-calculate total rt_args size to avoid reallocations
+        const size_t total_rt_args_size = memory_map_args.size() + traffic_config_args.size();
+
         std::vector<uint32_t> rt_args;
-        rt_args.reserve(traffic_config_args.size());
+        rt_args.reserve(total_rt_args_size);
+        rt_args.insert(rt_args.end(), memory_map_args.begin(), memory_map_args.end());
         rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
 
-        receiver.create_kernel(coord_, ct_args, rt_args, {});
+        receiver.create_kernel(coord_, std::move(ct_args), std::move(rt_args), {});
         log_info(tt::LogTest, "created receiver kernel on core: {}", core);
     }
 }
@@ -466,6 +545,61 @@ inline std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_directio
         direction,
         this->fabric_node_id_);
     return link_indices;
+}
+
+inline void TestDevice::validate_sender_results() const {
+    std::vector<CoreCoord> sender_cores;
+    sender_cores.reserve(this->senders_.size());
+    for (const auto& [core, _] : this->senders_) {
+        sender_cores.push_back(core);
+    }
+
+    if (sender_cores.empty()) {
+        return;
+    }
+
+    // capture data from all the cores and then indidividually validate
+    auto data = this->device_info_provider_->read_buffer_from_cores(
+        this->coord_,
+        sender_cores,
+        sender_memory_map_->get_result_buffer_address(),
+        sender_memory_map_->get_result_buffer_size());
+
+    // validate data
+    for (const auto& [core, sender] : this->senders_) {
+        bool pass = sender.validate_results(data.at(core));
+        TT_FATAL(pass, "Sender on device: {} core: {} failed", this->fabric_node_id_, core);
+    }
+}
+
+inline void TestDevice::validate_receiver_results() const {
+    std::vector<CoreCoord> receiver_cores;
+    receiver_cores.reserve(this->receivers_.size());
+    for (const auto& [core, _] : this->receivers_) {
+        receiver_cores.push_back(core);
+    }
+
+    if (receiver_cores.empty()) {
+        return;
+    }
+
+    // capture data from all the cores and then indidividually validate
+    auto data = this->device_info_provider_->read_buffer_from_cores(
+        this->coord_,
+        receiver_cores,
+        receiver_memory_map_->get_result_buffer_address(),
+        receiver_memory_map_->get_result_buffer_size());
+
+    // validate data
+    for (const auto& [core, receiver] : this->receivers_) {
+        bool pass = receiver.validate_results(data.at(core));
+        TT_FATAL(pass, "Receiver on device: {} core: {} failed", this->fabric_node_id_, core);
+    }
+}
+
+inline void TestDevice::validate_results() const {
+    this->validate_sender_results();
+    this->validate_receiver_results();
 }
 
 }  // namespace fabric_tests

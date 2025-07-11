@@ -181,7 +181,6 @@ TEST(Cluster, ReportSystemHealth) {
     // It is a report of system health
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& eth_connections = cluster.get_ethernet_connections();
-    const auto& eth_connections_to_remote_mmio_devices = cluster.get_ethernet_connections_to_remote_mmio_devices();
 
     auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
     std::stringstream ss;
@@ -335,8 +334,8 @@ TEST(Cluster, TestMeshFullConnectivity) {
     if (not target_system_topology_str.empty()) {
         target_system_topology =
             magic_enum::enum_cast<FabricType>(target_system_topology_str, magic_enum::case_insensitive);
-        // TORUS_2D is the only topology that is supported for all cluster types
-        if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_2D) {
+        // TORUS_XY is the only topology that is supported for all cluster types
+        if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_XY) {
             bool supported_topology = false;
             switch (cluster_type) {
                 case tt::ClusterType::GALAXY:
@@ -386,7 +385,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
                     << num_expected_chip_connections << " chips for " << magic_enum::enum_name(*target_system_topology)
                     << " topology";
             };
-            if (*target_system_topology == FabricType::TORUS_2D) {
+            if (*target_system_topology == FabricType::TORUS_XY) {
                 static constexpr std::uint32_t num_expected_chip_connections = 4;
                 validate_num_connections(num_connections_to_chip.size(), num_expected_chip_connections);
             } else {

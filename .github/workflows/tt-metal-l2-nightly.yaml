@@ -15,7 +15,8 @@ on:
         options:
           - N150
           - N300
-          - BH
+          - P100
+          - P150b
       timeout:
         required: false
         type: number
