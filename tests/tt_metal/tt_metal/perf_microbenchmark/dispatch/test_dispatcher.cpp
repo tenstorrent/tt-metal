@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -629,8 +629,14 @@ int main(int argc, char** argv) {
             {"TO_MESH_ID", "0"},
             {"TO_DEV_ID", "0"},
             {"ROUTER_DIRECTION", "0"},
+            {"WORKER_MCAST_GRID", "0"},
+            {"NUM_WORKER_CORES_TO_MCAST", "0"},
             {"IS_D_VARIANT", "1"},
             {"IS_H_VARIANT", "1"},
+            {"DISPATCH_SHARED_REGION",
+             std::to_string(MetalContext::instance()
+                                .dispatch_mem_map(CoreType::WORKER)
+                                .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_SHARED_REGION))},
         };
 
         std::vector<uint32_t> spoof_prefetch_compile_args = {

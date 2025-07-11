@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -370,13 +370,18 @@ struct core_info_msg_t {
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
+// Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
+// a dummy entry.
+constexpr uint32_t go_message_num_entries = 9;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct subordinate_sync_msg_t subordinate_sync;
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
     struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    volatile struct go_msg_t go_message;
+    volatile struct go_msg_t go_messages[go_message_num_entries];
+    uint32_t pads_1[3];
+    volatile uint32_t go_message_index;  // Index into go_messages to use. Always 0 on unicast cores.
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
     struct core_info_msg_t core_info;

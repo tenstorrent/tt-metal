@@ -913,6 +913,8 @@ void MetalContext::initialize_firmware(
     uint32_t zero = 0;
     cluster_->write_core(
         &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
+    uint32_t go_message_index_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+    cluster_->write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 }
 
 void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {

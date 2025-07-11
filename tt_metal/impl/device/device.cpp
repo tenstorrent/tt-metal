@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -308,6 +308,21 @@ void Device::init_command_queue_device() {
         MetalContext::instance().get_cluster().write_core(
             &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
     };
+    auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
+        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            id_, logical_core, core_type);
+        auto programmable_core_type = get_programmable_core_type(virtual_core);
+        uint32_t go_message_addr =
+            MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+        uint32_t zero = 0;
+        MetalContext::instance().get_cluster().write_core(
+            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(id_);
+        uint32_t go_message_index_addr =
+            MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        MetalContext::instance().get_cluster().write_core(
+            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
+    };
     const auto& storage_only_cores = tt::get_logical_storage_cores(
         id_, num_hw_cqs_, MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config());
     auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
@@ -320,6 +335,7 @@ void Device::init_command_queue_device() {
             CoreCoord logical_core(x, y);
             if (!storage_only_cores_set.count(logical_core)) {
                 reset_launch_message_rd_ptr(logical_core, CoreType::WORKER);
+                reset_go_message_index(logical_core, CoreType::WORKER);
             }
         }
     }
@@ -779,18 +795,16 @@ void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_uns
 
 void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
 
-uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
+bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
 }
 
 uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
 }
 
-uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
-    if (mcast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
-    } else if (unicast_data) {
+uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
+    if (unicast_data) {
         return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
             sub_device_id);
     } else {

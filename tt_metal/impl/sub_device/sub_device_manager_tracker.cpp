@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,12 +66,19 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
         // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
         mesh_device->mesh_command_queue().reset_worker_state(
-            true, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+            true,
+            num_sub_devices,
+            sub_device_manager->noc_mcast_unicast_data(),
+            sub_device_manager->get_core_go_message_mapping());
     } else {
         for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
             auto& hw_cq = device_->command_queue(cq_id);
             // Only need to reset launch messages once, so reset on cq 0
-            hw_cq.reset_worker_state(cq_id == 0, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+            hw_cq.reset_worker_state(
+                cq_id == 0,
+                num_sub_devices,
+                sub_device_manager->noc_mcast_unicast_data(),
+                sub_device_manager->get_core_go_message_mapping());
         }
     }
     sub_device_manager->reset_sub_device_stall_group();
