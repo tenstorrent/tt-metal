@@ -231,6 +231,11 @@ Using the lt tool (`models/tt_transformers/lt`), the user can also provide multi
 ### Expected performance and accuracy
 
 See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
+Accuracy of the network architectures is measured by exact token matching using teacher forcing method. During inference the previous token is replaced by the ground truth token while the network generates the next token. This allows to avoid accumulating errors when comparisons on a finer level (tokens) assessed in comparison to other known metrics that compare quality and context of the answer. Token accuracy can be reported by passing the argument shown below:
+
+```
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --token_accuracy True
+```
 
 ### Implementation notes
 
