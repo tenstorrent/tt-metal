@@ -12,7 +12,6 @@
 namespace tt::tt_metal::distributed {
 
 // Manages coordinate translation and validation for distributed mesh operations
-// Combines functionality from DistributedMeshConfig and CoordinateTranslator
 class DistributedCoordinateSystem {
 public:
     DistributedCoordinateSystem(
@@ -31,7 +30,6 @@ public:
     // Coordinate translation
     std::optional<MeshCoordinate> global_to_local(const MeshCoordinate& global_coord) const;
     MeshCoordinate local_to_global(const MeshCoordinate& local_coord) const;
-
 
     // Get a range for iterating over local coordinates
     MeshCoordinateRange local_range() const { return MeshCoordinateRange(local_shape_); }

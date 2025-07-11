@@ -75,13 +75,11 @@ MeshCoordinate DistributedCoordinateSystem::local_to_global(const MeshCoordinate
 DistributedCoordinateSystem DistributedCoordinateSystem::from_control_plane() {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    auto global_shape = control_plane.get_physical_mesh_shape(
-        control_plane.get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::GLOBAL);
-
-    auto local_shape = control_plane.get_physical_mesh_shape(
-        control_plane.get_local_mesh_id_bindings()[0],
-        tt::tt_fabric::MeshScope::LOCAL);
+    const auto local_mesh_id = control_plane.get_local_mesh_id_bindings()[0];
     auto local_offset = control_plane.get_local_mesh_offset();
+
+    auto global_shape = control_plane.get_physical_mesh_shape(local_mesh_id, tt::tt_fabric::MeshScope::GLOBAL);
+    auto local_shape = control_plane.get_physical_mesh_shape(local_mesh_id, tt::tt_fabric::MeshScope::LOCAL);
 
     log_debug(LogDistributed,
               "[DistributedCoordinateSystem] Creating from control plane - Global shape: {}, Local shape: {}, Local offset: {}",
