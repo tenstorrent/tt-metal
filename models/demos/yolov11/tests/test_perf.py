@@ -99,7 +99,7 @@ def test_yolov11(device, input_tensor, batch_size, use_weights_from_ultralytics,
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 176],
+        [1, 198],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
