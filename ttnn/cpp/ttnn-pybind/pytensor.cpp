@@ -1065,6 +1065,51 @@ void pytensor_module(py::module& m_tensor) {
                 tt_tensor = tt_tensor.cpu()
         )doc")
         .def(
+            "item",
+            [](const Tensor& self) -> py::object {
+                using namespace CMAKE_UNIQUE_NAMESPACE;
+
+                // Check if tensor has exactly one element
+                if (self.logical_shape().volume() != 1) {
+                    TT_THROW(
+                        "tensor.item() requires tensor to have exactly one element, but got {} elements",
+                        self.logical_shape().volume());
+                }
+
+                Tensor host_tensor = self.storage_type() == DEVICE_STORAGE_TYPE ? self.cpu() : self;
+
+                auto buffer = convert_to_row_major_host_buffer(host_tensor, /*padded_output=*/false);
+                const auto* data = buffer.buffer.view_bytes().data();
+
+                switch (host_tensor.dtype()) {
+                    case DataType::FLOAT32: return py::cast(*reinterpret_cast<const float*>(data));
+                    case DataType::BFLOAT16: return py::cast(reinterpret_cast<const bfloat16*>(data)->to_float());
+                    case DataType::INT32: return py::cast(*reinterpret_cast<const int32_t*>(data));
+                    case DataType::UINT32: return py::cast(*reinterpret_cast<const uint32_t*>(data));
+                    case DataType::UINT16: return py::cast(*reinterpret_cast<const uint16_t*>(data));
+                    case DataType::UINT8: return py::cast(*reinterpret_cast<const uint8_t*>(data));
+                    default: TT_THROW("Unsupported DataType for item(): {}", host_tensor.dtype());
+                }
+            },
+            R"doc(
+                 Extract the scalar value from a tensor containing exactly one element.
+
+                 Similar to PyTorch's tensor.item(), this method returns the value of this tensor as a standard Python number.
+                 This only works for tensors with one element.
+
+                 Returns:
+                     Python scalar: The scalar value contained in the tensor.
+
+                 Raises:
+                     RuntimeError: If the tensor doesn't contain exactly one element.
+
+                 .. code-block:: python
+
+                     # Create a tensor with one element
+                     scalar_tensor = ttnn.from_torch(torch.tensor([3.14]), device=device)
+                     value = scalar_tensor.item()  # Returns 3.14
+             )doc")
+        .def(
             "to",
             py::overload_cast<Layout>(&Tensor::to_layout, py::const_),
             py::arg("target_layout").noconvert(),

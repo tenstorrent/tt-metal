@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import math
+import torch
+import ttnn
+
+
+def test_tensor_item_basic_types(device):
+    """Test .item() with basic data types"""
+    test_cases = [
+        (torch.tensor([100], dtype=torch.uint8), ttnn.uint8, "UINT8"),
+        (torch.tensor([-100], dtype=torch.int32), ttnn.int32, "INT32"),
+        (torch.tensor([3.14], dtype=torch.float32), ttnn.float32, "FLOAT32"),
+        (torch.tensor([2.71], dtype=torch.bfloat16), ttnn.bfloat16, "BFLOAT16"),
+        (torch.tensor([30000], dtype=torch.int16), ttnn.uint16, "UINT16"),
+        (torch.tensor([200], dtype=torch.uint8), ttnn.uint8, "UINT8 edge case"),
+        # Zero values
+        (torch.tensor([0], dtype=torch.uint8), ttnn.uint8, "UINT8 zero"),
+        (torch.tensor([0], dtype=torch.int32), ttnn.int32, "INT32 zero"),
+        (torch.tensor([0.0], dtype=torch.float32), ttnn.float32, "FLOAT32 zero"),
+        # Maximum values
+        (torch.tensor([255], dtype=torch.uint8), ttnn.uint8, "UINT8 max"),
+        (torch.tensor([2147483647], dtype=torch.int32), ttnn.int32, "INT32 max"),
+        # Minimum values
+        (torch.tensor([-2147483648], dtype=torch.int32), ttnn.int32, "INT32 min"),
+        # Small float values
+        (torch.tensor([1e-6], dtype=torch.float32), ttnn.float32, "FLOAT32 small"),
+        (torch.tensor([-1e-6], dtype=torch.float32), ttnn.float32, "FLOAT32 negative small"),
+        # Infinity values
+        (torch.tensor([float("inf")], dtype=torch.float32), ttnn.float32, "FLOAT32 +inf"),
+        (torch.tensor([float("-inf")], dtype=torch.float32), ttnn.float32, "FLOAT32 -inf"),
+        # NaN values
+        (torch.tensor([float("nan")], dtype=torch.float32), ttnn.float32, "FLOAT32 nan"),
+        # Very large and small numbers
+        (torch.tensor([1e20], dtype=torch.float32), ttnn.float32, "FLOAT32 large"),
+        (torch.tensor([-1e20], dtype=torch.float32), ttnn.float32, "FLOAT32 large negative"),
+        (torch.tensor([1e-20], dtype=torch.float32), ttnn.float32, "FLOAT32 very small"),
+        # Test precision differences for BFLOAT16
+        (torch.tensor([0.123456789], dtype=torch.bfloat16), ttnn.bfloat16, "BFLOAT16 precision"),
+    ]
+
+    for torch_tensor, ttnn_dtype, name in test_cases:
+        ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+        original_value = torch_tensor.item()
+        ttnn_value = ttnn_tensor.item()
+
+        if math.isnan(original_value):
+            assert math.isnan(ttnn_value), f"{name}: {original_value} != {ttnn_value}"
+        elif math.isinf(original_value):
+            assert math.isinf(ttnn_value), f"{name}: {original_value} != {ttnn_value}"
+        else:
+            assert original_value == ttnn_value, f"{name}: {original_value} != {ttnn_value}"
