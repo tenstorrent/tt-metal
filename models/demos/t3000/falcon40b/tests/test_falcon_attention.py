@@ -221,7 +221,7 @@ def run_test_FalconAttention_inference(
     )
 
     # TT hardware execution -------------------------------------------------------------
-    tt_ccl = TT_CCL(mesh_device)
+    tt_ccl = TT_CCL(mesh_device, model_config, seq_len)
     tt_FalconAttention_model = TtFalconAttention(
         mesh_device,
         tt_ccl,

@@ -216,6 +216,7 @@ def run_falcon_demo_kv(
     prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(
         input_prompts, tokenizer, max_seq_len, perf_mode
     )
+    actual_seq_len = prefill_ids.shape[1]
     profiler.end(f"tokenizing_inputs")
 
     # Update model_config for prefill
@@ -240,6 +241,7 @@ def run_falcon_demo_kv(
         model_config,
         tt_cache_path,
         use_global_cos_sin_cache,
+        actual_seq_len,
     )  # single layer only used for compile
     logger.info("Moved weights (single layer) to devices!")
 
@@ -347,6 +349,7 @@ def run_falcon_demo_kv(
         model_config,
         tt_cache_path,
         use_global_cos_sin_cache,
+        actual_seq_len,
     )
     logger.info("Moved weights (all layers) to device!")
     profiler.end(f"moving_to_device")

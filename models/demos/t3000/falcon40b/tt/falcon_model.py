@@ -47,7 +47,6 @@ class TtFalconModelShared:
         self.num_layers = num_layers
         self.hidden_size = config.hidden_size
         self.num_devices = mesh_device.get_num_devices()
-        self.seq_len = seq_len
         self.ln_output_tensors_dict = {
             "final_layernorm": dict(),
             "mlp_layernorm": dict(),
