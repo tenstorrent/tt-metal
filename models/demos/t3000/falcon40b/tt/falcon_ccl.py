@@ -35,12 +35,13 @@ class TT_CCL:
         self.rs_semaphore_handles = [[], []]
 
         self.model_config = model_config
+        self.default_dtype = model_config["DEFAULT_DTYPE"]
 
         self.ag_output_pbs = {}
         self.rs_output_pbs = {}
         self.rs_intermediate_pbs = {}
 
-        self.seq_len = 32  # TODO: Why is the falcon demo dim 2 seq_len hardcoded to 32?
+        self.seq_len = seq_len
 
         self.create_persistent_buffers()
 
@@ -99,29 +100,29 @@ class TT_CCL:
         self.ag_output_pbs["DECODER_FWD_PREFILL_AG"] = self.create_persistent_buffer(
             shape=[1, 1, self.seq_len, 8192],
             mem_config=self.model_config["DEFAULT_MEMCFG"],
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
         )
         self.ag_output_pbs["ATTN_FWD_PREFILL_AG"] = self.create_persistent_buffer(
             shape=[1, 1, self.seq_len, 8192],
             mem_config=self.model_config["DEFAULT_MEMCFG"],
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
         )
 
         self.rs_intermediate_pbs["MLP_FWD_PREFILL_RS"] = self.create_persistent_buffer(
             shape=[1, 1, self.seq_len, 8192],
             mem_config=self.model_config["DEFAULT_MEMCFG"],
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
         )
         self.rs_output_pbs["MLP_FWD_PREFILL_RS"] = self.create_persistent_buffer(
             shape=[1, 1, self.seq_len, 1024],
             mem_config=self.model_config["DEFAULT_MEMCFG"],
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
         )
 
         self.ag_output_pbs["MODEL_FWD_PREFILL_AG"] = self.create_persistent_buffer(
             shape=[1, 1, self.seq_len, 8192],
             mem_config=self.model_config["DEFAULT_MEMCFG"],
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
         )
 
         # decode
@@ -138,25 +139,25 @@ class TT_CCL:
         self.ag_output_pbs["DECODER_FWD_DECODE_AG"] = self.create_persistent_buffer(
             shape=[1, 1, 32, 8192],
             mem_config=mem_config,
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
         )
 
         self.ag_output_pbs["ATTN_FWD_DECODE_AG"] = self.create_persistent_buffer(
             shape=[1, 1, 32, 8192],
             mem_config=mem_config,
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
         )
 
         self.ag_output_pbs["MODEL_FWD_DECODE_AG"] = self.create_persistent_buffer(
             shape=[1, 1, 32, 8192],
             mem_config=mem_config,
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
         )
 
         self.rs_intermediate_pbs["MLP_FWD_DECODE_RS"] = self.create_persistent_buffer(
             shape=[1, 1, 32, 8192],
             mem_config=mem_config,
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
             distributed=True,
         )
         shard_shape = [32, 32]
@@ -172,7 +173,7 @@ class TT_CCL:
         self.rs_output_pbs["MLP_FWD_DECODE_RS"] = self.create_persistent_buffer(
             shape=[1, 1, 32, 1024],
             mem_config=mem_config,
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=self.default_dtype,
             distributed=True,
         )
 
