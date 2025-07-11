@@ -61,7 +61,7 @@ void MetalContext::initialize(
     size_t worker_l1_size,
     bool minimal) {
     // Workaround for galaxy and BH, need to always re-init
-    if (cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
+    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
