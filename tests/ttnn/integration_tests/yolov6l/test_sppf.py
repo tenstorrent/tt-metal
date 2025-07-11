@@ -18,7 +18,7 @@ def test_yolov6l_sppf(device, reset_seeds):
 
     model = model.backbone.ERBlock_5[2].sppf
 
-    torch_input = torch.randn(1, 1024, 20, 15)
+    torch_input = torch.randn(1, 1024, 20, 20)
 
     parameters = create_yolov6l_model_parameters(model, torch_input, device)
 

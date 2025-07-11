@@ -40,11 +40,18 @@ std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
 }
 
 class T3KReshapeTestFixture : public ::testing::Test {
+private:
+    inline static ARCH arch = tt::ARCH::Invalid;
+    inline static size_t num_devices = 0;
+
 public:
+    static void SetUpTestSuite() {
+        arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        num_devices = tt::tt_metal::GetNumAvailableDevices();
+    }
+
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }

@@ -32,6 +32,12 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using MeshShape = tt::tt_metal::distributed::MeshShape;
 using MeshWorkload = tt::tt_metal::distributed::MeshWorkload;
 using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
+using DeviceLocalBufferConfig = tt::tt_metal::distributed::DeviceLocalBufferConfig;
+using MeshBufferConfig = tt::tt_metal::distributed::MeshBufferConfig;
+using ReplicatedBufferConfig = tt::tt_metal::distributed::ReplicatedBufferConfig;
+using MeshBuffer = tt::tt_metal::distributed::MeshBuffer;
+using BufferDistributionSpec = tt::tt_metal::BufferDistributionSpec;
+using Shape = tt::tt_metal::Shape;
 
 using Topology = tt::tt_fabric::Topology;
 
@@ -68,6 +74,8 @@ public:
             "Only expected a single user mesh for a single host, but got: {}",
             user_meshes.size());
 
+        // TODO: for now we are just dealing with user mesh 0 here
+        available_mesh_ids_.insert(user_meshes[0]);
         mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
         const auto coordinates = MeshCoordinateRange(mesh_shape_);
         for (const auto& coord : coordinates) {
@@ -144,6 +152,18 @@ public:
         return mesh_coordinate_to_node_id_.at(device_coord);
     }
 
+    FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const override {
+        TT_FATAL(
+            available_mesh_ids_.count(mesh_id) > 0,
+            "Mesh id: {} is not available for querying fabric node id",
+            mesh_id);
+        TT_FATAL(
+            mesh_coordinate_to_node_id_.count(device_coord) > 0,
+            "Mesh coordinate: {} is not available for querying fabric node id",
+            device_coord);
+        return mesh_coordinate_to_node_id_.at(device_coord);
+    }
+
     MeshCoordinate get_device_coord(const FabricNodeId& node_id) const override {
         auto it = node_id_to_mesh_coordinate_.find(node_id);
         TT_FATAL(it != node_id_to_mesh_coordinate_.end(), "Unknown node id: {} for querying mesh coord", node_id);
@@ -170,15 +190,12 @@ public:
 
     std::vector<FabricNodeId> get_all_node_ids() const override { return available_node_ids_; }
 
-    uint32_t get_l1_unreserved_base(const FabricNodeId& node_id) const override {
-        const auto& device_coord = get_device_coord(node_id);
-        auto* device = mesh_device_->get_device(device_coord);
-        return device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    uint32_t get_l1_unreserved_base() const override {
+        return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+            HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
 
-    uint32_t get_l1_unreserved_size(const FabricNodeId& node_id) const override {
-        return tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
-    }
+    uint32_t get_l1_unreserved_size() const override { return tt::tt_metal::hal::get_max_worker_l1_unreserved_size(); }
 
     uint32_t get_l1_alignment() const override { return tt::tt_metal::hal::get_l1_alignment(); }
 
@@ -306,6 +323,94 @@ public:
             total_hops);
 
         return ring_destinations;
+    }
+
+    std::shared_ptr<MeshBuffer> create_mesh_buffer_helper(
+        const std::vector<CoreCoord>& cores, uint32_t address, uint32_t size_bytes) const {
+        std::set<CoreRange> all_cores_set;
+        for (const auto& core : cores) {
+            all_cores_set.insert(CoreRange(core));
+        }
+
+        auto all_cores = CoreRangeSet(all_cores_set);
+        auto num_cores = all_cores_set.size();
+        auto total_size = size_bytes * num_cores;
+        auto shard_params = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+
+        auto buffer_distribution_spec =
+            BufferDistributionSpec(Shape{num_cores, 1}, Shape{1, 1}, all_cores, ShardOrientation::ROW_MAJOR);
+
+        auto buffer_page_mapping = buffer_distribution_spec.compute_page_mapping();
+
+        DeviceLocalBufferConfig buffer_specs = {
+            .page_size = size_bytes,
+            .buffer_type = BufferType::L1,
+            .sharding_args =
+                BufferShardingArgs(buffer_distribution_spec, shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+
+        MeshBufferConfig mesh_buffer_specs = ReplicatedBufferConfig{
+            .size = total_size,
+        };
+        auto mesh_buffer = MeshBuffer::create(mesh_buffer_specs, buffer_specs, mesh_device_.get(), address);
+
+        return mesh_buffer;
+    }
+
+    // Data reading helpers
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const override {
+        auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
+
+        const auto& buffer_distribution_spec =
+            mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec();
+        TT_FATAL(buffer_distribution_spec.has_value(), "Buffer distribution spec is not set");
+        const auto buffer_page_mapping = buffer_distribution_spec->compute_page_mapping();
+
+        auto total_size = size_bytes * buffer_page_mapping.all_cores.size();
+        std::vector<uint32_t> data;
+        data.resize(total_size / sizeof(uint32_t));
+        tt::tt_metal::distributed::ReadShard(mesh_device_->mesh_command_queue(), data, mesh_buffer, device_coord);
+
+        // splice up data into map
+        std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
+        auto num_words_per_core = size_bytes / sizeof(uint32_t);
+
+        for (auto i = 0; i < buffer_page_mapping.all_cores.size(); i++) {
+            const auto& core = buffer_page_mapping.all_cores[i];
+            const auto& page_indices = buffer_page_mapping.core_host_page_indices[i];
+            std::vector<uint32_t> core_data;
+            core_data.reserve(page_indices.size() * num_words_per_core);
+            for (const auto& page_idx : page_indices) {
+                if (page_idx == tt::tt_metal::UncompressedBufferPageMapping::PADDING) {
+                    continue;
+                }
+                auto start_idx = page_idx * num_words_per_core;
+                auto end_idx = start_idx + num_words_per_core;
+                core_data.insert(core_data.end(), data.begin() + start_idx, data.begin() + end_idx);
+            }
+            results.emplace(core, core_data);
+        }
+
+        return results;
+    }
+
+    void zero_out_buffer_on_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const override {
+        auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
+
+        const auto total_size = size_bytes * cores.size();
+        std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
+        tt::tt_metal::distributed::WriteShard(
+            mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
     }
 
     // ======================================================================================
@@ -731,6 +836,7 @@ private:
     Topology topology_;
     RoutingType routing_type_;
     MeshShape mesh_shape_;
+    std::set<MeshId> available_mesh_ids_;
     tt::tt_metal::FabricConfig current_fabric_config_;
     std::vector<MeshCoordinate> available_device_coordinates_;
     std::vector<FabricNodeId> available_node_ids_;
@@ -744,8 +850,29 @@ private:
         tt::tt_metal::detail::SetFabricConfig(fabric_config);
         mesh_device_ = MeshDevice::create(mesh_shape_);
 
+        TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
+
         for (const auto& coord : available_device_coordinates_) {
+            TT_FATAL(
+                coord.dims() == mesh_shape_.dims(),
+                "Device coordinate {} has different dimensions than mesh shape {}",
+                coord,
+                mesh_shape_);
+
+            // Validate coordinate bounds
+            for (size_t i = 0; i < coord.dims(); ++i) {
+                TT_FATAL(
+                    coord[i] < mesh_shape_[i],
+                    "Device coordinate {} is out of bounds for mesh shape {} (dimension {} >= {})",
+                    coord,
+                    mesh_shape_,
+                    i,
+                    mesh_shape_[i]);
+            }
+
             auto* device = mesh_device_->get_device(coord);
+            TT_FATAL(device != nullptr, "Failed to get device at coordinate {}", coord);
+
             const auto fabric_node_id = control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(device->id());
             mesh_coordinate_to_node_id_.emplace(coord, fabric_node_id);
             node_id_to_mesh_coordinate_.emplace(fabric_node_id, coord);

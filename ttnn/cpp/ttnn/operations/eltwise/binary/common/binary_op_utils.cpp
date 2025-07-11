@@ -269,6 +269,10 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
             op_name = "binary_right_shift_tile";
             break;
+        case BinaryOpType::LOGICAL_RIGHT_SHIFT:
+            new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
+            op_name = "binary_logical_right_shift_tile";
+            break;
         case BinaryOpType::MAXIMUM:
             new_defines.insert({"BINOP_INIT", fmt::format("binary_max_tile_init();")});
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {

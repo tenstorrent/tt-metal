@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
+#include <cmath>
 #include <cstdint>
 
 namespace ttnn::operations::experimental::reduction::sort::program {
@@ -56,6 +57,9 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     // Calculate the number of cores utilized based on the input tensor shape
     const uint32_t all_core_utilization_loop_count = Ht / total_number_of_cores;
     const uint32_t all_core_utilization_loop_residuum = Ht % total_number_of_cores;
+
+    // uint32 index tensor support
+    const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
 
     // Calculate core range
     /**
@@ -186,7 +190,8 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         Ht,
         total_number_of_cores,
         compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y};
+        compute_with_storage_grid_size.y,
+        static_cast<uint32_t>(is_32_bit_data)};
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
         "writer_single_row_single_core.cpp";
@@ -215,7 +220,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         program,
         compute_kernel_path,
         core_range,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is_32_bit_data, .compile_args = compute_compile_time_args});
     SetRuntimeArgs(
         program,
         compute_kernel_id,
@@ -354,6 +359,9 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         "All core utilization count exceeds total number of cores. Utilized cores: {}, Total cores: {}",
         all_core_utilization_count,
         total_number_of_cores_virtual);
+
+    // uint32 index tensor support
+    const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
 
     /**
      * Calculates the core range based on the number of work units (all_core_utilization_count) and the total number of
@@ -591,7 +599,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         number_of_tiles_per_core,
         total_number_of_cores_virtual,
         semaphore_exchange_readers,
-    };
+        static_cast<uint32_t>(is_32_bit_data)};
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
         "writer_cross_core_data_exchange.cpp";
@@ -625,7 +633,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         program,
         compute_kernel_path,
         core_range,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is_32_bit_data, .compile_args = compute_compile_time_args});
 
     return {std::move(program), {reader_kernel_id, compute_kernel_id, writer_kernel_id, core_range}};
 }
@@ -747,6 +755,12 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
 
     const uint32_t all_core_utilization_loop_count = total_work_units / number_of_available_cores;
     const uint32_t all_core_utilization_loop_residuum = total_work_units % number_of_available_cores;
+
+    // uint32 index tensor support
+    const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
+
+    // Log 2 of Wt for compute kernel
+    const uint32_t log2Wt = std::log2(Wt);
 
     /**
      * Calculates the core range based on the input tensor shape (Wt) and the total number of cores available
@@ -872,7 +886,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         index_tensor_cb_index,
         static_cast<uint32_t>(input_tensor_is_dram),
         static_cast<uint32_t>(value_tensor_is_dram),
-        static_cast<uint32_t>(index_tensor_is_dram)};
+        static_cast<uint32_t>(index_tensor_is_dram),
+        static_cast<uint32_t>(is_32_bit_data)};
     const std::string coordinator_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
         "coordinator_single_row_multi_core.cpp";
@@ -963,7 +978,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         static_cast<uint32_t>(attributes.descending),
-        static_cast<uint32_t>(attributes.stable)};
+        static_cast<uint32_t>(attributes.stable),
+        log2Wt};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/"
         "sort_single_row_multi_core.cpp";
@@ -971,7 +987,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         program,
         compute_kernel_path,
         core_range,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is_32_bit_data, .compile_args = compute_compile_time_args});
 
     return {
         std::move(program),

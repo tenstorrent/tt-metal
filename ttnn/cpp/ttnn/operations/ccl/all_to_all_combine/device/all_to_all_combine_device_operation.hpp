@@ -26,6 +26,7 @@ struct AllToAllCombineDeviceOperation {
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
         const tt::tt_metal::GlobalSemaphore cross_device_semaphore;
+        const bool locally_reduced;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         static constexpr auto attribute_names = std::forward_as_tuple(
             "output_mem_config", "axis", "num_links", "topology", "cross_device_semaphore", "subdevice_id");
@@ -103,7 +104,8 @@ struct AllToAllCombineDeviceOperation {
         const GlobalSemaphore& global_semaphore,
         const std::optional<uint32_t>& axis,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-        const std::optional<ttnn::Tensor>& optional_output_tensor);
+        const std::optional<ttnn::Tensor>& optional_output_tensor,
+        bool locally_reduced=false);
 };
 }  // namespace ttnn::operations::ccl
 
