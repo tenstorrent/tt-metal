@@ -48,7 +48,7 @@ def run_avg_pool2d(
         for h in range(in_h):
             for w in range(in_w):
                 torch_input[0, c, h, w] = counter
-        counter += 1
+                counter += 1
 
     ## Test setup for Actual.
     if dtype == ttnn.bfloat8_b:
@@ -101,7 +101,7 @@ def run_avg_pool2d(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             applied_shard_scheme=shard_scheme,
         )
-
+    ttnn_output = ttnn_output[:, :, :, :in_c]
     ## Test teardown for Actual.
     ttnn_output = ttnn_output.reshape(
         torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]

@@ -72,7 +72,7 @@ static Tensor pool2d_invoke(
     uint32_t num_cores_nhw = 0;
     uint32_t num_cores_c = 0;
     uint32_t channels_padded = input_padded_shape[3];
-    uint32_t output_channels_padded = tt::round_up(input_tensor_shape[3], 32);
+    uint32_t output_channels_padded = tt::round_up(input_tensor_shape[3], 16);
 
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
     if (!out_memory_config.shard_spec().has_value()) {

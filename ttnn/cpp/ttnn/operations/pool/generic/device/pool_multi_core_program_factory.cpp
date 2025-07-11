@@ -275,7 +275,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     const uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-    const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+    const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / 16);
     const bool last_tile_is_partial = (in_c / num_shards_c) % 32 != 0 && (in_c / num_shards_c) % 32 < 17;
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
@@ -406,7 +406,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // output of reduce == writer to write
     // output rows in RM
     // after reduction
-    const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) *
+    const uint32_t out_cb_pagesize = std::min((uint32_t)16, output.shard_spec().value().shape[1]) *
                                      out_nbytes;  // there is just one row of channels after each reduction (or 1 block
                                                   // of c if its greater than 8 tiles)
     const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * out_ntiles_c;
