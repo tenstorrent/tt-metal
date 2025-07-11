@@ -307,6 +307,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             intermediate_first_core_tile_start_offset,  // intermediate_first_core_tile_start_offset
             input_tensor_cores_x.size(),                // num_cores it reads from
             ring_index,                                 // ring_index
+            semaphore.address(),                        // out_ready_sem_bank_addr (absolute address)
+            drain_sync_core.x,                          // out_ready_sem_noc0_x
+            drain_sync_core.y,                          // out_ready_sem_noc0_y
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());

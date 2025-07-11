@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -41,6 +42,9 @@ void kernel_main() {
     uint32_t intermediate_first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_index = get_arg_val<uint32_t>(arg_idx++);
+    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     DPRINT << "tensor_address0: " << tensor_address0 << ENDL();
     DPRINT << "num_tiles_per_core: " << num_tiles_per_core << ENDL();
     DPRINT << "num_tiles_to_read: " << num_tiles_to_read << ENDL();
@@ -92,5 +96,8 @@ void kernel_main() {
         l1_read_addr,
         noc0_dest_noc_addr + intermediate_first_core_tile_start_offset * tensor0_page_size,
         num_tiles_to_read * tensor0_page_size);
+    uint64_t out_ready_sem_noc_addr =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+    noc_semaphore_inc(out_ready_sem_noc_addr, 1);
     noc_async_write_barrier();
 }
