@@ -257,7 +257,6 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{32, 32},
                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 0})),
-                    // .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
             .output_shard_spec =
@@ -304,7 +303,6 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .output_shard_spec =
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{2, 32, 32},
-                    // .grid = CoreRangeSet(CoreRange({0, 0}, {5, 0})),
                     .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
@@ -319,14 +317,12 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .input_shard_spec =
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{2, 4, 16},
-                    // .grid = CoreRangeSet(CoreRange({0, 0}, {3, 0})),
                     .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
             .output_shard_spec =
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{1, 3, 16},
-                    // .grid = CoreRangeSet(CoreRange({0, 0}, {2, 0})),
                     .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
