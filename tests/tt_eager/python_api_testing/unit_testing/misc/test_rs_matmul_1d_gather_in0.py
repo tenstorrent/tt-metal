@@ -631,7 +631,7 @@ def run_multi_core_matmul_1d(
     "device_params",
     [
         {
-            "trace_region_size": 1173504,
+            "trace_region_size": 1200000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -751,7 +751,7 @@ def test_tg_matmul_1d_ring_llama_with_rs_perf(
     "device_params",
     [
         {
-            "trace_region_size": 1077248,
+            "trace_region_size": 1200000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
