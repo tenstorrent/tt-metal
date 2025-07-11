@@ -23,13 +23,18 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {
-            name: "llama3-8b quietbox data-parallel=4 performance",
+          # {
+          #   name: "llama3-8b quietbox data-parallel=4 performance",
+          #   arch: blackhole,
+          #   cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4,
+          #   owner_id: U05RWH3QUPM # Salar Hosseini
+          #  },
+           {
+            name: "llama3-8b quietbox data-parallel=4 stress",
             arch: blackhole,
-            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4,
-            owner_id: U05RWH3QUPM # Salar Hosseini
-          }
-        ]
+            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4,
+            owner_id: U03PUAKE719 # Miguel Tairum
+           }      ]
     name: ${{ matrix.test-group.name }}
     runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"]
     steps:
@@ -66,7 +71,7 @@ jobs:
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e HF_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }}
-            -v /localdev/blackhole_demos:/localdev/blackhole_demos:ro
+            -v /localdev/blackhole_demos:/localdev/blackhole_demos
           install_wheel: true
           run_args: |
             if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
