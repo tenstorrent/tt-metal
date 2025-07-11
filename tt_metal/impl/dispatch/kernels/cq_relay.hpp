@@ -99,6 +99,7 @@ public:
             tt::tt_fabric::fabric_set_route(
                 (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
                 (eth_chan_directions)edm.direction,
+                0,  // branch forward
                 0,  // start hop
                 num_hops,
                 true);
