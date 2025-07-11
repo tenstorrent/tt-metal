@@ -263,6 +263,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t out_nbytes = datum_size(out_df);
 
     const uint32_t in_nbytes_c = in_c / num_shards_c * in_nbytes;  // row of input (channels)
+    const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * in_nbytes;  // row of input (channels)
     const uint32_t in_aligned_nbytes_c =
         tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
     const uint32_t out_nbytes_c = in_c / num_shards_c * out_nbytes;  // row of output (channels)
@@ -487,6 +488,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (uint32_t)pool_type,
         one_scalar_per_core,
         config_cb_id,
+        in_nbytes_c,
+        in_nbytes_padded_c,
         multi_buffering_factor,
         stride_w};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
