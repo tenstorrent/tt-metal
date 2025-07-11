@@ -16,25 +16,13 @@ Test for nlp_create_qkv_heads_boltz operation
 """
 
 
-def run_nlp_create_qkv_heads_boltz_test(
-    batch, seq_len, head_dim, n_heads, dtype, in0_mem_config, out_mem_config, device
-):
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-
+def run_nlp_create_qkv_heads_boltz_test(batch, seq_len, head_dim, n_heads, dtype, in0_mem_config, device):
     torch.manual_seed(1234)
 
     ## input tensor
-    seq_len = 768
-    # n_heads = 8
-    heads_num = n_heads  # 8
-    head_dim = 32
+    heads_num = n_heads
 
-    qkvg_shape = [batch, 1, seq_len, heads_num * head_dim * 3]
+    qkvg_shape = [batch, seq_len, seq_len, heads_num * head_dim * 3]
     qkvg = torch.randn(qkvg_shape)
 
     # Extract Q, K, V as contiguous blocks
@@ -42,58 +30,12 @@ def run_nlp_create_qkv_heads_boltz_test(
     ref_k = qkvg[:, :, :, heads_num * head_dim : 2 * heads_num * head_dim]  # [batch, 1, seq_len, heads_num*head_dim]
     ref_v = qkvg[:, :, :, 2 * heads_num * head_dim :]  # [batch, 1, seq_len, heads_num*head_dim]
 
-    # Remove batch and singleton dimensions: [seq_len, heads_num*head_dim]
-    ref_q = ref_q.squeeze(0).squeeze(0)  # [seq_len, heads_num*head_dim]
-    ref_k = ref_k.squeeze(0).squeeze(0)  # [seq_len, heads_num*head_dim]
-    ref_v = ref_v.squeeze(0).squeeze(0)  # [seq_len, heads_num*head_dim]
+    ref_q = torch.reshape(ref_q, [seq_len, seq_len, heads_num, head_dim]).permute(2, 0, 1, 3)
+    ref_k = torch.reshape(ref_k, [seq_len, seq_len, heads_num, head_dim]).permute(2, 0, 1, 3)
+    ref_v = torch.reshape(ref_v, [seq_len, seq_len, heads_num, head_dim]).permute(2, 0, 1, 3)
 
-    # Reshape to separate heads: [seq_len, heads_num, head_dim]
-    ref_q = ref_q.reshape(seq_len, heads_num, head_dim)
-    ref_k = ref_k.reshape(seq_len, heads_num, head_dim)
-    ref_v = ref_v.reshape(seq_len, heads_num, head_dim)
-
-    # Expand to create the seq_len x seq_len structure: [seq_len, seq_len, heads_num, head_dim]
-    ref_q = ref_q.unsqueeze(1).expand(seq_len, seq_len, heads_num, head_dim)
-    ref_k = ref_k.unsqueeze(1).expand(seq_len, seq_len, heads_num, head_dim)
-    ref_v = ref_v.unsqueeze(1).expand(seq_len, seq_len, heads_num, head_dim)
-
-    # Apply transpose to get [heads_num, seq_len, seq_len, head_dim]
-    ref_q = ref_q.transpose(-4, -2)
-    ref_k = ref_k.transpose(-4, -2)
-    ref_v = ref_v.transpose(-4, -2)
-
-    # Now convert the input to interleaved format for the TTNN operation
-    # The TTNN operation expects data in interleaved format per head: Q_head0, K_head0, V_head0, Q_head1, K_head1, V_head1, etc.
-    # But our test data is in concatenated format: Q_all_heads, K_all_heads, V_all_heads
-    # Convert from concatenated to interleaved format to match what the TTNN op expects
-
-    # Extract the QKV data: [batch, seq_len, heads_num * head_dim * 3]
-    qkv_data = qkvg.squeeze(1)  # Remove the dimension of size 1: [batch, seq_len, heads_num * head_dim * 3]
-
-    # Extract Q, K, V from concatenated format
-    q_data = qkv_data[:, :, : heads_num * head_dim]  # [batch, seq_len, heads_num * head_dim]
-    k_data = qkv_data[:, :, heads_num * head_dim : 2 * heads_num * head_dim]  # [batch, seq_len, heads_num * head_dim]
-    v_data = qkv_data[:, :, 2 * heads_num * head_dim :]  # [batch, seq_len, heads_num * head_dim]
-
-    # Reshape to separate heads
-    q_data = q_data.reshape(batch, seq_len, heads_num, head_dim)  # [batch, seq_len, heads_num, head_dim]
-    k_data = k_data.reshape(batch, seq_len, heads_num, head_dim)  # [batch, seq_len, heads_num, head_dim]
-    v_data = v_data.reshape(batch, seq_len, heads_num, head_dim)  # [batch, seq_len, heads_num, head_dim]
-
-    # Convert to interleaved format: Q_head0, K_head0, V_head0, Q_head1, K_head1, V_head1, etc.
-    qkv_interleaved = torch.zeros(batch, seq_len, heads_num * head_dim * 3)
-    for head in range(heads_num):
-        # For each head, place Q, K, V data in interleaved positions
-        start_idx = head * head_dim * 3
-        qkv_interleaved[:, :, start_idx : start_idx + head_dim] = q_data[:, :, head, :]  # Q
-        qkv_interleaved[:, :, start_idx + head_dim : start_idx + 2 * head_dim] = k_data[:, :, head, :]  # K
-        qkv_interleaved[:, :, start_idx + 2 * head_dim : start_idx + 3 * head_dim] = v_data[:, :, head, :]  # V
-
-    # Update the input tensor to use the interleaved format for TTNN
-    qkvg_ttnn_input = qkv_interleaved.unsqueeze(
-        1
-    )  # Add back the dimension: [batch, 1, seq_len, heads_num * head_dim * 3]
-    qkvg_ttnn = ttnn.Tensor(qkvg_ttnn_input, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
+    ## ttnn
+    qkvg_ttnn = ttnn.Tensor(qkvg, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
 
     ## experimental op method
     q_ttnn, k_ttnn, v_ttnn = ttnn.experimental.nlp_create_qkv_heads_boltz(
@@ -104,22 +46,26 @@ def run_nlp_create_qkv_heads_boltz_test(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Convert TTNN tensors to PyTorch tensors for comparison
-    q_from_ttnn = tt2torch_tensor(q_ttnn)  # [heads_num, seq_len, seq_len, head_dim] - Query tensor output
-    k_from_ttnn = tt2torch_tensor(k_ttnn)  # [heads_num, seq_len, seq_len, head_dim] - Key tensor output
-    v_from_ttnn = tt2torch_tensor(v_ttnn)  # [heads_num, seq_len, seq_len, head_dim] - Value tensor output
+    # Check memory of inputs and outputs
+    assert qkvg_ttnn.memory_config().buffer_type == in0_mem_config.buffer_type
+    logger.debug(f"qkvg: {qkvg_ttnn.memory_config().buffer_type} and {qkvg_ttnn.get_dtype()}")
+    logger.debug(f"q: {q_ttnn.memory_config().buffer_type} and {q_ttnn.get_dtype()}")
+    logger.debug(f"k: {k_ttnn.memory_config().buffer_type} and {k_ttnn.get_dtype()}")
+    logger.debug(f"v: {v_ttnn.memory_config().buffer_type} and {v_ttnn.get_dtype()}")
 
-    # Check all heads
-    print("Checking all heads")
+    # Convert TTNN tensors to PyTorch tensors for comparison
+    q_from_ttnn = tt2torch_tensor(q_ttnn)
+    k_from_ttnn = tt2torch_tensor(k_ttnn)
+    v_from_ttnn = tt2torch_tensor(v_ttnn)
 
     # Quality checks - check all heads
     out_pass_q, output_pcc_q = comp_pcc(q_from_ttnn, ref_q, pcc=0.99)
     out_pass_k, output_pcc_k = comp_pcc(k_from_ttnn, ref_k, pcc=0.99)
     out_pass_v, output_pcc_v = comp_pcc(v_from_ttnn, ref_v, pcc=0.99)
 
-    print(f"Q PCC: {output_pcc_q}, Pass: {out_pass_q}")
-    print(f"K PCC: {output_pcc_k}, Pass: {out_pass_k}")
-    print(f"V PCC: {output_pcc_v}, Pass: {out_pass_v}")
+    # print(f"Q PCC: {output_pcc_q}, Pass: {out_pass_q}")
+    # print(f"K PCC: {output_pcc_k}, Pass: {out_pass_k}")
+    # print(f"V PCC: {output_pcc_v}, Pass: {out_pass_v}")
 
     assert out_pass_q, f"Q tensor quality check failed with PCC: {output_pcc_q}"
     assert out_pass_k, f"K tensor quality check failed with PCC: {output_pcc_k}"
@@ -127,61 +73,27 @@ def run_nlp_create_qkv_heads_boltz_test(
 
 
 @pytest.mark.parametrize(
-    "out_mem_config",
-    (
-        ttnn.DRAM_MEMORY_CONFIG,
-        # ttnn.L1_MEMORY_CONFIG,
-    ),
-    ids=["out_DRAM"],  # , "out_L1"],
-)
-@pytest.mark.parametrize(
     "in0_mem_config",
-    (
-        ttnn.DRAM_MEMORY_CONFIG,
-        # ttnn.L1_MEMORY_CONFIG,
-    ),
-    ids=["in0_DRAM"],  # , "in0_L1"],
+    (ttnn.DRAM_MEMORY_CONFIG,),
+    ids=["in0_DRAM"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16,),  # (ttnn.bfloat8_b,),#, ttnn.bfloat16),
-    ids=["BFLOAT8_B"],  # , "BFLOAT16"],
+    (ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b),
+    ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "batch, seq_len, n_heads, head_dim",
-    [(1, 768, 2, 32)],  # Changed to a list containing one tuple
+    [(1, 768, 4, 32), (1, 704, 4, 32), (1, 1408, 4, 32)],
     ids=[
-        "batch1_seq768_head384",
+        "batch1_seq768_heads4_headdim32",
+        "batch1_seq704_heads4_headdim32",
+        "batch1_seq1408_heads4_headdim32",
     ],
 )
 
-# ( 1, 768, 4, 32)
-def test_nlp_create_qkv_heads_boltz(
-    batch, seq_len, n_heads, head_dim, dtype, in0_mem_config, out_mem_config, request, device
-):
+# Test with different configurations: batch size, sequence length, number of heads, head dimension
+def test_nlp_create_qkv_heads_boltz(batch, seq_len, n_heads, head_dim, dtype, in0_mem_config, request, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    run_nlp_create_qkv_heads_boltz_test(
-        batch, seq_len, head_dim, n_heads, dtype, in0_mem_config, out_mem_config, device
-    )
-
-
-"""
-def test_nlp_create_qkv_heads_segformer_with_program_cache(device):
-    dtype = ttnn.bfloat8_b
-    mem_config = ttnn.DRAM_MEMORY_CONFIG
-    for _ in range(2):
-        run_nlp_create_qkv_heads_segformer_test(1, 32, 32, dtype, mem_config, mem_config, device)
-        dummy_shape = [1, 1, 32, 32]
-        py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
-
-    mem_config = ttnn.L1_MEMORY_CONFIG
-    for _ in range(2):
-        run_nlp_create_qkv_heads_segformer_test(1, 32, 32, dtype, mem_config, mem_config, device)
-        dummy_shape = [1, 1, 32, 32]
-        py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
-
-    assert device.num_program_cache_entries() == 2
-"""
+    run_nlp_create_qkv_heads_boltz_test(batch, seq_len, head_dim, n_heads, dtype, in0_mem_config, device)
