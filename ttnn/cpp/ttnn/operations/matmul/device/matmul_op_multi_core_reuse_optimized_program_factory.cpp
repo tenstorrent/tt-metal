@@ -30,6 +30,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
     uint32_t out_subblock_h,
@@ -42,8 +43,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
-    bool untilize_out,
-    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level) {
+    bool untilize_out) {
     tt_metal::Program program{};
 
     // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
@@ -491,14 +491,14 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     CoreCoord compute_with_storage_grid_size,
     tt::tt_metal::DataType output_dtype,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
-    bool untilize_out,
-    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level) {
+    bool untilize_out) {
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
     auto in0_tile_shape = a.tensor_spec().tile().get_tile_shape();
@@ -572,6 +572,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
         Nt,
         Kt,
         bcast_batch,
+        throttle_level,
         in0_block_w,
         in0_last_ktile_w,
         out_subblock_h,
@@ -584,8 +585,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
         in0_data_format,
         in1_data_format,
         output_data_format,
-        untilize_out,
-        throttle_level);
+        untilize_out);
 }
 
 // TODO: Get rid of no-op reshapes when we generalize
@@ -598,14 +598,14 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     CoreCoord compute_with_storage_grid_size,
     tt::tt_metal::DataType output_dtype,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
-    bool untilize_out,
-    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level) {
+    bool untilize_out) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -621,14 +621,14 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
         compute_with_storage_grid_size,
         output_dtype,
         compute_kernel_config,
+        throttle_level,
         in0_block_w,
         out_subblock_h,
         out_subblock_w,
         per_core_M,
         per_core_N,
         fuse_batch,
-        untilize_out,
-        throttle_level);
+        untilize_out);
 }
 
 }  // namespace matmul

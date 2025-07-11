@@ -62,9 +62,14 @@ void throttle_mm_perf(
 
     uint32_t uint_throttle_level = static_cast<uint32_t>(throttle_level);
 
-    // Override parameter with environment setting for throttle level if possible
+    // If environment variable is set, this overrides the throttle level parameter
     if (mm_throttle_env_enabled) {
         uint_throttle_level = std::stoi(std::getenv("TT_MM_THROTTLE_PERF"));
+    }
+
+    // No throttling requested
+    if (uint_throttle_level == 0) {
+        return;
     }
 
     mm_kernel_defines["MM_THROTTLE"] = std::to_string(uint_throttle_level);
@@ -83,7 +88,8 @@ void throttle_mm_perf(
         mm_kernel_defines["MM_THROTTLE"] = std::to_string(0);
         log_error(
             tt::LogOp,
-            "Throttle matmul perf ignored: invalid throttle level requested - only {{1,2,3,4,5}} are supported");
+            "Throttle matmul perf ignored: invalid throttle level {} requested - only {{1,2,3,4,5}} are supported",
+            uint_throttle_level);
     }
 }
 
