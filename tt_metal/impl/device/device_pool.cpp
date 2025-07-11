@@ -37,7 +37,6 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/common/executor.hpp"

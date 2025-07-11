@@ -26,7 +26,6 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/arch.h>
@@ -75,16 +74,18 @@ Kernel::Kernel(
 
 void Kernel::register_kernel_with_watcher() {
     if (this->kernel_src_.source_type_ == KernelSource::FILE_PATH) {
-        this->watcher_kernel_id_ = watcher_register_kernel(this->kernel_src_.source_);
+        this->watcher_kernel_id_ =
+            MetalContext::instance().watcher_server()->register_kernel(this->kernel_src_.source_);
     } else {
         TT_FATAL(this->kernel_src_.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
-        this->watcher_kernel_id_ = watcher_register_kernel(this->name());
+        this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
     }
 }
 
 void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
     TT_ASSERT(this->kernel_full_name_.size() > 0, "Kernel full name not set!");
-    watcher_register_kernel_elf_paths(this->watcher_kernel_id_, this->file_paths(device));
+    auto paths = this->file_paths(device);
+    MetalContext::instance().watcher_server()->register_kernel_elf_paths(this->watcher_kernel_id_, paths);
 }
 
 std::string Kernel::name() const { return this->kernel_src_.name(); }
