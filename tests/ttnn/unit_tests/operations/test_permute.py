@@ -364,8 +364,10 @@ def test_permute_4d_cn(device, shape, dtype):
     assert_with_pcc(torch_output, output_tensor, 0.9999)
 
 
-@pytest.mark.parametrize("shape", [[1, 1, 32, 32]])
-@pytest.mark.parametrize("dtype", [ttnn.int32])
+@pytest.mark.parametrize(
+    "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [32, 32, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 64, 64]]
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_permute_4d_wh(device, shape, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)

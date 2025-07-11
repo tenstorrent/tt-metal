@@ -65,7 +65,12 @@ inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
-    // These two lines should be moved to the LLK
+    /*
+     * These two lines should be moved to the LLK
+     * This should be broadly discussed with the team, since this bit was so far toggled
+     * within a section guarded by mutex::REG_RMW, because it's a part of the register
+     * that both UNPACK and PACK thread may access.
+     */
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
