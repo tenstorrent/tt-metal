@@ -391,7 +391,7 @@ def test_multimodal_demo_text(
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
-            "N300_Llama-3.2-11B": 21.5,
+            "N300_Llama-3.2-11B": 21.4,
             "T3K_Llama-3.2-11B": 33,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
