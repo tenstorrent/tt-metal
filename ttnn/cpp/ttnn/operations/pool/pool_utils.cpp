@@ -174,7 +174,8 @@ uint32_t calculate_L1_usage(
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const uint32_t max_rows_for_reduction =
         !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
-    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool ? 4 : 8;
+    const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
+    const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {

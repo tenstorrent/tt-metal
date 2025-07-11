@@ -278,9 +278,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const uint32_t max_rows_for_reduction =
         !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+    const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     // For large kernel avg pool, we need to use fp32 accumulation to avoid precision error buildup over multiple
     // reduction stages, so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles at a time.
-    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool ? 4 : 8;
+    const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
@@ -518,8 +519,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en = is_avg_pool,  // for average pool requires fp32 accumulation to avoid
-                                          // precision error buildup over multiuple reduction stages
+        .fp32_dest_acc_en = is_avg_pool && is_large_kernel,  // for average pool requires fp32 accumulation to avoid
+                                                             // precision error buildup over multiuple reduction stages
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};

@@ -77,10 +77,11 @@ template <
     uint32_t in_cb_ntiles>
 FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    // average pool requires fp32 accumulation so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles
-    // at a time.
-    const uint32_t MAX_ELE_PER_REDUCTION =
-        is_avg_pool ? 4 * TILE_WIDTH * BYTES_PER_ELEM : 8 * TILE_WIDTH * BYTES_PER_ELEM;
+    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
+    // otherwise we can reduce 8 tiles at a time.
+    constexpr bool is_large_kernel = (window_h * window_w) > max_rows_for_reduction;
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    constexpr uint32_t MAX_ELE_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_write_inc =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 

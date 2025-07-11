@@ -44,9 +44,10 @@ void MAIN {
     constexpr uint32_t num_out_rows = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
-    // average pool requires fp32 accumulation so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles
-    // at a time.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool ? 4 : 8;
+    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
+    // otherwise we can reduce 8 tiles at a time.
+    constexpr bool is_large_kernel = window_size_hw > max_rows_for_reduction;
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
