@@ -94,9 +94,9 @@ jobs:
 
       - name: Update submodule
         id: update-submodule
-        shell: bash -x {0}  # <--- enable execution trace
         run: |
           cd ${{ env.SUBMODULE_PATH }}
+          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
           OLD_SHA=$(git rev-parse --short=7 HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
 
