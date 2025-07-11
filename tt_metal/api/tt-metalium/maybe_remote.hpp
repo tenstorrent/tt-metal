@@ -93,9 +93,6 @@ public:
     [[nodiscard]] T* operator->();
     [[nodiscard]] const T* operator->() const;
 
-    // Optional-style access
-    [[nodiscard]] std::optional<T> optional_value() const;
-
     // Simple pattern matching for local/remote cases
     template <typename LocalFunc, typename RemoteFunc>
     [[nodiscard]] auto when(LocalFunc&& on_local, RemoteFunc&& on_remote) const -> decltype(auto);
@@ -188,15 +185,6 @@ const T* MaybeRemote<T>::operator->() const {
     }
     return &std::get<T>(value_);
 }
-
-template <typename T>
-std::optional<T> MaybeRemote<T>::optional_value() const {
-    if (is_local()) {
-        return std::get<T>(value_);
-    }
-    return std::nullopt;
-}
-
 
 template <typename T>
 template <typename LocalFunc, typename RemoteFunc>

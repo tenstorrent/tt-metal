@@ -81,20 +81,6 @@ TEST(MaybeRemoteTest, ValueAccessThrowsForRemote) {
     EXPECT_THROW((void)const_remote.value(), std::exception);
 }
 
-TEST(MaybeRemoteTest, OptionalValue) {
-    auto local = MaybeRemote<int>::local(42);
-    EXPECT_THAT(local.optional_value(), Optional(42));
-
-    auto remote = MaybeRemote<int>::remote();
-    EXPECT_EQ(remote.optional_value(), std::nullopt);
-
-    auto local_string = MaybeRemote<std::string>::local("test");
-    EXPECT_THAT(local_string.optional_value(), Optional(std::string("test")));
-
-    auto remote_string = MaybeRemote<std::string>::remote();
-    EXPECT_EQ(remote_string.optional_value(), std::nullopt);
-}
-
 TEST(MaybeRemoteTest, WhenPatternMatching) {
     auto local = MaybeRemote<int>::local(42);
 
