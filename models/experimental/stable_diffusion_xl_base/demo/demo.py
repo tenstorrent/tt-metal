@@ -22,7 +22,7 @@ from models.utility_functions import profiler
 
 @torch.no_grad()
 def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae_on_device, evaluation_range):
-    batch_size = ttnn_device.get_num_devices()
+    batch_size = 1
 
     start_from, _ = evaluation_range
     torch.manual_seed(0)
@@ -183,12 +183,12 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
     )
     ttnn_add_text_embeds = ttnn.from_torch(
-        torch_add_text_embeds[0],
+        torch_add_text_embeds,
         dtype=ttnn.bfloat16,
         device=ttnn_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
     )
 
     torch_add_time_ids = torch.stack([negative_add_time_ids.squeeze(0), add_time_ids.squeeze(0)], dim=0)
