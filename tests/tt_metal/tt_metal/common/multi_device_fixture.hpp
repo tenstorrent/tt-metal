@@ -261,7 +261,7 @@ protected:
 class GenericMeshDevice2DFabricFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMeshDevice2DFabricFixture() :
-        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = FabricConfig::FABRIC_2D_DYNAMIC}) {}
+        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {}
 };
 
 class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase {

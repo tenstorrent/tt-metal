@@ -1819,7 +1819,8 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
             const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
             auto intermesh_links = this->get_intermesh_eth_links(chip_id);
             for (const auto& [eth_coord, eth_chan] : intermesh_links) {
-                if (eth_routing_info.at(eth_coord) == EthRouterMode::FABRIC_ROUTER and skip_reserved_cores) {
+                if (eth_routing_info.find(eth_coord) != eth_routing_info.end() and
+                    eth_routing_info.at(eth_coord) == EthRouterMode::FABRIC_ROUTER and skip_reserved_cores) {
                     continue;
                 }
                 active_ethernet_cores.insert(eth_coord);
