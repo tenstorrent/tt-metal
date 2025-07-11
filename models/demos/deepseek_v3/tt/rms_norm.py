@@ -87,14 +87,13 @@ class RMSNorm(AbstractModule):
         stats_memcfg = None
         is_distributed = False
         if norm_category == "attention_norm" or norm_category == "mlp_norm":
-            assert list(mesh_device.shape) == [
-                8,
-                4,
-            ], f"Only 8x4 mesh devices are supported for Decoder RMSNorm, got {list(mesh_device.shape)}"
+            assert (
+                list(mesh_device.shape)[1] == 8
+            ), f"Only ?x8 mesh devices are supported for Decoder RMSNorm, got {list(mesh_device.shape)}"
             is_distributed = True
             output_memcfg = None
             stats_memcfg = ttnn.create_sharded_memory_config(
-                shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * list(mesh_device.shape)[0]],
+                shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * list(mesh_device.shape)[1]],
                 core_grid=ttnn.CoreGrid(y=1, x=1),
                 strategy=ttnn.ShardStrategy.WIDTH,
             )

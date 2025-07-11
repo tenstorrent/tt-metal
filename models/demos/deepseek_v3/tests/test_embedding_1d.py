@@ -79,7 +79,6 @@ def test_embedding_forward_pass(
     else:
         tt_output = Embedding1D.forward_decode(tt_input_ids, run_config)
 
-    logger.info(tt_output)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -91,7 +90,6 @@ def test_embedding_forward_pass(
 
     # Reference forward pass
     reference_output = reference_model(torch_input_ids)
-    print(reference_output.shape)
 
     # Compare outputs
     pcc_required = 0.99  # Embedding should be exact match (just lookup)
