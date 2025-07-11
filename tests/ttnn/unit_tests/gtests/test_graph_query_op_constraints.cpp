@@ -30,6 +30,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -202,9 +203,9 @@ class EltwiseUnaryOpIfTest : public TTNNFixtureWithDevice,
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //    GTEST_SKIP ();
-    //}
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -225,9 +226,9 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
 TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //    GTEST_SKIP ();
-    //}
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -248,9 +249,9 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
 TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //    GTEST_SKIP ();
-    //}
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -279,9 +280,9 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
 TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //    GTEST_SKIP ();
-    //}
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -306,9 +307,9 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
 TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //    GTEST_SKIP ();
-    //}
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -329,9 +330,9 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
 TEST_P(EltwiseUnaryOpIfTest, Sin) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //    GTEST_SKIP ();
-    //}
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -352,9 +353,9 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
 TEST_P(EltwiseUnaryOpIfTest, Cos) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //    GTEST_SKIP ();
-    //}
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -460,9 +461,9 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //    GTEST_SKIP();
-    //}
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -490,13 +491,13 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     }
 }
 
-TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {  //----------- TEMP ---------------
+TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //     GTEST_SKIP();
-    // }
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -524,13 +525,13 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {  //----------- TEMP ------------
     }
 }
 
-TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {  //----------- TEMP ---------------
+TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //     GTEST_SKIP();
-    // }
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -558,13 +559,13 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {  //----------- TEMP ---------------
     }
 }
 
-TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {  //----------- TEMP ---------------
+TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //     GTEST_SKIP();
-    // }
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
@@ -592,13 +593,13 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {  //----------- TEMP ---------------
     }
 }
 
-TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {  //----------- TEMP ---------------
+TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    // if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-    //     GTEST_SKIP();
-    // }
+    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+        GTEST_SKIP();
+    }
 
     // Run the test
     {
