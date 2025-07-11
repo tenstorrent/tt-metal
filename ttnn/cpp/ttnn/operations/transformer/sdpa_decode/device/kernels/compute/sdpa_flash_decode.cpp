@@ -247,6 +247,7 @@ void MAIN {
 
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 /* QK = Q_CHUNK @ K_CHUNK */
+                reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
                 pack_reconfig_data_format(cb_qk_im);
 
                 cb_matmul_blocks(
@@ -303,6 +304,7 @@ void MAIN {
                     cb_cur_sum, Sk_chunk_t_dynamic);
 
                 /* OUT_IM = QK @ V_CHUNK */
+                reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_mm);
                 cb_matmul_blocks(
                     cb_qk_im,
@@ -318,12 +320,15 @@ void MAIN {
                     out_subblock_h,
                     out_subblock_w,
                     false /*transpose*/);
+
+                reconfig_data_format_srca(cb_out_mm);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
+                    reconfig_data_format_srca(cb_out_mm);
+                    pack_reconfig_data_format(cb_out_accumulate_im);
                     cb_out_mm = cb_out_im;
-
                 } else {
                     reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_exp_max_diff);
@@ -357,7 +362,6 @@ void MAIN {
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 } else {
                     // Write o, m, l into cb_out
-                    reconfig_data_format_srca(cb_out_accumulate_im);
                     move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
                     move_block<true>(cb_cur_max, cb_out_m, Sq_chunk_t);
                     move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
@@ -376,8 +380,8 @@ void MAIN {
                 // reducer's compute
 
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    reconfig_data_format(cb_q_in, cb_q_in);  // DEBUG
-                    pack_reconfig_data_format(cb_out_accumulate_im_2);
+                    // reconfig_data_format(cb_q_in, cb_q_in);  // DEBUG
+                    // pack_reconfig_data_format(cb_out_accumulate_im_2);
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
