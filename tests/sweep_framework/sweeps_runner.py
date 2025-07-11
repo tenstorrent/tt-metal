@@ -12,6 +12,7 @@ import json
 import enlighten
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+import ttnn
 from multiprocessing import Process
 from faster_fifo import Queue
 from queue import Empty
@@ -560,7 +561,6 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
         conn = psycopg2.connect(**pg_config)
         cursor = conn.cursor()
         sweep_name = header_info[0]["sweep_name"]
-        print("sweep_name: ", sweep_name)
         device_name = test_results[0].get("device", None) if test_results else None
 
         test_insert_query = """
@@ -654,7 +654,7 @@ def push_failed_test(run_id, name, test_start_time, test_end_time, status):
         raise
 
 
-def run_multiple_modules_json(module_names, suite_name, command=None):
+def run_multiple_modules_json(module_names, suite_name, command=None, vector_id=None):
     """Run multiple modules using JSON files from vectors_export directory"""
     pbar_manager = enlighten.get_manager()
 
@@ -690,52 +690,65 @@ def run_multiple_modules_json(module_names, suite_name, command=None):
             with open(vector_file, "r") as file:
                 data = json.load(file)
 
-                for suite in data:
-                    if not should_continue:
-                        break
-                    if suite_name and suite_name != suite:
+            suites_to_process = []
+            if vector_id:
+                found_vector = False
+                for suite_key, suite_content in data.items():
+                    if vector_id in suite_content:
+                        vector = suite_content[vector_id]
+                        vector["vector_id"] = vector_id
+                        suites_to_process.append((suite_key, [vector]))
+                        found_vector = True
+                        break  # Found the vector, no need to check other suites
+                if not found_vector:
+                    logger.warning(f"Vector ID '{vector_id}' not found in module '{module_name}'. Skipping.")
+                    continue
+            else:
+                for suite_key, suite_content in data.items():
+                    if suite_name and suite_name != suite_key:
                         continue  # user only wants to run a specific suite
 
-                    # Prepare vectors for this suite
-                    for input_hash in data[suite]:
-                        data[suite][input_hash]["vector_id"] = input_hash
-                    vectors = [data[suite][input_hash] for input_hash in data[suite]]
+                    for input_hash in suite_content:
+                        suite_content[input_hash]["vector_id"] = input_hash
+                    vectors = list(suite_content.values())
+                    suites_to_process.append((suite_key, vectors))
 
-                    # Verify the module name matches
-                    if vectors and vectors[0]["sweep_name"] != module_name:
-                        logger.warning(f"Module name mismatch: expected {module_name}, got {vectors[0]['sweep_name']}")
-                        continue
-                    test_start_time = dt.datetime.now()
-                    # Import and run the test module
+            for suite, vectors in suites_to_process:
+                if not should_continue:
+                    break
+
+                # Verify the module name matches
+                if vectors and vectors[0]["sweep_name"] != module_name:
+                    logger.warning(f"Module name mismatch: expected {module_name}, got {vectors[0]['sweep_name']}")
+                    continue
+                test_start_time = dt.datetime.now()
+                # Import and run the test module
+                try:
+                    test_module = importlib.import_module("sweeps." + module_name)
+                    header_info, test_vectors = sanitize_inputs(vectors)
+                    logger.info(f"Executing tests for module {module_name}, suite {suite}")
+                    results = execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
+                    test_end_time = dt.datetime.now()
+                    logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                    logger.info(f"Tests Executed - {len(results)}")
+
                     try:
-                        test_module = importlib.import_module("sweeps." + module_name)
-                        header_info, test_vectors = sanitize_inputs(vectors)
-                        logger.info(f"Executing tests for module {module_name}, suite {suite}")
-                        results = execute_suite(
-                            test_module, test_vectors, pbar_manager, suite, module_name, header_info
-                        )
-                        test_end_time = dt.datetime.now()
-                        logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-                        logger.info(f"Tests Executed - {len(results)}")
-
-                        try:
-                            test_status = push_test(run_id, header_info, results, test_start_time, test_end_time)
-                            if test_status == "failure":
-                                status = "failure"
-                        except Exception as e:
-                            logger.error("Stopping execution due to database error")
-                            should_continue = False
-                            break
-
-                    except ImportError as e:
-                        logger.error(f"Failed to import module {module_name}: {e}")
-                        continue
+                        test_status = push_test(run_id, header_info, results, test_start_time, test_end_time)
+                        if test_status == "failure":
+                            status = "failure"
                     except Exception as e:
-                        logger.error(f"Failed to execute module {module_name}: {e}")
-                        test_end_time = dt.datetime.now()
-                        push_failed_test(run_id, module_name, test_start_time, test_end_time, "failure")
-                        continue
+                        logger.error("Stopping execution due to database error")
+                        should_continue = False
+                        break
 
+                except ImportError as e:
+                    logger.error(f"Failed to import module {module_name}: {e}")
+                    continue
+                except Exception as e:
+                    logger.error(f"Failed to execute module {module_name}: {e}")
+                    test_end_time = dt.datetime.now()
+                    push_failed_test(run_id, module_name, test_start_time, test_end_time, "failure")
+                    continue
         except FileNotFoundError:
             logger.error(f"Vector file not found: {vector_file}")
             continue
@@ -752,7 +765,7 @@ def run_multiple_modules_json(module_names, suite_name, command=None):
     logger.info(f"Run status: {status}")
 
 
-def run_sweeps_json(module_names, suite_name, command=None):
+def run_sweeps_json(module_names, suite_name, command=None, vector_id=None):
     """Run sweeps from JSON files - supports single or multiple modules"""
     if isinstance(module_names, str):
         # Single module
@@ -760,13 +773,31 @@ def run_sweeps_json(module_names, suite_name, command=None):
         with open(READ_FILE, "r") as file:
             print(READ_FILE)
             data = json.load(file)
-            for suite in data:
-                if suite_name and suite_name != suite:
-                    continue  # user only wants to run a specific suite
 
-                for input_hash in data[suite]:
-                    data[suite][input_hash]["vector_id"] = input_hash
-                vectors = [data[suite][input_hash] for input_hash in data[suite]]
+            suites_to_process = []
+            if vector_id:
+                found_vector = False
+                for suite_key, suite_content in data.items():
+                    if vector_id in suite_content:
+                        vector = suite_content[vector_id]
+                        vector["vector_id"] = vector_id
+                        suites_to_process.append((suite_key, [vector]))
+                        found_vector = True
+                        break  # Found the vector, no need to check other suites
+                if not found_vector:
+                    logger.error(f"Vector ID '{vector_id}' not found in '{READ_FILE}'.")
+                    return
+            else:
+                for suite_key, suite_content in data.items():
+                    if suite_name and suite_name != suite_key:
+                        continue  # user only wants to run a specific suite
+
+                    for input_hash in suite_content:
+                        suite_content[input_hash]["vector_id"] = input_hash
+                    vectors = list(suite_content.values())
+                    suites_to_process.append((suite_key, vectors))
+
+            for suite, vectors in suites_to_process:
                 module_name = vectors[0]["sweep_name"]
                 test_module = importlib.import_module("sweeps." + module_name)
                 header_info, test_vectors = sanitize_inputs(vectors)
@@ -782,7 +813,7 @@ def run_sweeps_json(module_names, suite_name, command=None):
                     export_test_results_json(header_info, results)
     else:
         # Multiple modules
-        run_multiple_modules_json(module_names, suite_name, command)
+        run_multiple_modules_json(module_names, suite_name, command, vector_id=vector_id)
 
 
 def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, command=None):
@@ -1300,9 +1331,9 @@ if __name__ == "__main__":
             command_details.append(f"modules: {args.module_name}")
         if args.suite_name:
             command_details.append(f"suites: {args.suite_name}")
-        command = f"Selective test run ({', '.join(command_details)})"
+        command = ", ".join(command_details)
     else:
-        command = "All sweep tests"
+        command = "all_sweeps"
 
     if not args.module_name and args.vector_id:
         parser.print_help()
@@ -1377,10 +1408,10 @@ if __name__ == "__main__":
     # Determine which execution path to take
     if READ_FILE:
         # Using explicit read-file argument
-        run_sweeps_json(module_names, args.suite_name, command=command)
+        run_sweeps_json(module_names, args.suite_name, command=command, vector_id=args.vector_id)
     elif DATABASE_BACKEND == "postgres" and args.module_name and not args.read_file:
         # Using PostgreSQL with module names but no read-file - use automatic file discovery
-        run_sweeps_json(module_names, args.suite_name, command=command)
+        run_sweeps_json(module_names, args.suite_name, command=command, vector_id=args.vector_id)
     elif DATABASE_BACKEND == "postgres" and not args.module_name:
         # Using PostgreSQL with no module names specified - use automatic file discovery
         all_module_names = list(get_all_modules())
@@ -1392,7 +1423,7 @@ if __name__ == "__main__":
         logger.info("Running modules:")
         for module_name in module_names:
             logger.info(f"  {module_name}")
-        run_sweeps_json(module_names, args.suite_name, command=command)
+        run_sweeps_json(module_names, args.suite_name, command=command, vector_id=args.vector_id)
     else:
         # Exporting results to Elasticsearch
         logger.info(f"Exporting results to Elasticsearch")
