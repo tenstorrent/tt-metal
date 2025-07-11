@@ -56,6 +56,10 @@ public:
         size_t num_shards_per_core_in_group_2 = 0;
     };
     const CoreGroups& core_groups() const { return core_groups_; }
+    // CoreGroups represented as a tuple compatible with split_work_to_cores function.
+    // Returns: number of cores with data, cores with data, cores in group 1, cores in group 2,
+    // number of shards per core in group 1, number of shards per core in group 2.
+    std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> core_groups_tuple() const;
 
     UncompressedBufferPageMapping compute_page_mapping() const {
         return detail::compute_page_mapping(tensor_shape_in_pages_, shard_shape_in_pages_, cores_);

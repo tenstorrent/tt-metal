@@ -223,6 +223,18 @@ size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
     return num_shards_per_core(core_idx) * shard_volume_;
 }
 
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
+BufferDistributionSpec::core_groups_tuple() const {
+    return {
+        core_groups_.cores_with_data.num_cores(),
+        core_groups_.cores_with_data,
+        core_groups_.cores_in_group_1,
+        core_groups_.cores_in_group_2,
+        core_groups_.num_shards_per_core_in_group_1,
+        core_groups_.num_shards_per_core_in_group_2,
+    };
+}
+
 void BufferDistributionSpec::init_precomputed_data() {
     shard_volume_ = shard_shape_in_pages_.volume();
     if (tensor_shape_in_pages_.volume() != 0) {
