@@ -94,6 +94,7 @@ jobs:
 
       - name: Update submodule
         id: update-submodule
+        shell: bash -x {0}  # <--- enable execution trace
         run: |
           cd ${{ env.SUBMODULE_PATH }}
           OLD_SHA=$(git rev-parse --short=7 HEAD)
