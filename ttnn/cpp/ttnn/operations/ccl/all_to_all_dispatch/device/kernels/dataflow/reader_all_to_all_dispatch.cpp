@@ -58,6 +58,8 @@ void kernel_main() {
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(4);
 
     uint32_t global_semaphore_address = get_arg_val<uint32_t>(5);
+    uint32_t token_start_idx = get_arg_val<uint32_t>(6);
+    uint32_t token_end_idx = get_arg_val<uint32_t>(7);
 
     const auto input_addr_gen = get_interleaved_addr_gen<input_is_dram, input_page_size>(input_tensor_address);
     const auto indices_addr_gen = get_interleaved_addr_gen<indices_is_dram, indices_page_size>(indices_tensor_address);
@@ -77,7 +79,7 @@ void kernel_main() {
 
     ASSERT(indices_pages == input_pages);
     // read the input tokens and the selected experts for each token
-    for (uint32_t i = 0; i < indices_pages; i++) {
+    for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
         cb_reserve_back(indices_tensor_cb_id, 1);
         cb_reserve_back(input_tensor_cb_id, 1);
 
@@ -104,10 +106,13 @@ void kernel_main() {
         noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
 
-        for (uint32_t i = 0; i < tokens_per_device * dispatch_devices; i++) {
-            uint32_t l1_write_addr = get_write_ptr(metadata_buffer_id) + i * aligned_indices_page_size;
-            uint64_t metadata_write_addr = get_noc_addr(i, metadata_addr_gen);
-            noc_async_write(l1_write_addr, metadata_write_addr, metadata_page_size);
+        for (uint32_t t = 0; t < tokens_per_device; t++) {
+            for (uint32_t d = 0; d < dispatch_devices; d++) {
+                uint32_t page = d * tokens_per_device + t;
+                uint32_t l1_write_addr = get_write_ptr(metadata_buffer_id) + page * aligned_indices_page_size;
+                uint64_t metadata_write_addr = get_noc_addr(page, metadata_addr_gen);
+                noc_async_write(l1_write_addr, metadata_write_addr, metadata_page_size);
+            }
         }
         noc_async_write_barrier();
     }

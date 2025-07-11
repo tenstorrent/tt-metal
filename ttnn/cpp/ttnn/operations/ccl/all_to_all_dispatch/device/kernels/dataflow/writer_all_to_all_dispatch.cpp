@@ -105,6 +105,8 @@ void kernel_main() {
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t tokens_per_core_start = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t tokens_per_core_end = get_arg_val<uint32_t>(rt_args_idx++);
 
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
@@ -155,7 +157,7 @@ void kernel_main() {
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
-    for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
+    for (uint32_t local_token = tokens_per_core_start; local_token < tokens_per_core_end; local_token++) {
         // global_token is the global token index for the current token
         // we need the global token index to write to the output buffer – each global token that could potentially be
         // sent has a unique output buffer address to ensure that it is not overwritten by another token
@@ -228,7 +230,7 @@ void kernel_main() {
     // two modes: send pages directly to the output buffer or send pages to the intermediate buffer and then write to
     // the output buffer latter is slower but is less L1 intensive
     if constexpr (write_page_by_page) {
-        for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
+        for (uint32_t local_token = tokens_per_core_start; local_token < tokens_per_core_end; local_token++) {
             uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
             uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
             uint32_t token_indices_address = base_indices_addr + (local_token * aligned_indices_page_size);
@@ -282,15 +284,19 @@ void kernel_main() {
         }
     } else {
         uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
+        uint32_t indices_size_per_core = aligned_indices_page_size * (tokens_per_core_end - tokens_per_core_start);
 
-        // dispatch the metadata to the current device
         uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
+        uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
+                                                 (tokens_per_core_start * aligned_indices_page_size);
+
         for (uint32_t d = 0; d < num_devices; d++) {
             if (d == linearized_mesh_coord) {
+                // dispatch the metadata to the local device
                 detail::dispatch_metadata_local_device(
                     base_indices_addr,
-                    intermediate_metadata_write_addr + (dispatch_index * indices_size),
-                    indices_size,
+                    noc_core_offset_md_write_addr,
+                    indices_size_per_core,
                     global_noc_semaphore_address);
             } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                 if constexpr (is_1d_topology<topology>()) {
@@ -304,9 +310,9 @@ void kernel_main() {
                         metadata_packet_header,
                         d,
                         base_indices_addr,
-                        intermediate_metadata_write_addr + (dispatch_index * indices_size),
+                        noc_core_offset_md_write_addr,
                         global_noc_semaphore_address,
-                        (int)indices_size,
+                        (int)indices_size_per_core,
                         alignment,
                         1,
                         true);
@@ -321,9 +327,9 @@ void kernel_main() {
                         dest_chip_ids[d],
                         dest_mesh_ids[d],
                         base_indices_addr,
-                        intermediate_metadata_write_addr + (dispatch_index * indices_size),
+                        noc_core_offset_md_write_addr,
                         global_noc_semaphore_address,
-                        (int)indices_size,
+                        (int)indices_size_per_core,
                         alignment,
                         1,
                         true);
