@@ -229,6 +229,15 @@ demos_tg_device() {
     ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
 }
 
+deepseek_tg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+    local model=$4
+
+    ./tests/scripts/tg/run_tg_deepseek_tests.sh --model "$model"
+}
+
 # Run tg model perf tests
 model_perf_tg_device() {
     local tt_arch=$1
