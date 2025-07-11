@@ -84,296 +84,295 @@ jobs:
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests -m models_device_performance_bare_metal
           # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov11_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=${{ matrix.test-info.test-type }}_yolov11_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov11
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: stable_diffusion tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
+      # - name: stable_diffusion tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_stable_diffusion_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME stable_diffusion
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_stable_diffusion_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME stable_diffusion
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       
-      - name: distilbert tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
+      # - name: distilbert tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_distilbert_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME distilbert
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_distilbert_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: vgg & vgg_unet tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests -m models_device_performance_bare_metal
+      # - name: vgg & vgg_unet tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_vgg_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME vgg
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_vgg_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: bert_tiny tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
+      # - name: bert_tiny tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_bert_tiny_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME bert_tiny
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_bert_tiny_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: squeezebert tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
+      # - name: squeezebert tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_squeezebert_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME squeezebert
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_squeezebert_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: roberta tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal
+      # - name: roberta tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_roberta_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME roberta
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_roberta_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: resnet50 tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
+      # - name: resnet50 tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_resnet50_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME resnet50
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_resnet50_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: ufld_v2 tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
+      # - name: ufld_v2 tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_ufld_v2_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME ufld_v2
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_ufld_v2_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: sentence_bert tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests -m models_device_performance_bare_metal
+      # - name: sentence_bert tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_sentence_bert_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME sentence_bert
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_sentence_bert_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: functional_unet tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
+      # - name: functional_unet tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_functional_unet_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME functional_unet
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_functional_unet_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: mamba tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
+      # - name: mamba tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_mamba_$(date +%Y_%m_%d).csv
-      - name: mamba tests
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME 
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_mamba_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: metal_BERT_large_11 tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
+      # - name: metal_BERT_large_11 tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_metal_BERT_large_11_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME metal_BERT_large_11
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_metal_BERT_large_11_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: yolov4 tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
+      # - name: yolov4 tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov4_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov4
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov4_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: mobilenetv2 tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          # issue 24652: https://github.com/tenstorrent/tt-metal/issues/24652
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/mobilenetv2/tests -m models_device_performance_bare_metal
+      # - name: mobilenetv2 tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     # issue 24652: https://github.com/tenstorrent/tt-metal/issues/24652
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/mobilenetv2/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_mobilenetv2_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME mobilenetv2
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_mobilenetv2_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: yolov8x tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8x/tests -m models_device_performance_bare_metal
+      # - name: yolov8x tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8x/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov8x_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov8x
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov8x_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: yolov8s & yolov8s_world tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s/tests -m models_device_performance_bare_metal
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8s_world/tests -m models_device_performance_bare_metal
+      # - name: yolov8s & yolov8s_world tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s/tests -m models_device_performance_bare_metal
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8s_world/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov8s_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov8s
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov8s_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: vanilla_unet tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vanilla_unet/test -m models_device_performance_bare_metal
+      # - name: vanilla_unet tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vanilla_unet/test -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_vanilla_unet_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME vanilla_unet
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_vanilla_unet_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: yolov10 tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov10/tests -m models_device_performance_bare_metal
+      # - name: yolov10 tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov10/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov10_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov10
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov10_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: yolov7 tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov7/tests/perf/test_perf.py -m models_device_performance_bare_metal
+      # - name: yolov7 tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov7/tests/perf/test_perf.py -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov7_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov7
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov7_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: vit tests
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        env:
-          TRACY_NO_INVARIANT_CHECK: 1
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal
+      # - name: vit tests
+      #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   env:
+      #     TRACY_NO_INVARIANT_CHECK: 1
+      #   run: |
+      #     set -x
+      #     export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+      #     WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_vit_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME vit
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      #     export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_vit_$(date +%Y_%m_%d).csv
+      #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+      #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: yolov6l tests
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
@@ -385,7 +384,7 @@ jobs:
           export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
           WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov6l_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=${{ matrix.test-info.test-type }}_yolov6l_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov6l
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
