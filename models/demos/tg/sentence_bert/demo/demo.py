@@ -78,11 +78,11 @@ def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_
     )
     ttnn_module._capture_sentencebert_trace_2cqs()
     t0 = time.time()
-    ttnn_out = ttnn_module._execute_sentencebert_trace_2cqs_inference()
+    ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
     t1 = time.time()
     ttnn_sentence_embeddings = ttnn.to_torch(
         ttnn_out, mesh_composer=ttnn_module.runner_infra.output_mesh_composer, dtype=torch.float32
-    ).squeeze(dim=1)
+    )
     cosine_sim_matrix1 = cosine_similarity(reference_sentence_embeddings.detach().squeeze().cpu().numpy())
     upper_triangle1 = np.triu(cosine_sim_matrix1, k=1)
     similarities1 = upper_triangle1[upper_triangle1 != 0]
