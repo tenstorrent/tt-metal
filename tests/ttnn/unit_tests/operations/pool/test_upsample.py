@@ -140,15 +140,15 @@ def upsample_multicore_common(
     if core_range != None:
         shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(core[0][1], core[0][0]), ttnn.CoreCoord(core[1][1], core[1][0]))
+                ttnn.CoreRange(ttnn.CoreCoord(core[0][0], core[0][1]), ttnn.CoreCoord(core[1][0], core[1][1]))
                 for core in core_range
             }
         )
         if shard_strategy == ttnn.ShardStrategy.BLOCK:
             if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-                ncores = (core_range[0][1][0] - core_range[0][0][0] + 1, core_range[0][1][1] - core_range[0][0][1] + 1)
-            elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
                 ncores = (core_range[0][1][1] - core_range[0][0][1] + 1, core_range[0][1][0] - core_range[0][0][0] + 1)
+            elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+                ncores = (core_range[0][1][0] - core_range[0][0][0] + 1, core_range[0][1][1] - core_range[0][0][1] + 1)
         elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
             ncores = shard_grid.num_cores()
         else:
