@@ -9,6 +9,8 @@ target_sources(
     PRIVATE
         device/update_cache_op.cpp
         device/update_cache_op_multi_core.cpp
+        device/update_cache_multi_core_program_factory.cpp
+        device/fill_cache_multi_core_program_factory.cpp
         kv_cache.cpp
 )
 

@@ -7,21 +7,14 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "update_cache_multi_core_program_factory.hpp"
+#include "fill_cache_multi_core_program_factory.hpp"
 
 namespace ttnn::operations::kv_cache {
 
 enum class UpdateCacheOpParallelizationStrategy { MULTI_CORE };
 
 enum class UpdateCacheOpType { FILL, UPDATE };
-
-tt::tt_metal::operation::ProgramWithCallbacks update_cache_multi_core(
-    const Tensor& cache_tensor,
-    const Tensor& input_tensor,
-    uint32_t update_idx,
-    uint32_t batch_offset,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
-tt::tt_metal::operation::ProgramWithCallbacks fill_cache_multi_core(
-    const Tensor& cache_tensor, const Tensor& input_tensor, uint32_t batch_idx, uint32_t update_idx);
 
 struct UpdateCache {
     const uint32_t batch_idx;
