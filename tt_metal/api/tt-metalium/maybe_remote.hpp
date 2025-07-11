@@ -76,8 +76,8 @@ public:
     MaybeRemote() = delete;
 
     // Named constructors for clarity
-    static MaybeRemote local(T value);
-    static MaybeRemote remote();
+    [[nodiscard]] static MaybeRemote local(T value);
+    [[nodiscard]] static MaybeRemote remote();
 
     // Query methods
     [[nodiscard]] bool is_local() const noexcept;
@@ -97,8 +97,28 @@ public:
     template <typename LocalFunc, typename RemoteFunc>
     [[nodiscard]] auto when(LocalFunc&& on_local, RemoteFunc&& on_remote) const -> decltype(auto);
 
+    // For void return types
+    template <typename LocalFunc>
+    auto if_local(LocalFunc&& on_local) const
+        -> std::enable_if_t<std::is_void_v<std::invoke_result_t<LocalFunc, const T&>>>;
+
+    // For non-void return types
+    template <typename LocalFunc>
+    [[nodiscard]] auto if_local(LocalFunc&& on_local) const -> std::enable_if_t<
+        !std::is_void_v<std::invoke_result_t<LocalFunc, const T&>>,
+        std::optional<std::invoke_result_t<LocalFunc, const T&>>>;
+
+    // For void return types
+    template <typename RemoteFunc>
+    auto if_remote(RemoteFunc&& on_remote) const -> std::enable_if_t<std::is_void_v<std::invoke_result_t<RemoteFunc>>>;
+
+    // For non-void return types
+    template <typename RemoteFunc>
+    [[nodiscard]] auto if_remote(RemoteFunc&& on_remote) const -> std::
+        enable_if_t<!std::is_void_v<std::invoke_result_t<RemoteFunc>>, std::optional<std::invoke_result_t<RemoteFunc>>>;
+
     // Equality operators
-    bool operator==(const MaybeRemote& other) const = default;
+    [[nodiscard]] bool operator==(const MaybeRemote& other) const = default;
 
     // Debugging support
     [[nodiscard]] std::string to_string() const;
@@ -146,18 +166,12 @@ bool MaybeRemote<T>::is_remote() const noexcept {
 
 template <typename T>
 T& MaybeRemote<T>::value() & {
-    if (is_remote()) {
-        throw_remote_access_error();
-    }
-    return std::get<T>(value_);
+    return *this->operator->();
 }
 
 template <typename T>
 const T& MaybeRemote<T>::value() const& {
-    if (is_remote()) {
-        throw_remote_access_error();
-    }
-    return std::get<T>(value_);
+    return *this->operator->();
 }
 
 template <typename T>
@@ -172,18 +186,18 @@ const T& MaybeRemote<T>::operator*() const& {
 
 template <typename T>
 T* MaybeRemote<T>::operator->() {
-    if (is_remote()) {
-        throw_remote_access_error();
+    if (auto* p = std::get_if<T>(&value_); p) {
+        return p;  // local -– hand back the pointer
     }
-    return &std::get<T>(value_);
+    throw_remote_access_error();  // remote – raise
 }
 
 template <typename T>
 const T* MaybeRemote<T>::operator->() const {
-    if (is_remote()) {
-        throw_remote_access_error();
+    if (const auto* p = std::get_if<T>(&value_); p) {
+        return p;  // local -– hand back the pointer
     }
-    return &std::get<T>(value_);
+    throw_remote_access_error();  // remote – raise
 }
 
 template <typename T>
@@ -194,6 +208,49 @@ auto MaybeRemote<T>::when(LocalFunc&& on_local, RemoteFunc&& on_remote) const ->
     } else {
         return std::invoke(std::forward<RemoteFunc>(on_remote));
     }
+}
+
+// if_local for void return types
+template <typename T>
+template <typename LocalFunc>
+auto MaybeRemote<T>::if_local(LocalFunc&& on_local) const
+    -> std::enable_if_t<std::is_void_v<std::invoke_result_t<LocalFunc, const T&>>> {
+    if (is_local()) {
+        std::invoke(std::forward<LocalFunc>(on_local), std::get<T>(value_));
+    }
+}
+
+// if_local for non-void return types
+template <typename T>
+template <typename LocalFunc>
+auto MaybeRemote<T>::if_local(LocalFunc&& on_local) const -> std::enable_if_t<
+    !std::is_void_v<std::invoke_result_t<LocalFunc, const T&>>,
+    std::optional<std::invoke_result_t<LocalFunc, const T&>>> {
+    if (is_local()) {
+        return std::invoke(std::forward<LocalFunc>(on_local), std::get<T>(value_));
+    }
+    return std::nullopt;
+}
+
+// if_remote for void return types
+template <typename T>
+template <typename RemoteFunc>
+auto MaybeRemote<T>::if_remote(RemoteFunc&& on_remote) const
+    -> std::enable_if_t<std::is_void_v<std::invoke_result_t<RemoteFunc>>> {
+    if (is_remote()) {
+        std::invoke(std::forward<RemoteFunc>(on_remote));
+    }
+}
+
+// if_remote for non-void return types
+template <typename T>
+template <typename RemoteFunc>
+auto MaybeRemote<T>::if_remote(RemoteFunc&& on_remote) const -> std::
+    enable_if_t<!std::is_void_v<std::invoke_result_t<RemoteFunc>>, std::optional<std::invoke_result_t<RemoteFunc>>> {
+    if (is_remote()) {
+        return std::invoke(std::forward<RemoteFunc>(on_remote));
+    }
+    return std::nullopt;
 }
 
 template <typename T>

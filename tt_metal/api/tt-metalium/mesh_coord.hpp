@@ -289,6 +289,9 @@ public:
     // Returns (inclusive) range of coordinates in the container.
     const MeshCoordinateRange& coord_range() const;
 
+    // Returns the number of elements in the container.
+    size_t size() const;
+
     // Accessor methods.
     T& at(const MeshCoordinate& coord);
     const T& at(const MeshCoordinate& coord) const;
@@ -421,7 +424,12 @@ public:
      * @return A vector containing only the local values
      */
     std::vector<T> get_local_values() const {
-        return extract_locals(*this);
+        std::vector<T> local_values;
+        local_values.reserve(this->size());
+        for (const auto& it = this->begin(); it != this->end(); ++it) {
+            local_values.push_back(it->value());
+        }
+        return local_values;
     }
 
     /**
@@ -434,6 +442,11 @@ public:
         return this->at(coord).is_local();
     }
 };
+
+template <typename T>
+size_t MeshContainer<T>::size() const {
+    return values_.size();
+}
 
 template <typename T>
 MeshContainer<T>::MeshContainer(const MeshShape& shape, const T& fill_value) :

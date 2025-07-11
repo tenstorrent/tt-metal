@@ -127,7 +127,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
     const MeshDeviceConfig& config) :
     ScopedDevices(
         config.physical_device_ids().empty()
-            ? extract_locals(SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset()))
+            ? SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset())
             : config.physical_device_ids(),
         l1_small_size,
         trace_region_size,
@@ -448,6 +448,9 @@ size_t MeshDevice::num_cols() const { return view_->num_cols(); }
 const MeshShape& MeshDevice::shape() const { return view_->shape(); }
 
 std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
+    TT_FATAL(
+        this->shape() == this->local_shape(), "Cannot reshape a mesh that is not the same shape as the local shape");
+
     // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
     // The physical connectivity between devices must be preserved when reshaping.
     //
@@ -478,10 +481,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
     auto new_physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(new_shape);
 
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
-        const auto& maybe_device_id = new_physical_device_ids[i];
-        TT_FATAL(maybe_device_id.is_local(), "Device at index {} is remote, cannot reshape with remote devices", i);
-        chip_id_t device_id = *maybe_device_id;
-        if (physical_device_id_to_linearized_index.find(device_id) ==
+        if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) ==
             physical_device_id_to_linearized_index.end()) {
             TT_THROW(
                 "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "
@@ -493,9 +493,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
     std::vector<IDevice*> new_device_order;
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
-        const auto& maybe_device_id = new_physical_device_ids[i];
-        chip_id_t device_id = *maybe_device_id;
-        new_device_order.push_back(this->get_device(device_id));
+        new_device_order.push_back(this->get_device(new_physical_device_ids[i]));
     }
     return new_device_order;
 }

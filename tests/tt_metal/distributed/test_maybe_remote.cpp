@@ -243,6 +243,117 @@ TEST(MaybeRemoteTest, CopySemantics) {
     EXPECT_EQ(local.value(), 42);  // Original still valid
 }
 
+TEST(MaybeRemoteTest, IfLocal) {
+    // Test with local value
+    auto local = MaybeRemote<int>::local(42);
+
+    // Test if_local with return value
+    auto result = local.if_local([](int value) { return value * 2; });
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), 84);
+
+    // Test if_local with different return type
+    auto str_result = local.if_local([](int value) { return std::to_string(value); });
+    ASSERT_TRUE(str_result.has_value());
+    EXPECT_EQ(str_result.value(), "42");
+
+    // Test if_local with mutable lambda
+    int captured = 0;
+    local.if_local([&captured](int value) { captured = value; });
+    EXPECT_EQ(captured, 42);
+
+    // Test with remote value - if_local should not execute
+    auto remote = MaybeRemote<int>::remote();
+    captured = 0;
+    remote.if_local([&captured](int value) { captured = value; });
+    EXPECT_EQ(captured, 0);  // Should remain unchanged
+
+    // Test with custom type
+    auto local_test = MaybeRemote<TestType>::local({123});
+    auto test_result = local_test.if_local([](const TestType& t) { return t.value * 3; });
+    ASSERT_TRUE(test_result.has_value());
+    EXPECT_EQ(test_result.value(), 369);
+
+    // Test with void return
+    bool was_called = false;
+    local.if_local([&was_called](int) { was_called = true; });
+    EXPECT_TRUE(was_called);
+
+    was_called = false;
+    remote.if_local([&was_called](int) { was_called = true; });
+    EXPECT_FALSE(was_called);
+
+    // Test if_local on remote returns empty optional
+    auto remote_result = remote.if_local([](int value) { return value * 2; });
+    EXPECT_FALSE(remote_result.has_value());
+}
+
+TEST(MaybeRemoteTest, IfRemote) {
+    // Test with remote value
+    auto remote = MaybeRemote<int>::remote();
+
+    // Test if_remote with return value
+    auto result = remote.if_remote([]() { return 999; });
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), 999);
+
+    // Test if_remote with different return type
+    auto str_result = remote.if_remote([]() { return std::string("is_remote"); });
+    ASSERT_TRUE(str_result.has_value());
+    EXPECT_EQ(str_result.value(), "is_remote");
+
+    // Test if_remote with mutable lambda
+    int captured = 0;
+    remote.if_remote([&captured]() { captured = 100; });
+    EXPECT_EQ(captured, 100);
+
+    // Test with local value - if_remote should not execute
+    auto local = MaybeRemote<int>::local(42);
+    captured = 0;
+    local.if_remote([&captured]() { captured = 100; });
+    EXPECT_EQ(captured, 0);  // Should remain unchanged
+
+    // Test with void return
+    bool was_called = false;
+    remote.if_remote([&was_called]() { was_called = true; });
+    EXPECT_TRUE(was_called);
+
+    was_called = false;
+    local.if_remote([&was_called]() { was_called = true; });
+    EXPECT_FALSE(was_called);
+
+    // Test if_remote on local returns empty optional
+    auto local_result = local.if_remote([]() { return 999; });
+    EXPECT_FALSE(local_result.has_value());
+}
+
+TEST(MaybeRemoteTest, IfLocalIfRemoteCombined) {
+    // Test using both if_local and if_remote together
+    auto process_maybe_remote = [](const MaybeRemote<int>& maybe) -> std::string {
+        std::string result = "none";
+        maybe.if_local([&result](int value) { result = "local:" + std::to_string(value); });
+        maybe.if_remote([&result]() { result = "remote"; });
+        return result;
+    };
+
+    auto local = MaybeRemote<int>::local(42);
+    EXPECT_EQ(process_maybe_remote(local), "local:42");
+
+    auto remote = MaybeRemote<int>::remote();
+    EXPECT_EQ(process_maybe_remote(remote), "remote");
+
+    // Test chaining behavior - only one should execute
+    int counter = 0;
+    local.if_local([&counter](int) { counter++; });
+    local.if_remote([&counter]() { counter += 10; });
+    EXPECT_EQ(counter, 1);
+
+    counter = 0;
+    remote.if_local([&counter](int) { counter++; });
+    remote.if_remote([&counter]() { counter += 10; });
+    EXPECT_EQ(counter, 10);
+}
+
 TEST(MaybeRemoteTest, ComplexScenarios) {
     // Test with nested MaybeRemote (though probably not a real use case)
     using NestedType = MaybeRemote<MaybeRemote<int>>;

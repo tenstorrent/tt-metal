@@ -49,8 +49,7 @@ public:
     MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
 
     // Returns the physical device IDs mapped to a MeshDevice
-    // Each element can be either a local device ID or a RemoteDevice marker
-    std::vector<MaybeRemoteDeviceId> get_mapped_physical_device_ids(
+    std::vector<int> get_mapped_physical_device_ids(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 
