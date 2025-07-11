@@ -312,7 +312,6 @@ The following example demonstrates vector addition implementation using the Meta
 First, we initialize the device connection and allocate the necessary buffers:
 
 ```c++
-// FIXME: Should this still be IDevice? Or should this change to MeshDevice?
 IDevice* device = CreateDevice(/*device_id=*/0);
 CommandQueue& cq = dev->command_queue(/*cq_id=*/0);
 Program program = tt::tt_metal::CreateProgram();

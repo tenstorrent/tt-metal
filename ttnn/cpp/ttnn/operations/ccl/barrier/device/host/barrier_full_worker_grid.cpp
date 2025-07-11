@@ -106,7 +106,6 @@ operation::ProgramWithCallbacks barrier_with_workers(
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
 
     // Get the device from the tensor
-    // FIXME: Need to double check this is correct
     const auto& device = input_tensor.device()->get_device(target_device_id);
     // Get a representation of the topology
 

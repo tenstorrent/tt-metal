@@ -90,14 +90,6 @@ public:
         tt::tt_metal::distributed::MeshDevice* device,
         const tt::tt_metal::MemoryConfig& mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-    // Legacy overloads that accept a physical IDevice pointer. These create a
-    // single-device Mesh wrapper internally and forward to the MeshDevice
-    // version.  They can be removed once all call-sites migrate to MeshDevice.
-    static Tensor move_tensor_to_device(
-        const Tensor& input,
-        tt::tt_metal::IDevice* device,
-        const tt::tt_metal::MemoryConfig& mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
     /**
      * Updates tensor memory configuration
      * @param input Input tensor
@@ -137,13 +129,6 @@ public:
         const Tensor& output,
         const ttnn::Shape& shape,
         tt::tt_metal::distributed::MeshDevice* device,
-        tt::tt_metal::Layout target_layout,
-        std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
-
-    static Tensor format_output_tensor(
-        const Tensor& output,
-        const ttnn::Shape& shape,
-        tt::tt_metal::IDevice* device,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 };

@@ -597,8 +597,6 @@ Tensor to_host_mesh_tensor<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn:
     return to_host_mesh_tensor<uint32_t>(tensor, blocking, cq_id);
 }
 
-// FIXME: Need to check about this deletion
-
 namespace {
 
 DeviceStorage replicate_to_mesh_buffer(

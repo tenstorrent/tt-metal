@@ -282,9 +282,20 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.layout());
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+
+        // Determine the device to use for allocation
+        MeshDevice* target_device = nullptr;
+        if (device.has_value()) {
+            target_device = &device->get();
+        } else if (tensor.storage_type() == StorageType::DEVICE) {
+            target_device = tensor.device();
+        } else {
+            TT_THROW("Tensor must be allocated on device when no device parameter is provided");
+        }
+
         return allocate_tensor_on_mesh(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-            device.has_value() ? &device->get() : tensor.device());
+            target_device);
     }
 };
 
