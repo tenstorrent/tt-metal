@@ -1437,7 +1437,10 @@ void DeviceProfiler::dumpResults(
     // create nlohmann json log object
     nlohmann::ordered_json noc_trace_json_log = nlohmann::json::array();
 
+    // Dispatch cores must be added after non-dispatch cores as they must be profiled after non-dispatch cores in order
+    // to minimize the amount of dispatch data that is lost
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
+
     if (data_source == ProfilerDataBufferSource::DRAM) {
         readControlBuffers(device, virtual_cores, state);
 

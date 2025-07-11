@@ -787,8 +787,6 @@ void DumpDeviceProfileResults(
         }
     }
 
-    // Dispatch cores must be added after non-dispatch cores as they must be profiled after non-dispatch cores in order
-    // to minimize the amount of dispatch data that is lost
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
         for (const CoreCoord& core :
              tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
