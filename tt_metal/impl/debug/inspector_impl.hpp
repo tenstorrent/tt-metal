@@ -58,7 +58,7 @@ struct ProgramData {
 };
 
 struct MeshDeviceData {
-    std::weak_ptr<const distributed::MeshDevice> mesh_device;
+    const distributed::MeshDevice* mesh_device;
     int mesh_id;
     std::optional<int> parent_mesh_id;
     bool initialized = false;
