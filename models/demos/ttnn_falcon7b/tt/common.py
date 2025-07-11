@@ -13,6 +13,14 @@ def strip_state_dict_prefix(state_dict, prefix):
     return {k[len(prefix) + 1 :]: v for k, v in state_dict.items() if k.startswith(prefix)}
 
 
+def _get_rotary_embedding_from_inv_freq(torch_model) -> torch.Tensor:
+    # https://github.com/huggingface/transformers/blob/2b789f27f383435b8db2fee3d10b0a1358c0c234/src/transformers/models/falcon/modeling_falcon.py#L181-L187
+    t = torch.arange(torch_model.max_seq_len_cached, dtype=torch.int64).type_as(torch_model.inv_freq)
+    freqs = torch.outer(t, torch_model.inv_freq)
+    emb = torch.cat((freqs, freqs), dim=-1)
+    return emb
+
+
 def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_name=None, weights_mesh_mapper=None):
     def rotary_embedding_custom_processor(torch_model, name):
         parameters = {}
@@ -22,8 +30,9 @@ def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_na
             base_file_path = f"{tt_cache_path}/{name}"
 
         if isinstance(torch_model, transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding):
+            emb = _get_rotary_embedding_from_inv_freq(torch_model)
             parameters["cos_cached"] = ttnn.as_tensor(
-                torch_model.cos_cached,
+                emb.cos(),
                 dtype=model_config["COS_CACHED_WEIGHTS_DTYPE"],
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
@@ -33,7 +42,7 @@ def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_na
                 mesh_mapper=weights_mesh_mapper,
             )
             parameters["sin_cached"] = ttnn.as_tensor(
-                torch_model.sin_cached,
+                emb.sin(),
                 dtype=model_config["SIN_CACHED_WEIGHTS_DTYPE"],
                 device=device,
                 memory_config=model_config["DEFAULT_MEMCFG"],
