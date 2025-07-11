@@ -42,7 +42,7 @@ using YamlTestConfigSerializer = tt::tt_fabric::fabric_tests::YamlTestConfigSeri
 using ParsedTestConfig = tt::tt_fabric::fabric_tests::ParsedTestConfig;
 
 using Topology = tt::tt_fabric::Topology;
-using FabricConfig = tt::tt_metal::FabricConfig;
+using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 
 const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>

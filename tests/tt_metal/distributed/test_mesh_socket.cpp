@@ -1644,7 +1644,7 @@ void test_multi_connection_multi_device_data_copy(
 
 std::pair<MeshCoordinate, MeshCoordinate> get_random_mesh_coordinates(const MeshShape& mesh_shape) {
     std::srand(std::time(nullptr));  // Seed the RNG
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_2d_fabric_config(fabric_config)) {
         auto coord0 = MeshCoordinate(rand() % mesh_shape[0], rand() % mesh_shape[1]);
         auto coord1 = coord0;
