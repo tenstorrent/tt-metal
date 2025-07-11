@@ -20,8 +20,6 @@ namespace detail {
 
 struct bfloat4_tag {};
 struct bfloat8_tag {};
-using DTypeConversionFunc =
-    std::function<tt::tt_metal::Tensor(const tt::tt_metal::Tensor&, const tt::tt_metal::DataType dst_type)>;
 
 template <typename SrcType>
 auto preprocess_tensor(const tt::tt_metal::Tensor& input_tensor) {
@@ -123,8 +121,8 @@ Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& d
         return input_tensor;
     }
 
-    auto transform_tensor = [src_type, dtype]() -> DTypeConversionFunc {
-        auto get_dest_func = [&]<typename SrcType>() -> DTypeConversionFunc {
+    auto transform_tensor = [src_type, dtype]() {
+        auto get_dest_func = [&]<typename SrcType>() {
             switch (dtype) {
                 case DataType::BFLOAT4_B: return &transform_type<SrcType, bfloat4_tag>;
                 case DataType::BFLOAT8_B: return &transform_type<SrcType, bfloat8_tag>;
@@ -136,9 +134,6 @@ Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& d
                 case DataType::INT32: return &transform_type<SrcType, int32_t>;
                 case DataType::INVALID:
                     TT_THROW("Unsupported data type conversion requested. Destination type is invalid!");
-                default:
-                    TT_THROW(
-                        "Unsupported data type conversion requested. Destination type('{}') is invalid!", int(dtype));
             }
             TT_THROW("Unreachable");
         };
@@ -153,8 +148,6 @@ Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& d
             case DataType::UINT32: return get_dest_func.operator()<uint32_t>();
             case DataType::INT32: return get_dest_func.operator()<int32_t>();
             case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
-            default:
-                TT_THROW("Unsupported data type conversion requested. Source type('{}') is invalid!", int(src_type));
         }
         TT_THROW("Unreachable");
     }();
