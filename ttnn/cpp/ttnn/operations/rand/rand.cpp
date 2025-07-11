@@ -4,11 +4,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rand.hpp"
-#include <type_traits>
-
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 #include "ttnn/operations/rand/device/rand_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
