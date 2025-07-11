@@ -240,12 +240,9 @@ def test_dispatch_cores():
                         if count - allowedRange <= readCount <= count + allowedRange:
                             res = True
                             break
-                    print(
-                        f"Wrong tensix dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
-                    )
-                    # assert (
-                    #     res
-                    # ), f"Wrong tensix dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+                    assert (
+                        res
+                    ), f"Wrong tensix dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
         statTypesSet = set(statTypes)
         for statType in statTypes:
@@ -312,12 +309,9 @@ def test_ethernet_dispatch_cores():
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
                         break
-                print(
-                    f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
-                )
-                # assert (
-                #     res
-                # ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+                assert (
+                    res
+                ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
@@ -335,12 +329,9 @@ def test_ethernet_dispatch_cores():
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
                         break
-                print(
-                    f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
-                )
-                # assert (
-                #     res
-                # ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+                assert (
+                    res
+                ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
 
 @skip_for_grayskull()
