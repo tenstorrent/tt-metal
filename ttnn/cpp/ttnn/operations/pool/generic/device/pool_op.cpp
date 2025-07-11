@@ -83,7 +83,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
     // need to pad the last dim to TILE_WIDTH
     uint32_t out_c = sliding_window_config.channels;
-    uint32_t out_c_padded = tt::round_up(out_c, tt::constants::TILE_WIDTH);
+    uint32_t out_c_padded = tt::round_up(out_c, 16);
     uint32_t out_nhw = sliding_window_config.batch_size * out_h * out_w;
 
     uint32_t out_nhw_padded =
@@ -96,8 +96,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec().has_value()) {
         auto shard_spec = mem_config.shard_spec().value();
-        uint32_t padded_c = tt::round_up(sliding_window_config.channels, tt::constants::TILE_WIDTH);
-        shard_spec.shape[1] = padded_c;
+        shard_spec.shape[1] = out_c_padded;
         mem_config = mem_config.with_shard_spec(shard_spec);
     } else {
         uint32_t ncores = input.shard_spec().value().num_cores();
