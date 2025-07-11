@@ -284,8 +284,12 @@ void MAIN {
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_max);
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > 0);
+                    cb_cur_max, Sk_chunk_t_dynamic);
 
+                if (k_chunk > k_chunk_start) {
+                    reconfig_data_format(cb_cur_max, cb_prev_max);
+                    max_block_inplace(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                }
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
@@ -296,7 +300,7 @@ void MAIN {
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                    cb_cur_sum, cb_prev_sum, Sk_chunk_t_dynamic);
+                    cb_cur_sum, Sk_chunk_t_dynamic);
 
                 /* OUT_IM = QK @ V_CHUNK */
                 pack_reconfig_data_format(cb_out_mm);
@@ -438,6 +442,7 @@ void MAIN {
 
             // free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
+            cb_pop_front(cb_prev_sum, Sq_chunk_t);
         }
     }
     cb_pop_front(cb_q_in, q_chunk_tiles);
