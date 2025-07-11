@@ -5,11 +5,12 @@
 import math
 import torch
 import ttnn
+import pytest
 
 
-def test_tensor_item_basic_types(device):
-    """Test .item() with basic data types"""
-    test_cases = [
+@pytest.mark.parametrize(
+    "torch_tensor, ttnn_dtype, description",
+    [
         (torch.tensor([100], dtype=torch.uint8), ttnn.uint8, "UINT8"),
         (torch.tensor([-100], dtype=torch.int32), ttnn.int32, "INT32"),
         (torch.tensor([3.14], dtype=torch.float32), ttnn.float32, "FLOAT32"),
@@ -37,19 +38,33 @@ def test_tensor_item_basic_types(device):
         (torch.tensor([1e20], dtype=torch.float32), ttnn.float32, "FLOAT32 large"),
         (torch.tensor([-1e20], dtype=torch.float32), ttnn.float32, "FLOAT32 large negative"),
         (torch.tensor([1e-20], dtype=torch.float32), ttnn.float32, "FLOAT32 very small"),
-        # Test precision differences for BFLOAT16
+        # BFLOAT16 precision test
         (torch.tensor([0.123456789], dtype=torch.bfloat16), ttnn.bfloat16, "BFLOAT16 precision"),
-    ]
+        # 2D
+        (torch.tensor([[0.123456789]], dtype=torch.bfloat16), ttnn.bfloat16, "2D BFLOAT16 precision"),
+        (torch.tensor([[2147483647]], dtype=torch.int32), ttnn.int32, "2D INT32 max"),
+        (torch.tensor([[float("-inf")]], dtype=torch.float32), ttnn.float32, "2D FLOAT32 -inf"),
+        # 3D
+        (torch.tensor([[[30000]]], dtype=torch.int16), ttnn.uint16, "3D UINT16"),
+        (torch.tensor([[[0.0]]], dtype=torch.float32), ttnn.float32, "3D FLOAT32 zero"),
+        (torch.tensor([[[float("nan")]]], dtype=torch.float32), ttnn.float32, "3D FLOAT32 nan"),
+        # 4D
+        (torch.tensor([[[[30000]]]], dtype=torch.int16), ttnn.uint16, "4D UINT16"),
+        (torch.tensor([[[[0.0]]]], dtype=torch.float32), ttnn.float32, "4D FLOAT32 zero"),
+        (torch.tensor([[[[float("nan")]]]], dtype=torch.float32), ttnn.float32, "4D FLOAT32 nan"),
+    ],
+)
+def test_tensor_item_basic_types(device, torch_tensor, ttnn_dtype, description):
+    """Test .item() with basic data types"""
 
-    for torch_tensor, ttnn_dtype, name in test_cases:
-        ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-        original_value = torch_tensor.item()
-        ttnn_value = ttnn_tensor.item()
+    original_value = torch_tensor.item()
+    ttnn_value = ttnn_tensor.item()
 
-        if math.isnan(original_value):
-            assert math.isnan(ttnn_value), f"{name}: {original_value} != {ttnn_value}"
-        elif math.isinf(original_value):
-            assert math.isinf(ttnn_value), f"{name}: {original_value} != {ttnn_value}"
-        else:
-            assert original_value == ttnn_value, f"{name}: {original_value} != {ttnn_value}"
+    if math.isnan(original_value):
+        assert math.isnan(ttnn_value), f"{description}: {original_value} != {ttnn_value}"
+    elif math.isinf(original_value):
+        assert math.isinf(ttnn_value), f"{description}: {original_value} != {ttnn_value}"
+    else:
+        assert original_value == ttnn_value, f"{description}: {original_value} != {ttnn_value}"

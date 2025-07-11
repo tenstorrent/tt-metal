@@ -1070,11 +1070,10 @@ void pytensor_module(py::module& m_tensor) {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
 
                 // Check if tensor has exactly one element
-                if (self.logical_shape().volume() != 1) {
-                    TT_THROW(
-                        "tensor.item() requires tensor to have exactly one element, but got {} elements",
-                        self.logical_shape().volume());
-                }
+                TT_FATAL(
+                    self.logical_shape().volume() == 1,
+                    "tensor.item() requires tensor to have exactly one element, but got {} elements",
+                    self.logical_shape().volume());
 
                 Tensor host_tensor = self.storage_type() == DEVICE_STORAGE_TYPE ? self.cpu() : self;
 
