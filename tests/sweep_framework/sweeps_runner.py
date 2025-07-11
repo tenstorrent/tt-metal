@@ -394,7 +394,7 @@ def initialize_postgres_database():
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             initiated_by VARCHAR(255) NOT NULL,
             host VARCHAR(255),
-            command VARCHAR(1024),
+            run_contents VARCHAR(1024),
             git_author VARCHAR(255),
             git_branch_name VARCHAR(255),
             git_commit_hash VARCHAR(50),
@@ -490,7 +490,9 @@ def generate_error_signature(exception_message):
     return exception_message.splitlines()[0][:255]
 
 
-def push_run(initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, command=None):
+def push_run(
+    initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents=None
+):
     """Export run result to PostgreSQL database"""
     pg_config = get_postgres_config(POSTGRES_ENV)
 
@@ -500,13 +502,13 @@ def push_run(initiated_by, host, git_author, git_branch_name, git_commit_hash, s
 
         # Insert run result into the runs table
         insert_run_query = """
-        INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, command)
+        INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """
         cursor.execute(
             insert_run_query,
-            (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, command),
+            (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents),
         )
         conn.commit()
         logger.info("Successfully exported run result to PostgreSQL database")
@@ -654,7 +656,7 @@ def push_failed_test(run_id, name, test_start_time, test_end_time, status):
         raise
 
 
-def run_multiple_modules_json(module_names, suite_name, command=None, vector_id=None):
+def run_multiple_modules_json(module_names, suite_name, run_contents=None, vector_id=None):
     """Run multiple modules using JSON files from vectors_export directory"""
     pbar_manager = enlighten.get_manager()
 
@@ -675,7 +677,9 @@ def run_multiple_modules_json(module_names, suite_name, command=None, vector_id=
     git_commit_hash = git_hash()
     status = "success"
     run_start_time = dt.datetime.now()
-    run_id = push_run(initiated_by, host, git_author, git_branch_name, git_commit_hash, run_start_time, status, command)
+    run_id = push_run(
+        initiated_by, host, git_author, git_branch_name, git_commit_hash, run_start_time, status, run_contents
+    )
 
     should_continue = True
 
@@ -765,7 +769,7 @@ def run_multiple_modules_json(module_names, suite_name, command=None, vector_id=
     logger.info(f"Run status: {status}")
 
 
-def run_sweeps_json(module_names, suite_name, command=None, vector_id=None):
+def run_sweeps_json(module_names, suite_name, run_contents=None, vector_id=None):
     """Run sweeps from JSON files - supports single or multiple modules"""
     if isinstance(module_names, str):
         # Single module
@@ -807,16 +811,18 @@ def run_sweeps_json(module_names, suite_name, command=None, vector_id=None):
                 logger.info(f"Tests Executed - {len(results)}")
                 if DATABASE_BACKEND == "postgres":
                     logger.info("Dumping results to PostgreSQL database.")
-                    export_test_results_postgres(header_info, results, dt.datetime.now(), dt.datetime.now(), command)
+                    export_test_results_postgres(
+                        header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
+                    )
                 else:
                     logger.info("Dumping results to JSON file.")
                     export_test_results_json(header_info, results)
     else:
         # Multiple modules
-        run_multiple_modules_json(module_names, suite_name, command, vector_id=vector_id)
+        run_multiple_modules_json(module_names, suite_name, run_contents, vector_id=vector_id)
 
 
-def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, command=None):
+def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_contents=None):
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     pbar_manager = enlighten.get_manager()
 
@@ -873,7 +879,7 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, command=No
                     logger.info(f"Tests Executed - {len(results)}")
                     if DATABASE_BACKEND == "postgres":
                         export_test_results_postgres(
-                            header_info, results, dt.datetime.now(), dt.datetime.now(), command
+                            header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
                         )
                     else:
                         export_test_results(header_info, results)
@@ -926,7 +932,7 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, command=No
                         logger.info(f"Tests Executed - {len(results)}")
                         if DATABASE_BACKEND == "postgres":
                             export_test_results_postgres(
-                                header_info, results, dt.datetime.now(), dt.datetime.now(), command
+                                header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
                             )
                         else:
                             export_test_results(header_info, results)
@@ -940,7 +946,7 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, command=No
                     logger.info(f"Tests Executed - {len(results)}")
                     if DATABASE_BACKEND == "postgres":
                         export_test_results_postgres(
-                            header_info, results, dt.datetime.now(), dt.datetime.now(), command
+                            header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
                         )
                     else:
                         export_test_results(header_info, results)
@@ -1041,7 +1047,7 @@ def map_test_status_to_db_status(test_status):
     return status_mapping.get(test_status, "error")
 
 
-def export_test_results_postgres(header_info, results, run_start_time, run_end_time, command=None):
+def export_test_results_postgres(header_info, results, run_start_time, run_end_time, run_contents=None):
     """Export test results to PostgreSQL database"""
     if len(results) == 0:
         return
@@ -1067,7 +1073,7 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
         run_insert_query = """
         INSERT INTO runs (
             initiated_by, host, git_author, git_branch_name, git_commit_hash,
-            start_time_ts, end_time_ts, status, command
+            start_time_ts, end_time_ts, status, run_contents
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """
@@ -1081,7 +1087,7 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
             run_start_time,
             run_end_time,
             "success",  # Will be updated after processing all results
-            command,
+            run_contents,
         )
 
         cursor.execute(run_insert_query, run_values)
@@ -1326,14 +1332,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
     if args.module_name or args.suite_name:
-        command_details = []
+        run_contents_details = []
         if args.module_name:
-            command_details.append(f"modules: {args.module_name}")
+            run_contents_details.append(f"{args.module_name}")
         if args.suite_name:
-            command_details.append(f"suites: {args.suite_name}")
-        command = ", ".join(command_details)
+            run_contents_details.append(f"{args.suite_name}")
+        run_contents = ", ".join(run_contents_details)
     else:
-        command = "all_sweeps"
+        run_contents = "all_sweeps"
 
     if not args.module_name and args.vector_id:
         parser.print_help()
@@ -1408,10 +1414,10 @@ if __name__ == "__main__":
     # Determine which execution path to take
     if READ_FILE:
         # Using explicit read-file argument
-        run_sweeps_json(module_names, args.suite_name, command=command, vector_id=args.vector_id)
+        run_sweeps_json(module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
     elif DATABASE_BACKEND == "postgres" and args.module_name and not args.read_file:
         # Using PostgreSQL with module names but no read-file - use automatic file discovery
-        run_sweeps_json(module_names, args.suite_name, command=command, vector_id=args.vector_id)
+        run_sweeps_json(module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
     elif DATABASE_BACKEND == "postgres" and not args.module_name:
         # Using PostgreSQL with no module names specified - use automatic file discovery
         all_module_names = list(get_all_modules())
@@ -1423,11 +1429,11 @@ if __name__ == "__main__":
         logger.info("Running modules:")
         for module_name in module_names:
             logger.info(f"  {module_name}")
-        run_sweeps_json(module_names, args.suite_name, command=command, vector_id=args.vector_id)
+        run_sweeps_json(module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
     else:
         # Exporting results to Elasticsearch
         logger.info(f"Exporting results to Elasticsearch")
-        run_sweeps(module_names, args.suite_name, args.vector_id, skip_modules_set, command=command)
+        run_sweeps(module_names, args.suite_name, args.vector_id, skip_modules_set, run_contents=run_contents)
 
     if args.watcher:
         disable_watcher()
