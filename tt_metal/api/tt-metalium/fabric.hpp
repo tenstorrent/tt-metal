@@ -95,11 +95,11 @@ tt::tt_fabric::Topology get_fabric_topology();
  * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
  */
 void SetFabricConfig(
-    tt_metal::FabricConfig fabric_config,
-    tt_metal::FabricReliabilityMode reliability_mode = tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+    FabricConfig fabric_config,
+    FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
     std::optional<uint8_t> num_routing_planes = std::nullopt);
 
-tt_metal::FabricConfig GetFabricConfig();
+FabricConfig GetFabricConfig();
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(

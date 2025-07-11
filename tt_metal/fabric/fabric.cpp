@@ -242,13 +242,9 @@ tt::tt_fabric::Topology get_fabric_topology() {
 FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
 
 void SetFabricConfig(
-    tt_metal::FabricConfig fabric_config,
-    tt_metal::FabricReliabilityMode reliability_mode,
-    std::optional<uint8_t> num_routing_planes) {
+    FabricConfig fabric_config, FabricReliabilityMode reliability_mode, std::optional<uint8_t> num_routing_planes) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode, num_routing_planes);
 }
-
-tt_metal::FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
 
 namespace experimental {
 

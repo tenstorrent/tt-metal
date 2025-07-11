@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -257,7 +258,7 @@ class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixtu
 
 class DISABLED_CommandQueueMultiDeviceOnFabricFixture
     : public CommandQueueMultiDeviceFixture,
-      public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+      public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
 private:
     bool original_fd_fabric_en_ = false;
     inline static ARCH arch_ = tt::ARCH::Invalid;

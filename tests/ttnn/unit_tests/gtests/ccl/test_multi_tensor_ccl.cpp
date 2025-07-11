@@ -44,10 +44,12 @@ std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
 
 class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
 protected:
-    T3000MultiCQFabricMeshDeviceFixture() { tt::tt_fabric::SetFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D); }
+    T3000MultiCQFabricMeshDeviceFixture() {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
     void TearDown() override {
         T3000MultiCQMeshDeviceFixture::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 };
 

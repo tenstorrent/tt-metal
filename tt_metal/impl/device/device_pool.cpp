@@ -386,7 +386,7 @@ void DevicePool::initialize_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
         tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
@@ -613,7 +613,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
 
     // Only can launch Fabric if all devices are active
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             // Fabric currently requires all devices to be active
@@ -627,7 +627,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 }
 
 void DevicePool::wait_for_fabric_router_sync() const {
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
     }
@@ -918,7 +918,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     }
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-        tt::tt_fabric::SetFabricConfig(FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
     }
 
     return pass;

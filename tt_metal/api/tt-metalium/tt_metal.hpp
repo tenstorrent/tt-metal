@@ -17,20 +17,12 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/cluster_descriptor_types.h>
-
-namespace tt {
-namespace tt_metal {
-enum class FabricConfig : uint32_t;
-enum class FabricReliabilityMode : uint32_t;
-}  // namespace tt_metal
-}  // namespace tt
 
 namespace tt::tt_metal {
 class Buffer;
