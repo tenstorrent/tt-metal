@@ -142,6 +142,8 @@ public:
 
     CoreRangeSet(const CoreRange& core_range);
 
+    CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords);
+
     CoreRangeSet() = default;
 
     friend void swap(CoreRangeSet& first, CoreRangeSet& second);
