@@ -40,6 +40,9 @@ def test_benchmark_from_torch_two_copy(benchmark):
     benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
 
 
+import inspect
+
+
 @pytest.mark.parametrize("use_device", [True, False])
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize(
@@ -61,9 +64,15 @@ def test_benchmark_from_torch_two_copy(benchmark):
         ttnn.int32,
     ],
 )
-def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout):
+def test_benchmark_from_torch(tracy_profile, benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
+
+    ttnn.start_tracy_zone(
+        "benchmark_from_torch.py",
+        f"test_benchmark_from_torch[ttnn_dtype={ttnn_dtype}-torch_dtype={torch_dtype}-ttnn_layout={ttnn_layout}-use_device={use_device}]",
+        inspect.currentframe().f_lineno,
+    )
 
     height = 8096
     width = 8100
@@ -73,6 +82,8 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
         torch_input_tensor = torch.rand((height, width), dtype=torch_dtype)
 
     def from_torch():
+        ttnn.start_tracy_zone("benchmark_from_torch.py", "from_torch", inspect.currentframe().f_lineno)
+
         ttnn.from_torch(
             torch_input_tensor,
             device=device if use_device else None,
@@ -80,4 +91,42 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
             layout=ttnn_layout,
         )
 
+        ttnn.stop_tracy_zone()
+
     benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
+
+    ttnn.stop_tracy_zone()
+
+
+@pytest.mark.parametrize("use_device", [True, False])
+@pytest.mark.parametrize(
+    "torch_dtype",
+    [
+        torch.float16,
+        torch.float32,
+        torch.int32,
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        ttnn.bfloat16,
+        ttnn.uint8,
+        ttnn.int32,
+    ],
+)
+def test_benchmark_to_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype):
+    if ttnn_dtype in [ttnn.bfloat8_b, ttnn.uint8]:
+        pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
+
+    height = 32
+    width = 32
+    ttnn_input_tensor = ttnn.rand((height, width), dtype=ttnn_dtype, device=device)
+
+    def to_torch():
+        ttnn.to_torch(ttnn_input_tensor, device=device if use_device else None, dtype=torch_dtype)
+
+    benchmark.pedantic(to_torch, iterations=10, rounds=5, warmup_rounds=1)
