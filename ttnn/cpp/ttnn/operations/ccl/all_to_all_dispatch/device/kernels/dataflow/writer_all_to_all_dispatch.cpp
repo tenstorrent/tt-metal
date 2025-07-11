@@ -181,34 +181,38 @@ void kernel_main() {
                         // if the expert lives on the current device, we dispatch the input token to it
                         detail::dispatch_input_local_device(
                             input_token_read_addr, output_token_write_addr, output_page_size);
-                    } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
+                    } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                         // if the expert lives on a remote device, we dispatch the input token to it
                         // if axis is specified then we only send to the devices that are along the axis
                         // if axis is not specified then we send to all devices
-                        if (is_1d_topology(topology)) {
-                            dispatch_input_remote_device_1d<
+                        if constexpr (is_1d_topology<topology>()) {
+                            fabric_send_chip_unicast_noc_unicast_1d<
                                 linearized_mesh_coord,
-                                mesh_cols,
+                                topology,
                                 mesh_rows,
-                                fabric_max_packet_size,
-                                topology>(
+                                mesh_cols,
+                                fabric_max_packet_size>(
+                                fabric_connections,
+                                unicast_packet_header,
                                 d,
-                                alignment,
-                                (int)output_page_size,
                                 input_token_read_addr,
                                 output_token_write_addr,
-                                fabric_connections,
-                                unicast_packet_header);
+                                (int)output_page_size,
+                                alignment);
                         } else {
-                            dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size>(
+                            fabric_send_chip_unicast_noc_unicast<
+                                src_chip_id,
+                                mesh_rows,
+                                mesh_cols,
+                                fabric_max_packet_size>(
+                                fabric_connections,
+                                unicast_packet_header,
                                 dest_chip_ids[d],
                                 dest_mesh_ids[d],
-                                alignment,
-                                (int)output_page_size,
                                 input_token_read_addr,
                                 output_token_write_addr,
-                                fabric_connections,
-                                unicast_packet_header);
+                                (int)output_page_size,
+                                alignment);
                         }
                     }
                 }
@@ -235,43 +239,43 @@ void kernel_main() {
                     // dispatch the metadata to the current device and increment the local copy of the semaphore
                     detail::dispatch_metadata_local_device(
                         token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
-                } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
+                } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                     // dispatch the metadata to the remote device and increment the remote device's copy of the
                     // semaphore
-                    if (is_1d_topology(topology)) {
-                        dispatch_chip_uni_noc_uni_fused_sem_inc_1d<
+                    if constexpr (is_1d_topology<topology>()) {
+                        fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                             linearized_mesh_coord,
-                            mesh_cols,
+                            topology,
                             mesh_rows,
-                            fabric_max_packet_size,
-                            topology>(
+                            mesh_cols,
+                            fabric_max_packet_size>(
+                            fabric_connections,
+                            metadata_packet_header,
                             d,
-                            alignment,
-                            (int)metadata_page_size,
                             token_indices_address,
                             metadata_write_addr,
                             global_noc_semaphore_address,
+                            (int)metadata_page_size,
+                            alignment,
                             1,
-                            true,
-                            fabric_connections,
-                            metadata_packet_header);
+                            true);
                     } else {
-                        dispatch_chip_uni_noc_uni_fused_sem_inc<
+                        fabric_send_chip_unicast_noc_unicast_with_semaphore<
                             src_chip_id,
-                            mesh_cols,
                             mesh_rows,
+                            mesh_cols,
                             fabric_max_packet_size>(
+                            fabric_connections,
+                            metadata_packet_header,
                             dest_chip_ids[d],
                             dest_mesh_ids[d],
                             token_indices_address,
                             metadata_write_addr,
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
+                            alignment,
                             1,
-                            true,
-                            fabric_connections,
-                            metadata_packet_header,
-                            alignment);
+                            true);
                     }
                 }
             }
@@ -288,37 +292,41 @@ void kernel_main() {
                     intermediate_metadata_write_addr + (dispatch_index * indices_size),
                     indices_size,
                     global_noc_semaphore_address);
-            } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
-                if (is_1d_topology(topology)) {
-                    dispatch_chip_uni_noc_uni_fused_sem_inc_1d<
+            } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
+                if constexpr (is_1d_topology<topology>()) {
+                    fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                         linearized_mesh_coord,
-                        mesh_cols,
+                        topology,
                         mesh_rows,
-                        fabric_max_packet_size,
-                        topology>(
+                        mesh_cols,
+                        fabric_max_packet_size>(
+                        fabric_connections,
+                        metadata_packet_header,
                         d,
-                        alignment,
-                        (int)indices_size,
                         base_indices_addr,
                         intermediate_metadata_write_addr + (dispatch_index * indices_size),
                         global_noc_semaphore_address,
+                        (int)indices_size,
+                        alignment,
                         1,
-                        true,
-                        fabric_connections,
-                        metadata_packet_header);
+                        true);
                 } else {
-                    dispatch_chip_uni_noc_uni_fused_sem_inc<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size>(
+                    fabric_send_chip_unicast_noc_unicast_with_semaphore<
+                        src_chip_id,
+                        mesh_rows,
+                        mesh_cols,
+                        fabric_max_packet_size>(
+                        fabric_connections,
+                        metadata_packet_header,
                         dest_chip_ids[d],
                         dest_mesh_ids[d],
                         base_indices_addr,
                         intermediate_metadata_write_addr + (dispatch_index * indices_size),
                         global_noc_semaphore_address,
                         (int)indices_size,
+                        alignment,
                         1,
-                        true,
-                        fabric_connections,
-                        metadata_packet_header,
-                        alignment);
+                        true);
                 }
             }
         }
