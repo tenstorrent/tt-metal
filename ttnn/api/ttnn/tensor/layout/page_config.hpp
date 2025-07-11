@@ -32,6 +32,9 @@ public:
 
     const Tile& get_tile() const;
 
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+
     bool operator==(const RowMajorPageConfig&) const = default;
     bool operator!=(const RowMajorPageConfig&) const = default;
 
@@ -59,6 +62,9 @@ public:
     size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
 
     const Tile& get_tile() const;
+
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
 
     bool operator==(const TilePageConfig&) const = default;
     bool operator!=(const TilePageConfig&) const = default;
@@ -91,6 +97,15 @@ public:
     Tile get_tile() const;
 
     Layout get_layout() const;
+
+    /// Returns the minimum required alignment for the shard shape.
+    Alignment get_required_shard_shape_alignment() const;
+
+    /// Returns the recommended alignment for the shard shape.
+    /// This takes into account device memory alignment requirements trying to optimize memory usage and read/write
+    /// performance. The exact device alignment requirements are dependent on device architecture and BufferType, so the
+    /// maximum possible alignment is used.
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
 
     bool operator==(const PageConfig&) const = default;
     bool operator!=(const PageConfig&) const = default;
