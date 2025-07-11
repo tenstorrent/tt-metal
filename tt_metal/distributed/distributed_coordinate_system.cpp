@@ -71,10 +71,12 @@ MeshCoordinate DistributedCoordinateSystem::local_to_global(const MeshCoordinate
     return MeshCoordinate(global_coord);
 }
 
-
 // Static factory method to create from control plane
-DistributedCoordinateSystem DistributedCoordinateSystem::from_control_plane(const MeshShape& global_shape) {
+DistributedCoordinateSystem DistributedCoordinateSystem::from_control_plane() {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    auto global_shape = control_plane.get_physical_mesh_shape(
+        control_plane.get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::GLOBAL);
 
     auto local_shape = control_plane.get_physical_mesh_shape(
         control_plane.get_local_mesh_id_bindings()[0],

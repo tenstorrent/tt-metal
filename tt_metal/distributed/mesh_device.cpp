@@ -223,7 +223,10 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
 
-    auto coord_system = DistributedCoordinateSystem::from_control_plane(config.mesh_shape());
+    // When the mesh is distributed across multiple ranks, the DistributedCoordinateSystem
+    // is used to provide information on what part of the mesh is locally available vs. remote.
+    // For single-process/ single-host, the "global" mesh is the same as the "local" mesh.
+    auto coord_system = DistributedCoordinateSystem::from_control_plane();
 
     // Create distributed mesh container and populate local devices
     DistributedMeshContainer<IDevice*> global_devices(config.mesh_shape());

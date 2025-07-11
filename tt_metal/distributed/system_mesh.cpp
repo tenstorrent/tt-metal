@@ -47,10 +47,12 @@ public:
 };
 
 // Implementation of public methods
-SystemMesh::Impl::Impl()
-    : global_shape_(tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::GLOBAL)),
-      physical_coordinates_(global_shape_),  // Use DistributedMeshContainer
-      local_offset_(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_offset()) {
+SystemMesh::Impl::Impl() :
+    global_shape_(MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+        MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0],
+        tt::tt_fabric::MeshScope::GLOBAL)),
+    physical_coordinates_(global_shape_),
+    local_offset_(MetalContext::instance().get_control_plane().get_local_mesh_offset()) {
     // Get local physical coordinates
     const auto& local_coordinates = get_system_mesh_coordinate_translation_map();
     DistributedCoordinateSystem coord_system(global_shape_, local_coordinates.shape(), local_offset_);
@@ -65,7 +67,6 @@ SystemMesh::Impl::Impl()
     // Use populate_local_region to set up the distributed container
     physical_coordinates_.populate_local_region(coord_system, ordered_physical_coords);
 }
-
 
 const MeshShape& SystemMesh::Impl::shape() const { return global_shape_; }
 

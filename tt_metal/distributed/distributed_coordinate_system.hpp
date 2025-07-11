@@ -37,7 +37,7 @@ public:
     MeshCoordinateRange local_range() const { return MeshCoordinateRange(local_shape_); }
 
     // Static factory method to create coordinate system from control plane
-    static DistributedCoordinateSystem from_control_plane(const MeshShape& global_shape);
+    static DistributedCoordinateSystem from_control_plane();
 
 private:
     MeshShape global_shape_;

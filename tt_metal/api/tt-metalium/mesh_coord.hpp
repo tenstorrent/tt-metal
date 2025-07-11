@@ -404,14 +404,14 @@ public:
      */
     template <typename CoordSystem>
     void populate_local_region(const CoordSystem& coord_sys, const std::vector<T>& local_values) {
-        TT_FATAL(local_values.size() == coord_sys.local_shape().mesh_size(),
-                 "Number of local values {} doesn't match local mesh size {}",
-                 local_values.size(), coord_sys.local_shape().mesh_size());
-
+        TT_FATAL(
+            local_values.size() == this->shape().mesh_size(),
+            "Number of local values {} does not match mesh size {}",
+            local_values.size(),
+            this->shape().mesh_size());
         size_t idx = 0;
-        for (auto local_coord : coord_sys.local_range()) {
-            auto global_coord = coord_sys.local_to_global(local_coord);
-            this->at(global_coord) = MaybeRemote<T>::local(local_values[idx++]);
+        for (auto local_coord : this->coord_range()) {
+            this->at(local_coord) = MaybeRemote<T>::local(local_values[idx++]);
         }
     }
 
