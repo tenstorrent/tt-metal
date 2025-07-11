@@ -117,6 +117,8 @@ message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIB
 message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
 message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
 
+message(STATUS "Build with Offline Models from Mlp-Op-Perf: ${BUILD_MLP_OP_PERF}")
+
 ############################################################################################################################
 
 if(ENABLE_BUILD_TIME_TRACE)
