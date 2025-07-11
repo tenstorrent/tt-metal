@@ -1,0 +1,15 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_METAL_VISIBLE_DEVICES: "0,1"
+
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_METAL_VISIBLE_DEVICES: "2,3"
+
+global_env:
+  OMPI_ALLOW_RUN_AS_ROOT: 1
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml"

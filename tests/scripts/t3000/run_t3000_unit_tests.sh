@@ -107,7 +107,7 @@ run_t3000_tt_metal_multiprocess_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_tt_metal_multiprocess_tests"
-  mpirun -n 1 env TT_METAL_CACHE=~/.cache/tt-metal-cache0 TT_METAL_VISIBLE_DEVICES=0,1 TT_MESH_ID=0 TT_HOST_RANK=0 ./build/test/tt_metal/multi_host_fabric_tests : -n 1 env TT_METAL_CACHE=~/.cache/tt-metal-cache1 TT_METAL_VISIBLE_DEVICES=2,3 TT_MESH_ID=1 TT_HOST_RANK=0 ./build/test/tt_metal/multi_host_fabric_tests
+  tt-run --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

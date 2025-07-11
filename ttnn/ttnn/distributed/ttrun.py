@@ -89,6 +89,8 @@ def get_rank_environment(
         Dictionary of environment variables for this rank
     """
     env = {
+        "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", os.getcwd()),
+        "PYTHONPATH": os.environ.get("PYTHONPATH", os.getcwd()),
         "TT_METAL_CACHE": os.environ.get(
             "TT_METAL_CACHE",
             DEFAULT_CACHE_DIR_PATTERN.format(home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank),
