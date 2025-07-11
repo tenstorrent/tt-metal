@@ -4,7 +4,7 @@
 
 // This programming example is an advanced example, compared to the vecadd single core example in the
 // contributed folder.  It illustrated sharding tensor inputs to L1 memory of multiple cores directly,
-// then perform vector addition tile by tile. Because of sharding to L1, DRAM is not involved.
+// then perform vector addition tile by tile. Because of sharding to L1, DRAM nor NoC is not involved.
 // Data copy is avoided and reader and writer kernels are not needed.
 
 #include <tt-metalium/bfloat16.hpp>
@@ -12,6 +12,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt-metalium/buffer.hpp"
+#include "tt-metalium/buffer_types.hpp"
+#include "tt-metalium/constants.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,63 +23,38 @@
 #include <string_view>
 #include <vector>
 
-using namespace tt;
 using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
-// sharding configuration is defined by the following struct
-struct L1Config {
-    L1Config(TensorMemoryLayout layout, uint32_t cores_height, uint32_t cores_width) :
-        buffer_layout(layout), num_cores_height(cores_height), num_cores_width(cores_width) {}
+struct DistributionConfig {
+    DistributionConfig(TensorMemoryLayout layout, uint32_t num_cores_y, uint32_t num_cores_x) :
+        layout(layout), num_cores_y(num_cores_y), num_cores_x(num_cores_x) {}
 
-    TensorMemoryLayout buffer_layout;
-    uint32_t num_cores_height;
-    uint32_t num_cores_width;
-
-    // following sharding parameters are hardcode for this example
-    tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
-    uint32_t element_size = sizeof(bfloat16);
-    uint32_t num_tiles_per_core_height = 2;
-    uint32_t num_tiles_per_core_width = 2;
-
-    // following sharding parameters are calculated based on the above configuration
-    uint32_t num_cores = num_cores_height * num_cores_width;
-    uint32_t num_tiles_per_core = num_tiles_per_core_height * num_tiles_per_core_width;
-    uint32_t size_bytes = num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT * num_cores_width *
-                          num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
-    uint32_t page_size_bytes = tt::constants::TILE_HW * element_size;
-    CoreRange cores = CoreRange(CoreCoord(0, 0), CoreCoord(0, num_cores - 1));
-    ShardSpecBuffer shard_spec() const {
-        return ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>({cores})),
-            {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
-             (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {num_cores_height * num_tiles_per_core_height * num_cores_height,
-             num_tiles_per_core_width * num_cores_width});
-    }
+    TensorMemoryLayout layout;
+    uint32_t num_cores_y;
+    uint32_t num_cores_x;
 };
 
-std::shared_ptr<Buffer> MakeShardedL1BufferBFP16(IDevice* device, const L1Config& test_config) {
-    return CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+std::shared_ptr<Buffer> MakeShardedL1BufferBFP16(
+    IDevice* device, size_t size, const DistributionConfig& config, const ShardSpecBuffer& shard_config) {
+    return CreateBuffer(ShardedBufferConfig{
         .device = device,
-        .size = test_config.size_bytes,
-        .page_size = test_config.page_size_bytes,
-        .buffer_layout = test_config.buffer_layout,
-        .shard_parameters = test_config.shard_spec()});
+        .size = size,
+        .page_size = tt::constants::TILE_HW * sizeof(bfloat16),
+        .buffer_layout = config.layout,
+        .shard_parameters = shard_config});
 }
 
 CBHandle MakeCircularBufferBFP16(
     Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles, const std::shared_ptr<Buffer>& l1_buf) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_HW;
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}})
-                                              .set_page_size(cb, tile_size)
-                                              // IMPORTANT: assign L1 buffer address to circular buffer directly so that
-                                              // no extra allocation and data copy
-                                              .set_globally_allocated_address(*l1_buf);
-    return CreateCircularBuffer(program, core, cb_src0_config);
+    CircularBufferConfig cb_config = CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}})
+                                         .set_page_size(cb, tile_size)
+                                         // IMPORTANT: assign L1 buffer address to circular buffer directly so that
+                                         // no extra allocation and data copy
+                                         .set_globally_allocated_address(*l1_buf);
+    return CreateCircularBuffer(program, core, cb_config);
 }
 
 std::string next_arg(int& i, int argc, char** argv) {
@@ -101,13 +79,29 @@ void help(std::string_view program_name) {
 }
 
 int main(int argc, char** argv) {
+    // This is an advanced example of vector addition with sharded L1 buffers. Sharding is a technique that allows
+    // distributing data is specific patterns across multiple cores's L1(SRAM) memory, reducing or eliminating the
+    // need for NoC bandwidth. This example demonstrates how to set up sharded L1 buffers and perform vector addition
+    // across them.
+    //
+    // Sharding is quite percise and requires exact division of the data across the cores. The example tries to
+    // distribute 64 (4x4) tiles across 4 cores. But in different sharding modes:
+    // * height: Shard the tensors across the height dimension
+    // * width: Shard the tensors across the width dimension
+    // * block: Shard the tensors across both height and width dimensions
+    //
+    // In different modes, the data is distributed differently across the cores in different patterns. Each core:
+    // * hight: Uses 4 cores in the y direction. Each core gets 1 rows of 4 tiles each.
+    // * width: Uses 4 cores in the x direction. Each core gets 1 column of 4 tiles each.
+    // * block: Uses a 2x2 grid of cores. Each core gets 2 rows and 2 columns of tiles, effectively sharding the tensor
+    // into blocks.
+
     // used fixed seed for reproducibility and deterministic results
     int seed = 0x1234567;
     int device_id = 0;
     std::string sharding_type = "height";
 
-    // sharding configuration, 4x4 of tiles bfloat16, each core has 2x2 tiles, sharded to 4 core
-    const std::unordered_map<std::string_view, L1Config> test_configs{
+    const std::unordered_map<std::string_view, DistributionConfig> test_configs{
         {"height", {TensorMemoryLayout::HEIGHT_SHARDED, 4, 1}},
         {"width", {TensorMemoryLayout::WIDTH_SHARDED, 1, 4}},
         {"block", {TensorMemoryLayout::BLOCK_SHARDED, 2, 2}},
@@ -137,44 +131,86 @@ int main(int argc, char** argv) {
     IDevice* device = CreateDevice(device_id);
     Program program = CreateProgram();
 
-    std::cout << "Sharding type: " << sharding_type << std::endl;
-    if (!test_configs.contains(sharding_type)) {
-        std::cout << "Invalid sharding type: " << sharding_type << std::endl;
-        help(argv[0]);
-        return 1;
-    }
-    const auto& test_config = test_configs.at(sharding_type);
+    const auto& config = test_configs.at(sharding_type);
 
-    // Create the input and output buffers.
-    auto a = MakeShardedL1BufferBFP16(device, test_config);
-    auto b = MakeShardedL1BufferBFP16(device, test_config);
-    auto c = MakeShardedL1BufferBFP16(device, test_config);
+    // In this example we will distribute 16 tiles (4x4) across 4 cores.
+    constexpr uint32_t n_tiles_y = 4;
+    constexpr uint32_t n_tiles_x = 4;
 
+    // Calculate the number of tiles per core in each dimension based on the configuration.
+    const uint32_t num_tiles_per_core_x = n_tiles_x / config.num_cores_x;
+    const uint32_t num_tiles_per_core_y = n_tiles_y / config.num_cores_y;
+
+    fmt::print(
+        "Sharding {}x{} tiles to {}x{} cores in {} mode\n",
+        n_tiles_y,
+        n_tiles_x,
+        config.num_cores_y,
+        config.num_cores_x,
+        config.layout);
+    fmt::print("Each core will handle {}x{} tiles\n\n", num_tiles_per_core_y, num_tiles_per_core_x);
+
+    // Construct the L1 configuration. The configuration is very detailed to enable maximum performance.
+    // The cores that the buffer will be sharded across.
+    const CoreRange cores(CoreCoord(0, 0), CoreCoord(config.num_cores_y - 1, config.num_cores_x - 1));
+    // The sharing configuration for the buffer
+    ShardSpecBuffer spec(
+        // core_sets: The set of cores to shard the buffer across
+        cores,
+        // shard_shape: The size of each shard in the buffer
+        {uint32_t(num_tiles_per_core_x * tt::constants::TILE_HEIGHT),
+         uint32_t(num_tiles_per_core_y * tt::constants::TILE_WIDTH)},
+        // shard_orientation: The orientation of the shards in the buffer
+        ShardOrientation::ROW_MAJOR,
+        // page_shape: The shape of each page in the buffer (most likely equals to tile size as that's what the compute
+        // engines expect)
+        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+        // tensor2d_shape_in_pages: The shape of the tensor in pages/(tiles)
+        {n_tiles_y, n_tiles_x});
+
+    // Create the input and output buffers that lives on L1(SRAM)
+    size_t size_bytes = n_tiles_y * n_tiles_x * tt::constants::TILE_HW * sizeof(bfloat16);
+    auto a = MakeShardedL1BufferBFP16(device, size_bytes, config, spec);
+    auto b = MakeShardedL1BufferBFP16(device, size_bytes, config, spec);
+    auto c = MakeShardedL1BufferBFP16(device, size_bytes, config, spec);
+
+    // Data to fill the input buffers.
     std::mt19937 rng(seed);
-    auto a_data = create_random_vector_of_bfloat16_native(test_config.size_bytes, 10, rng());
-    auto b_data = create_random_vector_of_bfloat16_native(test_config.size_bytes, 10, rng());
+    std::uniform_real_distribution<float> dist(0.0f, 10.0f);
+    const size_t num_elements = n_tiles_x * n_tiles_y * tt::constants::TILE_HW;
+    std::vector<bfloat16> a_data(num_elements);
+    std::vector<bfloat16> b_data(num_elements);
+    for (size_t i = 0; i < a_data.size(); ++i) {
+        a_data[i] = bfloat16(dist(rng));
+        b_data[i] = bfloat16(dist(rng));
+    }
 
-    MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_0, test_config.num_tiles_per_core, a);
-    MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_1, test_config.num_tiles_per_core, b);
-    MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_2, test_config.num_tiles_per_core, c);
+    size_t num_tiles_per_core = n_tiles_x * n_tiles_y / CoreRangeSet(cores).num_cores();
+    // Create circular buffers so the compute APIs can access the data.
+    // NOTE: These are special circular buffers that have explicitly set L1 buffer address. As data already fully
+    // resides in L1, we can simply point the circular buffers to the L1 buffers and avoid any extra allocation or data
+    // copy. This is an impotant optimization for performance. But hyper specific to use cases like this one.
+    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, num_tiles_per_core, a);
+    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, num_tiles_per_core, b);
+    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, num_tiles_per_core, c);
 
+    // Create the kernels
     auto compute = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_sharding/kernels/add_sharding.cpp",
-        test_config.cores,
+        cores,
         ComputeConfig{
             .math_approx_mode = false,
             // pass in compile time arguments
-            .compile_args = {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2},
-            .defines = {}});
+            .compile_args = {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2}});
 
     // copy data from host to L1 directly
-    EnqueueWriteBuffer(device->command_queue(), a, a_data, false);
-    EnqueueWriteBuffer(device->command_queue(), b, b_data, false);
-
-    SetRuntimeArgs(program, compute, test_config.cores, {test_config.num_tiles_per_core});
-
     CommandQueue& cq = device->command_queue();
+    EnqueueWriteBuffer(cq, a, a_data, false);
+    EnqueueWriteBuffer(cq, b, b_data, false);
+
+    SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
+
     // Enqueue the program
     EnqueueProgram(cq, program, true);
 
@@ -186,30 +222,28 @@ int main(int argc, char** argv) {
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)
-    std::cout << "Partial results: (note we are running under BFP16. It's going "
-                 "to be less accurate)\n";
-    size_t element_per_core = constants::TILE_HW * test_config.num_tiles_per_core;
+    fmt::print("Partial results: (note we are running under BFP16. It's going to be less accurate)\n");
+    size_t element_per_core = tt::constants::TILE_HW * num_tiles_per_core;
     size_t print_per_core = std::min((size_t)10, element_per_core);
 
-    for (int core = 0; core < test_config.num_cores; ++core) {
-        const auto core_offset = core * element_per_core;
-        std::cout << "Core (0, " << core << "):\n";
+    int core_idx = 0;
+    for (auto& core : cores) {
+        const auto core_offset = core_idx * element_per_core;
+        fmt::print("Core {}:\n", core_idx);
         for (int index = 0; index < print_per_core; index++) {
             const auto i = core_offset + index;
-            std::cout << "index  " << i << "   " << a_data[i].to_float() << " + " << b_data[i].to_float() << " = "
-                      << c_data[i].to_float() << "\n";
+            fmt::print("index {}: {} + {} = {}\n", i, a_data[i].to_float(), b_data[i].to_float(), c_data[i].to_float());
         }
         std::cout << std::endl;
+        core_idx++;
     }
-    std::cout << std::flush;
 
+    // Verify the results
     bool pass = true;
     for (size_t i = 0; i < c_data.size(); i++) {
         float expected = a_data[i].to_float() + b_data[i].to_float();
-        if (std::abs(c_data[i].to_float() - expected) > 0 &&
-            std::abs(c_data[i].to_float() - expected) > 0.2f) {  // Allow some error due to BFP16 precision
-            std::cout << "Mismatch at index " << i << ": expected " << expected << ", got " << c_data[i].to_float()
-                      << std::endl;
+        if (std::abs(c_data[i].to_float() - expected) > 0.2f) {  // Allow some error due to BFP16 precision
+            fmt::print(stderr, "Mismatch at index {}: expected {}, got {}\n", i, expected, c_data[i].to_float());
             pass = false;
         }
     }
