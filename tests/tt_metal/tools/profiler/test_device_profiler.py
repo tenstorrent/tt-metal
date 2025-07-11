@@ -606,5 +606,5 @@ def test_sub_device_profiler():
     )
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
-        "CommandQueueSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
+        "UnitMeshCQSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
     )
