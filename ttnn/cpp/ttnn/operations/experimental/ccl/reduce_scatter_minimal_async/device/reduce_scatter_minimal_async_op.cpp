@@ -149,14 +149,17 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
     std::vector<IDevice*> devices_to_use = {};
     const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
     if (this->cluster_axis.has_value()) {
+        log_info(tt::LogOp, "DEBUG: cluster_axis is set to {}", this->cluster_axis.value());
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.
         devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
                                                            : mesh_view.get_devices_on_row(coord[0]);
     } else {
+        log_info(tt::LogOp, "DEBUG: cluster_axis is not set");
         devices_to_use = devices;
     }
     uint32_t target_ring_size = devices_to_use.size();
+    log_info(tt::LogOp, "DEBUG: target_ring_size is {}", target_ring_size);
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
@@ -235,7 +238,20 @@ Tensor reduce_scatter_minimal_async_impl(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
-    uint32_t num_devices = devices.size();
+
+    // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
+    // Since we don't have a specific coordinate here, we use the maximum possible devices
+    uint32_t num_devices;
+    if (cluster_axis.has_value()) {
+        auto mesh_device = input_tensor.mesh_device();
+        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
+        const auto& mesh_view = mesh_device->get_view();
+        // Use the mesh dimensions to determine the ring size
+        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    } else {
+        num_devices = devices.size();
+    }
+
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
