@@ -13,7 +13,7 @@ namespace ckernel::sfpu
 inline sfpi::vFloat _sigmoid_piecewise_linear_positive_(sfpi::vFloat val)
 {
     sfpi::vFloat result = 1.0f;
-    v_if (val < 1.0f)
+    v_if (val <= 1.0f)
     {
         result = 0.229f * val + 0.5f; // linear appx as y = 0.229x + 0.5
     }
