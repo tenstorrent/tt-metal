@@ -32,7 +32,7 @@ GRAPH_OUT_FOLDER = "plots"
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 @pytest.mark.parametrize("reset_bool", [True])  # Optional reset
-@pytest.mark.parametrize("reset_period", [200])  # reser device every N prompts
+@pytest.mark.parametrize("reset_period", [200])  # reser device every N prompts, should be at least 2
 def test_accuracy_with_reset(
     vae_on_device, captions_path, coco_statistics_path, evaluation_range, reset_bool, reset_period
 ):
@@ -50,6 +50,8 @@ def test_accuracy_with_reset(
 
         subprocess.run(
             [
+                "env",
+                "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml",  # Required in CI; has no effect in local environments
                 "pytest",
                 "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py",
                 "--start-from",
