@@ -95,54 +95,36 @@ float interpolate_transaction_bw(
 
 uint32_t get_effective_l1_cores(
     uint32_t transaction_size,
-    uint32_t num_cores,
     int index,
     bool is_write,
     std::map<uint32_t, std::array<float, 2>> l1_read_bw,
     std::map<uint32_t, std::array<float, 2>> l1_write_bw) {
     const uint32_t max_l1_cores = (index == 0) ? (8 + 8) : (9 + 12);
-
-    float achieved_l1_bw;
-    float max_bw = index == 0 ? 28.0f : 33.0f;
-    auto tr_type = is_write ? l1_write_bw : l1_read_bw;
-    if (transaction_size < 1024) {
-        achieved_l1_bw = interpolate_transaction_bw(transaction_size, tr_type, index);
-    } else {
-        achieved_l1_bw = max_bw;  // Max L1 bandwidth
-    }
-
-    // Calculate how many cores needed to saturate L1 bandwidth
-    uint32_t cores_for_bandwidth = std::ceil(max_bw / achieved_l1_bw);
-
-    uint32_t effective_cores = cores_for_bandwidth * max_l1_cores;
+    int num_cores = (index == 0) ? 64 : 108;
+    float max_bw = index == 0 ? 30.0f : 36.0f;
+    auto aggregate_bw = max_bw * max_l1_cores;
+    float achieved_l1_bw = interpolate_transaction_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
+    uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
     if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
+        effective_cores = num_cores;
     }
     return effective_cores;
 }
 
 uint32_t get_effective_dram_cores(
     uint32_t transaction_size,
-    uint32_t num_cores,
     uint32_t num_dram_channels,
+    bool is_read,
     int index,
     std::map<uint32_t, std::array<float, 2>> dram_bw) {
-    // For given transaction size, calculate effective bandwidth
-    float achieved_channel_bw;
-    if (transaction_size < 1024) {
-        achieved_channel_bw = interpolate_transaction_bw(transaction_size, dram_bw, index);
-    } else {
-        achieved_channel_bw = index == 0 ? 28.0f : 33.0f;  // Max per-channel bandwidth
-    }
-
-    // Calculate how many cores needed to saturate one channel
-    uint32_t cores_per_channel = std::ceil(28.0f / achieved_channel_bw);
-
-    uint32_t effective_cores = cores_per_channel * num_dram_channels;
+    int num_cores = (index == 0) ? 64 : 108;
+    float max_bw = is_read ? 37.0f : 35.0f;
+    auto aggregate_bw = max_bw * num_dram_channels;
+    float achieved_dram_bw = interpolate_transaction_bw(transaction_size, dram_bw, index);
+    uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
     if (effective_cores > num_cores) {
         effective_cores = num_cores;  // Limit to available cores
     }
-
     return effective_cores;
 }
 
@@ -277,6 +259,7 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
             input_transaction_size = std::min(multi_row_size, 65536u);
         }
     }
+
     uint32_t num_read_transactions = std::ceil((float)input_size_bytes / (float)input_transaction_size);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
@@ -301,26 +284,27 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
     }
     uint32_t num_write_transactions = std::ceil((float)output_size_bytes / (float)output_transaction_size);
 
-    // limit number of cores to max aggregate bw to avoid congestion
     int num_dram_channels = (arch == tt::ARCH::WORMHOLE_B0) ? 12 : 8;
-
+    auto updated_input_transactions = num_read_transactions;
+    auto updated_output_transactions = num_write_transactions;
+    // limit number of cores to max aggregate bw to avoid congestion
     if (input_is_dram && output_is_dram) {
         uint32_t input_effective_cores =
-            get_effective_dram_cores(input_transaction_size, num_cores, num_dram_channels, index, dram_bw);
+            get_effective_dram_cores(input_transaction_size, num_dram_channels, true, index, dram_bw);
         uint32_t output_effective_cores =
-            get_effective_dram_cores(output_transaction_size, num_cores, num_dram_channels, index, dram_bw);
-
-        auto updated_input_transactions = std::ceil((float)num_read_transactions / (float)input_effective_cores);
-        auto updated_output_transactions = std::ceil((float)num_write_transactions / (float)output_effective_cores);
-
+            get_effective_dram_cores(output_transaction_size, num_dram_channels, false, index, dram_bw);
+        updated_input_transactions = std::ceil((float)num_read_transactions / (float)input_effective_cores);
+        updated_output_transactions = std::ceil((float)num_write_transactions / (float)output_effective_cores);
         num_cores = input_effective_cores;
         if (updated_input_transactions < updated_output_transactions) {  // to do permute specific
             num_cores = output_effective_cores;
         }
     } else if (input_is_dram) {
-        num_cores = get_effective_dram_cores(input_transaction_size, num_cores, num_dram_channels, index, dram_bw);
+        num_cores = get_effective_dram_cores(input_transaction_size, num_dram_channels, true, index, dram_bw);
+        updated_input_transactions = std::ceil((float)num_read_transactions / (float)num_cores);
     } else if (output_is_dram) {
-        num_cores = get_effective_dram_cores(output_transaction_size, num_cores, num_dram_channels, index, dram_bw);
+        num_cores = get_effective_dram_cores(output_transaction_size, num_dram_channels, false, index, dram_bw);
+        updated_output_transactions = std::ceil((float)num_write_transactions / (float)num_cores);
     }
     // local noc transactions for l1 sharded tensors
     bool is_local = input_is_sharded && !input_is_dram && output_is_sharded && !output_is_dram &&
@@ -329,24 +313,28 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
 
     if (!input_is_dram && !output_is_dram) {
         uint32_t input_effective_cores =
-            get_effective_l1_cores(input_transaction_size, num_cores, index, false, l1_read_bw, l1_write_bw);
+            get_effective_l1_cores(input_transaction_size, index, false, l1_read_bw, l1_write_bw);
         uint32_t output_effective_cores =
-            get_effective_l1_cores(output_transaction_size, num_cores, index, true, l1_read_bw, l1_write_bw);
-        auto updated_input_transactions = std::ceil((float)num_read_transactions / (float)input_effective_cores);
-        auto updated_output_transactions = std::ceil((float)num_write_transactions / (float)output_effective_cores);
-
+            get_effective_l1_cores(output_transaction_size, index, true, l1_read_bw, l1_write_bw);
+        updated_input_transactions = std::ceil((float)num_read_transactions / (float)input_effective_cores);
+        updated_output_transactions = std::ceil((float)num_write_transactions / (float)output_effective_cores);
         num_cores = input_effective_cores;
-        if (updated_input_transactions < updated_output_transactions) {  // to do permute specific
+        if (updated_input_transactions < updated_output_transactions) {
             num_cores = output_effective_cores;
         }
     } else if (!input_is_dram) {
-        num_cores = get_effective_l1_cores(input_transaction_size, num_cores, index, false, l1_read_bw, l1_write_bw);
+        auto num_cores_ = get_effective_l1_cores(input_transaction_size, index, false, l1_read_bw, l1_write_bw);
+        if (updated_output_transactions < (num_read_transactions / num_cores_)) {
+            num_cores = num_cores_;
+        }
     } else if (!output_is_dram) {
-        num_cores = get_effective_l1_cores(output_transaction_size, num_cores, index, true, l1_read_bw, l1_write_bw);
+        auto num_cores_ = get_effective_l1_cores(output_transaction_size, index, true, l1_read_bw, l1_write_bw);
+        if (updated_input_transactions < (num_write_transactions / num_cores_)) {
+            num_cores = num_cores_;
+        }
     }
 
     num_cores = is_local ? input_tensor.memory_config().shard_spec().value().grid.num_cores() : num_cores;
-
     // parallelize work over cores
     // assume distribution of work is balanced between cores
     num_read_transactions = std::ceil((float)num_read_transactions / (float)num_cores);
@@ -376,7 +364,6 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         l1_read_bw,
         l1_write_bw,
         dram_bw);
-
     // Use max(read, write) to account for overlap
     int ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
     int total_compute_cycles = 0;

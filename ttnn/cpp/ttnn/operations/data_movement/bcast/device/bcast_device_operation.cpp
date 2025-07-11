@@ -5,7 +5,6 @@
 #include "bcast_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 // using namespace tt;
 // using namespace tt_metal;
@@ -169,19 +168,6 @@ std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(
     }
     auto spec = compute_output_specs(input_tensors, output_tensors)[0];
     return {create_device_tensor(spec, input_tensors.at(0).device())};
-}
-
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-EltwiseBinaryBroadcast::create_op_performance_model(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        input_tensors, output_tensors, ideal_dev_clock_cycles);
-    return result;
 }
 
 operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(
