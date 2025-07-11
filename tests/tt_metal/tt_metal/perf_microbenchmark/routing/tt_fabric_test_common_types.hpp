@@ -189,11 +189,11 @@ struct AllocatorPolicies {
 
 struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
-    std::vector<std::vector<eth_coord_t>> logical_to_physical_mapping;
+    std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
 
     PhysicalMeshConfig() {
         mesh_descriptor_path = "";  // Default path to the mesh descriptor.
-        logical_to_physical_mapping = {};
+        eth_coord_mapping = {};
     }
 };
 

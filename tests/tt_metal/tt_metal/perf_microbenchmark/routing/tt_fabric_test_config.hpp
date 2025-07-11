@@ -523,17 +523,15 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
 inline PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml) {
     TT_FATAL(physical_mesh_yaml.IsMap(), "Expected physical mesh config to be a map");
     TT_FATAL(
-        physical_mesh_yaml["mesh_descriptor_path"].IsDefined() ==
-            physical_mesh_yaml["logical_to_physical_mapping"].IsDefined(),
-        "Physical mesh config must contain both 'mesh_descriptor_path' and 'logical_to_physical_mapping', or neither");
+        physical_mesh_yaml["mesh_descriptor_path"].IsDefined() == physical_mesh_yaml["eth_coord_mapping"].IsDefined(),
+        "Physical mesh config must contain both 'mesh_descriptor_path' and 'eth_coord_mapping', or neither");
     PhysicalMeshConfig physical_mesh_config;
     if (physical_mesh_yaml["mesh_descriptor_path"]) {
         physical_mesh_config.mesh_descriptor_path =
             parse_scalar<std::string>(physical_mesh_yaml["mesh_descriptor_path"]);
     }
-    if (physical_mesh_yaml["logical_to_physical_mapping"]) {
-        physical_mesh_config.logical_to_physical_mapping =
-            parse_2d_array<eth_coord_t>(physical_mesh_yaml["logical_to_physical_mapping"]);
+    if (physical_mesh_yaml["eth_coord_mapping"]) {
+        physical_mesh_config.eth_coord_mapping = parse_2d_array<eth_coord_t>(physical_mesh_yaml["eth_coord_mapping"]);
     }
     return physical_mesh_config;
 }
@@ -1699,9 +1697,9 @@ private:
         out << YAML::BeginMap;
         out << YAML::Key << "mesh_descriptor_path";
         out << YAML::Value << config.mesh_descriptor_path;
-        out << YAML::Key << "logical_to_physical_mapping";
+        out << YAML::Key << "eth_coord_mapping";
         out << YAML::Value;
-        to_yaml(out, config.logical_to_physical_mapping);
+        to_yaml(out, config.eth_coord_mapping);
         out << YAML::EndMap;
     }
 

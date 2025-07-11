@@ -67,11 +67,33 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
 
 public:
     void init(const PhysicalMeshConfig* physical_mesh_config = nullptr) {
-        // TODO
-        // if (physical_mesh_config) {
-        //     tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(physical_mesh_config->mesh_descriptor_path,
-        //     physical_mesh_config->logical_to_physical_mapping);
-        // }
+        if (physical_mesh_config) {
+            // hacky workaround for now, will change as more multi-host infra is brought up
+            const char* mesh_id_str = std::getenv("TT_MESH_ID");
+            const char* host_rank_str = std::getenv("TT_HOST_RANK");
+            auto local_mesh_id = std::string(mesh_id_str);
+            auto local_host_rank = std::string(host_rank_str);
+
+            TT_FATAL(
+                local_mesh_id.size() and local_host_rank.size(),
+                "TT_MESH_ID and TT_HOST_RANK environment variables must be set for Multi-Host Fabric Tests.");
+
+            const auto& eth_coord_mapping = physical_mesh_config->eth_coord_mapping;
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+            for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
+                if (mesh_id == std::stoi(local_mesh_id)) {
+                    for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
+                        const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
+                        chip_to_eth_coord_mapping.insert(
+                            {FabricNodeId(MeshId{mesh_id}, chip_id),
+                             cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                    }
+                }
+            }
+            tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+                physical_mesh_config->mesh_descriptor_path, chip_to_eth_coord_mapping);
+        }
         control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
         TT_FATAL(

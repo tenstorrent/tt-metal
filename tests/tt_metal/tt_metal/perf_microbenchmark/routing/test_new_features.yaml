@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 physical_mesh:
    mesh_descriptor_path: "<path_to_yaml>"
-   logical_to_physical_mapping: [
+   eth_coord_mapping: [
     [
       [0, 0, 0, 0, 0],
       [0, 1, 0, 0, 0],
