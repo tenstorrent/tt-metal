@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import pytest
 from loguru import logger
 
@@ -17,7 +18,7 @@ from models.utility_functions import (
 )
 
 
-class TtAddAndNormModel(torch.nn.Module):
+class TtAddAndNormModel(LightweightModule):
     def __init__(self, config, state_dict, device, lnorm_type):
         super().__init__()
 

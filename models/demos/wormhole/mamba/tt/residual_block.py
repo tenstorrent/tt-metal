@@ -4,14 +4,13 @@
 
 from typing import Callable
 
-import torch
-
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.mamba.reference.args import ModelArgs
 from models.demos.wormhole.mamba.tt.mamba_block import TtMambaBlock
 
 
-class TtResidualBlock(torch.nn.Module):
+class TtResidualBlock(LightweightModule):
     def __init__(self, args: ModelArgs, device, configs, load_fn: Callable):
         super().__init__()
 
