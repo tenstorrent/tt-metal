@@ -915,7 +915,10 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
 /**
  * Initiates an asynchronous read for a single packet with transaction size and source location determined by the AddrGen object.
  * This function is the generic implementation that can be used with any address generator that provides
- * the get_noc_addr method and page_size attribute.
+ * the get_noc_addr method and either a page_size or a log_base_2_of_page_size
+ * member variable. It is designed to be flexible and can be used with various address generators.
+ * Note that providing the size argument is optional, and if provided,
+ * it will override the default page size of the address generator.
  *
  * Return value: None
  *
@@ -938,12 +941,18 @@ FORCE_INLINE void noc_async_read_page(
     uint32_t size = 0,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    noc_async_read_one_packet(
-        addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, size ? size : addrgen.page_size, noc);
+    static_assert(
+        has_required_addrgen_traits<AddrGen>::value,
+        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+
+    uint32_t page_size = has_page_size<AddrGen>::value ? addrgen.page_size : 1 << addrgen.log_base_2_of_page_size;
+    noc_async_read_one_packet(addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, size ? size : page_size, noc);
 }
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
  * Initiates an asynchronous read for a single packet with transaction size and source location determined by the TensorAccessor object.
  * This function is a convenience wrapper around noc_async_read_page for TensorAccessor objects.
  * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
@@ -961,6 +970,8 @@ FORCE_INLINE void noc_async_read_page(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
  * Initiates an asynchronous read for a single packet with transaction size and source location determined by the TensorAccessor object.
  * This function is a convenience wrapper around noc_async_read_page for TensorAccessor objects.
  * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
@@ -978,6 +989,8 @@ FORCE_INLINE void noc_async_read_tile(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
  * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGen object.
  * This function is a convenience wrapper around noc_async_read_page for InterleavedAddrGen objects.
  * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
@@ -995,6 +1008,8 @@ FORCE_INLINE void noc_async_read_tile(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
  * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGen object.
  * This function is a convenience wrapper around noc_async_read_page for InterleavedAddrGen objects.
  * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
@@ -1013,6 +1028,8 @@ FORCE_INLINE void noc_async_read_page(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
  * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGenFast object.
  * This function is a convenience wrapper around noc_async_read_page for InterleavedAddrGenFast objects.
  * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
@@ -1038,6 +1055,8 @@ FORCE_INLINE void noc_async_read_tile(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
  * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedPow2AddrGenFast object.
  * This function is a convenience wrapper around noc_async_read_page for InterleavedPow2AddrGenFast objects.
  * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
@@ -1056,12 +1075,12 @@ FORCE_INLINE void noc_async_read_page(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
  * Initiates an asynchronous read for a single packet with custom transaction size and a source location determined by the InterleavedPow2AddrGenFast object.
  * This function is a convenience wrapper around noc_async_read_page for InterleavedPow2AddrGenFast objects.
  * It allows reading a partial page, which is useful for cases where only a portion of the page needs to be read.
  * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
- *
- * TODO: Not used anywhere in metal, should it be removed?
  *
  * Extra arguments:
  *
@@ -1085,7 +1104,10 @@ FORCE_INLINE void noc_async_read_partial_page(
 /**
  * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the AddrGen object.
  * This function is the generic implementation that can be used with any address generator that provides
- * the get_noc_addr method and page_size attribute.
+ * the get_noc_addr method and either a page_size or a log_base_2_of_page_size member variable.
+ * It is designed to be flexible and can be used with various address generators.
+ * Note that providing the size argument is optional, and if provided,
+ * it will override the default page size of the address generator.
  *
  * Return value: None
  *
@@ -1108,12 +1130,18 @@ FORCE_INLINE void noc_async_write_page(
     uint32_t size = 0,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    noc_async_write_one_packet(
-        src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : addrgen.page_size, noc);
+    static_assert(
+        has_required_addrgen_traits<AddrGen>::value,
+        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+
+    uint32_t page_size = has_page_size<AddrGen>::value ? addrgen.page_size : 1 << addrgen.log_base_2_of_page_size;
+    noc_async_write_one_packet(src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
 }
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
  * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the TensorAccessor object.
  * This function is a convenience wrapper around noc_async_write_page for TensorAccessor objects.
  * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
@@ -1132,6 +1160,8 @@ FORCE_INLINE void noc_async_write_page(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
  * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the TensorAccessor object.
  * This function is a convenience wrapper around noc_async_write_page for TensorAccessor objects.
  * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
@@ -1145,6 +1175,8 @@ FORCE_INLINE void noc_async_write_tile(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
  * Initiates an asynchronous write for a single packet with custom transaction size, and destination location determined by the InterleavedAddrGen object.
  * This function is a convenience wrapper around noc_async_write_page for InterleavedAddrGen objects.
  * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
@@ -1169,6 +1201,8 @@ FORCE_INLINE void noc_async_write_page(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
  * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the InterleavedAddrGen object.
  * This function is a convenience wrapper around noc_async_write_page for InterleavedAddrGen objects.
  * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
@@ -1182,6 +1216,8 @@ FORCE_INLINE void noc_async_write_tile(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
  * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the InterleavedAddrGenFast object.
  * This function is a convenience wrapper around noc_async_write_page for InterleavedAddrGenFast objects.
  * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
@@ -1205,11 +1241,11 @@ FORCE_INLINE void noc_async_write_tile(
 
 // clang-format off
 /**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
  * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the InterleavedPow2AddrGenFast object.
  * This function is a convenience wrapper around noc_async_write_page for InterleavedPow2AddrGenFast objects.
  * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
- *
- * TODO: Not used anywhere in metal, should it be removed?
  *
  * Extra arguments:
  *
