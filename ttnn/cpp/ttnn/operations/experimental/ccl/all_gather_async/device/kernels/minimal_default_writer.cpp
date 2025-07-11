@@ -196,7 +196,22 @@ void kernel_main() {
     } else {
         tile_id_start = my_chip_id * input_tensor_Ht * input_tensor_Wt;
     }
+
+    // 2. unicast output ready semaphore
+    uint64_t out_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+    auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        out_ready_sem_noc_addr_in_pkt,
+        static_cast<uint16_t>(1),  // increment 1
+        32});
+    pkt_hdr_sem_inc->to_chip_unicast(1);
+
+    uint32_t chunk_count = 0;
+    uint32_t chunks_per_sync = 32;
+
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+        chunk_count = 0;
         while (tiles_read < tiles_to_read) {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
             uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
@@ -292,6 +307,21 @@ void kernel_main() {
             }
 
             cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+
+            chunk_count++;
+            if (chunk_count % chunks_per_sync == 0) {
+                // 2. unicast output ready semaphore
+                if ((direction == 1 && num_targets_backward_direction) || num_targets_forward_direction) {
+                    tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
+                }
+            }
+        }
+
+        if (chunk_count % chunks_per_sync != 0) {
+            // Write the unicast packet
+            if ((direction == 1 && num_targets_backward_direction) || num_targets_forward_direction) {
+                tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
+            }
         }
 
         tile_id_start += output_tensor_Wt * output_tensor_Ht;
@@ -299,26 +329,6 @@ void kernel_main() {
         tiles_to_read = input_tile_id_end;
         pages_read_in_row = start_pages_read_in_row;
         row_offset = start_row_offset;
-    }
-
-    // 2. unicast output ready semaphore
-    uint64_t out_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
-    // Write the unicast packet
-    if (direction == 1) {
-        if (num_targets_backward_direction) {
-            pkt_hdr_sem_inc->to_chip_unicast(1);
-            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
-        }
-    } else {
-        if (num_targets_forward_direction) {
-            pkt_hdr_sem_inc->to_chip_unicast(1);
-            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
-        }
     }
 
     // increment locally
@@ -376,6 +386,8 @@ void kernel_main() {
             tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
         }
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+            chunk_count = 0;
+
             while (tiles_read < tiles_to_read) {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 uint32_t tiles_to_put_in_current_packet =
@@ -438,6 +450,17 @@ void kernel_main() {
                 }
 
                 cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+
+                chunk_count++;
+                if (chunk_count % chunks_per_sync == 0) {
+                    // 2. unicast output ready semaphore
+                    tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
+                }
+            }
+
+            if (chunk_count % chunks_per_sync != 0) {
+                // 2. unicast output ready semaphore
+                tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
             }
 
             tile_id_start += output_tensor_Wt * output_tensor_Ht;
@@ -446,9 +469,6 @@ void kernel_main() {
             row_offset = start_row_offset;
             pages_read_in_row = start_pages_read_in_row;
         }
-        // 2. unicast output ready semaphore
-        pkt_hdr_sem_inc->to_chip_unicast(1);
-        tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
         slice_writes++;
     }
 
