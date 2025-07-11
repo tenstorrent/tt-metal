@@ -70,7 +70,7 @@ jobs:
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests -m models_device_performance_bare_metal
 
           export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_non-civ2_tests_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME _non-civ2
+          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME non-civ2
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: yolov11 tests
