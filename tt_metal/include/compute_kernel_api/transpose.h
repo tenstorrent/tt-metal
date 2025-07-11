@@ -32,7 +32,7 @@ ALWI void transpose_init(uint32_t icb) {
                 false /*acc_to_dest*/,
                 EltwiseBinaryReuseDestType::NONE /*binary_reuse_dest*/,
                 UnpackToDestEn /*unpack_to_dest*/,
-                false /*disable_src_zero_flag*/>(true /*transpose_of_faces*/, false /*within_face_16x16_transpose*/)));
+                true /*disable_src_zero_flag*/>(true /*transpose_of_faces*/, false /*within_face_16x16_transpose*/)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               A2D /*type*/,
               DST_ACCUM_MODE /*is_fp32_dest_acc_en*/,
