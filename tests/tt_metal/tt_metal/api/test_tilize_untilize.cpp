@@ -675,7 +675,7 @@ INSTANTIATE_TEST_SUITE_P(
     TilizeUntilizeBigBufferTests,
     TilizeUntilizeBigBufferShortTestsFixture,
     ::testing::Combine(
-        ::testing::Values(PhysicalSize{1ULL << 16, 1ULL << 17}),  // shape
+        ::testing::Values(PhysicalSize{1ULL << 16, (1ULL << 16) + 32}),  // shape
         ::testing::Values(TensorLayoutType::LIN_ROW_MAJOR),
         ::testing::Values(TensorLayoutType::TILED_NFACES),
         ::testing::Values(false),
