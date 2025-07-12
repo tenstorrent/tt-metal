@@ -61,17 +61,21 @@ void append_sharded_args(
         auto device = buffer.device();
         auto bank_type = buffer.core_type();
         for (size_t i = 0; i < n_banks; i += 2) {
-            const auto virtual_coord1 = device->virtual_core_from_logical_core(bank_coords[i], bank_type);
+            // We don't virtualize DRAM coord, since we need logical x coord == bank_id to calculate the address
+            const auto coord1 =
+                buffer.is_dram() ? bank_coords[i] : device->virtual_core_from_logical_core(bank_coords[i], bank_type);
 
             if (i + 1 < n_banks) {
                 // Pack two coordinates into one uint32_t if we have a pair
-                const auto virtual_coord2 = device->virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
+                const auto coord2 = buffer.is_dram()
+                                        ? bank_coords[i + 1]
+                                        : device->virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
                 args.push_back(
-                    ((virtual_coord2.x & 0xFF) << 24) | ((virtual_coord2.y & 0xFF) << 16) |
-                    ((virtual_coord1.x & 0xFF) << 8) | (virtual_coord1.y & 0xFF));
+                    ((coord2.x & 0xFF) << 24) | ((coord2.y & 0xFF) << 16) | ((coord1.x & 0xFF) << 8) |
+                    (coord1.y & 0xFF));
             } else {
                 // Handle odd number of coordinates by setting the second coordinate to zero
-                args.push_back(((virtual_coord1.x & 0xFF) << 8) | (virtual_coord1.y & 0xFF));
+                args.push_back(((coord1.x & 0xFF) << 8) | (coord1.y & 0xFF));
             }
         }
     }

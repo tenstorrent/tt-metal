@@ -34,7 +34,8 @@ template <
     uint32_t NumBanksCT = 0,
     typename TensorShapeWrapper = ArrayDynamicWrapper,
     typename ShardShapeWrapper = ArrayDynamicWrapper,
-    typename BankCoordsWrapper = ArrayDynamicWrapper>
+    typename BankCoordsWrapper = ArrayDynamicWrapper,
+    bool IsDram = false>
 struct DistributionSpec {
     static constexpr bool has_static_rank = RankCT != 0;
     static constexpr bool has_static_num_banks = NumBanksCT != 0;
@@ -45,7 +46,8 @@ struct DistributionSpec {
     static constexpr bool is_static = shapes_static && bank_coords_static;
 
     static constexpr auto rank_ct = RankCT;
-    static constexpr uint32_t num_banks_ct = NumBanksCT;
+    static constexpr auto num_banks_ct = NumBanksCT;
+    static constexpr auto is_dram = IsDram;
 
     using ShapeDynamic = detail::Span<uint32_t>;
     using BankCoordsDynamic = detail::Span<uint16_t>;
@@ -258,14 +260,16 @@ template <
     uint32_t NumBanksCT = 0,
     typename TensorShapeWrapper_ = ArrayDynamicWrapper,
     typename ShardShapeWrapper_ = ArrayDynamicWrapper,
-    typename BankCoordsWrapper_ = ArrayDynamicWrapper>
+    typename BankCoordsWrapper_ = ArrayDynamicWrapper,
+    bool IsDram = false>
 auto make_dspec(
     uint32_t rank_rt = 0,
     uint32_t num_banks_rt = 0,
     uint32_t* tensor_shape_ptr = nullptr,
     uint32_t* shard_shape_ptr = nullptr,
     uint16_t* bank_coords_ptr = nullptr) {
-    using DSpec = DistributionSpec<RankCT, NumBanksCT, TensorShapeWrapper_, ShardShapeWrapper_, BankCoordsWrapper_>;
+    using DSpec =
+        DistributionSpec<RankCT, NumBanksCT, TensorShapeWrapper_, ShardShapeWrapper_, BankCoordsWrapper_, IsDram>;
     constexpr bool RankStatic = RankCT != 0;
     constexpr bool NumBanksStatic = NumBanksCT != 0;
     constexpr bool TensorShapeDynamic = !TensorShapeWrapper_::is_static;
@@ -367,7 +371,13 @@ auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
         !ArgsOffsets::num_banks_is_crta or ArgsOffsets::bank_coords_is_crta,
         "Bank coords must be CRTA if num_banks is not known at compile time!");
 
-    return make_dspec<ArgsOffsets::RankCT, ArgsOffsets::NumBanksCT, TensorShapeType, ShardShapeType, BankCoordsType>(
+    return make_dspec<
+        ArgsOffsets::RankCT,
+        ArgsOffsets::NumBanksCT,
+        TensorShapeType,
+        ShardShapeType,
+        BankCoordsType,
+        ArgsOffsets::is_dram>(
         rank,
         num_banks,
         ArgsOffsets::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args_offsets.tensor_shape_crta_offset())
