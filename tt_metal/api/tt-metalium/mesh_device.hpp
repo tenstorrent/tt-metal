@@ -99,7 +99,6 @@ private:
         // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
         const std::vector<IDevice*>& root_devices() const;
     };
-
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -331,6 +330,18 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Returns the offset of this host's portion of the mesh within the global distributed mesh.
+    // For single-host meshes, this returns (0, 0).
+    MeshCoordinate local_offset() const;
+
+    // Returns the shape of the mesh portion managed by this host.
+    // For single-host meshes, this equals the global mesh shape.
+    MeshShape local_shape() const;
+
+    // Checks if a global coordinate is managed by this host.
+    // Returns true if the coordinate falls within this host's local mesh bounds.
+    bool is_local_coordinate(const MeshCoordinate& coord) const;
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
