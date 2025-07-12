@@ -86,10 +86,8 @@ public:
     static TensorToMesh create(const MeshDevice& mesh_device, const MeshMapperConfig& config);
 
     // Distributes a tensor onto a mesh.
-    // The input tensor is expected to be a "single device" tensor with `HostStorage`; the output tensor will be a
-    // distributed tensor with `MultiDeviceHostStorage`.
-    // TODO: #15840 - eliminate the distinction between `HostStorage` and `MultiDeviceHostStorage`. This means possibly
-    // removing this API, and instead relying on the overload that accepts the span of logical data.
+    // The input tensor is expected to be host-side tensor consisting of 1 device shard (i.e., distributed over 1x1
+    // mesh); the output tensor will be a host-side tensor distributed over the shape specified in `MeshMapperConfig`.
     Tensor operator()(const Tensor& tensor) const;
 
     // Overload that takes in a span of logical data; used in situations where the tensor object might not be
@@ -148,10 +146,8 @@ public:
     static MeshToTensor create(const MeshDevice& mesh_device, const MeshComposerConfig& config);
 
     // Composes multi-device tensor into a single tensor.
-    // The input tensor is expected to be distributed over a mesh; the output tensor will be a "single device" tensor
-    // with `HostStorage`.
-    // TODO: #15840 - eliminate the distinction between `HostStorage` and `MultiDeviceHostStorage`. This means possibly
-    // removing this API, and instead relying on the overload that returns the vector of logical data.
+    // The input tensor is expected to be distributed over a mesh as specified in `MeshComposerConfig`; the output
+    // tensor will be a host-side tensor consisting of 1 device shard (i.e., distributed over 1x1 mesh).
     Tensor compose(const Tensor& tensor) const;
 
     // Overload that returns a pair of logical data composed of a multi-device tensor and its shape.
