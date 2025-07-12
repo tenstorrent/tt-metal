@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 // TODO: move routing table here
 namespace tt::tt_fabric {
@@ -95,6 +96,8 @@ struct tensix_routing_l1_info_t {
 // MEM_TENSIX_ROUTING_TABLE_SIZE
 static_assert(sizeof(tensix_routing_l1_info_t) == 2064, "Struct size mismatch!");
 
+constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
+
 struct fabric_connection_info_t {
     uint32_t edm_direction;
     uint32_t edm_noc_xy;  // packed x,y coordinates
@@ -105,7 +108,13 @@ struct fabric_connection_info_t {
     uint32_t edm_worker_location_info_addr;
     uint32_t buffer_size_bytes;
     uint32_t buffer_index_semaphore_id;
-} __attribute__((packed));
+    uint32_t worker_flow_control_semaphore;
+};
+
+// Ensure worker_flow_control_semaphore is properly aligned for pointer access
+static_assert(
+    offsetof(fabric_connection_info_t, worker_flow_control_semaphore) % 4 == 0,
+    "worker_flow_control_semaphore must be 4-byte aligned for safe pointer access");
 
 // Fabric connection metadata stored in worker L1
 // 16 for WH, 12 for BH
@@ -115,8 +124,13 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_connection_info_t connections[MAX_FABRIC_ENDPOINTS];
     uint32_t valid_connections_mask;  // bit mask indicating which connections are valid
     uint8_t padding[12];              // pad to cache line alignment
-} __attribute__((packed));
+};
 
-static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 592, "Struct size mismatch!");
+// Ensure the struct size is a multiple of 4 bytes to maintain alignment in connections array
+static_assert(
+    sizeof(fabric_connection_info_t) % 4 == 0,
+    "fabric_connection_info_t size must be a multiple of 4 bytes to maintain alignment in arrays");
+
+static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 656, "Struct size mismatch!");
 
 }  // namespace tt::tt_fabric

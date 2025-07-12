@@ -1219,13 +1219,7 @@ void run_sender_channel_step_impl(
                 // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
                 // instead because these connections will be read/write counter based instead
                 local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
-                if (channel_connection_established) {
-                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
-                } else {
-                    local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
-                    // If not connected, we update the read counter in L1 as well so the next connecting worker
-                    // is more likely to see space available as soon as it tries connecting
-                }
+                local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
             }
         }
     }
@@ -1241,17 +1235,7 @@ void run_sender_channel_step_impl(
                 local_sender_channel_worker_interface
                     .template update_persistent_connection_copy_of_free_slots<enable_ring_support>();
             } else {
-                if (channel_connection_established) {
-                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
-                } else {
-                    ASSERT(
-                        local_sender_channel_worker_interface.local_write_counter.counter >
-                        (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id)));
-                    ASSERT(SENDER_NUM_BUFFERS >= get_ptr_val(sender_channel_free_slots_stream_id));
-                    auto new_val = local_sender_channel_worker_interface.local_write_counter.counter -
-                                   (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id));
-                    local_sender_channel_worker_interface.worker_location_info_ptr->edm_local_write_counter = new_val;
-                }
+                local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
             }
             increment_local_update_ptr_val(
                 to_sender_packets_acked_streams[sender_channel_index], -acks_since_last_check);
@@ -1262,7 +1246,7 @@ void run_sender_channel_step_impl(
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
-            check_worker_connections(
+            check_worker_connections<MY_ETH_CHANNEL>(
                 local_sender_channel_worker_interface,
                 channel_connection_established,
                 sender_channel_free_slots_stream_id);
@@ -2239,7 +2223,7 @@ void kernel_main() {
         const size_t start = !has_downstream_edm_vc0_buffer_connection;
         const size_t end = has_downstream_edm_vc1_buffer_connection + 1;
         for (size_t i = start; i < end; i++) {
-            downstream_edm_noc_interfaces[i].template open<true, tt::tt_fabric::worker_handshake_noc>();
+            downstream_edm_noc_interfaces[i].template open<false, true, tt::tt_fabric::worker_handshake_noc>();
             ASSERT(
                 get_ptr_val(downstream_edm_noc_interfaces[i].worker_credits_stream_id) ==
                 DOWNSTREAM_SENDER_NUM_BUFFERS);
@@ -2296,7 +2280,8 @@ void kernel_main() {
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
                 // open connections with available downstream edms
-                downstream_edm_noc_interfaces[edm_index].template open<true, tt::tt_fabric::worker_handshake_noc>();
+                downstream_edm_noc_interfaces[edm_index]
+                    .template open<false, true, tt::tt_fabric::worker_handshake_noc>();
                 *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_free_slots_ptr = 0;
             }
             edm_index++;
@@ -2315,7 +2300,7 @@ void kernel_main() {
             }
             if (connect_ring) {
                 downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
-                    .template open<true, tt::tt_fabric::worker_handshake_noc>();
+                    .template open<false, true, tt::tt_fabric::worker_handshake_noc>();
                 *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_free_slots_ptr = 0;
             }
         }
