@@ -20,8 +20,8 @@ jobs:
     runs-on: [arch-wormhole_b0, in-service, n300]
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
