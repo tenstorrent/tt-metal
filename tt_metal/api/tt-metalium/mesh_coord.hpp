@@ -413,7 +413,7 @@ public:
             local_values.size(),
             this->shape().mesh_size());
         size_t idx = 0;
-        for (auto local_coord : this->coord_range()) {
+        for (const auto& local_coord : this->coord_range()) {
             this->at(local_coord) = MaybeRemote<T>::local(local_values[idx++]);
         }
     }

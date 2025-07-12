@@ -75,7 +75,7 @@ SystemMesh::Impl::Impl() :
     // Extract physical coordinates in order for populate_local_region
     std::vector<PhysicalMeshCoordinate> ordered_physical_coords;
     ordered_physical_coords.reserve(local_coordinates.shape().mesh_size());
-    for (auto local_coord : coord_system.local_range()) {
+    for (const auto& local_coord : coord_system.local_range()) {
         ordered_physical_coords.push_back(local_coordinates.at(local_coord));
     }
 
