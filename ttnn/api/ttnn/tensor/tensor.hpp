@@ -243,11 +243,13 @@ public:
 
     // Returns device `Storage`.
     // Throws if the tensor is not on device.
-    const DeviceStorage& device_storage() const;
+    const DeviceStorage& device_storage() const&;
+    const DeviceStorage& device_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns host `Storage`.
     // Throws if the tensor is not on host.
-    const HostStorage& host_storage() const;
+    const HostStorage& host_storage() const&;
+    const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.

@@ -814,13 +814,13 @@ const TensorSpec& Tensor::tensor_spec() const { return this->tensor_attributes->
 
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
 
-const DeviceStorage& Tensor::device_storage() const {
+const DeviceStorage& Tensor::device_storage() const& {
     const auto* device_storage = std::get_if<DeviceStorage>(&this->storage());
     TT_FATAL(device_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
     return *device_storage;
 }
 
-const HostStorage& Tensor::host_storage() const {
+const HostStorage& Tensor::host_storage() const& {
     const auto* host_storage = std::get_if<HostStorage>(&this->storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return *host_storage;
