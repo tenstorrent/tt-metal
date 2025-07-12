@@ -119,9 +119,13 @@ void Application() {
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
-    enable_fw_flag[0] = 1;
 
     risc_init();
+
+    while (enable_fw_flag[0] != 1) {
+        // Wait for sync from host t
+        invalidate_l1_cache();
+    }
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
@@ -137,7 +141,6 @@ void Application() {
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
-    // Use this to exit for now
     while (enable_fw_flag[0]) {
         // Wait...
         WAYPOINT("GW");
@@ -208,5 +211,5 @@ void Application() {
         invalidate_l1_cache();
     }
 
-    return;
+    internal_::disable_erisc_app();
 }

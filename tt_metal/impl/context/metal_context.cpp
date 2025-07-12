@@ -649,6 +649,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             std::vector<uint32_t> clear_flag_data = {0};
             tt::llrt::write_hex_vec_to_core(
                 device_id, virtual_eth_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+            cluster_->l1_barrier(device_id);
             // Ensure that the core has returned to base fw
             llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
         }
@@ -931,7 +932,11 @@ void MetalContext::initialize_firmware(
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
-                    false);  // Wait for ack is not needed because we will wait for cores to be ready
+                    true);  // Wait for ack is not needed because we will wait for cores to be ready
+
+                std::vector<uint32_t> enable_data = {1};
+                tt::llrt::write_hex_vec_to_core(
+                    device_id, virtual_core, enable_data, get_active_erisc_launch_flag_addr());
             }
 
             break;
