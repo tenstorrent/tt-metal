@@ -24,7 +24,7 @@ autograd::TensorPtr layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
     auto tensor_shape = tensor->get_value().logical_shape();
     auto mean = core::empty(
-        core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
+        ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
         &autograd::ctx().get_device(),
         tensor->get_value().memory_config());
     auto rstd = ttnn::empty_like(mean);
@@ -80,7 +80,7 @@ autograd::TensorPtr composite_layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
     auto tensor_shape = tensor->get_value().logical_shape();
 
-    auto shape = core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
+    auto shape = ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
     auto mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
     ttnn::moreh_mean(
         tensor->get_value(),
@@ -138,7 +138,7 @@ autograd::TensorPtr composite_layernorm(
 
         // dnorm.mean(-1, keepdim=True)
         auto dnorm_shape = dtensor_normalized.logical_shape();
-        auto shape = core::create_shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
+        auto shape = ttnn::Shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
         auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
         ttnn::moreh_mean(
             dtensor_normalized,
