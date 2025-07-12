@@ -269,8 +269,69 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     return converted_weights
 
 
-def convert_meta_to_hf(state_dict, head_dim):
+def fuse_mlp_meta(state_dict):
+    key_map = {"w_gate": "w1.weight", "w_up": "w3.weight", "w_gate_up_proj": "w1_w3.weight"}
+
+    wgate_list = sorted(list(filter(lambda x: key_map["w_gate"] in x, state_dict.keys())))
+    wproj_list = sorted(list(filter(lambda x: key_map["w_up"] in x, state_dict.keys())))
+
+    for wgate_key, wproj_key in zip(wgate_list, wproj_list):
+        wgate = state_dict[wgate_key]
+        wproj = state_dict[wproj_key]
+
+        prefix_gate = wgate_key[: -len(key_map["w_gate"])]
+
+        fused_gate_up_proj = torch.vstack((wgate, wproj))
+        state_dict[f"{prefix_gate}{key_map['w_gate_up_proj']}"] = fused_gate_up_proj
+
+        del state_dict[wgate_key], state_dict[wproj_key]
+
+    return state_dict
+
+
+def fuse_qkv_meta(state_dict):
+    # Weight keys list
+    wq_list = sorted(list(filter(lambda x: "wq.weight" in x, state_dict.keys())))
+    wk_list = sorted(list(filter(lambda x: "wk.weight" in x, state_dict.keys())))
+    wv_list = sorted(list(filter(lambda x: "wv.weight" in x, state_dict.keys())))
+    # Bias keys list
+    wq_bias_list = sorted(list(filter(lambda x: "wq.bias" in x, state_dict.keys())))
+    wk_bias_list = sorted(list(filter(lambda x: "wk.bias" in x, state_dict.keys())))
+    wv_bias_list = sorted(list(filter(lambda x: "wv.bias" in x, state_dict.keys())))
+
+    for wq_key, wk_key, wv_key in zip(wq_list, wk_list, wv_list):
+        wq = state_dict[wq_key]
+        wk = state_dict[wk_key]
+        wv = state_dict[wv_key]
+
+        prefix = wq_key[: -len("wq.weight")]
+        fused_qkv_weights = torch.vstack((wq, wk, wv))
+        state_dict[f"{prefix}wqkv.weight"] = fused_qkv_weights
+
+        del state_dict[wq_key], state_dict[wk_key], state_dict[wv_key]
+
+    # Checking for bias
+    if len(wq_bias_list) > 0:
+        for wq_bias_key, wk_bias_key, wv_bias_key in zip(wq_bias_list, wk_bias_list, wv_bias_list):
+            wq_bias = state_dict[wq_bias_key]
+            wk_bias = state_dict[wk_bias_key]
+            wv_bias = state_dict[wv_bias_key]
+
+            prefix = wq_bias_key[: -len("wq.bias")]
+            fused_qkv_bias = torch.vstack((wq_bias, wk_bias, wv_bias))
+            state_dict[f"{prefix}wqkv.bias"] = fused_qkv_bias
+
+            del state_dict[wq_bias_key], state_dict[wk_bias_key], state_dict[wv_bias_key]
+
+    return state_dict
+
+
+def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False):
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
+    if fuse_qkv:
+        state_dict = fuse_qkv_meta(state_dict)
+    if fuse_mlp:
+        state_dict = fuse_mlp_meta(state_dict)
     state_dict = map_meta_to_hf_keys(state_dict)
     return state_dict
 
@@ -295,11 +356,15 @@ def map_meta_to_hf_keys(loaded_weights):
         "attention.wv.bias": "self_attn.v_proj.bias",
         "attention.q_norm.weight": "self_attn.q_norm.weight",
         "attention.k_norm.weight": "self_attn.k_norm.weight",
+        "attention.wqkv.weight": "self_attn.qkv_proj.weight",
+        "attention.wqkv.bias": "self_attn.qkv_proj.bias",
         # Feed forward module
         "feed_forward.w1.weight": "mlp.gate_proj.weight",
         "feed_forward.w3.weight": "mlp.up_proj.weight",
         "feed_forward.w2.weight": "mlp.down_proj.weight",
+        "feed_forward.w1_w3.weight": "mlp.gate_up_proj.weight",
         # Direct mappings for when we get just the final components
+        "w1_w3.weight": "gate_up_proj.weight",
         "w1.weight": "gate_proj.weight",
         "w2.weight": "down_proj.weight",
         "w3.weight": "up_proj.weight",
@@ -310,6 +375,9 @@ def map_meta_to_hf_keys(loaded_weights):
         "wq.bias": "q_proj.bias",
         "wk.bias": "k_proj.bias",
         "wv.bias": "v_proj.bias",
+        # fused qkv mapping
+        "wqkv.weight": "qkv_proj.weight",
+        "wqkv.bias": "qkv_proj.bias",
         # Host embeddings
         "emb.weight": "weight",
     }
