@@ -9,8 +9,15 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_unary
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         common/unary_op_utils.cpp
         device/unary_composite_op.cpp
@@ -22,16 +29,6 @@ target_sources(
         tanh_accurate/device/tanh_accurate_sharded_pgm_factory.cpp
         tanh_accurate/tanh_accurate.cpp
         unary.cpp
-)
-
-file(GLOB_RECURSE kernels device/kernels/*)
-target_sources(
-    ttnn_op_eltwise_unary
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})

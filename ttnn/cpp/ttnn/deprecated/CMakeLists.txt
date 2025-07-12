@@ -7,6 +7,7 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
 file(GLOB_RECURSE kernels tt_dnn/kernels/*)
 target_sources(
     ttnn_deprecated
