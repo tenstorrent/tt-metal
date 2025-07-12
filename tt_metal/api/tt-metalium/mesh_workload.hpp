@@ -26,6 +26,9 @@ class MeshWorkload {
 public:
     // Main User-Facing API building blocks
     MeshWorkload();
+    MeshWorkload(
+        Program&& program,
+        const MeshCoordinateRange& device_range = MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     ~MeshWorkload();
     MeshWorkload(MeshWorkload&& other) noexcept;
     MeshWorkload& operator=(MeshWorkload&& other) noexcept;

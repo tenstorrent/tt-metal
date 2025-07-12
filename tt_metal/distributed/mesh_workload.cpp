@@ -70,12 +70,26 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
+void MeshWorkloadImpl::initialize_kernel_groups_and_kernels() {
+    kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
+    kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
+}
+
 MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
     ZoneScoped;
     // A MeshWorkload tracks maintains its own handles to kernels across all
     // encapsulated programs
-    kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
-    kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
+    initialize_kernel_groups_and_kernels();
+    Inspector::mesh_workload_created(this);
+}
+
+MeshWorkloadImpl::MeshWorkloadImpl(Program&& program, const MeshCoordinateRange& device_range) :
+    id(get_next_counter()) {
+    ZoneScoped;
+    // A MeshWorkload tracks maintains its own handles to kernels across all
+    // encapsulated programs
+    initialize_kernel_groups_and_kernels();
+    add_program(device_range, std::move(program));
     Inspector::mesh_workload_created(this);
 }
 
@@ -445,6 +459,8 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
 // MeshWorkload PIMPL Implementation
 
 MeshWorkload::MeshWorkload() : pimpl_(std::make_unique<MeshWorkloadImpl>()) {}
+MeshWorkload::MeshWorkload(Program&& program, const MeshCoordinateRange& device_range) :
+    pimpl_(std::make_unique<MeshWorkloadImpl>(std::move(program), device_range)) {}
 MeshWorkload::~MeshWorkload() = default;
 MeshWorkload::MeshWorkload(MeshWorkload&& other) noexcept = default;
 MeshWorkload& MeshWorkload::operator=(MeshWorkload&& other) noexcept = default;
