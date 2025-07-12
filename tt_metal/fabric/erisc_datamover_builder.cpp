@@ -1448,7 +1448,6 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     } else {
         this->downstream_edm_vcs_noc_x[1] = ds_noc_x;
         this->downstream_edm_vcs_noc_y[1] = ds_noc_y;
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1] = adapter_spec.buffer_index_semaphore_id;
         this->downstream_edms_connected = 1;
     }
 
@@ -1487,9 +1486,6 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
         this->downstream_edm_vcs_semaphore_address[2] = adapter_spec.edm_l1_sem_addr;
         this->downstream_edm_vcs_worker_registration_address[2] = adapter_spec.edm_connection_handshake_addr;
         this->downstream_edm_vcs_worker_location_info_address[2] = adapter_spec.edm_worker_location_info_addr;
-        if (config.topology != Topology::Mesh) {
-            this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2] = adapter_spec.buffer_index_semaphore_id;
-        }
     }
 }
 
