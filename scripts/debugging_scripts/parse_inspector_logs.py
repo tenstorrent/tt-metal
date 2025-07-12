@@ -16,6 +16,7 @@ Description:
     This script parses inspector logs and transfers them into a structured format.
 """
 
+from typing import TYPE_CHECKING
 from dataclasses import dataclass
 from functools import cache, cached_property
 import os
@@ -23,6 +24,9 @@ import sys
 import yaml
 from datetime import datetime, timedelta, timezone
 from docopt import docopt
+
+if TYPE_CHECKING:
+    from inspector_data import InspectorData, KernelData, MeshCoordinate, MeshDeviceData, MeshWorkloadProgramData, MeshWorkloadData, ProgramData
 
 
 # Note: This method is parsing enty by entry and should be used only for debugging large log files.
@@ -73,65 +77,6 @@ class StartupData:
 
     def print_log(self, timestamp_ns: int, message: str):
         print(f"  {self.convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}")
-
-
-@dataclass
-class KernelData:
-    watcher_kernel_id: int
-    name: str
-    path: str
-    source: str
-    program_id: int
-
-
-@dataclass
-class MeshCoordinate:
-    coordinates: list[int]
-
-
-@dataclass
-class MeshDeviceData:
-    mesh_id: int
-    devices: list[int]
-    shape: list[int]
-    parent_mesh_id: int | None = None
-    initialized: bool = False
-
-    def get_device_id(self, coordinate: MeshCoordinate) -> int:
-        assert len(coordinate.coordinates) == len(
-            self.shape
-        ), f"Coordinate {coordinate.coordinates} does not match mesh shape {self.shape}"
-        linear_index = 0
-        for dim in range(len(coordinate.coordinates)):
-            linear_index = linear_index + coordinate.coordinates[dim] * self.shape[dim]
-        return self.devices[linear_index]
-
-
-@dataclass
-class MeshWorkloadProgramData:
-    program_id: int
-    coordinates: list[MeshCoordinate]
-
-
-@dataclass
-class MeshWorkloadData:
-    mesh_workload_id: int
-    programs: list[MeshWorkloadProgramData]
-    binary_status_per_mesh_device: dict[int, str]
-
-    def get_device_binary_status(self, mesh_id: int) -> str:
-        return self.binary_status_per_mesh_device.get(mesh_id, "NotSet")
-
-
-@dataclass
-class ProgramData:
-    id: int
-    compiled: bool
-    binary_status_per_device: dict[int, str]
-    watcher_kernel_ids: list[int]
-
-    def get_device_binary_status(self, device_id: int) -> str:
-        return self.binary_status_per_device.get(device_id, "NotSet")
 
 
 def get_kernels(log_directory: str) -> dict[int, KernelData]:
@@ -371,33 +316,6 @@ def get_devices_in_use(programs: dict[int, ProgramData]) -> set[int]:
     return used_devices
 
 
-class InspectorData:
-    def __init__(self, log_directory: str):
-        self.log_directory = log_directory
-
-    @cached_property
-    def mesh_devices(self) -> dict[int, MeshDeviceData]:
-        return get_mesh_devices(self.log_directory)
-
-    @cached_property
-    def mesh_workloads(self) -> dict[int, MeshWorkloadData]:
-        return get_mesh_workloads(self.log_directory)
-
-    @cached_property
-    def kernels(self) -> dict[int, KernelData]:
-        return get_kernels(self.log_directory)
-
-    @cached_property
-    def programs(self) -> dict[int, ProgramData]:
-        programs = get_programs(self.log_directory)
-        update_programs_with_mesh_workloads(programs, self.mesh_workloads, self.mesh_devices)
-        return programs
-
-    @cached_property
-    def devices_in_use(self) -> set[int]:
-        return get_devices_in_use(self.programs)
-
-
 def get_log_directory(log_directory: str | None = None) -> str:
     if log_directory is None:
         log_directory = os.environ.get("TT_METAL_INSPECTOR_LOG_PATH", "")
@@ -410,9 +328,60 @@ def get_log_directory(log_directory: str | None = None) -> str:
     return log_directory
 
 
-@cache
-def get_data(log_directory: str | None = None) -> InspectorData:
-    return InspectorData(get_log_directory(log_directory))
+def get_data(log_directory: str | None = None) -> "InspectorData":
+    from inspector_data import InspectorData
+
+    class InspectorLogsData(InspectorData):
+        def __init__(self, log_directory: str):
+            self.log_directory = log_directory
+
+        @cached_property
+        def __mesh_devices(self) -> dict[int, MeshDeviceData]:
+            return get_mesh_devices(self.log_directory)
+
+        @property
+        def mesh_devices(self) -> dict[int, MeshDeviceData]:
+            return self.__mesh_devices
+
+        @cached_property
+        def __mesh_workloads(self) -> dict[int, MeshWorkloadData]:
+            return get_mesh_workloads(self.log_directory)
+
+        @property
+        def mesh_workloads(self) -> dict[int, MeshWorkloadData]:
+            return self.__mesh_workloads
+
+        @cached_property
+        def __kernels(self) -> dict[int, KernelData]:
+            return get_kernels(self.log_directory)
+
+        @property
+        def kernels(self) -> dict[int, KernelData]:
+            return self.__kernels
+
+        @cached_property
+        def __programs(self) -> dict[int, ProgramData]:
+            programs = get_programs(self.log_directory)
+            update_programs_with_mesh_workloads(programs, self.mesh_workloads, self.mesh_devices)
+            return programs
+
+        @property
+        def programs(self) -> dict[int, ProgramData]:
+            return self.__programs
+
+        @cached_property
+        def __devices_in_use(self) -> set[int]:
+            return get_devices_in_use(self.programs)
+
+        @property
+        def devices_in_use(self) -> set[int]:
+            return self.__devices_in_use
+
+    log_directory = get_log_directory(log_directory)
+    if os.path.exists(log_directory):
+        return InspectorLogsData(log_directory)
+    else:
+        raise ValueError(f"Log directory {log_directory} does not exist. Please provide a valid path.")
 
 
 def main():

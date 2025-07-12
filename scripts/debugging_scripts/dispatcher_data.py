@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+TODO: Write needed arguments for this script
+"""
+
+from dataclasses import dataclass
+import os
+from docopt import docopt
+from functools import cache
+from inspector_data import run as get_inspector_data
+from parse_inspector_logs import InspectorData
+import sys
+from triage import TriageScript
+from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.firmware import ELF
+from ttexalens.parse_elf import mem_access
+from ttexalens.tt_exalens_init import init_ttexalens
+from ttexalens.tt_exalens_lib import parse_elf
+from ttexalens.context import Context
+from utils import ORANGE, RST
+from triage import TTTriageError
+
+triage_config = TriageScript(
+    data_provider=True,
+    depends=["inspector_data"],
+)
+
+
+@dataclass
+class DispatcherCoreData:
+    firmware_path: str
+    kernel_path: str | None
+    kernel_offset: int | None
+    launch_msg_rd_ptr: int
+    kernel_config_base: int
+    kernel_text_offset: int
+    watcher_kernel_id: int
+
+class DispatcherData:
+    def __init__(self, inspector_data: InspectorData):
+        self.inspector_data = inspector_data
+
+        self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
+        brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
+        idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
+
+        # Check if firmware elf paths exist
+        if not os.path.exists(brisc_elf_path):
+            raise TTTriageError(f"BRISC ELF file {brisc_elf_path} does not exist.")
+
+        if not os.path.exists(idle_erisc_elf_path):
+            raise TTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
+
+        self._brisc_elf = parse_elf(brisc_elf_path, context)
+        self._idle_erisc_elf = parse_elf(idle_erisc_elf_path, context)
+
+        # Check if debug info is obtained correctly
+        if not self._brisc_elf:
+            raise TTTriageError(
+                f"Failed to extract DWARF info from ELF file {brisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+            )
+        if not self._idle_erisc_elf:
+            raise TTTriageError(
+                f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+            )
+
+        # Acces the value of enumerator for supported blocks
+        self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
+        self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
+
+        # Enumerators for tensix block
+        self._enum_values_tenisx = {
+            "ProcessorTypes": {
+                "BRISC": self._brisc_elf.enumerators["TensixProcessorTypes::DM0"].value,
+                "NCRISC": self._brisc_elf.enumerators["TensixProcessorTypes::DM1"].value,
+                "TRISC0": self._brisc_elf.enumerators["TensixProcessorTypes::MATH0"].value,
+                "TRISC1": self._brisc_elf.enumerators["TensixProcessorTypes::MATH1"].value,
+                "TRISC2": self._brisc_elf.enumerators["TensixProcessorTypes::MATH2"].value,
+            },
+            "dispatch_core_processor_classes": {
+                "BRISC": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM0"].value,
+                "NCRISC": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM1"].value,
+                "TRISC0": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
+                "TRISC1": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
+                "TRISC2": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
+            },
+        }
+
+        # Enumerators for eth block
+        self._enum_values_eth = {
+            "ProcessorTypes": {
+                "ERISC": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
+                "ERISC0": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
+            },
+            "dispatch_core_processor_classes": {
+                "ERISC": self._idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value,
+                "ERISC0": self._idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value,
+                "ERISC1": self._idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM1"].value,
+            },
+        }
+
+        # Blackhole has ERISC1 processor type
+        try:
+            self._enum_values_eth["ProcessorTypes"]["ERISC1"] = self._idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
+        except:
+            pass
+
+    def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
+        loc_mem_reader = ELF.get_mem_reader(location._device._context, location._device._id, location)
+        if location._device.get_block_type(location) == "functional_workers":
+            # For tensix, use the brisc elf
+            fw_elf = self._brisc_elf
+            programmable_core_type = self._ProgrammableCoreTypes_TENSIX
+            enum_values = self._enum_values_tenisx
+        else:
+            # For eth, use the idle erisc elf
+            fw_elf = self._idle_erisc_elf
+            programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
+            enum_values = self._enum_values_eth
+
+        proc_name = risc_name.upper()
+        proc_type = enum_values["ProcessorTypes"][proc_name]
+        proc_class = enum_values["dispatch_core_processor_classes"][proc_name]
+
+        launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
+
+        # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
+
+        # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
+        kernel_config_base = mem_access(
+            fw_elf,
+            f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",
+            loc_mem_reader,
+        )[0][0]
+
+        # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
+        kernel_text_offset = mem_access(
+            fw_elf,
+            f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_text_offset[{proc_type}]",
+            loc_mem_reader,
+        )[0][0]
+
+        # enum dispatch_core_processor_classes
+        watcher_kernel_id = mem_access(
+            fw_elf,
+            f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
+            loc_mem_reader,
+        )[0][0] & 0xFFFF
+
+        kernel = self.inspector_data.kernels.get(watcher_kernel_id)
+        if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+            firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
+        elif proc_name.lower() == "erisc1":
+            firmware_path = self._a_kernel_path + "../../../firmware/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+        else:
+            firmware_path = self._a_kernel_path + f"../../../firmware/{proc_name.lower()}/{proc_name.lower()}.elf"
+            firmware_path = os.path.realpath(firmware_path)
+
+        if kernel:
+            if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+            elif proc_name.lower() == "erisc1":
+                kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+            else:
+                kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+            kernel_path = os.path.realpath(kernel_path)
+            if proc_name == "NCRISC" and location._device._arch == "wormhole_b0":
+                kernel_offset = 0xFFC00000
+            else:
+                kernel_offset = kernel_config_base + kernel_text_offset
+        else:
+            kernel_path = None
+            kernel_offset = None
+
+        return DispatcherCoreData(
+            firmware_path=firmware_path,
+            kernel_path=kernel_path,
+            kernel_offset=kernel_offset,
+            launch_msg_rd_ptr=launch_msg_rd_ptr,
+            kernel_config_base=kernel_config_base,
+            kernel_text_offset=kernel_text_offset,
+            watcher_kernel_id=watcher_kernel_id,
+        )
+
+    @staticmethod
+    def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
+        firmware_elf_path = a_kernel_path + f"../../../firmware/{risc_name.lower()}/{risc_name.lower()}.elf"
+        return os.path.realpath(firmware_elf_path)
+
+
+def get_dispatcher_data(inspector_data: InspectorData) -> DispatcherData:
+    return DispatcherData(inspector_data)
+
+
+
+@cache
+def run(args, context: Context):
+    inspector_data = get_inspector_data(args, context)
+    return get_dispatcher_data(inspector_data)
+
+
+if __name__ == "__main__":
+    context = init_ttexalens()
+    args = docopt(__doc__, argv=sys.argv[1:])
+    dispatcher_data = run(args, context)
+    # TODO: Print dispatcher data in a readable format

@@ -669,11 +669,11 @@ def main(argv=None):
             device_ids = inspector_data.devices_in_use
             if len(device_ids) == 0:
                 print(
-                    f"{ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
+                    f"  {ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
                 )
                 device_ids = [int(id) for id in context.devices.keys()]
         else:
-            print(f"{ORANGE}Inspector data not found. Using all available devices.{RST}")
+            print(f"  {ORANGE}Using all available devices.{RST}")
             device_ids = [int(id) for id in context.devices.keys()]
     elif len(args["--dev"]) == 1 and args["--dev"][0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
