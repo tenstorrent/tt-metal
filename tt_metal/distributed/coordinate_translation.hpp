@@ -26,7 +26,8 @@ public:
     using chip_id_t = uint32_t;
     using MeshId = tt::tt_fabric::MeshId;
     PhysicalMeshCoordinate() = delete;
-    PhysicalMeshCoordinate(chip_id_t mesh_id, chip_id_t chip_id) : mesh_id_(MeshId(mesh_id)), chip_id_(chip_id) {}
+    PhysicalMeshCoordinate(MeshId mesh_id, chip_id_t chip_id)
+        : mesh_id_(mesh_id), chip_id_(chip_id) {}
     MeshId mesh_id() const { return mesh_id_; }
     chip_id_t chip_id() const { return chip_id_; }
 
