@@ -50,7 +50,7 @@ using MeshDeviceTest = GenericMeshDeviceFixture;
 TEST_F(MeshDeviceT3000Test, SystemMeshTearDownWithoutClose) {
     auto& sys = SystemMesh::instance();
 
-    const auto system_shape = sys.get_shape();
+    const auto system_shape = sys.shape();
     ASSERT_EQ(system_shape.dims(), 2);
     EXPECT_EQ(system_shape[0], 2);
     EXPECT_EQ(system_shape[1], 4);
