@@ -111,8 +111,8 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     bool divide_by_shards = false;
     const auto& dspec = *output.buffer()->buffer_distribution_spec();
     if (nd_sharded && same_tiles && dim == 0) {
-        NdShardSpec input_nd_shard_spec = input.nd_shard_spec().value();
-        NdShardSpec output_nd_shard_spec = output.nd_shard_spec().value();
+        const NdShardSpec& input_nd_shard_spec = input.nd_shard_spec().value();
+        const NdShardSpec& output_nd_shard_spec = output.nd_shard_spec().value();
         const Shape& input_shard_shape = input_nd_shard_spec.shard_shape;
         bool compatible_shards =
             input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR &&
