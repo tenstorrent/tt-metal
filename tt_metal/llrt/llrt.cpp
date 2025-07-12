@@ -382,7 +382,7 @@ void send_msg_to_eth_mailbox(
     }
 }
 
-void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_loops) {
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
     constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
@@ -393,12 +393,17 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
 
     uint32_t heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
     uint32_t previous_heartbeat_val = heartbeat_val;
+    const auto start = std::chrono::high_resolution_clock::now();
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
+
     while (heartbeat_val == previous_heartbeat_val) {
+        std::this_thread::sleep_for(k_sleep_time);
         previous_heartbeat_val = heartbeat_val;
         heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
-        if (timeout_loops > 0) {
-            timeout_loops--;
-            if (timeout_loops <= 0) {
+        if (timeout_ms > 0) {
+            const auto now = std::chrono::high_resolution_clock::now();
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+            if (elapsed > timeout_ms) {
                 auto core_type_idx =
                     hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
                 std::uint32_t launch_erisc_addr = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;

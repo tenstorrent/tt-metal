@@ -122,13 +122,16 @@ void Application() {
 
     risc_init();
 
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+
+    // Stall for the host to set this flag to 1 otherwise we could exit
+    // the base firmware while the host is still initializing
     while (enable_fw_flag[0] != 1) {
-        // Wait for sync from host t
+        // Wait for sync from host
         invalidate_l1_cache();
     }
 
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
     set_deassert_addresses();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
@@ -141,16 +144,32 @@ void Application() {
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
-    while (enable_fw_flag[0]) {
+    while (1) {
         // Wait...
         WAYPOINT("GW");
 
-        uint8_t go_message_signal = mailboxes->go_message.signal;
+        uint8_t go_message_signal = RUN_MSG_DONE;
+        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+            invalidate_l1_cache();
+            if (!enable_fw_flag[0]) {
+                internal_::disable_erisc_app();
+                return;
+            }
 
-        uint32_t kernel_config_base =
-            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+            // While the go signal for kernel execution is not sent, check if the worker was signalled
+            // to reset its launch message read pointer.
+            if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                // Set the rd_ptr on workers to specified value
+                mailboxes->launch_msg_rd_ptr = 0;
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                mailboxes->go_message.signal = RUN_MSG_DONE;
+                // Notify dispatcher that this has been done
+                internal_::notify_dispatch_core_done(dispatch_addr);
+            }
+        }
+        WAYPOINT("GD");
 
-        if (go_message_signal == RUN_MSG_GO) {
+        {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
             // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
             // "invalid" iterations.
@@ -164,11 +183,6 @@ void Application() {
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            // #18384: This register was left dirty by eth training.
-            // It is not used in dataflow api, so it can be set to 0
-            // one time here instead of setting it everytime in dataflow_api.
-            NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
-
             flush_erisc_icache();
 
             enum dispatch_core_processor_masks enables =
@@ -178,8 +192,15 @@ void Application() {
 
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
+                // #18384: This register was left dirty by eth training.
+                // It is not used in dataflow api, so it can be set to 0
+                // one time here instead of setting it everytime in dataflow_api.
+                NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
-                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+                constexpr int index =
+                    static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+                uint32_t kernel_config_base =
+                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
@@ -193,22 +214,13 @@ void Application() {
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
+                launch_msg_address->kernel_config.preload = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
-
-            WAYPOINT("GD");
-        } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-            // Reset the launch message buffer read ptr
-            mailboxes->launch_msg_rd_ptr = 0;
-            uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-            mailboxes->go_message.signal = RUN_MSG_DONE;
-            internal_::notify_dispatch_core_done(dispatch_addr);
         }
-
-        invalidate_l1_cache();
     }
 
     internal_::disable_erisc_app();

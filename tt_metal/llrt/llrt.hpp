@@ -118,7 +118,7 @@ void send_msg_to_eth_mailbox(
 
 // Wait for a heartbeat from the active ethernet core, if supported
 // Used to check if the base firmware is running and ready to service the eth mailbox
-void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_loops = 10000);
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
 
 }  // namespace internal_
 

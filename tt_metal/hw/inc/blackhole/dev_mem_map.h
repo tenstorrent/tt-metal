@@ -185,9 +185,6 @@
 #define MEM_ERISC_BARRIER_BASE (MEM_ERISC_APP_ROUTING_INFO_BASE + MEM_ERISC_APP_ROUTING_INFO_SIZE)
 // Used to signal active erisc firmware exited properly
 #define MEM_ERISC_LAUNCH_FLAG (MEM_ERISC_BARRIER_BASE + MEM_ERISC_L1_BARRIER_SIZE)
-// This region contains saved local memory of erisc0 (SysEng FW)
-// It's size is MEM_ERISC_LOCAL_SIZE
-#define MEM_ERISC_SYSENG_LOCAL_MEM_STATE (MEM_ERISC_LAUNCH_FLAG + MEM_ERISC_LAUNCH_FLAG_SIZE)
 
 // Common Misc
 #define MEM_RETRAIN_COUNT_ADDR 0x7CC10
