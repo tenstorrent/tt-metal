@@ -46,6 +46,7 @@ tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
+tt_metal/hw/inc/accessor @tenstorrent/metalium-developers-ttnn-core
 tt_metal/hw/firmware/ @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/toolchain/ @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @pgkeller @nathan-TT
