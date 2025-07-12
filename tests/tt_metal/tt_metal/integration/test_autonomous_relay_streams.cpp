@@ -224,7 +224,7 @@ void build_and_run_autonomous_stream_test(
     bool enable_page_size_variations,
     std::array<uint32_t, num_sizes> const& sub_sizes,
     std::size_t num_loop_iterations) {
-    TT_ASSERT(programs.size() == 0);
+    TT_ASSERT(programs.empty());
     // Make configurable
     const uint32_t read_write_cb_num_pages = 8;
     const uint32_t page_size_plus_header = page_size + tile_header_size;

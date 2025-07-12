@@ -151,7 +151,7 @@ std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
 
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
-        if (allocator && allocator->get_allocated_buffers().size() > 0) {
+        if (allocator && !allocator->get_allocated_buffers().empty()) {
             return true;
         }
     }

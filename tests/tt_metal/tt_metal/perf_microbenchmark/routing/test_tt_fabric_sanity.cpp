@@ -381,7 +381,7 @@ struct test_board_t {
         }
 
         // error out if no n hop chip pairs exist at all
-        if (!n_hop_neighbors_cnt.size()) {
+        if (n_hop_neighbors_cnt.empty()) {
             throw std::runtime_error("No n hop chip pairs found");
         }
 
@@ -442,7 +442,7 @@ struct test_board_t {
 
         // error out if no valid tx rx mapping was found
         // We should only be able to hit this assertion when looking for mcast destinations
-        if (!tx_rx_map.size()) {
+        if (tx_rx_map.empty()) {
             throw std::runtime_error("No valid tx rx mapping found");
         }
     }
@@ -688,7 +688,7 @@ struct test_device_t {
         }
 
         // throw error if no potential router core found
-        if (src_routers.size() == 0) {
+        if (src_routers.empty()) {
             log_fatal(LogTest, "No router cores found for num hops: {}, on device: {}", num_hops, physical_chip_id);
             throw std::runtime_error("No router cores found for specified num hops");
         }
@@ -1270,9 +1270,9 @@ struct test_traffic_t {
         std::shuffle(tx_workers.begin(), tx_workers.end(), global_rng);
 
         // Assign tx to rx. Ensure that atleast one tx is mapped to a rx
-        while (tx_workers.size() > 0) {
+        while (!tx_workers.empty()) {
             std::shuffle(rx_workers.begin(), rx_workers.end(), global_rng);
-            for (uint32_t i = 0; (i < num_rx_workers) && (tx_workers.size() > 0); i++) {
+            for (uint32_t i = 0; (i < num_rx_workers) && (!tx_workers.empty()); i++) {
                 rx_idx = rx_workers[i];
                 tx_idx = tx_workers.back();
                 tx_workers.pop_back();

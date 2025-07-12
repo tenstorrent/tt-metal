@@ -608,7 +608,7 @@ int main(int argc, char** argv) {
     const size_t dst_eth_l1_byte_address = erisc_unreserved_base + 32;
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    assert(active_eth_cores.size() > 0);
+    assert(!active_eth_cores.empty());
     auto eth_sender_core_iter = active_eth_cores.begin();
     assert(eth_sender_core_iter != active_eth_cores.end());
     const auto& eth_sender_core = *eth_sender_core_iter;

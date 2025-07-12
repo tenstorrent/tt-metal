@@ -160,7 +160,7 @@ std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
         const auto& v = trace[i];
         i++;
         OperationInfo info;
-        if (v[kArguments].size() > 0) {
+        if (!v[kArguments].empty()) {
             info.operation_name = v[kParams][kName];
             info.arguments = v[kArguments];
             operations.push_back(info);

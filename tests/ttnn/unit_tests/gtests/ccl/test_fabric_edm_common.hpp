@@ -751,7 +751,7 @@ void generate_multi_input_test_worker_reader_kernel(
             command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR,
         "Unsupported tensor IO command type");
 
-    TT_ASSERT(tensors.size() > 0 && tensors.size() <= 2);
+    TT_ASSERT(!tensors.empty() && tensors.size() <= 2);
     TT_ASSERT(cb_indices.size() == tensors.size());
 
     auto sender_worker_reader_kernel = ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
@@ -3308,7 +3308,7 @@ void launch_kernels_and_wait_for_completion(
         }
     }
 
-    TT_FATAL(device_programs.size() > 0, "No devices found");
+    TT_FATAL(!device_programs.empty(), "No devices found");
     for (const auto& [device, program] : device_programs) {
         tt_metal::Synchronize(device, *ttnn::DefaultQueueId);
     }

@@ -135,7 +135,7 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
     }
 
     // If any Buffers were kept alive for testing, Deallocate them now to exercise that path for capture/replay.
-    if (buffers_vec.size() > 0) {
+    if (!buffers_vec.empty()) {
         log_info(tt::LogTest, "Explicitly deallocating {} buffers now.", buffers_vec.size());
         for (auto& buffer : buffers_vec) {
             DeallocateBuffer(*buffer);

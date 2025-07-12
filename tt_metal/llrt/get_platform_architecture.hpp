@@ -57,7 +57,7 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
         // This map holds PCI info for each mmio chip.
         auto devices_info = PCIDevice::enumerate_devices_info();
-        if (devices_info.size() > 0) {
+        if (!devices_info.empty()) {
             arch = devices_info.begin()->second.get_arch();
             for (auto& [device_id, device_info] : devices_info) {
                 tt::ARCH detected_arch = device_info.get_arch();
