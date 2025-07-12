@@ -45,6 +45,7 @@ private:
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
+    void initialize_kernel_groups_and_kernels();
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
@@ -68,6 +69,7 @@ private:
 public:
     // Main User-Facing API building blocks
     MeshWorkloadImpl();
+    MeshWorkloadImpl(Program&& program, const MeshCoordinateRange& device_range);
     ~MeshWorkloadImpl();
 
     uint64_t get_id() const { return id; }
