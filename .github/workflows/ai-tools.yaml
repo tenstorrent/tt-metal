@@ -20,8 +20,8 @@ jobs:
     runs-on: [arch-wormhole_b0, in-service, n300]
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
@@ -30,10 +30,20 @@ jobs:
         with:
           fetch-depth: 500
 
+      - name: Install unzip
+        run: |
+          # Check if unzip is available, install if missing
+          if ! command -v unzip &> /dev/null; then
+            echo "Installing unzip..."
+            sudo apt-get update && sudo apt-get install -y unzip
+          else
+            echo "unzip is already installed"
+          fi
+
       - uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.AAK }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.AI_GH_TOKEN }}
           trigger_phrase: "@tt-ai"
           allowed_tools: "Bash(./build_metal.sh --debug)"
           timeout_minutes: "30"
