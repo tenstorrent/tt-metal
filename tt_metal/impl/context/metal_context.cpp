@@ -237,6 +237,10 @@ MetalContext::MetalContext() {
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+
+    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
+    // how MetalContext lifetime will work through the API.
+    std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 distributed::multihost::DistributedContext& MetalContext::get_distributed_context() {
@@ -245,6 +249,7 @@ distributed::multihost::DistributedContext& MetalContext::get_distributed_contex
 }
 
 MetalContext::~MetalContext() {
+    distributed_context_.reset();
     cluster_.reset();
     hal_.reset();
 }
