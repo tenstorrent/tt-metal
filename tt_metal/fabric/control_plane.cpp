@@ -1122,45 +1122,6 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
     TT_THROW("Cannot Find Ethernet Channel Direction");
 }
 
-std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route_to_exit_node(
-    FabricNodeId src_fabric_node_id, MeshId dst_mesh_id, chan_id_t src_chan_id) const {
-    TT_FATAL(this->system_has_intermesh_links(), "Cannot generate a route to an exit node on a system with no links to a remote host.");
-    int i = 0;
-    std::vector<std::pair<FabricNodeId, chan_id_t>> route;
-    // Generate Route to exit node within the local mesh
-    const auto& exit_nodes_for_dst_mesh = routing_table_generator_->get_exit_nodes_routing_to_mesh(dst_mesh_id);
-    while (std::find(exit_nodes_for_dst_mesh.begin(), exit_nodes_for_dst_mesh.end(), src_fabric_node_id) == exit_nodes_for_dst_mesh.end()) {
-        i++;
-        if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
-            return {};
-        }
-        chan_id_t next_chan_id = 0;
-        next_chan_id = this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_mesh_id];
-        if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
-            // The complete route b/w src and dst not found, probably some eth cores are reserved along the path
-            return {};
-        }
-        if (src_chan_id != next_chan_id) {
-            // Chan to chan within chip
-            route.push_back({src_fabric_node_id, next_chan_id});
-        }
-        std::tie(src_fabric_node_id, src_chan_id) =
-            this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
-        route.push_back({src_fabric_node_id, src_chan_id});
-    }
-    // Append exit connection.
-    // Check if the exit node has an outgoing connection to the destination mesh, on this channel
-    // If not, return empty route
-    auto next_chan_id = this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_mesh_id];
-    if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
-        return {};
-    }
-    // Routing plane can be used for inter-mesh traffic. Return the route to the exit node
-    route.push_back({src_fabric_node_id, this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_mesh_id]});
-    // TODO: Get routing plane index and return empty if this is > num intermesh routing planes
-    return route;
-}
-
 std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const {
     // Find any eth chan on the plane id
@@ -1171,18 +1132,23 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         this->local_mesh_binding_.host_rank,
         src_fabric_node_id.mesh_id);
 
-    if (!this->is_local_mesh(dst_fabric_node_id.mesh_id)) {
-        // Current algorithm to find a fabric route between meshes is to simply find a route to a local exit node
-        // that can route traffic to the requested destination mesh. Once traffic has reached the appropriate exit
-        // node, routers on the destination mesh will route the traffic to the destination chip.
-        // The assumption here is that a routing plane that can route traffic to the exit node and along the intermesh
-        // link is a valid routing plane within the destination mesh (reasonable assumption for current topologies).
-        return this->get_fabric_route_to_exit_node(src_fabric_node_id, dst_fabric_node_id.mesh_id, src_chan_id);
+    // If the dest node is on a mesh not local to the host, a route is only generated up to the exit node.
+    bool end_route_at_exit_node = !this->is_local_mesh(dst_fabric_node_id.mesh_id);
+
+    std::vector<FabricNodeId> candidate_end_nodes;
+    if (end_route_at_exit_node) {
+        // If routing to a mesh remote to the host, we need to generate a path to a local exit node that can direct
+        // traffic to the remote mesh.
+        candidate_end_nodes = routing_table_generator_->get_exit_nodes_routing_to_mesh(dst_fabric_node_id.mesh_id);
+    } else {
+        // If routing to a mesh local to the host, we can route directly to the destination chip.
+        candidate_end_nodes.push_back(dst_fabric_node_id);
     }
 
     std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
-    while (src_fabric_node_id != dst_fabric_node_id) {
+    while (std::find(candidate_end_nodes.begin(), candidate_end_nodes.end(), src_fabric_node_id) ==
+           candidate_end_nodes.end()) {
         i++;
         auto src_mesh_id = src_fabric_node_id.mesh_id;
         auto src_chip_id = src_fabric_node_id.chip_id;
@@ -1212,7 +1178,12 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
             this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
         route.push_back({src_fabric_node_id, src_chan_id});
     }
-
+    if (end_route_at_exit_node) {
+        // When routing to a remote mesh, append the exit node to the route.
+        route.push_back(
+            {src_fabric_node_id,
+             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_fabric_node_id.mesh_id]});
+    }
     return route;
 }
 

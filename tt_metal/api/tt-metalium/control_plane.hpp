@@ -194,10 +194,6 @@ private:
     std::unordered_map<MeshId, std::map<EthChanDescriptor, EthChanDescriptor>> peer_intermesh_link_tables_;
 
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
-
-    std::vector<std::pair<FabricNodeId, chan_id_t>> get_fabric_route_to_exit_node(
-        FabricNodeId src_fabric_node_id, MeshId dst_mesh_id, chan_id_t src_chan_id) const;
-
     // custom logic to order eth channels
     void order_ethernet_channels();
 
