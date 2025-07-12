@@ -1067,28 +1067,17 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "item",
             [](const Tensor& self) -> py::object {
-                using namespace CMAKE_UNIQUE_NAMESPACE;
-
-                // Check if tensor has exactly one element
-                TT_FATAL(
-                    self.logical_shape().volume() == 1,
-                    "tensor.item() requires tensor to have exactly one element, but got {} elements",
-                    self.logical_shape().volume());
-
-                Tensor host_tensor = self.storage_type() == DEVICE_STORAGE_TYPE ? self.cpu() : self;
-
-                auto buffer = convert_to_row_major_host_buffer(host_tensor, /*padded_output=*/false);
-                const auto* data = buffer.buffer.view_bytes().data();
-
-                switch (host_tensor.dtype()) {
-                    case DataType::FLOAT32: return py::cast(*reinterpret_cast<const float*>(data));
-                    case DataType::BFLOAT16: return py::cast(reinterpret_cast<const bfloat16*>(data)->to_float());
-                    case DataType::INT32: return py::cast(*reinterpret_cast<const int32_t*>(data));
-                    case DataType::UINT32: return py::cast(*reinterpret_cast<const uint32_t*>(data));
-                    case DataType::UINT16: return py::cast(*reinterpret_cast<const uint16_t*>(data));
-                    case DataType::UINT8: return py::cast(*reinterpret_cast<const uint8_t*>(data));
-                    default: TT_THROW("Unsupported DataType for item(): {}", host_tensor.dtype());
-                }
+                auto result = self.item();
+                return std::visit(
+                    [](const auto& value) -> py::object {
+                        using T = std::decay_t<decltype(value)>;
+                        if constexpr (std::is_same_v<T, bfloat16>) {
+                            return py::cast(value.to_float());
+                        } else {
+                            return py::cast(value);
+                        }
+                    },
+                    result);
             },
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.
