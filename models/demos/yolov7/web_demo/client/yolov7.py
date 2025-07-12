@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import orjson
 import requests
+import streamlit as st
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 # Configure the logger

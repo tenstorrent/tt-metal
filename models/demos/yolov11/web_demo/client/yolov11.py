@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import orjson
 import requests
+import streamlit as st
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 # Configure the logger
@@ -108,7 +109,7 @@ class VideoProcessor(VideoProcessorBase):
 
         # Parse API URL once at the class level for efficiency
         if not hasattr(self, "api_url"):
-            parser = argparse.ArgumentParser(description="YOLOv8 script")
+            parser = argparse.ArgumentParser(description="YOLOv11 script")
             parser.add_argument("--api-url", type=str, required=True, help="URL for the object detection API")
             args = parser.parse_args()
             self.api_url = args.api_url

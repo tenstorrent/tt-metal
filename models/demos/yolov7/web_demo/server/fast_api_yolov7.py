@@ -15,8 +15,8 @@ from PIL import Image
 import models.demos.yolov7.reference.yolov7_model as yolov7_model
 import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
 import ttnn
+from models.demos.yolov7.demo.demo_utils import load_coco_class_names
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
-from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
 sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model
@@ -50,9 +50,43 @@ def get_dispatch_core_config():
     return dispatch_core_config
 
 
+def postprocess_yolov7_custom(preds, img, orig_imgs):
+    """Custom postprocessing for YOLOv7 to match YOLOv11 format"""
+    # The model output is already processed and contains detections in format [x1, y1, x2, y2, conf, cls]
+    # We just need to scale the coordinates to the original image size
+
+    results = []
+    for batch_idx in range(preds.shape[0]):
+        if preds[batch_idx].numel() == 0:
+            # No detections
+            results.append(
+                {"boxes": {"xyxy": torch.empty((0, 4)), "conf": torch.empty((0,)), "cls": torch.empty((0,))}}
+            )
+            continue
+
+        # Extract detections for this batch
+        detections = preds[batch_idx]  # Shape: [num_detections, 6] where 6 = [x1, y1, x2, y2, conf, cls]
+
+        # Scale coordinates to original image size
+        img_h, img_w = orig_imgs[batch_idx].shape[:2]
+        scaled_boxes = detections[:, :4].clone()
+        scaled_boxes[:, [0, 2]] *= img_w / 640  # scale x coordinates
+        scaled_boxes[:, [1, 3]] *= img_h / 640  # scale y coordinates
+
+        # Clip boxes to image boundaries
+        scaled_boxes[:, 0] = torch.clamp(scaled_boxes[:, 0], 0, img_w)
+        scaled_boxes[:, 1] = torch.clamp(scaled_boxes[:, 1], 0, img_h)
+        scaled_boxes[:, 2] = torch.clamp(scaled_boxes[:, 2], 0, img_w)
+        scaled_boxes[:, 3] = torch.clamp(scaled_boxes[:, 3], 0, img_h)
+
+        results.append({"boxes": {"xyxy": scaled_boxes, "conf": detections[:, 4], "cls": detections[:, 5]}})
+
+    return results
+
+
 @app.on_event("startup")
 async def startup():
-    global model
+    global model, class_names
     if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
         print("WH_ARCH_YAML:", os.environ.get("WH_ARCH_YAML"))
         device_id = 0
@@ -71,6 +105,9 @@ async def startup():
         device.enable_program_cache()
         model = YOLOv7PerformantRunner(device)
     model._capture_yolov7_trace_2cqs()
+
+    # Load class names
+    class_names = load_coco_class_names()
 
 
 @app.on_event("shutdown")
@@ -98,25 +135,33 @@ async def objdetection_v2(file: UploadFile = File(...)):
     response = model.run(image)
     response = ttnn.to_torch(response)
     t2 = time.time()
-    results = postprocess(response, image, image1)[0]
+
+    # Use standard YOLOv7 postprocessing
+    from models.demos.yolov7.demo.demo_utils import postprocess as postprocess_yolov7
+
+    # Create batch info for postprocessing
+    batch = [["input_image"], [image1], [image1.shape]]
+
+    # Postprocess using standard YOLOv7 function
+    results = postprocess_yolov7(response, image, [image1], batch, class_names, "input_image", image1, None)[0]
     logging.info("The inference on the sever side took: %.3f seconds", t2 - t1)
-    conf_thresh = 0.6
-    nms_thresh = 0.5
 
     output = []
-    for i in range(len(results["boxes"]["xyxy"])):
-        output.append(
-            torch.concat(
-                (
-                    results["boxes"]["xyxy"][i] / 640,
-                    results["boxes"]["conf"][i].unsqueeze(0),
-                    results["boxes"]["conf"][i].unsqueeze(0),
-                    results["boxes"]["cls"][i].unsqueeze(0),
-                ),
-                dim=0,
+    if results["boxes"]["xyxy"].numel() > 0 and results["boxes"]["xyxy"].shape[0] > 0:
+        boxes = results["boxes"]["xyxy"]  # [num_detections, 4]
+        confs = results["boxes"]["conf"]  # [num_detections]
+        cls_ids = results["boxes"]["cls"]  # [num_detections]
+
+        for i in range(len(boxes)):
+            # Normalize coordinates to [0,1] range
+            x1, y1, x2, y2 = boxes[i] / torch.tensor(
+                [image1.shape[1], image1.shape[0], image1.shape[1], image1.shape[0]]
             )
-            .numpy()
-            .tolist()
-        )
+            output.append(
+                [x1.item(), y1.item(), x2.item(), y2.item(), confs[i].item(), confs[i].item(), cls_ids[i].item()]
+            )
+    else:
+        # No detections
+        pass
     t3 = time.time()
     return output
