@@ -74,7 +74,7 @@ struct MeshMapperConfig {
 std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement);
 std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config);
 
-// Distributes a host tensor onto a multi-device configuration.
+// Mapper interface used for distributing a tensor onto a mesh.
 class TensorToMesh {
 public:
     ~TensorToMesh();
@@ -85,9 +85,9 @@ public:
 
     static TensorToMesh create(const MeshDevice& mesh_device, const MeshMapperConfig& config);
 
-    // Distributes a tensor onto a mesh.
-    // The input tensor is expected to be host-side tensor consisting of 1 device shard (i.e., distributed over 1x1
-    // mesh); the output tensor will be a host-side tensor distributed over a mesh of the same shape as the mesh device.
+    // Maps a tensor onto a mesh.
+    // The input tensor is expected to be host-side tensor consisting of 1 device shard (i.e., mapped to 1x1 mesh).
+    // The output tensor will be a host-side tensor mapped to a mesh of the same shape as the mesh device.
     Tensor operator()(const Tensor& tensor) const;
 
     // Overload that takes in a span of logical data; used in situations where the tensor object might not be
@@ -134,7 +134,7 @@ struct MeshComposerConfig {
 
 std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config);
 
-// Composer interface that aggregates a multi-device tensor into a host tensor.
+// Composer interface used for aggregating a tensor distributed over a mesh.
 class MeshToTensor {
 public:
     ~MeshToTensor();
@@ -145,12 +145,12 @@ public:
 
     static MeshToTensor create(const MeshDevice& mesh_device, const MeshComposerConfig& config);
 
-    // Composes multi-device tensor into a single tensor.
-    // The input tensor is expected to be distributed over a mesh of the same shape as the mesh device; the output
-    // tensor will be a host-side tensor consisting of 1 device shard (i.e., distributed over 1x1 mesh).
+    // Composes a tensor distributed over a mesh.
+    // The input tensor is expected to be distributed over a mesh of the same shape as the mesh device.
+    // The output tensor will be a host-side tensor consisting of 1 device shard (i.e., mapped to 1x1 mesh).
     Tensor compose(const Tensor& tensor) const;
 
-    // Overload that returns a pair of logical data composed of a multi-device tensor and its shape.
+    // Overload that returns a pair of logical data and its shape, composed from a tensor distributed over a mesh.
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const;
 
