@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "reader_pool2d_sharded_common.hpp"
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -16,35 +15,75 @@
 
 #define ALWI inline __attribute__((always_inline))
 
-#define MAX_ELE_PER_REDUCTION 512  // TILE_WIDTH * 8 * numbytes
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
+
+// Fill an L1 buffer with the given val
+// WARNING: Use with caution as there's no memory protection. Make sure size is within limits
+ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
+    // simplest impl:
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
+    uint32_t value = val | (val << 16);
+    if (ptr[0] != value || unconditionally) {
+        for (uint32_t i = 0; i < n / 2; ++i) {
+            ptr[i] = (value);
+        }
+    }
+
+    return true;
+}
+
+template <uint32_t cb_id, uint32_t clear_value_cb_id>
+FORCE_INLINE void clear_out_tiles() {
+    constexpr uint32_t tile_size = get_tile_size(cb_id);
+    const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
+    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
+    const uint64_t clear_value_addr = get_noc_addr(get_read_ptr(clear_value_cb_id));
+    uint64_t write_addr = get_noc_addr(get_write_ptr(cb_id));
+
+    for (uint32_t i = 0; i < num_tiles * num_pages; ++i) {
+        noc_async_read(clear_value_addr, write_addr, tile_size);
+        write_addr += tile_size;
+    }
+    noc_async_read_barrier();
+}
+
+template <uint32_t clear_value_cb_id, uint32_t num_tiles>
+FORCE_INLINE void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr) {
+    constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
+
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        noc_async_read(clear_value_addr, write_addr, tile_size);
+        write_addr += tile_size;
+    }
+    noc_async_read_barrier();
+}
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
 template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
-    uint32_t compute_sync_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
     uint32_t in_nbytes_c,
     uint32_t in_c,
-    uint32_t in_write_inc,
     uint32_t max_rows_for_reduction,
     uint32_t total_elems_to_reduce,
-    uint32_t bf16_init_value,
     bool is_avg_pool,
     bool wide_reduction,
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
-    uint32_t interm_reduction_chunks,
-    uint32_t interm_cb_id>
-FORCE_INLINE void read_window_with_top_left_index(
-    uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t& out_l1_write_addr) {
+    bool is_large_kernel>
+FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    constexpr uint32_t read_bytes = wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;
+    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
+    // otherwise we can reduce 8 tiles at a time.
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    constexpr uint32_t MAX_ELE_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
+    constexpr uint32_t in_write_inc =
+        wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
@@ -82,36 +121,11 @@ FORCE_INLINE void read_window_with_top_left_index(
                             clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
                                 get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
                         }
-
-                        // clear the interm CB
-                        // TODO we only really need to clear the interm CB before the last reduction stage ie if
-                        // cur_reduction = (total_rows % 32) / 31 - 2
-                        uint32_t max_rows_interm_remainder = chunk % (max_rows_for_reduction - 1);
-                        if (max_rows_interm_remainder == max_rows_for_reduction - 2) {
-                            cb_wait_front(compute_sync_cb_id, 1);
-                            // skip the first row where we are accumulating
-                            fill_with_val(
-                                get_write_ptr(interm_cb_id) + TILE_WIDTH * in_cb_ntiles * BYTES_PER_ELEM,
-                                (TILE_HEIGHT - 1) * TILE_WIDTH * in_cb_ntiles,
-                                bf16_init_value);
-                            cb_pop_front(compute_sync_cb_id, 1);
-                        }
                     }
                     chunk++;
                 }
             }
         }
-
-        // wait for compute to finish final reduction
-        cb_wait_front(compute_sync_cb_id, 1);
-        // write the first row from the interm buffer
-        noc_async_read(get_noc_addr(get_read_ptr(interm_cb_id)), out_l1_write_addr, read_bytes);
-        noc_async_read_barrier();
-        // clear the interm buffer's first row, partial tiles get first 2 rows cleared which is fine
-        fill_with_val(get_read_ptr(interm_cb_id), TILE_WIDTH * in_cb_ntiles, bf16_init_value);
-        out_l1_write_addr += read_bytes;
-        // signal to compute that output has been written
-        cb_pop_front(compute_sync_cb_id, 1);
     }
 }
 
@@ -169,41 +183,27 @@ void kernel_main() {
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
 
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(10);
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
+    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(10);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
+    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(12);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(13);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(20);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
-    constexpr uint32_t interm_cb_id = get_compile_time_arg_val(22);
-    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(23);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(25);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(28);
-    constexpr uint32_t sync_cb_id1 =
-        get_compile_time_arg_val(29);  // signal to compute and reader 1 that reader 0 is done initializing
-    constexpr uint32_t sync_cb_id2 =
-        get_compile_time_arg_val(30);  // signal to compute and reader 0 that reader 1 is done initializing
-    constexpr uint32_t sync_cb_id3 =
-        get_compile_time_arg_val(31);  // wait for compute to signal for reader 0 to reset CBs or write output
-    constexpr uint32_t sync_cb_id4 =
-        get_compile_time_arg_val(32);  // wait for compute to signal for reader 1 to reset CBs or write output
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(33);
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(21);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(22);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(25);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-    constexpr uint32_t compute_sync_cb_id =
-        split_reader && reader_id == 1 ? sync_cb_id4 : sync_cb_id3;  // compute sync cb is the one for the reader
-    constexpr uint32_t stride_w = get_compile_time_arg_val(34);
 
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
@@ -211,65 +211,29 @@ void kernel_main() {
     uint32_t scalar_value = 0;
 
     constexpr uint32_t window_size_hw = window_h * window_w;
+    constexpr bool is_large_kernel = (window_h * window_w) > max_rows_for_reduction;
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
     // we only need to initialize the in_cb if we will not fill each multibuffering chunk with max_rows worth of data
-    constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multi_buffering_factor;
+    // constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multi_buffering_factor;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (split_reader) {
-        constexpr uint32_t half_tile = TILE_HEIGHT * TILE_WIDTH / 2;
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), half_tile, bf16_init_value);
-        } else {
-            fill_with_val(get_write_ptr(clear_value_cb_id) + 2 * half_tile, half_tile, bf16_init_value);  // 2 for bf16
-        }
-    } else {
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-        }
-    }
-
-    // ensure the clear CB is full before proceeding
     if constexpr (reader_id == 0) {
-        cb_push_back(sync_cb_id1, 1);
-        if constexpr (split_reader) {
-            cb_wait_front(sync_cb_id2, 1);
-        }
-    } else {
-        cb_push_back(sync_cb_id2, 1);
-        cb_wait_front(sync_cb_id1, 1);
+        fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+        cb_push_back(clear_value_cb_id, 1);
     }
-
-    if constexpr (need_to_initialize_in_cb && !is_avg_pool) {  // for avg pool fill_with_val runs in loop, no need to
-                                                               // initialize
-        clear_out_tiles<in_cb_id, clear_value_cb_id>();
+    if constexpr (reader_id == 1) {
+        cb_wait_front(clear_value_cb_id, 1);
     }
+    // TODO we don't always need to initialize the in_cb
+    clear_out_tiles<in_cb_id, clear_value_cb_id>();
 
-    if constexpr (reader_id == 0) {
-        constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
-        // initialize buffers
-        clear_out_tiles<interm_cb_id, clear_value_cb_id>();
-        if constexpr (one_scalar_per_core) {
-            fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
-        }
-        if constexpr (is_avg_pool) {
-            // for avgpool, we use a one's CB to avoid double division by kernel size for large kernel case.
-            fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
-        }
-    }
-
-    // ensure initialization is done before proceeding
-    if constexpr (reader_id == 0) {
-        cb_push_back(sync_cb_id1, 1);
-        if constexpr (split_reader) {
-            cb_wait_front(sync_cb_id2, 2);
-        }
-    } else {
-        cb_push_back(sync_cb_id2, 1);
-        cb_wait_front(sync_cb_id1, 2);
+    // initialize the scalar CB
+    if constexpr (reader_id == 0 && one_scalar_per_core) {
+        fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
+        cb_push_back(in_scalar_cb_id_0, 1);
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
@@ -285,8 +249,6 @@ void kernel_main() {
     uint32_t counter = reader_id;
     constexpr uint32_t total_elems_to_reduce = window_h * window_w;
     constexpr bool wide_reduction = in_nblocks_c > 1;
-    constexpr uint32_t in_write_inc =
-        wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     if constexpr (!one_scalar_per_core) {
         config_l1_addr = get_read_ptr(config_cb_id);
@@ -312,8 +274,6 @@ void kernel_main() {
         reader_indices_on_core = reader_nindices;
     }
 
-    uint32_t out_l1_write_addr = get_write_ptr(out_cb_id);
-    out_l1_write_addr += (split_reader && reader_id == 1) ? in_nbytes_c : 0;
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
@@ -334,23 +294,18 @@ void kernel_main() {
             read_window_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
-                compute_sync_cb_id,
                 window_h,
                 window_w,
                 in_w_padded,
                 in_nbytes_c,
                 in_c,
-                in_write_inc,
                 max_rows_for_reduction,
                 total_elems_to_reduce,
-                bf16_init_value,
                 is_avg_pool,
                 wide_reduction,
                 clear_value_cb_id,
                 in_cb_ntiles,
-                interm_reduction_chunks,
-                interm_cb_id>(ind, in_l1_read_base_addr, out_l1_write_addr);
-            out_l1_write_addr += split_reader ? in_nbytes_c : 0;
+                is_large_kernel>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -365,22 +320,17 @@ void kernel_main() {
         read_window_with_top_left_index<
             in_nblocks_c,
             in_cb_id,
-            compute_sync_cb_id,
             window_h,
             window_w,
             in_w_padded,
             in_nbytes_c,
             in_c,
-            in_write_inc,
             max_rows_for_reduction,
             total_elems_to_reduce,
-            bf16_init_value,
             is_avg_pool,
             wide_reduction,
             clear_value_cb_id,
             in_cb_ntiles,
-            interm_reduction_chunks,
-            interm_cb_id>(0, in_l1_read_base_addr, out_l1_write_addr);
-        out_l1_write_addr += split_reader ? in_nbytes_c : 0;
+            is_large_kernel>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()
