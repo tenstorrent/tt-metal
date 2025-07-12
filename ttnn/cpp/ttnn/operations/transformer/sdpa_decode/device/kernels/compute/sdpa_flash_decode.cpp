@@ -435,13 +435,25 @@ void MAIN {
             pack_reconfig_data_format(cb_out_final);
 
             if constexpr (untilize_output) {
-                untilize_init_short(cb_out_accumulate_im);
+                if constexpr (use_pack_untilize) {
+                    pack_untilize_init_short<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
+                } else {
+                    untilize_init_short(cb_out_accumulate_im);
+                }
                 cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
                 cb_reserve_back(cb_out_final, out_chunk_tiles);
-                untilize_block(cb_out_accumulate_im, out_chunk_tiles, cb_out_final);
+                if constexpr (use_pack_untilize) {
+                    pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
+                } else {
+                    untilize_block(cb_out_accumulate_im, out_chunk_tiles, cb_out_final);
+                }
+                if constexpr (use_pack_untilize) {
+                    pack_untilize_uninit(cb_out_final);
+                } else {
+                    untilize_uninit(cb_out_final);
+                }
                 cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
                 cb_push_back(cb_out_final, out_chunk_tiles);
-                untilize_uninit(cb_out_final);
             } else {
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
