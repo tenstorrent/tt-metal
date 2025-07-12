@@ -66,8 +66,12 @@ public:
     }
 
 private:
-    std::vector<CoreCoord> compute_core_list(
-        const CoreRangeSet& core_range_set, ShardDistributionStrategy shard_distribution_strategy);
+    static std::vector<CoreCoord> compute_core_list(
+        const Shape& tensor_shape_in_pages,
+        const Shape& shard_shape_in_pages,
+        const CoreRangeSet& core_range_set,
+        ShardOrientation shard_orientation,
+        ShardDistributionStrategy shard_distribution_strategy);
     void init_precomputed_data();
 
     Shape tensor_shape_in_pages_;
