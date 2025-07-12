@@ -87,7 +87,7 @@ public:
 
     // Distributes a tensor onto a mesh.
     // The input tensor is expected to be host-side tensor consisting of 1 device shard (i.e., distributed over 1x1
-    // mesh); the output tensor will be a host-side tensor distributed over the shape specified in `MeshMapperConfig`.
+    // mesh); the output tensor will be a host-side tensor distributed over a mesh of the same shape as the mesh device.
     Tensor operator()(const Tensor& tensor) const;
 
     // Overload that takes in a span of logical data; used in situations where the tensor object might not be
@@ -146,7 +146,7 @@ public:
     static MeshToTensor create(const MeshDevice& mesh_device, const MeshComposerConfig& config);
 
     // Composes multi-device tensor into a single tensor.
-    // The input tensor is expected to be distributed over a mesh as specified in `MeshComposerConfig`; the output
+    // The input tensor is expected to be distributed over a mesh of the same shape as the mesh device; the output
     // tensor will be a host-side tensor consisting of 1 device shard (i.e., distributed over 1x1 mesh).
     Tensor compose(const Tensor& tensor) const;
 
