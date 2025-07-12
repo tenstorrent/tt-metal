@@ -93,7 +93,7 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
     tt::stl::SmallVector<uint32_t> new_tensor_shape;
     tt::stl::SmallVector<uint32_t> new_shard_shape;
 
-    bool in_identical_streak = false;
+    bool matching_dims_sequence = false;
     bool last_dim_divisible = false;
     uint64_t cur_tensor_volume = 1;
     uint64_t cur_shard_volume = 1;
@@ -103,7 +103,7 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
 
         bool should_merge_dims = false;
         if (dim < -1) {
-            should_merge_dims = in_identical_streak || (shard_size == 1 && last_dim_divisible);
+            should_merge_dims = matching_dims_sequence || (shard_size == 1 && last_dim_divisible);
         }
 
         if (should_merge_dims) {
@@ -112,9 +112,9 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
         } else {
             new_tensor_shape.push_back(tensor_size);
             new_shard_shape.push_back(shard_size);
-            in_identical_streak = true;
+            matching_dims_sequence = true;
         }
-        in_identical_streak &= tensor_size == shard_size;
+        matching_dims_sequence &= tensor_size == shard_size;
         last_dim_divisible = tensor_size % shard_size == 0;
 
         cur_tensor_volume *= tensor_size;
