@@ -1068,16 +1068,7 @@ void pytensor_module(py::module& m_tensor) {
             "item",
             [](const Tensor& self) -> py::object {
                 auto result = self.item();
-                return std::visit(
-                    [](const auto& value) -> py::object {
-                        using T = std::decay_t<decltype(value)>;
-                        if constexpr (std::is_same_v<T, bfloat16>) {
-                            return py::cast(value.to_float());
-                        } else {
-                            return py::cast(value);
-                        }
-                    },
-                    result);
+                return std::visit([](const auto& value) -> py::object { return py::cast(value); }, result);
             },
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.

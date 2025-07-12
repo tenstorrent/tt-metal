@@ -454,17 +454,24 @@ template std::vector<uint8_t> Tensor::to_vector<uint8_t>(ttnn::QueueId cq_id) co
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(ttnn::QueueId cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(ttnn::QueueId cq_id) const;
 
-std::variant<float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t> Tensor::item() const {
+std::variant<double, int64_t> Tensor::item() const {
     ZoneScoped;
     TT_FATAL(
         this->logical_shape().volume() == 1,
         "tensor.item() requires tensor to have exactly one element, but got {} elements",
         this->logical_shape().volume());
 
-    // Helper lambda to extract single value of any type
-    auto extract_value = [this]<typename T>() -> std::variant<float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t> {
+    // Use existing infrastructure: to_vector() already handles multi-device and host tensors correctly
+    // by calling cpu() internally when needed
+    auto extract_value = [this]<typename T>() -> std::variant<double, int64_t> {
         auto vector_data = this->to_vector<T>(ttnn::DefaultQueueId);
-        return vector_data[0];
+        if constexpr (std::is_floating_point_v<T>) {
+            return static_cast<double>(vector_data[0]);
+        } else if constexpr (std::is_same_v<T, bfloat16>) {
+            return static_cast<double>(vector_data[0].to_float());
+        } else {
+            return static_cast<int64_t>(vector_data[0]);
+        }
     };
 
     switch (this->dtype()) {

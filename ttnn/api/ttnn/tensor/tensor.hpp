@@ -268,8 +268,8 @@ public:
     uint32_t element_size() const;
 
     // Extract the scalar value from a tensor containing exactly one element
-    // Returns a variant that can hold any of the supported data types
-    std::variant<float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t> item() const;
+    // Returns a variant that can hold floating point or integer values
+    std::variant<double, int64_t> item() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
     auto attribute_values() const {
