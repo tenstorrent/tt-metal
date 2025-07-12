@@ -93,7 +93,7 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
     tt::stl::SmallVector<uint32_t> new_tensor_shape;
     tt::stl::SmallVector<uint32_t> new_shard_shape;
 
-    bool last_dim_identical = false;
+    bool matching_dims_sequence = false;
     bool last_dim_divisible = false;
     uint64_t cur_tensor_volume = 1;
     uint64_t cur_shard_volume = 1;
@@ -102,8 +102,8 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
         auto shard_size = shard_shape[dim];
 
         bool should_merge_dims = false;
-        if (dim < -2) {
-            should_merge_dims = last_dim_identical || (shard_size == 1 && last_dim_divisible);
+        if (dim < -1) {
+            should_merge_dims = matching_dims_sequence || (shard_size == 1 && last_dim_divisible);
         }
 
         if (should_merge_dims) {
@@ -112,16 +112,16 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
         } else {
             new_tensor_shape.push_back(tensor_size);
             new_shard_shape.push_back(shard_size);
+            matching_dims_sequence = true;
         }
+        matching_dims_sequence &= tensor_size == shard_size;
+        last_dim_divisible = tensor_size % shard_size == 0;
 
         cur_tensor_volume *= tensor_size;
         cur_shard_volume *= shard_size;
         if (cur_tensor_volume == tensor_volume && cur_shard_volume == shard_volume) {
             break;
         }
-
-        last_dim_identical = tensor_size == shard_size;
-        last_dim_divisible = tensor_size % shard_size == 0;
     }
 
     for (int dim = -static_cast<int>(shard_shape.rank()) - 1; dim >= -static_cast<int>(tensor_shape.rank()); dim--) {
@@ -159,10 +159,11 @@ BufferDistributionSpec::BufferDistributionSpec(
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
+    cores_ = compute_core_list(
+        tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
     std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
         CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 
-    cores_ = compute_core_list(core_range_set, shard_distribution_strategy);
     if (tensor_shape_in_pages_.volume() != 0) {
         TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
     }
@@ -171,20 +172,24 @@ BufferDistributionSpec::BufferDistributionSpec(
 }
 
 std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
-    const CoreRangeSet& core_range_set, ShardDistributionStrategy shard_distribution_strategy) {
+    const Shape& tensor_shape_in_pages,
+    const Shape& shard_shape_in_pages,
+    const CoreRangeSet& core_range_set,
+    ShardOrientation shard_orientation,
+    ShardDistributionStrategy shard_distribution_strategy) {
     if (shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
         return corerange_to_cores(
-            core_range_set, core_range_set.num_cores(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
+            core_range_set, core_range_set.num_cores(), shard_orientation == ShardOrientation::ROW_MAJOR);
     }
 
-    TT_FATAL(shard_shape_in_pages_.rank() <= 2, "2D grid distribution is only supported for 2D sharding!");
+    TT_FATAL(shard_shape_in_pages.rank() <= 2, "2D grid distribution is only supported for 2D sharding!");
     TT_FATAL(
         core_range_set.ranges().size() == 1, "2D grid distribution is only supported for one contiguous core grid!");
     auto core_grid = core_range_set.ranges()[0];
 
-    uint32_t num_shards_along_width = std::max(div_up(tensor_shape_in_pages_[-1], shard_shape_in_pages_[-1]), 1u);
-    uint32_t num_shards_along_height = std::max(div_up(tensor_shape_in_pages_[-2], shard_shape_in_pages_[-2]), 1u);
-    if (shard_orientation_ != ShardOrientation::ROW_MAJOR) {
+    uint32_t num_shards_along_width = std::max(div_up(tensor_shape_in_pages[-1], shard_shape_in_pages[-1]), 1u);
+    uint32_t num_shards_along_height = std::max(div_up(tensor_shape_in_pages[-2], shard_shape_in_pages[-2]), 1u);
+    if (shard_orientation != ShardOrientation::ROW_MAJOR) {
         std::swap(num_shards_along_width, num_shards_along_height);
     }
     TT_FATAL(
@@ -199,7 +204,7 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
         {core_grid.start_coord.x + num_shards_along_width - 1, core_grid.start_coord.y + num_shards_along_height - 1});
 
     return corerange_to_cores(
-        trimmed_core_grid, trimmed_core_grid.size(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
+        trimmed_core_grid, trimmed_core_grid.size(), shard_orientation == ShardOrientation::ROW_MAJOR);
 }
 
 size_t BufferDistributionSpec::num_shards() const { return num_shards_; }
