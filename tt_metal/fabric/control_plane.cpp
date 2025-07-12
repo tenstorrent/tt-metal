@@ -924,7 +924,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                 const auto fabric_node_id = FabricNodeId(MeshId{mesh_id}, chip_id);
                 if (*(distributed_context.size()) > 1) {
                     this->assign_intermesh_link_directions_to_remote_host(fabric_node_id);
-                    this->assign_neighbor_meshes_to_exit_node(fabric_node_id);
                 } else {
                     this->assign_intermesh_link_directions_to_local_host(fabric_node_id);
                 }
@@ -1129,7 +1128,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route_t
     int i = 0;
     std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     // Generate Route to exit node within the local mesh
-    const auto& exit_nodes_for_dst_mesh = exit_nodes_per_neighbor_mesh_.at(dst_mesh_id);
+    const auto& exit_nodes_for_dst_mesh = routing_table_generator_->get_exit_nodes_routing_to_mesh(dst_mesh_id);
     while (std::find(exit_nodes_for_dst_mesh.begin(), exit_nodes_for_dst_mesh.end(), src_fabric_node_id) == exit_nodes_for_dst_mesh.end()) {
         i++;
         if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
@@ -2051,33 +2050,6 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
     TT_FATAL(
         num_directions_assigned == num_links_requested_on_node,
         "Could not bind all edges in the Mesh Graph to an intermesh link.");
-}
-
-void ControlPlane::assign_neighbor_meshes_to_exit_node(const FabricNodeId& fabric_node_id) {
-    // Generate a map tracking the exit nodes connected to each neighbor mesh
-    const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
-    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
-    auto board_id = chip_id_to_asic_id_.at(physical_chip_id);
-    auto intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
-
-    for (const auto& [eth_core, eth_chan] : intermesh_links) {
-        auto curr_eth_chan_desc = EthChanDescriptor{.board_id = board_id, .chan_id = eth_chan};
-        const auto& remote_eth_chan_desc = intermesh_link_table_.intermesh_links.at(curr_eth_chan_desc);
-        for (const auto& [connected_mesh_id, edge] :
-            inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
-            bool exit_node_found = false;
-            for (const auto& [candidate_desc, candidate_peer_desc] : peer_intermesh_link_tables_[connected_mesh_id]) {
-                if (candidate_desc == remote_eth_chan_desc && candidate_peer_desc == curr_eth_chan_desc) {
-                    exit_nodes_per_neighbor_mesh_[connected_mesh_id].push_back(fabric_node_id);
-                    exit_node_found = true;
-                    break;
-                }
-            }
-            if (exit_node_found) {
-                break;  // No need to check other edges for this link. We found the local exit node it corresponds to
-            }
-        }
-    }
 }
 
 const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }

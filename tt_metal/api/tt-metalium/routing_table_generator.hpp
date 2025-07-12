@@ -50,6 +50,8 @@ public:
 
     void print_routing_tables() const;
 
+    const std::vector<FabricNodeId>& get_exit_nodes_routing_to_mesh(MeshId mesh_id) const;
+
     std::unique_ptr<MeshGraph> mesh_graph;
 
 private:
@@ -59,6 +61,7 @@ private:
 
     RoutingTable intra_mesh_table_;
     RoutingTable inter_mesh_table_;
+    std::unordered_map<MeshId, std::vector<FabricNodeId>> exit_nodes_routing_to_mesh_;
 
     std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> get_paths_to_all_meshes(
         MeshId src, const InterMeshConnectivity& inter_mesh_connectivity);

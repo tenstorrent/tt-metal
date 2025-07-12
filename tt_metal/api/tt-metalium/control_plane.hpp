@@ -195,8 +195,6 @@ private:
 
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
 
-    std::unordered_map<MeshId, std::vector<FabricNodeId>> exit_nodes_per_neighbor_mesh_;
-
     std::vector<std::pair<FabricNodeId, chan_id_t>> get_fabric_route_to_exit_node(
         FabricNodeId src_fabric_node_id, MeshId dst_mesh_id, chan_id_t src_chan_id) const;
 
@@ -264,7 +262,6 @@ private:
 
     void assign_intermesh_link_directions_to_remote_host(const FabricNodeId& fabric_node_id);
 
-    void assign_neighbor_meshes_to_exit_node(const FabricNodeId& fabric_node_id);
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
