@@ -19,6 +19,7 @@
 #include "ttnn/operations/data_movement/expand/expand_pybind.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad_pybind.hpp"
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
+#include "ttnn/operations/data_movement/flip/flip_pybind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
 #include "ttnn/operations/data_movement/move/move_pybind.hpp"
@@ -53,6 +54,7 @@ void py_module(py::module& module) {
     bind_non_zero_indices(module);
     clone::bind_clone_operation(module);
     detail::bind_concat(module);
+    detail::bind_flip(module);
     detail::bind_indexed_fill(module);
     detail::bind_pad(module);
     detail::bind_permute(module);
