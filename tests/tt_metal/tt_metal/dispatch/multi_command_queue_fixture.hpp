@@ -38,6 +38,7 @@ protected:
         const chip_id_t device_id = 0;
         const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
         this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        this->devices_.push_back(this->device_);
     }
 
     void TearDown() override {

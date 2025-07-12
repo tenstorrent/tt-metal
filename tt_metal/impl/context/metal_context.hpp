@@ -101,6 +101,13 @@ private:
     void reset_cores(chip_id_t device_id);
     void assert_cores(chip_id_t device_id);
 
+    // Returns the ERISC Launch Flag address
+    uint32_t get_active_erisc_launch_flag_addr();
+    // Returns true if metal firmware or a kernel is running on the virtual ethernet core
+    bool erisc_app_still_running(chip_id_t device_id, CoreCoord virtual_core);
+    // Send a message to exit the erisc app
+    void erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth);
+
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(chip_id_t device_id);

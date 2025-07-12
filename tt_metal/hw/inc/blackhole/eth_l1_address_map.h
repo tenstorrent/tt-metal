@@ -16,7 +16,7 @@ struct address_map {
     static constexpr std::uint32_t ERISC_APP_SYNC_INFO_BASE = MEM_ERISC_APP_SYNC_INFO_BASE;
     static constexpr std::uint32_t ERISC_APP_ROUTING_INFO_BASE = MEM_ERISC_APP_ROUTING_INFO_BASE;
     static constexpr std::uint32_t ERISC_BARRIER_BASE = MEM_ERISC_BARRIER_BASE;
-    static constexpr std::uint32_t LAUNCH_ERISC_APP_FLAG = 0;  // don't need this - just to get things to compile
+    static constexpr std::uint32_t LAUNCH_ERISC_APP_FLAG = MEM_ERISC_LAUNCH_FLAG;
 
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_BASE = MEM_AERISC_MAILBOX_BASE;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = MEM_AERISC_MAILBOX_END;

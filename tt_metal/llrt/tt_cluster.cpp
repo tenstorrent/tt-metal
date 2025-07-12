@@ -793,22 +793,9 @@ void Cluster::read_sysmem(
     this->driver_->read_from_sysmem(vec, addr, channel & HOST_MEM_CHANNELS_MASK, size_in_bytes, src_device_id);
 }
 
-void Cluster::verify_sw_fw_versions(
-    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
-    tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
-    log_info(
-        tt::LogDevice,
-        "Software version {}, Ethernet FW version {} (Device {})",
-        sw.str(),
-        fw_first_eth_core.str(),
-        device_id);
-    for (std::uint32_t &fw_version : fw_versions) {
-        tt_version fw(fw_version);
-
-        TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
-        TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
-        TT_FATAL(sw.minor <= fw.minor, "SW version is newer than FW version");
-    }
+FirmwareVersion Cluster::get_ethernet_fw_version() const {
+    tt_version version = this->driver_->get_ethernet_fw_version();
+    return FirmwareVersion(version.major, version.minor, version.patch);
 }
 
 // DRAM barrier is used to implement host-to-device synchronization and should be used when all previous writes to DRAM
@@ -1499,8 +1486,3 @@ bool Cluster::is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) 
 }
 
 }  // namespace tt
-
-std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
-    os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram);
-    return os;
-}

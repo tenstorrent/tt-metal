@@ -43,6 +43,21 @@ struct HalJitBuildConfig {
     ll_api::memory::Loading memory_load;
 };
 
+// Features that are enabled on a given device. Enablement of the feature
+// can be queried using the Hal::get_device_feature_enabled function.
+enum class DeviceFeature {
+    // Ethernet Firmware supports the usage of the mailbox API
+    ETH_FW_API,
+    // Dispatch to Active ethernet cores utilize a kernel config buffer
+    DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Idle ethernet cores utilize a kernel config buffer
+    DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Tensix cores utilize a kernel config buffer
+    DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER,
+    // Intermesh routing
+    ETH_LINKS_INTERMESH_ROUTING,
+};
+
 // Ethernet Firmware mailbox messages
 enum class FWMailboxMsg : uint8_t {
     // Message status mask.
@@ -58,6 +73,8 @@ enum class FWMailboxMsg : uint8_t {
     // Execute function from the core
     // arg0: L1 addr of function, arg1: unused, arg2: unused
     ETH_MSG_RELEASE_CORE,
+    // Heartbeat counter which indicates base firmware is running
+    HEARTBEAT,
     // Number of mailbox message types
     COUNT,
 };
@@ -135,6 +152,7 @@ public:
     using NOCAddrFunc = std::function<uint64_t(uint64_t)>;
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
     using EthFwArgAddrFunc = std::function<uint32_t(uint32_t)>;
+    using DeviceFeatureListFunc = std::function<bool(DeviceFeature)>;
 
 private:
     tt::ARCH arch_;
@@ -163,7 +181,6 @@ private:
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
-    bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_;
 
@@ -188,6 +205,7 @@ private:
     NOCAddrFunc noc_ucast_addr_y_func_;
     NOCAddrFunc noc_local_addr_func_;
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
+    DeviceFeatureListFunc device_features_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -242,7 +260,6 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
-    bool intermesh_eth_links_enabled() const { return this->intermesh_eth_links_enabled_; }
     const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
@@ -257,6 +274,10 @@ public:
     uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
+    // Query device features. Returns true if the feature is enabled.
+    bool get_device_feature_enabled(DeviceFeature feature) const { return this->device_features_func_(feature); }
+    // Returns true if the core has a kernel config buffer.
+    bool get_core_has_kernel_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
@@ -453,6 +474,18 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
     TT_ASSERT(index < this->core_info_.size());
     // -1 for the message
     return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
+}
+
+inline bool Hal::get_core_has_kernel_config_buffer(HalProgrammableCoreType programmable_core_type) const {
+    switch (programmable_core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            return get_device_feature_enabled(DeviceFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::ACTIVE_ETH:
+            return get_device_feature_enabled(DeviceFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::IDLE_ETH:
+            return get_device_feature_enabled(DeviceFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
+        default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
+    }
 }
 
 }  // namespace tt_metal

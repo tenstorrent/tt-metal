@@ -226,7 +226,7 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, go_msg_addr & ~0x3, sizeof(uint32_t));
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, go_msg_addr, sizeof(uint32_t));
         go_msg_t* core_status = (go_msg_t*)(run_mailbox_read_val.data());
         uint8_t run = core_status->signal;
         if (run != run_state && run != RUN_MSG_DONE) {
@@ -272,7 +272,7 @@ void wait_until_cores_done(
         if (loop_count % 1000 == 0) {
             log_debug(
                 tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
-            usleep(100000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
@@ -310,29 +310,26 @@ void send_msg_to_eth_mailbox(
     bool wait_for_ack,
     int timeout_ms) {
     constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
     bool is_eth_core = internal_::is_active_eth_core(device_id, virtual_core);
     TT_ASSERT(
         is_eth_core,
         "target core for send_msg_to_eth_mailbox {} (virtual) must be an active ethernet core",
         virtual_core.str());
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    uint32_t mailbox_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX);
-
-    // Mailbox not supported
-    if (mailbox_addr == 0) {
-        return;
-    }
-
-    auto status_mask = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
-    auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
+    const auto mailbox_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX);
+    const auto status_mask = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
+    const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
 
     auto wait_for_mailbox = [&](std::function<bool(uint32_t)> cond) {
-        constexpr auto k_sleep_time = std::chrono::milliseconds{500};
+        constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
         const auto start = std::chrono::high_resolution_clock::now();
 
         while (true) {
-            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
             uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
             log_debug(tt::LogLLRuntime, "Device {}: Eth {} Mailbox {:#x}", device_id, virtual_core.str(), mailbox_val);
 
@@ -340,7 +337,8 @@ void send_msg_to_eth_mailbox(
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start).count();
             if (elapsed > timeout_ms) {
                 TT_THROW(
-                    "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} mailbox {:#x}",
+                    "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} mailbox {:#x}. Is the "
+                    "firmware updated? Minimum tt-firmware version is 18.2.0",
                     device_id,
                     timeout_ms,
                     virtual_core.str(),
@@ -350,6 +348,7 @@ void send_msg_to_eth_mailbox(
             if (cond(mailbox_val)) {
                 break;
             }
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
             std::this_thread::sleep_for(k_sleep_time);
         }
     };
@@ -359,7 +358,6 @@ void send_msg_to_eth_mailbox(
     auto write_arg = [&](int index, uint32_t val) {
         uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(index);
         write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{val}, arg_addr);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     };
 
     const auto max_args = hal.get_eth_fw_mailbox_arg_count();
@@ -385,6 +383,34 @@ void send_msg_to_eth_mailbox(
     if (wait_for_ack) {
         auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
         wait_for_mailbox([=](uint32_t mailbox_val) { return (mailbox_val & status_mask) == done_message; });
+    }
+}
+
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_loops) {
+    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
+    const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::HEARTBEAT);
+
+    uint32_t heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+    uint32_t previous_heartbeat_val = heartbeat_val;
+    while (heartbeat_val == previous_heartbeat_val) {
+        previous_heartbeat_val = heartbeat_val;
+        heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+        if (timeout_loops > 0) {
+            timeout_loops--;
+            if (timeout_loops <= 0) {
+                TT_THROW(
+                    "Device {}: Eth mailbox timeout waiting for active eth core {} to become active again. Is "
+                    "the "
+                    "firmware updated? Minimum tt-firmware version is 18.2.0",
+                    device_id,
+                    virtual_core.str());
+            }
+        }
     }
 }
 

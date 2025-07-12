@@ -57,6 +57,7 @@ const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
         case DebugBrisc: return " brisc";
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
+        case DebugSubordinateErisc: return "subordinate_erisc";
         case DebugIErisc: return "ierisc";
         case DebugSubordinateIErisc: return "subordinate_ierisc";
         case DebugTrisc0: return "trisc0";
@@ -1034,6 +1035,10 @@ void WatcherDeviceReader::LogRunningKernels(CoreDescriptor& core, const launch_m
             tt::LogMetal,
             " erisc : {}",
             kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+        log_info(
+            tt::LogMetal,
+            " erisc : {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
     } else {
         log_info(
             tt::LogMetal,
@@ -1055,6 +1060,7 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
+        case DebugSubordinateErisc:
         case DebugSubordinateIErisc:
             return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];

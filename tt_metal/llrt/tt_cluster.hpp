@@ -31,6 +31,7 @@
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_types.h>
 #include <umd/device/types/harvesting.h>
 
 namespace tt {
@@ -48,10 +49,6 @@ class Hal;
 }
 }  // namespace tt
 struct tt_device_params;
-
-static constexpr std::uint32_t SW_VERSION = 0x00020000;
-
-using tt_target_dram = std::tuple<int, int, int>;
 
 namespace tt {
 
@@ -84,6 +81,17 @@ enum class EthRouterMode : uint32_t {
     IDLE = 0,
     BI_DIR_TUNNELING = 1,
     FABRIC_ROUTER = 2,
+};
+
+struct FirmwareVersion {
+    uint16_t major = 0xffff;
+    uint8_t minor = 0xff;
+    uint8_t patch = 0xff;
+
+    friend std::ostream& operator<<(std::ostream& os, const FirmwareVersion& fw) {
+        os << "FW:" << (uint32_t)fw.major << "." << (uint32_t)fw.minor << "." << (uint32_t)fw.patch;
+        return os;
+    }
 };
 
 class Cluster {
@@ -151,8 +159,7 @@ public:
         return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
     }
 
-    //! device driver and misc apis
-    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
+    FirmwareVersion get_ethernet_fw_version() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
@@ -379,6 +386,9 @@ private:
 
     bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
+    // Verify system has required firmware versions for Metal
+    void assert_fw_versions();
+
     ARCH arch_;
     TargetDevice target_type_;
 
@@ -442,4 +452,12 @@ private:
 
 }  // namespace tt
 
-std::ostream& operator<<(std::ostream& os, const tt_target_dram& dram);
+template <>
+struct fmt::formatter<tt::FirmwareVersion> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    template <typename Context>
+    constexpr auto format(const tt::FirmwareVersion& version, Context& ctx) const {
+        return format_to(ctx.out(), "FW:{}.{}.{}", version.major, version.minor, version.patch);
+    }
+};
