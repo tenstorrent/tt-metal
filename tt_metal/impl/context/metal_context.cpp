@@ -358,10 +358,6 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
         uint32_t go_addr =
             hal_->get_dev_addr(get_programmable_core_type(virtual_eth_core, device_id), HalL1MemAddrType::GO_MSG);
         cluster_->write_core(&go_msg, sizeof(go_msg_t), tt_cxy_pair(device_id, virtual_eth_core), go_addr);
-
-        std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
-        std::vector<uint32_t> data = {0};
-        cluster_->write_core(&data, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_eth_core), launch_erisc_addr);
     };
 
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
@@ -562,11 +558,9 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(device_id, virtual_core), reset_val);
 
-            // NOTE: Return to base fw by clearing launch flag is done in clear_launch_messages_on_eth_cores so the code
-            // below is not needed
-            // std::vector<uint32_t> clear_flag_data = {0};
-            // tt::llrt::write_hex_vec_to_core(
-            //     device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+            std::vector<uint32_t> clear_flag_data = {0};
+            tt::llrt::write_hex_vec_to_core(
+                device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
         }
     }
 
