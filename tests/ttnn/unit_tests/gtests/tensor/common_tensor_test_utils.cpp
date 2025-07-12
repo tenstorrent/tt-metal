@@ -33,15 +33,13 @@ void test_tensor_on_device(
 
     const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
 
-    const auto input_buf_size_bytes = layout.compute_packed_buffer_size_bytes(input_shape);
-    const auto host_buffer_datum_size_bytes = sizeof(uint32_t);
-    const auto input_buf_size = input_buf_size_bytes / host_buffer_datum_size_bytes;
+    const auto input_buf_size = layout.compute_packed_buffer_size_bytes(input_shape);
 
-    auto host_data = std::shared_ptr<void>(new uint32_t[input_buf_size], std::default_delete<uint32_t[]>());
-    auto* host_data_ptr = static_cast<uint32_t*>(host_data.get());
+    auto host_data = std::shared_ptr<void>(new uint8_t[input_buf_size], std::default_delete<uint8_t[]>());
+    auto* host_data_ptr = static_cast<uint8_t*>(host_data.get());
 
-    auto readback_data = std::shared_ptr<void>(new uint32_t[input_buf_size], std::default_delete<uint32_t[]>());
-    auto* readback_data_ptr = static_cast<uint32_t*>(readback_data.get());
+    auto readback_data = std::shared_ptr<void>(new uint8_t[input_buf_size], std::default_delete<uint8_t[]>());
+    auto* readback_data_ptr = static_cast<uint8_t*>(readback_data.get());
 
     const auto random_prime_number = 4051;
     for (int i = 0; i < input_buf_size; i++) {
