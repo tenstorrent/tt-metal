@@ -68,15 +68,6 @@ def reference_model(hf_config, request):
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
     "mode, batch, seq_len, norm_category",
     [
         ("decode", 64, 1, "attention_norm"),  # Batch decode with distributed and sharded inputs
@@ -95,8 +86,10 @@ def test_rmsnorm_forward_pass(
     reference_model,
     hf_config,
     temp_dir,
-    mesh_device,
+    galaxy_or_t3k_mesh,
 ):
+    mesh_device = galaxy_or_t3k_mesh
+
     """Test rmsnorm forward pass against reference model."""
     assert norm_category in NORM_CATEGORIES, f"Invalid norm category: {norm_category}"
     is_decoder_norm = norm_category == "attention_norm" or norm_category == "mlp_norm"

@@ -2,9 +2,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import tempfile
-from pathlib import Path
 
 import pytest
 import torch
@@ -12,27 +9,11 @@ from loguru import logger
 
 # Import from local reference files instead of HuggingFace
 from torch.nn import Embedding
-from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
-
-
-@pytest.fixture
-def temp_dir():
-    """Create a temporary directory for test outputs."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
-
-@pytest.fixture
-def hf_config():
-    """Load DeepSeek config for testing."""
-    path = os.getenv("HF_MODEL", "/proj_sw/user_dev/deepseek-ai")
-    config = AutoConfig.from_pretrained(path, trust_remote_code=True)
-    return config
 
 
 @pytest.fixture
@@ -45,15 +26,6 @@ def reference_model(hf_config):
     )
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
-    indirect=True,
-)
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
@@ -70,21 +42,21 @@ def test_embedding_forward_pass(
     reference_model,
     hf_config,
     temp_dir,
-    mesh_device,
+    mesh_row,
 ):
     """Test embedding forward pass against reference model."""
     # Setup: Convert weights and get weight_config
     hf_state_dict = reference_model.state_dict()
-    weight_config = Embedding1D.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
+    weight_config = Embedding1D.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_row)
 
     # Generate appropriate config
     if mode == "prefill":
-        model_config = Embedding1D.prefill_model_config(hf_config, mesh_device)
+        model_config = Embedding1D.prefill_model_config(hf_config, mesh_row)
     else:
-        model_config = Embedding1D.decode_model_config(hf_config, mesh_device)
+        model_config = Embedding1D.decode_model_config(hf_config, mesh_row)
 
     # Create a new model state
-    model_state = Embedding1D.create_state(hf_config, mesh_device=mesh_device)
+    model_state = Embedding1D.create_state(hf_config, mesh_device=mesh_row)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -94,8 +66,8 @@ def test_embedding_forward_pass(
 
     tt_input_ids = ttnn.from_torch(
         torch_input_ids,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_row,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_row),
         dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -107,19 +79,17 @@ def test_embedding_forward_pass(
     else:
         tt_output = Embedding1D.forward_decode(tt_input_ids, run_config)
 
-    logger.info(tt_output)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
+            mesh_row,
             dims=(-2, -1),
-            mesh_shape=tuple(mesh_device.shape),
+            mesh_shape=tuple(mesh_row.shape),
         ),
     )
 
     # Reference forward pass
     reference_output = reference_model(torch_input_ids)
-    print(reference_output.shape)
 
     # Compare outputs
     pcc_required = 0.99  # Embedding should be exact match (just lookup)

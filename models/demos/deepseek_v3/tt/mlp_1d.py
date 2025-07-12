@@ -196,7 +196,7 @@ class MLP1D(AbstractModule):
             "reduce_scatter": ReduceScatterConfig(
                 dim=-1,  # We are scattering across the feature dimension (last one)
                 math_op=ttnn.ReduceType.Sum,
-                topology=ttnn.Topology.Ring,
+                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,  # RMSNorm must provide this shard spec as its output
@@ -294,7 +294,7 @@ class MLP1D(AbstractModule):
                 dim=-1,  # We are scattering across the feature dimension (last one)
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=output_memory_config,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "input_memory_config": input_memory_config,  # For asserting the input to the MLP
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
