@@ -1063,6 +1063,30 @@ void pytensor_module(py::module& m_tensor) {
                 tt_tensor = tt_tensor.cpu()
         )doc")
         .def(
+            "item",
+            [](const Tensor& self) -> py::object {
+                auto result = self.item();
+                return std::visit([](const auto& value) -> py::object { return py::cast(value); }, result);
+            },
+            R"doc(
+                 Extract the scalar value from a tensor containing exactly one element.
+
+                 Similar to PyTorch's tensor.item(), this method returns the value of this tensor as a standard Python number.
+                 This only works for tensors with one element.
+
+                 Returns:
+                     Python scalar: The scalar value contained in the tensor.
+
+                 Raises:
+                     RuntimeError: If the tensor doesn't contain exactly one element.
+
+                 .. code-block:: python
+
+                     # Create a tensor with one element
+                     scalar_tensor = ttnn.from_torch(torch.tensor([3.14]), device=device)
+                     value = scalar_tensor.item()  # Returns 3.14
+             )doc")
+        .def(
             "to",
             py::overload_cast<Layout>(&Tensor::to_layout, py::const_),
             py::arg("target_layout").noconvert(),

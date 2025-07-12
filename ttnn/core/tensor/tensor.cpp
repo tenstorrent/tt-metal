@@ -453,6 +453,39 @@ template std::vector<uint8_t> Tensor::to_vector<uint8_t>(ttnn::QueueId cq_id) co
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(ttnn::QueueId cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(ttnn::QueueId cq_id) const;
 
+std::variant<double, int64_t> Tensor::item() const {
+    ZoneScoped;
+    TT_FATAL(
+        this->logical_shape().volume() == 1,
+        "tensor.item() requires tensor to have exactly one element, but got {} elements",
+        this->logical_shape().volume());
+
+    // Use existing infrastructure: to_vector() already handles multi-device and host tensors correctly
+    // by calling cpu() internally when needed
+    auto extract_value = [this]<typename T>() -> std::variant<double, int64_t> {
+        auto vector_data = this->to_vector<T>(ttnn::DefaultQueueId);
+        if constexpr (std::is_floating_point_v<T>) {
+            return static_cast<double>(vector_data[0]);
+        } else if constexpr (std::is_same_v<T, bfloat16>) {
+            return static_cast<double>(vector_data[0].to_float());
+        } else {
+            return static_cast<int64_t>(vector_data[0]);
+        }
+    };
+
+    switch (this->dtype()) {
+        case DataType::FLOAT32: return extract_value.template operator()<float>();
+        case DataType::BFLOAT16: return extract_value.template operator()<bfloat16>();
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: return extract_value.template operator()<float>();
+        case DataType::INT32: return extract_value.template operator()<int32_t>();
+        case DataType::UINT32: return extract_value.template operator()<uint32_t>();
+        case DataType::UINT16: return extract_value.template operator()<uint16_t>();
+        case DataType::UINT8: return extract_value.template operator()<uint8_t>();
+        default: TT_THROW("Unsupported DataType for item(): {}", this->dtype());
+    }
+}
+
 Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device)) {
         return to_device(mesh_device, mem_config, cq_id);
