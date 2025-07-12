@@ -24,7 +24,7 @@ on:
         default: 120
 
 jobs:
-  test:
+  tt-metal-l2-tests:
     strategy:
       fail-fast: false
       matrix:
