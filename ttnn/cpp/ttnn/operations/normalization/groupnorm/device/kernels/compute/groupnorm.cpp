@@ -522,13 +522,9 @@ void MAIN {
             add_tiles_init(cb_ex2_global, cb_eps);
             add_tiles(cb_ex2_global, cb_eps, 0, 0, dst0);
             tile_regs_wait();
-            // sqrt(Var + eps)
-            sqrt_tile_init();
-            sqrt_tile(dst0);
-            tile_regs_wait();
             // 1/[sqrt(Var + eps)]
-            recip_tile_init();
-            recip_tile(dst0);
+            rsqrt_tile_init();
+            rsqrt_tile(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex2pe);
