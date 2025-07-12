@@ -34,7 +34,7 @@ constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targe
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
-    return;
+    // return;
     DPRINT << "Kernel = worker_writer" << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
     DPRINT << "reserved_packet_header_cb_id: " << reserved_packet_header_cb_id << ENDL();
@@ -65,6 +65,9 @@ void kernel_main() {
     DPRINT << "num_tiles_to_read: " << num_tiles_to_read << ENDL();
     DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << ENDL();
     DPRINT << "num_cores: " << num_cores << ENDL();
+    DPRINT << "out_ready_sem_bank_addr: " << static_cast<uint32_t>(out_ready_sem_bank_addr) << ENDL();
+    DPRINT << "out_ready_sem_noc0_x: " << static_cast<uint32_t>(out_ready_sem_noc0_x) << ENDL();
+    DPRINT << "out_ready_sem_noc0_y: " << static_cast<uint32_t>(out_ready_sem_noc0_y) << ENDL();
     DPRINT << ENDL();
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -119,13 +122,13 @@ void kernel_main() {
         DPRINT << "core_id: " << core_id << " noc0_dest_noc_addr: " << noc0_dest_noc_addr << ENDL();
 
         // This issues a flush barrier
-        write_and_advance_local_read_address_for_fabric_write(
+        /*write_and_advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
             fabric_connection,
             l1_read_addr,
-            num_tiles_to_read_this_core * tensor0_page_size);
+            num_tiles_to_read_this_core * tensor0_page_size);*/
         if constexpr (dynamic_alternate) {
             std::swap(
                 pkt_hdr_forward->routing_fields.value,
@@ -142,7 +145,7 @@ void kernel_main() {
     }
 
     // 2. mcast output ready semaphore
-    /*
+
     auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
@@ -166,12 +169,11 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
-    */
 
     fabric_connection.close();
     // increment locally
-    uint64_t out_ready_sem_noc_addr =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-    noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-    noc_async_write_barrier();
+    // uint64_t out_ready_sem_noc_addr =
+    //     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+    // noc_semaphore_inc(out_ready_sem_noc_addr, 1);
+    // noc_async_write_barrier();
 }

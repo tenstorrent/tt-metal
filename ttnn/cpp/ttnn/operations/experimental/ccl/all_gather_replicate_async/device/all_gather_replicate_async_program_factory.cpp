@@ -372,6 +372,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& intermediate = input_tensors[1];
+            const auto& aggregated = input_tensors[2];
 
             auto semaphore = static_cast<const ttnn::AllGatherReplicateAsync*>(operation)->semaphore;
 
@@ -384,6 +385,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
                 // reader
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                worker_reader_sender_runtime_args[1] = intermediate.buffer()->address();
+                worker_reader_sender_runtime_args[8] = semaphore.address();
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = intermediate.buffer()->address();
@@ -395,6 +398,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             for (const auto& core : intermediate_cores_vec) {
                 auto& worker_receiver_runtime_args = worker_receiver_runtime_args_by_core[core.x][core.y];
                 worker_receiver_runtime_args[0] = semaphore.address();
+                worker_receiver_runtime_args[3] = aggregated.buffer()->address();
             }
         };
 
