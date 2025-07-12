@@ -52,7 +52,7 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t c
     uint32_t tile_idx = 0;
 
     transpose_wh_init_short(cb_tilize);
-    pack_untilize_dst_init_short<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
+    pack_untilize_dest_init<Ht, Ht, use_narrow_row, row_size>(cb_out);
     for (uint32_t w = 0; w < Wt; ++w) {
         tile_regs_acquire();
         for (uint32_t h = 0; h < Ht; ++h) {
@@ -65,13 +65,13 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t c
         if (w == Wt - 1) {  // last row
             cb_reserve_back(cb_out, pack_num_pages_last_row_col);
             tile_regs_wait();
-            pack_untilize_dst<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
+            pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
             tile_regs_release();
             cb_push_back(cb_out, pack_num_pages_last_row_col);
         } else {
             cb_reserve_back(cb_out, pack_num_pages_last_col);
             tile_regs_wait();
-            pack_untilize_dst<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
+            pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
             tile_regs_release();
             cb_push_back(cb_out, pack_num_pages_last_col);
         }
@@ -85,7 +85,7 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
     transpose_wh_init_short(cb_tilize);
-    pack_untilize_dst_init_short<Ht>(cb_out);
+    pack_untilize_dest_init<Ht>(cb_out);
     for (uint32_t w = 0; w < Wt; ++w) {
         tile_regs_acquire();
         for (uint32_t h = 0; h < Ht; ++h) {
@@ -96,7 +96,7 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
 
         cb_reserve_back(cb_out, Ht);
         tile_regs_wait();
-        pack_untilize_dst<Ht>(cb_out);
+        pack_untilize_dest<Ht>(cb_out);
 
         tile_regs_release();
         cb_push_back(cb_out, Ht);
