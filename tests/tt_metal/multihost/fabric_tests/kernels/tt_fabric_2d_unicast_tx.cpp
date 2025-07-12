@@ -93,7 +93,6 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender bwd_fabric_connection;
 
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fwd_packet_header;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* bwd_packet_header;
 
     fwd_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
