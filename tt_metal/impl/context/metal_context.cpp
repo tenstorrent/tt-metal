@@ -638,9 +638,9 @@ void MetalContext::assert_cores(chip_id_t device_id) {
 
     if (!hal_->get_eth_fw_is_cooperative()) {
         // Assert riscs on active eth
-        for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+        const auto assert_eth_core = [&](const CoreCoord& logical_eth_core, bool ack_return_to_base_fw) {
             CoreCoord virtual_eth_core =
-                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_eth_core, CoreType::ETH);
             TensixSoftResetOptions reset_val =
                 TENSIX_ASSERT_SOFT_RESET &
                 static_cast<TensixSoftResetOptions>(
@@ -648,12 +648,21 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             // Reset subordinate
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
             // Return primary to base FW
-            std::vector<uint32_t> clear_flag_data = {0};
-            tt::llrt::write_hex_vec_to_core(
-                device_id, virtual_eth_core, clear_flag_data, get_active_erisc_launch_flag_addr());
-            cluster_->l1_barrier(device_id);
-            // Ensure that the core has returned to base fw
-            llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
+            if (ack_return_to_base_fw) {
+                std::vector<uint32_t> clear_flag_data = {0};
+                tt::llrt::write_hex_vec_to_core(
+                    device_id, virtual_eth_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+                cluster_->l1_barrier(device_id);
+                // Ensure that the core has returned to base fw
+                llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
+            }
+        };
+
+        for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+            assert_eth_core(eth_core, true);
+        }
+        for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
+            assert_eth_core(eth_core, false);
         }
     }
 }

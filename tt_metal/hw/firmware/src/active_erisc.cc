@@ -149,7 +149,7 @@ void Application() {
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+        while (!enable_fw_flag[0] || (go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
             if (!enable_fw_flag[0]) {
                 internal_::disable_erisc_app();
