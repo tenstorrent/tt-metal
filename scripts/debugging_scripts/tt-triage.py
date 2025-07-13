@@ -483,8 +483,8 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                     cs = top_callstack(
                         pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
                     )
-                    if GDB_EN:
-                        get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], kernel_path, kernel_offset)
+                    if GDB_EN:                            
+                        get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset)
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
@@ -496,7 +496,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                     cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
 
                     if GDB_EN:
-                        get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], fw_elf_path)
+                        get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
 
             if VVERBOSE:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -556,7 +556,7 @@ def tear_down_gdb(gdb_client, ui_state: UIState):
     # Stop GDB server
     ui_state.stop_gdb()
 
-def get_callstack_with_gdb(gdb_client, pid: int, elf_path: str, kernel_offset: int = None):
+def get_callstack_with_gdb(gdb_client, pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None):
     # Giving 0 as kernel_offset does not work
     add_symbol_file_cmd = f"add-symbol-file {elf_path} {kernel_offset}" if kernel_offset is not None else f"add-symbol-file {elf_path}"
     
@@ -569,7 +569,7 @@ def get_callstack_with_gdb(gdb_client, pid: int, elf_path: str, kernel_offset: i
     set prompt 
     set logging file {CALLSTACK_LOG_PATH}
     set logging enabled on
-    printf "Process ID: {pid}\\n"
+    printf "{pid}: {loc} {risc_name}\\n"
     backtrace
     printf "\\n"
     set logging enabled off
