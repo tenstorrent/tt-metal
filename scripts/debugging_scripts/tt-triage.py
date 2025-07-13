@@ -483,8 +483,8 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                     cs = top_callstack(
                         pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
                     )
-                if GDB_EN:
-                    get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], kernel_path, kernel_config_base + kernel_text_offset)
+                    if GDB_EN:
+                        get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], kernel_path, kernel_offset)
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
