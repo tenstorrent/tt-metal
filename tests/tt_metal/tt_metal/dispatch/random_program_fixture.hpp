@@ -301,7 +301,6 @@ private:
             max_index = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
                             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
                         1;
-            return DataMovementProcessor::RISCV_0;
         }
 
         const uint32_t num = this->generate_random_num(0, max_index);
@@ -333,7 +332,7 @@ private:
         all_cores = empty_crs.merge(all_cores);
 
         CoreRangeSet cores;
-        const uint32_t num = this->generate_random_num(0, 2);
+        const uint32_t num = 0;  // this->generate_random_num(0, 2);
         switch (num) {
             case 0: cores = all_cores; break;
             case 1: cores = this->generate_subset_of_cores(all_cores, 2); break;

@@ -139,6 +139,14 @@ void Application() {
         noc_local_state_init(n);
     }
 
+    // There may be some random data from the base FW
+    // We only use NOC0 here
+    noc_async_full_barrier(0 /* noc */);
+    // #18384: This register was left dirty by eth training.
+    // It is not used in dataflow api, so it can be set to 0
+    // one time here instead of setting it everytime in dataflow_api.
+    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
+
     deassert_all_reset();
     wait_subordinate_eriscs();
     mailboxes->go_message.signal = RUN_MSG_DONE;
@@ -149,10 +157,11 @@ void Application() {
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while (!enable_fw_flag[0] || (go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
             if (!enable_fw_flag[0]) {
                 internal_::disable_erisc_app();
+                ((volatile uint32_t*)(0x40000))[1] = 0xdeaddead;
                 return;
             }
 
@@ -183,6 +192,11 @@ void Application() {
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
+            // #18384: This register was left dirty by eth training.
+            // It is not used in dataflow api, so it can be set to 0
+            // one time here instead of setting it everytime in dataflow_api.
+            NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
+
             flush_erisc_icache();
 
             enum dispatch_core_processor_masks enables =
@@ -192,10 +206,6 @@ void Application() {
 
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
-                // #18384: This register was left dirty by eth training.
-                // It is not used in dataflow api, so it can be set to 0
-                // one time here instead of setting it everytime in dataflow_api.
-                NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
                 constexpr int index =
                     static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
