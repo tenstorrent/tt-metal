@@ -49,6 +49,8 @@ VVERBOSE = False
 context = None
 GDB_EN = False
 PORT = 6767
+CALLSTACK_LOG_PATH = os.environ.get("TT_METAL_HOME", "") + "/scripts/debugging_scripts/callstack.output"
+GDB_LOG_PATH = os.environ.get("TT_METAL_HOME", "") + "/scripts/debugging_scripts/gdb_log.txt"
 
 try:
     from tabulate import tabulate, TableFormat, Line, DataRow
@@ -482,12 +484,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                         pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
                     )
                 if GDB_EN:
-                    f = open("callstack.output", "r")
-                    callstack_output = f.read()
                     get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], kernel_path, kernel_config_base + kernel_text_offset)
-                    while callstack_output == f.read():
-                        time.sleep(0.01)
-                    f.close()
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
@@ -498,9 +495,8 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
 
                     cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
 
-                    # if GDB_EN:
-                    #     get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], fw_elf_path, 0)
-                    #     time.sleep(1)    
+                    if GDB_EN:
+                        get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], fw_elf_path)
 
             if VVERBOSE:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -547,7 +543,7 @@ def set_up_gdb(ui_state: UIState):
     gdb_client.stdin.write(f"target extended-remote localhost:{PORT}\n")
     gdb_client.stdin.flush()
 
-    gdb_client.stdin.write("shell > callstack.output\n")
+    gdb_client.stdin.write(f"shell > {CALLSTACK_LOG_PATH}\n")
     gdb_client.stdin.flush()
 
     return gdb_client
@@ -560,12 +556,18 @@ def tear_down_gdb(gdb_client, ui_state: UIState):
     # Stop GDB server
     ui_state.stop_gdb()
 
-def get_callstack_with_gdb(gdb_client, pid: int, elf_path: str, kernel_offset: int):
+def get_callstack_with_gdb(gdb_client, pid: int, elf_path: str, kernel_offset: int = None):
+    # Giving 0 as kernel_offset does not work
+    add_symbol_file_cmd = f"add-symbol-file {elf_path} {kernel_offset}" if kernel_offset is not None else f"add-symbol-file {elf_path}"
+    
+    f = open(CALLSTACK_LOG_PATH, "r")
+    callstack_output = f.read()
+
     gdb_client.stdin.write(f"""\
     attach {pid}
-    add-symbol-file {elf_path} {kernel_offset}
+    {add_symbol_file_cmd}
     set prompt 
-    set logging file callstack.output
+    set logging file {CALLSTACK_LOG_PATH}
     set logging enabled on
     printf "Process ID: {pid}\\n"
     backtrace
@@ -575,7 +577,12 @@ def get_callstack_with_gdb(gdb_client, pid: int, elf_path: str, kernel_offset: i
     """)
     gdb_client.stdin.flush()
 
-    return True
+    # Wait for command to finish
+    while callstack_output == f.read():
+        time.sleep(0.01)
+    f.close()
+
+
 
 def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context: Context):
     """Print the running operations on the device."""
@@ -714,8 +721,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
 
         # Should be option to log to some file
         output, _ = gdb_client.communicate()
-        metal_home = os.environ.get("TT_METAL_HOME", "")
-        with open(os.path.join(metal_home, "scripts", "debugging_scripts", "gdb_log.txt"), "w") as f:
+        with open(GDB_LOG_PATH, "w") as f:
             f.write(output)
 
 
