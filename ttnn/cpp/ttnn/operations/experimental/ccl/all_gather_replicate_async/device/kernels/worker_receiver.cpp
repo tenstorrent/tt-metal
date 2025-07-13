@@ -29,10 +29,9 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
-    // if(core_id != ring_index) {
-    //     noc_semaphore_set(signal_semaphore_addr_ptr, 0);
-    //     return;
-    // }
+    if (core_id != ring_index) {
+        return;
+    }
 
     // 1. Wait for signal
     {

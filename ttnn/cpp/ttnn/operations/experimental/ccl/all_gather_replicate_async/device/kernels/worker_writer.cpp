@@ -145,7 +145,7 @@ void kernel_main() {
     }
 
     // 2. mcast output ready semaphore
-
+    /*
     auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
@@ -169,6 +169,7 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
+    */
 
     fabric_connection.close();
     // increment locally
