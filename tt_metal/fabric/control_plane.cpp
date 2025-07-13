@@ -2017,11 +2017,6 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const { return th
 
 HostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
 
-MeshCoordinate ControlPlane::get_local_mesh_offset() const {
-    auto coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
-    return coord_range.start_coord();
-}
-
 MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scope) const {
     std::optional<HostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;

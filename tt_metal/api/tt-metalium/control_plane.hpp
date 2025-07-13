@@ -71,7 +71,6 @@ public:
     // a single host to bind to multiple meshes.
     std::vector<MeshId> get_local_mesh_id_bindings() const;
     HostRankId get_local_host_rank_id_binding() const;
-    MeshCoordinate get_local_mesh_offset() const;
 
     // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
     MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;

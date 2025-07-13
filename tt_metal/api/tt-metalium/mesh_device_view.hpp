@@ -15,7 +15,6 @@
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -44,10 +43,12 @@ public:
     using DeviceView = std::vector<IDevice*>;
     using DeviceViews = std::vector<std::vector<IDevice*>>;
 
+    // Create a view of the entire mesh.
+    // MeshDeviceView(const MeshDevice& mesh_device);
+
     // // Create a view of a sub-region of the mesh defined by `range`.
     // MeshDeviceView(const std::vector<IDevice*>& devices, const MeshCoordinateRange& range);
     explicit MeshDeviceView(const MeshContainer<IDevice*>& devices);
-    explicit MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices);
     explicit MeshDeviceView(const MeshDevice& mesh_device);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
@@ -102,21 +103,8 @@ public:
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
-    // Distributed mesh support
-    // Returns the offset of this host's portion of the mesh within the global distributed mesh.
-    // For single-host meshes, this returns (0, 0).
-    [[nodiscard]] MeshCoordinate local_offset() const;
-
-    // Returns the shape of the mesh portion managed by this host.
-    // For single-host meshes, this equals the global mesh shape.
-    [[nodiscard]] MeshShape local_shape() const;
-
-    // Checks if a global coordinate is managed by this host.
-    // Returns true if the coordinate falls within this host's local mesh bounds.
-    [[nodiscard]] bool is_local_coordinate(const MeshCoordinate& coord) const;
-
 private:
-    DistributedMeshContainer<IDevice*> devices_;
+    MeshContainer<IDevice*> devices_;
     std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 
     // Set if the view is 2D to enable row/col APIs, otherwise nullopt.
