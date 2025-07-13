@@ -483,7 +483,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                     cs = top_callstack(
                         pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
                     )
-                    if GDB_EN:                            
+                    if GDB_EN and proc_name == "BRISC":                            
                         get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset)
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -495,7 +495,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
 
                     cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
 
-                    if GDB_EN:
+                    if GDB_EN and proc_name == "BRISC": 
                         get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
 
             if VVERBOSE:
@@ -565,6 +565,7 @@ def get_callstack_with_gdb(gdb_client, pid: int, loc, risc_name: str, elf_path: 
 
     gdb_client.stdin.write(f"""\
     attach {pid}
+    info inferior
     {add_symbol_file_cmd}
     set prompt 
     set logging file {CALLSTACK_LOG_PATH}
