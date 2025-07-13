@@ -569,7 +569,7 @@ def get_callstack_with_gdb(gdb_client, pid: int, loc, risc_name: str, elf_path: 
     set prompt 
     set logging file {CALLSTACK_LOG_PATH}
     set logging enabled on
-    printf "{pid}: {loc} {risc_name}\\n"
+    printf "{pid} -> {loc} {risc_name}\\n"
     backtrace
     printf "\\n"
     set logging enabled off
