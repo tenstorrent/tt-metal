@@ -161,8 +161,21 @@ public:
 private:
     uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
     void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
-    size_t get_address_from_block(
-        FabricMuxChannelType channel_type, uint8_t channel_id, size_t base_address, size_t unit_size_bytes) const;
+    uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
+
+    // Private nested struct for memory region management
+    struct MemoryRegion {
+        size_t base_address;
+        size_t unit_size;
+        size_t num_units;
+
+        MemoryRegion() = default;
+        MemoryRegion(size_t base, size_t unit_sz, size_t count);
+
+        size_t get_address(size_t offset = 0) const;
+        size_t get_end_address() const;
+        size_t get_total_size() const;
+    };
 
     CoreType core_type_ = CoreType::WORKER;
     uint8_t core_type_index_ = 0;
@@ -184,16 +197,18 @@ private:
 
     // memory map
     size_t memory_map_start_address_ = 0;
-    size_t status_address_ = 0;
-    size_t local_fabric_router_status_address_ = 0;
-    size_t termination_signal_address_ = 0;
-    size_t connection_info_base_address_ = 0;
-    size_t connection_handshake_base_address_ = 0;
-    size_t flow_control_base_address_ = 0;
-    size_t buffer_index_base_address_ = 0;
-    size_t full_size_channels_base_address_ = 0;
-    size_t header_only_channels_base_address_ = 0;
     size_t memory_map_end_address_ = 0;
+
+    // memory regions
+    MemoryRegion status_region_;
+    MemoryRegion local_fabric_router_status_region_;
+    MemoryRegion termination_signal_region_;
+    MemoryRegion connection_info_region_;
+    MemoryRegion connection_handshake_region_;
+    MemoryRegion flow_control_region_;
+    MemoryRegion buffer_index_region_;
+    MemoryRegion full_size_channels_region_;
+    MemoryRegion header_only_channels_region_;
 };
 
 }  // namespace tt::tt_fabric
