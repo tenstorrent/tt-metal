@@ -94,6 +94,9 @@ constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = static_cast<bool>(FABRIC_2D);
 
+constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
+constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
+
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
 constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
@@ -1004,36 +1007,36 @@ void process_go_signal_mcast_cmd() {
     // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see
     // CQDispatchGoSignalMcastCmd).
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
-    *aligned_go_signal_storage = cmd->mcast.go_signal;
+    uint32_t go_signal_value = cmd->mcast.go_signal;
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
-    if (cmd->mcast.num_mcast_txns > 0) {
+    uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
+    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    uint32_t wait_count = cmd->mcast.wait_count;
+    if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
-        uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
+            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+        uint32_t num_dests = num_worker_cores_to_mcast;
+        // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
+        uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
+        aligned_go_signal_storage[storage_offset] = go_signal_value;
+
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
-            (uint32_t)aligned_go_signal_storage, dst_noc_addr_multicast, sizeof(uint32_t));
+            (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
         while (!stream_wrap_ge(
-            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), cmd->mcast.wait_count)) {
+            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
-        // Send GO signal to remaining destinations. Only the destination NOC needs to be modified.
-        for (uint32_t i = 1, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
-            uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
-            uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
-            cq_noc_async_write_with_state<CQ_NOC_sNdl>(0, dst, 0);
-            noc_nonposted_writes_acked[noc_index] += num_dests;
-        }
-        noc_nonposted_writes_num_issued[noc_index] += cmd->mcast.num_mcast_txns;
+        noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
         while (!stream_wrap_ge(
-            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), cmd->mcast.wait_count)) {
+            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
     }
 
-    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    *aligned_go_signal_storage = go_signal_value;
     if constexpr (virtualize_unicast_cores) {
         // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
         // This chip is virtualizing cores the go signal is unicasted to

@@ -421,6 +421,12 @@ void DispatchKernel::CreateKernel() {
             .size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
 
+    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
+    CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+    auto virtual_start = device_->virtual_core_from_logical_core(device_worker_cores.start_coord, CoreType::WORKER);
+    auto virtual_end = device_->virtual_core_from_logical_core(device_worker_cores.end_coord, CoreType::WORKER);
+    auto virtual_core_range = CoreRange(virtual_start, virtual_end);
+
     std::vector<uint32_t> compile_args = {};
 
     auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
@@ -519,6 +525,9 @@ void DispatchKernel::CreateKernel() {
         {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
         {"TO_DEV_ID", std::to_string(dependent_config_.to_dev_id.value_or(0))},
         {"ROUTER_DIRECTION", std::to_string(dependent_config_.router_direction.value_or(0))},
+        {"WORKER_MCAST_GRID",
+         std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
+        {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };

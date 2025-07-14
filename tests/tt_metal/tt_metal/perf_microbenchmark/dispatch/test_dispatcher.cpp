@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -629,6 +629,8 @@ int main(int argc, char** argv) {
             {"TO_MESH_ID", "0"},
             {"TO_DEV_ID", "0"},
             {"ROUTER_DIRECTION", "0"},
+            {"WORKER_MCAST_GRID", "0"},
+            {"NUM_WORKER_CORES_TO_MCAST", "0"},
             {"IS_D_VARIANT", "1"},
             {"IS_H_VARIANT", "1"},
         };
