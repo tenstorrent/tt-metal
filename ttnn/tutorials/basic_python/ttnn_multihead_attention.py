@@ -76,7 +76,7 @@ def main():
 
         return self_output
 
-    batch_size = 8
+    batch_size = 6
     sequence_size = 384
     num_heads = 16
     head_size = 64
