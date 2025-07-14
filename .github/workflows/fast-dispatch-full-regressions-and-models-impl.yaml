@@ -89,16 +89,16 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        # card: [N150, N300]
-        # model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, whisper, yolov8s_world, yolov9c, vgg_unet, ufld_v2, mobilenetv2, vanilla_unet, yolov10, openpdn_mnist, yolov8x, vit, sentence_bert, yolov7, yolov8s, swin_s, yolov11, yolov6l, swin_v2]
+        card: [N150, N300]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, whisper, yolov8s_world, yolov9c, vgg_unet, ufld_v2, mobilenetv2, vanilla_unet, yolov10, openpdn_mnist, yolov8x, vit, sentence_bert, yolov7, yolov8s, swin_s, yolov11, yolov6l, swin_v2]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
         include:
           - model: stable_diffusion_xl_base
             card: N150
             timeout: 45
-          # - model: stable_diffusion_xl_base
-          #   card: N300
-          #   timeout: 45
+          - model: stable_diffusion_xl_base
+            card: N300
+            timeout: 45
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     defaults:
       run:
@@ -130,7 +130,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
