@@ -419,22 +419,28 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         0,
     };
 
-    std::vector<uint32_t> writer_runtime_args = {
-        input_tensor.buffer()->address(),
-        indices_tensor.buffer()->address(),
-        mapping_tensor.buffer()->address(),
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        (uint32_t)operation_attributes.cross_device_semaphore->address(),
-        0,
-        0,
-    };
     uint32_t link_id = 0;
+    uint32_t tokens_per_core_start = 0;
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
+        std::vector<uint32_t> writer_runtime_args = {
+            input_tensor.buffer()->address(),
+            indices_tensor.buffer()->address(),
+            mapping_tensor.buffer()->address(),
+            output_tensor.buffer()->address(),
+            metadata_tensor.buffer()->address(),
+            (uint32_t)operation_attributes.cross_device_semaphore->address(),
+            0,
+            0,
+        };
+        reader_runtime_args[6] = tokens_per_core_start;
+        reader_runtime_args[7] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
+        writer_runtime_args[6] = tokens_per_core_start;
+        writer_runtime_args[7] = reader_runtime_args[7];
+        tokens_per_core_start = reader_runtime_args[7];
         for (auto& neighbor : neighbors) {
             auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
-            log_debug(
-                tt::LogOp,
+            log_info(
+                tt::LogAlways,
                 "Connection between ({}, {}) and ({}, {}) at core {} will choose link_id: {}",
                 mesh_coordinate[0],
                 mesh_coordinate[1],
@@ -450,19 +456,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 sender_cores.at(i),
                 writer_runtime_args);
         }
-        link_id++;
-    }
-
-    uint32_t tokens_per_core_start = 0;
-    for (uint32_t i = 0; i < sender_cores.size(); i++) {
-        reader_runtime_args[6] = tokens_per_core_start;
-        reader_runtime_args[7] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
-        writer_runtime_args[6] = tokens_per_core_start;
-        writer_runtime_args[7] = reader_runtime_args[7];
-        tokens_per_core_start = reader_runtime_args[7];
 
         tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(i), reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_cores.at(i), writer_runtime_args);
+        link_id++;
     }
 
     return {
