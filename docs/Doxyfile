@@ -947,6 +947,7 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/eltwise_binary.h \
                          tt_metal/include/compute_kernel_api/matmul.h \
                          tt_metal/include/compute_kernel_api/pack.h \
+                         tt_metal/include/compute_kernel_api/pack_untilize.h \
                          tt_metal/include/compute_kernel_api/quantization.h \
                          tt_metal/include/compute_kernel_api/reconfig_data_format.h \
                          tt_metal/include/compute_kernel_api/reduce.h \
