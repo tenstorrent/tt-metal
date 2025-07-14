@@ -294,6 +294,8 @@ class CMakeBuild(build_ext):
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",
+            "fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+            "fabric/impl/kernels/tt_fabric_mux.cpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
             "impl/dispatch/kernels/**/*",
