@@ -11,13 +11,15 @@ from ttexalens.tt_exalens_lib import (
 
 from .device import run_elf_files, wait_for_tensix_operations_finished
 from .format_arg_mapping import (
+    FPU_BINARY_OPERATIONS,
+    REDUCE_OPERATIONS,
+    SFPU_BINARY_OPERATIONS,
+    SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     DestAccumulation,
     L1BufferLocations,
     MathFidelity,
     MathOperation,
-    ReduceDimension,
-    ReducePool,
     format_tile_sizes,
 )
 from .format_config import FormatConfig, InputOutputFormat
@@ -27,6 +29,26 @@ from .utils import run_shell_command
 class ProfilerBuild(Enum):
     Yes = "true"
     No = "false"
+
+
+def _generate_operation_constants(mathop: MathOperation) -> list[str]:
+    """Generate the appropriate operation constants based on the math operation type."""
+    constants = []
+
+    if mathop in SFPU_UNARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+        )
+    elif mathop in SFPU_BINARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
+        )
+    elif mathop in FPU_BINARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
+        )
+
+    return constants
 
 
 def generate_build_header(
@@ -61,15 +83,18 @@ def generate_build_header(
         "// SPDX-License-Identifier: Apache-2.0",
         "// AUTO-GENERATED CONFIGURATION HEADER. DO NOT EDIT MANUALLY!",
         "",
+        "#pragma once",
+        "",
         "#include <type_traits>",
         "",
+        '#include "llk_defs.h"',
+        '#include "llk_sfpu_types.h"',
         '#include "perf.h"',
         '#include "tensix_types.h"',
         "",
-        "#pragma once",
         "",
         "// Basic configuration",
-        "#define TILE_SIZE_CNT 0x1000",
+        "constexpr std::uint32_t TILE_SIZE_CNT = 0x1000;",
     ]
 
     # Profiler configuration
@@ -78,12 +103,11 @@ def generate_build_header(
 
     # Dest accumulation
     dest_acc = test_config.get("dest_acc", DestAccumulation.No)
-    if dest_acc == DestAccumulation.Yes or dest_acc == "DEST_ACC":
-        header_content.append("#define DEST_ACC")
+    header_content.append(f"constexpr bool dest_acc_en_input = {dest_acc.value};")
 
     # Unpack to dest
     unpack_to_dest = str(test_config.get("unpack_to_dest", False)).lower()
-    header_content.append(f"#define UNPACKING_TO_DEST {unpack_to_dest}")
+    header_content.append(f"constexpr bool UNPACKING_TO_DEST = {unpack_to_dest};")
 
     # Fused Test L1 to L1 : Input of first run is used as input for the second run ...
     # Not fusing: single L1-to-L1 iteration, so we retrieve one format configuration
@@ -91,14 +115,16 @@ def generate_build_header(
     # If L1_to_L1_ITERATIONS is 1, we take input tensor from L1 -> unpack -> math -> pack -> L1
     # If L1_to_L1_ITERATIONS is greater than 1, we perform multiple iterations of unpack -> math -> pack, by taking results tensor in L1 to be input tensor of next iteration
     fused_L1_to_L1 = test_config.get("L1_to_L1_iterations", 1)
-    header_content.append(f"#define L1_to_L1_ITERATIONS {str(fused_L1_to_L1)}")
+    header_content.append(
+        f"constexpr std::uint32_t L1_to_L1_ITERATIONS = {fused_L1_to_L1};"
+    )
 
     # Math fidelity & Approximation mode
     header_content.append(
-        f"#define MATH_FIDELITY {test_config.get('math_fidelity', MathFidelity.LoFi).value}"
+        f"constexpr std::uint32_t MATH_FIDELITY = {test_config.get('math_fidelity', MathFidelity.LoFi).value};"
     )
     header_content.append(
-        f"#define APPROX_MODE {test_config.get('approx_mode', ApproximationMode.No).value}"
+        f"constexpr bool APPROX_MODE = {test_config.get('approx_mode', ApproximationMode.No).value};"
     )
 
     # Data format configuration
@@ -130,27 +156,26 @@ def generate_build_header(
     # Math operation configuration
     mathop = test_config.get("mathop", "no_mathop")
     if mathop != "no_mathop":
-        header_content.extend(
-            ["", "// Math operation configuration", f"#define {mathop.value}"]
-        )
-        if mathop in [
-            MathOperation.ReduceColumn,
-            MathOperation.ReduceRow,
-            MathOperation.ReduceScalar,
-        ]:
+        header_content.extend(["", "// Math operation configuration"])
+        header_content.extend(_generate_operation_constants(mathop))
+
+        # Handle reduce operations
+        if mathop in REDUCE_OPERATIONS:
             header_content.append(
-                f"#define REDUCE_DIM {test_config.get('reduce_dim', ReduceDimension.No).value}"
+                f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{mathop.cpp_enum_value};"
             )
-            header_content.append(
-                f"#define POOL_TYPE {test_config.get('pool_type', ReducePool.No).value}"
-            )
+            pool_type = test_config.get("pool_type", None)
+            if pool_type is not None:
+                header_content.append(
+                    f"constexpr auto POOL_TYPE = ckernel::PoolType::{pool_type.value};"
+                )
 
     tile_cnt = test_config.get("tile_cnt", 1)
 
     header_content.append("")
     # Multi-tile test configuration
     header_content.append("// Multi-tile test configuration")
-    header_content.append(f"#define TILE_CNT {tile_cnt}")
+    header_content.append(f"constexpr int TILE_CNT = {tile_cnt};")
 
     # Unpack an result buffer addresses arrrays generations
     buffer_A_address = read_word_from_device("0,0", L1BufferLocations.srcA.value)
@@ -197,11 +222,13 @@ def generate_build_header(
     block_ct_dim = input_dimensions[1] // 32
     block_rt_dim = input_dimensions[0] // 32
 
-    header_content.append(
-        "#if defined(TEST_KERNEL)\n"
-        f"constexpr uint32_t BLOCK_CT_DIM = {block_ct_dim}; \n"
-        f"constexpr uint32_t BLOCK_RT_DIM = {block_rt_dim}; \n"
-        "#endif\n"
+    header_content.extend(
+        [
+            "#if defined(TEST_KERNEL)",
+            f"constexpr uint32_t BLOCK_CT_DIM = {block_ct_dim};",
+            f"constexpr uint32_t BLOCK_RT_DIM = {block_rt_dim};",
+            "#endif",
+        ]
     )
 
     if perf_run_type := test_config.get("perf_run_type"):
