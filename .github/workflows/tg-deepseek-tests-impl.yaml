@@ -43,6 +43,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
+        HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -62,7 +63,24 @@ jobs:
       - name: Run DeepSeek tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type deepseek_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+          fail=0
+          echo "LOG_METAL: Running DeepSeek unit tests"
+          start_time=$(date +%s)
+
+          pip install -U models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/deepseek_v3/tests/test_embedding_1d.py --timeout 10; fail+=$?;
+          pytest models/demos/deepseek_v3/tests/test_expert.py --timeout 5; fail+=$?;
+          pytest models/demos/deepseek_v3/tests/test_mla_1d.py --timeout 30; fail+=$?;
+          pytest models/demos/deepseek_v3/tests/test_mlp_1d.py --timeout 30; fail+=$?;
+          pytest models/demos/deepseek_v3/tests/test_rms_norm.py --timeout 30; fail+=$?;
+
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "LOG_METAL: DeepSeek unit tests took $duration seconds to complete"
+
+          if [[ $fail -ne 0 ]]; then
+            exit 1
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

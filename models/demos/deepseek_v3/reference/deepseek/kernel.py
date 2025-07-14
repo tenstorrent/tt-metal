@@ -9,7 +9,6 @@ import triton.language as tl
 from triton import Config
 
 
-@triton.jit
 def act_quant_kernel(x_ptr, y_ptr, s_ptr, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -31,7 +30,6 @@ def act_quant(x: torch.Tensor, block_size: int = 128) -> Tuple[torch.Tensor, tor
     return y, s
 
 
-@triton.jit
 def weight_dequant_kernel(x_ptr, s_ptr, y_ptr, M, N, BLOCK_SIZE: tl.constexpr):
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
