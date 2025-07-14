@@ -58,9 +58,9 @@ int main() {
             }
 
             auto data_tensor = ttml::autograd::create_tensor(
-                ttml::core::from_vector(data, ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
+                ttml::core::from_vector(data, ttnn::Shape({batch_size, 1, 1, num_features}), device));
             auto targets_tensor = ttml::autograd::create_tensor(
-                ttml::core::from_vector(targets, ttml::core::create_shape({batch_size, 1, 1, num_targets}), device));
+                ttml::core::from_vector(targets, ttnn::Shape({batch_size, 1, 1, num_targets}), device));
             return std::make_pair(data_tensor, targets_tensor);
         };
 

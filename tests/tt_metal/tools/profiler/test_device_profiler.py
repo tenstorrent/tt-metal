@@ -222,8 +222,8 @@ def test_dispatch_cores():
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [400, 600, 1000, 1290, 2000],
-        "Tensix CQ Prefetch": [400, 900, 1580, 4000],
+        "Tensix CQ Dispatch": [600, 760, 1310, 2330],
+        "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
         "dispatch_total_cq_cmd_op_time": [103],
         "dispatch_go_send_wait_time": [103],
     }
@@ -292,10 +292,7 @@ def test_dispatch_cores():
 @skip_for_blackhole()
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
-    REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [322, 600, 1400, 1900, 2100],
-        "Ethernet CQ Prefetch": [600, 2500],
-    }
+    REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 1220, 1430, 1660, 2320], "Ethernet CQ Prefetch": [1180, 4630]}
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
         setupAutoExtract=True,
@@ -314,7 +311,7 @@ def test_ethernet_dispatch_cores():
                         break
                 assert (
                     res
-                ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+                ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
@@ -334,7 +331,7 @@ def test_ethernet_dispatch_cores():
                         break
                 assert (
                     res
-                ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+                ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
 
 @skip_for_grayskull()

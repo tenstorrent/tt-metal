@@ -18,6 +18,15 @@
 #include <vector>
 
 namespace ttnn {
+
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
+    return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
 namespace {
 
 using ::testing::ElementsAre;
@@ -28,18 +37,14 @@ using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 
 using namespace tt::tt_metal;
 
-TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
-    return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
-}
-
 using TensorSerializationFlatbufferTest = GenericMeshDeviceFixture;
 
 TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorRoundtrip) {
     TemporaryFile test_file("flatbuffer.bin");
     std::vector<float> test_data{1.0f, 2.5f, -3.7f, 42.0f, -0.5f, 100.0f};
 
-    Tensor original_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 2, 3, 1}, DataType::FLOAT32));
+    Tensor original_tensor = Tensor::from_vector(
+        test_data, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(ttnn::Shape{1, 2, 3, 1}, DataType::FLOAT32));
 
     ASSERT_TRUE(original_tensor.storage_type() == StorageType::HOST);
 
@@ -59,7 +64,8 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
     {
         TemporaryFile test_file("uint32.bin");
         std::vector<uint32_t> test_data{1, 2, 3, 4, 5, 6};
-        Tensor original_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{2, 3}, DataType::UINT32));
+        Tensor original_tensor = Tensor::from_vector(
+            test_data, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(ttnn::Shape{2, 3}, DataType::UINT32));
 
         dump_tensor_flatbuffer(test_file.string(), original_tensor);
         Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
@@ -71,7 +77,8 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
     {
         TemporaryFile test_file("bfloat16.bin");
         std::vector<bfloat16> test_data{bfloat16(1.5f), bfloat16(2.5f), bfloat16(-3.5f), bfloat16(4.5f)};
-        Tensor original_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 4}, DataType::BFLOAT16));
+        Tensor original_tensor = Tensor::from_vector(
+            test_data, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(ttnn::Shape{1, 4}, DataType::BFLOAT16));
 
         dump_tensor_flatbuffer(test_file.string(), original_tensor);
         Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
@@ -97,7 +104,8 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DTensorRoundtrip) {
     }
 
     Tensor input_tensor = Tensor::from_vector(
-        test_data, get_tensor_spec(ttnn::Shape{1, num_devices, kNumElements, 1}, DataType::FLOAT32));
+        test_data,
+        CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(ttnn::Shape{1, num_devices, kNumElements, 1}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
@@ -138,7 +146,8 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
     }
 
     Tensor input_tensor = Tensor::from_vector(
-        test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
+        test_data,
+        CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::create_mesh_mapper(
         *mesh_device_,
@@ -183,7 +192,8 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DFewerShardsThanDevicesRoun
     }
 
     Tensor input_tensor = Tensor::from_vector(
-        test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, kNumElements, 1}, DataType::FLOAT32));
+        test_data,
+        CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(ttnn::Shape{1, num_devices - 1, kNumElements, 1}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
@@ -225,7 +235,8 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
     }
 
     Tensor input_tensor = Tensor::from_vector(
-        test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
+        test_data,
+        CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::create_mesh_mapper(
         *mesh_device_,
@@ -274,7 +285,8 @@ TEST_F(TensorSerializationFlatbufferT3000Test, PartiallyReplicatedRoundtrip) {
     }
 
     Tensor input_tensor = Tensor::from_vector(
-        test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
+        test_data,
+        CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::create_mesh_mapper(
         *mesh_device_,
