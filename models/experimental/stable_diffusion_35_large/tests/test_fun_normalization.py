@@ -41,7 +41,6 @@ from ..tt.parallel_config import StableDiffusionParallelManager
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("affine", [True, False], ids=["affine", "noaffine"])
-@pytest.mark.usefixtures("use_program_cache")
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_layer_norm(
     *,

@@ -40,7 +40,6 @@ from .tt.parallel_config import StableDiffusionParallelManager
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 15210496}],
     indirect=True,
 )
-@pytest.mark.usefixtures("use_program_cache")
 def test_sd3(
     *,
     mesh_device: ttnn.MeshDevice,

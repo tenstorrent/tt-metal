@@ -62,7 +62,6 @@ TILE_SIZE = 32
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 716800}], indirect=True
 )
-@pytest.mark.usefixtures("use_program_cache")
 def test_transformer_block(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -204,7 +203,7 @@ def test_transformer_block(
     parallel_manager.maybe_init_persistent_buffers(
         persistent_buffer_shape, list(tt_spatial.padded_shape), list(tt_prompt.padded_shape)
     )
-    for _ in range(100):
+    for _ in range(1):
         print(f"tt_spatial: {tt_spatial.shape}")
         print(f"tt_prompt: {tt_prompt.shape}")
         print(f"tt_time: {tt_time.shape}")

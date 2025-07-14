@@ -54,7 +54,6 @@ TILE_SIZE = 32
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 15157248}],
     indirect=True,
 )
-@pytest.mark.usefixtures("use_program_cache")
 def test_transformer(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -68,7 +67,6 @@ def test_transformer(
     sp: int,
     tp: int,
     topology: ttnn.Topology,
-    use_program_cache,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
