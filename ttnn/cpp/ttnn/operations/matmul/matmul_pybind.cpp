@@ -14,33 +14,12 @@
 #include "ttnn-pybind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::operations::matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
 
 void py_module(py::module& module) {
-    py::enum_<ttnn::operations::compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
-        Enum for controlling matmul compute throttling.
-
-        Higher levels insert NOP instructions to reduce compute throughput:
-        - LEVEL_0: No throttling (100% performance)
-        - LEVEL_1: Throttle to 73% of max performance
-        - LEVEL_2: Throttle to 67% of max performance
-        - LEVEL_3: Throttle to 50% of max performance
-        - LEVEL_4: Throttle to 40% of max performance
-        - LEVEL_5: Throttle to 33% of max performance
-
-        Used to prevent di/dt (power supply current) issues on large core counts.
-    )doc")
-        .value("LEVEL_0", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0)
-        .value("LEVEL_1", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_1)
-        .value("LEVEL_2", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_2)
-        .value("LEVEL_3", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_3)
-        .value("LEVEL_4", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_4)
-        .value("LEVEL_5", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_5);
-
     auto matmul_program_config = tt_serializable_class<MatmulProgramConfig>(module, "MatmulProgramConfig", R"doc(
         Class defining matmul program config
     )doc");
@@ -52,30 +31,21 @@ void py_module(py::module& module) {
 
     matmul_multi_core_reuse_program_config
         .def(
-            py::init<
-                CoreCoord,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
             py::arg("out_subblock_h").noconvert(),
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert(),
-            py::arg("throttle_level").noconvert() = ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0)
+            py::arg("per_core_N").noconvert())
         .def_readwrite(
             "compute_with_storage_grid_size", &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseProgramConfig::out_subblock_w)
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseProgramConfig::per_core_M)
-        .def_readwrite("per_core_N", &MatmulMultiCoreReuseProgramConfig::per_core_N)
-        .def_readwrite("throttle_level", &MatmulMultiCoreReuseProgramConfig::throttle_level);
+        .def_readwrite("per_core_N", &MatmulMultiCoreReuseProgramConfig::per_core_N);
 
     auto matmul_multi_core_reuse_multicast_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastProgramConfig>(
@@ -95,9 +65,7 @@ void py_module(py::module& module) {
                         std::size_t per_core_N,
                         bool transpose_mcast,
                         std::optional<UnaryWithParam> fused_activation,
-                        bool fuse_batch,
-                        ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
-                            ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0) {
+                        bool fuse_batch) {
                 // Set out_block_h and out_block_w to defaults if they are not provided
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -113,8 +81,7 @@ void py_module(py::module& module) {
                     per_core_N,
                     transpose_mcast,
                     std::move(fused_activation),
-                    fuse_batch,
-                    throttle_level);
+                    fuse_batch);
             }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -127,8 +94,7 @@ void py_module(py::module& module) {
             py::arg("per_core_N").noconvert(),
             py::arg("transpose_mcast").noconvert(),
             py::arg("fused_activation"),
-            py::arg("fuse_batch").noconvert() = true,
-            py::arg("throttle_level").noconvert() = ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0)
+            py::arg("fuse_batch").noconvert() = true)
         .def_readwrite(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size)
@@ -141,8 +107,7 @@ void py_module(py::module& module) {
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCastProgramConfig::per_core_N)
         .def_readwrite("transpose_mcast", &MatmulMultiCoreReuseMultiCastProgramConfig::transpose_mcast)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation)
-        .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_batch)
-        .def_readwrite("throttle_level", &MatmulMultiCoreReuseMultiCastProgramConfig::throttle_level);
+        .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_batch);
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCast1DProgramConfig>(
@@ -166,9 +131,7 @@ void py_module(py::module& module) {
                         bool gather_in0,
                         CoreRangeSet hop_cores,
                         std::size_t num_global_cb_receivers,
-                        bool untilize_out,
-                        ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
-                            ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0) {
+                        bool untilize_out) {
                 // Set out_block_h and out_block_w to defaults if they are not provided
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -188,8 +151,7 @@ void py_module(py::module& module) {
                     gather_in0,
                     std::move(hop_cores),
                     num_global_cb_receivers,
-                    untilize_out,
-                    throttle_level);
+                    untilize_out);
             }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -206,8 +168,7 @@ void py_module(py::module& module) {
             py::arg("gather_in0").noconvert() = false,
             py::arg("hop_cores").noconvert() = CoreRangeSet(),
             py::arg("num_global_cb_receivers").noconvert() = 1,
-            py::arg("untilize_out").noconvert() = false,
-            py::arg("throttle_level").noconvert() = ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0)
+            py::arg("untilize_out").noconvert() = false)
         .def_readwrite(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
@@ -225,8 +186,7 @@ void py_module(py::module& module) {
         .def_readwrite("hop_cores", &MatmulMultiCoreReuseMultiCast1DProgramConfig::hop_cores)
         .def_readwrite(
             "num_global_cb_receivers", &MatmulMultiCoreReuseMultiCast1DProgramConfig::num_global_cb_receivers)
-        .def_readwrite("untilize_out", &MatmulMultiCoreReuseMultiCast1DProgramConfig::untilize_out)
-        .def_readwrite("throttle_level", &MatmulMultiCoreReuseMultiCast1DProgramConfig::throttle_level);
+        .def_readwrite("untilize_out", &MatmulMultiCoreReuseMultiCast1DProgramConfig::untilize_out);
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
