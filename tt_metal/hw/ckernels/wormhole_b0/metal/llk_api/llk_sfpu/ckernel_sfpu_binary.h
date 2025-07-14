@@ -13,7 +13,9 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-inline sfpi::vInt _float_to_int32_fast_(sfpi::vFloat in) {
+// Helper function for _sfpu_binary_power_
+// This function convert a float32 to int32, given that in >= 0.0f.
+sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     sfpi::vInt result;
     sfpi::vInt exp = exexp(in);  // extract exponent
     v_if(exp < 0) { result = 0; }
@@ -62,7 +64,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     v_endif;
 
     zff = addexp(zff, 23);                                                 // * 2**23 (Mn)
-    sfpi::vInt z = _float_to_int32_fast_(zff + sfpi::vFloat(0x3f800000));  // (bias + x * log2(a)) * N_m
+    sfpi::vInt z = _float_to_int32_positive_(zff + sfpi::vFloat(0x3f800000));  // (bias + x * log2(a)) * N_m
 
     sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
@@ -71,7 +73,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif);
     sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560) + zif);
     d2 = d1 * d2;
-    zif = _float_to_int32_fast_(d2 * d3);
+    zif = _float_to_int32_positive_(d2 * d3);
 
     // zii |= zif; // restore exponent
     zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
@@ -119,7 +121,8 @@ inline void calculate_sfpu_binary(const uint dst_offset) {
             constexpr uint dst_tile_size = 32;
             sfpi::vFloat in0 = sfpi::dst_reg[0];
             sfpi::vFloat in1 = sfpi::dst_reg[dst_offset * dst_tile_size];
-            sfpi::vFloat result = _sfpu_binary_power_(in0, in1);
+            sfpi::vFloat result = 0.f;
+            result = _sfpu_binary_power_(in0, in1);
 
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
