@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iomanip>
 #include <optional>
+#include <regex>
 
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -184,7 +185,6 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         board_name_to_topology[board_name] = {col_size, row_size};
     }
     // Loop over Meshes, populate intra mesh
-    std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id;
     for (const auto& mesh : yaml["Mesh"]) {
         std::string mesh_board = mesh["board"].as<std::string>();
         MeshId mesh_id{mesh["id"].as<std::uint32_t>()};
@@ -196,7 +196,6 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             while (this->mesh_host_ranks_.size() <= *mesh_id) {
                 this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, HostRankId{0});
             }
-            mesh_edge_ports_to_chip_id.resize(*mesh_id + 1);
         }
         TT_FATAL(
             board_name_to_topology.find(mesh_board) != board_name_to_topology.end(),
@@ -319,54 +318,42 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                 }
             }
         }
-
-        // Get the edge ports of each mesh
-        // North, start from NW corner
-        std::uint32_t chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < mesh_ew_size; chip_id++) {
-            for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
-            }
-        }
-        // South, start from SW corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = (mesh_size - mesh_ew_size); chip_id < mesh_size; chip_id++) {
-            for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
-            }
-        }
-        // East, start from NE corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = (mesh_ew_size - 1); chip_id < mesh_size; chip_id += mesh_ew_size) {
-            for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
-            }
-        }
-        // WEST, start from NW corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < mesh_size; chip_id += mesh_ew_size) {
-            for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
-            }
-        }
     }
     // Loop over Graph, populate inter mesh
-    auto convert_yaml_to_port_id = [](const YAML::Node& node) -> std::pair<MeshId, port_id_t> {
-        MeshId mesh_id{node[0].as<std::uint32_t>()};
-        std::string port_string = node[1].as<std::string>();
-        RoutingDirection port_direction =
-            magic_enum::enum_cast<RoutingDirection>(port_string.substr(0, 1), magic_enum::case_insensitive).value();
-        std::uint32_t chan_id = static_cast<uint32_t>(std::stoul(port_string.substr(1, port_string.size() - 1)));
-        return {mesh_id, {port_direction, chan_id}};
+    auto convert_yaml_to_chip_id = [](const YAML::Node& node) -> std::pair<MeshId, chip_id_t> {
+        std::string node_str = node.as<std::string>();
+
+        // Parse format like "G0D1" where G0 is graph_id and D1 is device_id
+        // Using regex to match pattern: G followed by digits, then D followed by digits
+        std::regex pattern(R"(G(\d+)D(\d+))");
+        std::smatch matches;
+
+        TT_FATAL(
+            std::regex_match(node_str, matches, pattern),
+            "MeshGraph: Invalid node format: {}, expected format like G0D1",
+            node_str);
+
+        // matches[1] contains the graph_id (after G, before D)
+        // matches[2] contains the device_id (after D)
+        MeshId mesh_id{static_cast<std::uint32_t>(std::stoul(matches[1].str()))};
+        chip_id_t device_id = static_cast<chip_id_t>(std::stoul(matches[2].str()));
+
+        return {mesh_id, device_id};
     };
     for (const auto& mesh_connection : yaml["Graph"]) {
-        TT_FATAL(mesh_connection.size() == 2, "MeshGraph: Expecting 2 elements in each Graph connection");
-        const auto& [src_mesh_id, src_port_id] = convert_yaml_to_port_id(mesh_connection[0]);
-        const auto& [dst_mesh_id, dst_port_id] = convert_yaml_to_port_id(mesh_connection[1]);
-        const auto& src_chip_id = mesh_edge_ports_to_chip_id[*src_mesh_id].at(src_port_id);
-        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[*dst_mesh_id].at(dst_port_id);
-        this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_port_id.first);
+        TT_FATAL(mesh_connection.size() == 3, "MeshGraph: Expecting 3 elements in each Graph connection");
+
+        const auto& [src_mesh_id, src_chip_id] = convert_yaml_to_chip_id(mesh_connection[0]);
+        const auto& [dst_mesh_id, dst_chip_id] = convert_yaml_to_chip_id(mesh_connection[1]);
+        const unsigned int num_chans = mesh_connection[2].as<std::uint32_t>();
+
+        const auto port_direction = RoutingDirection::G;
+
+        for (unsigned int i = 0; i < num_chans; i++) {
+            this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, port_direction);
+        }
     }
+    printf("MeshGraph: Inter Mesh Connectivity: \n");
 }
 
 void MeshGraph::print_connectivity() const {
