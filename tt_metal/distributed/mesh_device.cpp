@@ -11,6 +11,7 @@
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include <system_mesh.hpp>
+#include <maybe_remote.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -35,10 +36,13 @@
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/api/tt-metalium/control_plane.hpp"
+#include "tt_metal/api/tt-metalium/fabric_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+#include "tt_metal/distributed/distributed_coordinate_system.hpp"
 
 #include "llrt/hal.hpp"
 #include <env_lib.hpp>
@@ -49,6 +53,7 @@
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.h>
+#include "impl/context/metal_context.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -217,9 +222,20 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
-    MeshContainer<IDevice*> devices(config.mesh_shape(), root_devices);
+
+    // When the mesh is distributed across multiple ranks, the DistributedCoordinateSystem
+    // is used to provide information on what part of the mesh is locally available vs. remote.
+    // For single-process/ single-host, the "global" mesh is the same as the "local" mesh.
+    auto coord_system = DistributedCoordinateSystem::from_control_plane();
+
+    // Create distributed mesh container and populate local devices
+    DistributedMeshContainer<IDevice*> global_devices(config.mesh_shape());
+    global_devices.populate_local_region(coord_system, root_devices);
+
     auto mesh_device = std::make_shared<MeshDevice>(
-        std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
+        std::move(scoped_devices),
+        std::make_unique<MeshDeviceView>(global_devices),
+        std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
@@ -432,6 +448,9 @@ size_t MeshDevice::num_cols() const { return view_->num_cols(); }
 const MeshShape& MeshDevice::shape() const { return view_->shape(); }
 
 std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
+    TT_FATAL(
+        this->shape() == this->local_shape(), "Cannot reshape a mesh that is not the same shape as the local shape");
+
     // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
     // The physical connectivity between devices must be preserved when reshaping.
     //
@@ -480,6 +499,10 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 }
 
 void MeshDevice::reshape(const MeshShape& new_shape) {
+    TT_FATAL(
+        this->shape() == this->local_shape(),
+        "Cannot reshape a mesh that is not the same shape as the local shape");
+
     TT_FATAL(
         new_shape.mesh_size() == this->num_devices(),
         "New shape must have the same number of devices as current shape");
@@ -934,5 +957,17 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+
+MeshCoordinate MeshDevice::local_offset() const {
+    return view_->local_offset();
+}
+
+MeshShape MeshDevice::local_shape() const {
+    return view_->local_shape();
+}
+
+bool MeshDevice::is_local_coordinate(const MeshCoordinate& coord) const {
+    return view_->is_local_coordinate(coord);
+}
 
 }  // namespace tt::tt_metal::distributed

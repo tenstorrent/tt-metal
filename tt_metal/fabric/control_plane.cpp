@@ -2013,9 +2013,25 @@ const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const {
 
 uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const { return chip_id_to_asic_id_.at(chip_id); }
 
-std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const { return this->local_mesh_binding_.mesh_ids; }
+std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
+    const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
+    const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
+    std::vector<MeshId> local_mesh_ids;
+    for (const auto& mesh_id : mesh_id_bindings) {
+        if (std::find(user_mesh_ids.begin(), user_mesh_ids.end(), mesh_id) != user_mesh_ids.end()) {
+            local_mesh_ids.push_back(mesh_id);
+        }
+    }
+    TT_FATAL(!local_mesh_ids.empty(), "No local mesh ids found");
+    return local_mesh_ids;
+}
 
 HostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
+
+MeshCoordinate ControlPlane::get_local_mesh_offset() const {
+    auto coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
+    return coord_range.start_coord();
+}
 
 MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scope) const {
     std::optional<HostRankId> local_host_rank_id =
