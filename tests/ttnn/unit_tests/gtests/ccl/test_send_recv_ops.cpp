@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <memory>
+#include <vector>
+
 #include "gtest/gtest.h"
 
 #include "ttnn/operations/experimental/ccl/send_async/send_async.hpp"

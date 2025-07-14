@@ -23,7 +23,7 @@
 
 namespace tt::tt_fabric {
 
-static constexpr uint8_t edm_fabric_write_noc_index = 0;
+inline constexpr uint8_t edm_fabric_write_noc_index = 0;
 
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details

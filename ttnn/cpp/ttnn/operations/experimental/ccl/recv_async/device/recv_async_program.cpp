@@ -3,6 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "recv_async_op.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -13,10 +22,10 @@ using namespace tt::constants;
 
 namespace ttnn {
 
-using namespace ccl;
-
 tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
-    const Tensor& output_tensor, IDevice* target_device, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    const Tensor& output_tensor,
+    tt::tt_metal::IDevice* target_device,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
@@ -24,7 +33,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     tt::tt_fabric::FabricNodeId sender_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_fabric::FabricNodeId receiver_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
 
-    // TODO: Find appropriate receiver core and fabric node IDs based on mesh socket configuration
+    // TODO #24995: Find appropriate receiver core and fabric node IDs based on mesh socket configuration
     for (const auto& connection : socket_connection_config) {
         if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
             receiver_core_coord = connection.receiver_core.core_coord;
@@ -36,7 +45,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         }
     }
 
-    // TODO: These parameters should be derived from the expected tensor/socket configuration
+    // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
         output_tensor.buffer()->alignment());
@@ -155,8 +164,8 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             receiver_core_coord,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
-        // TODO: This should be derived from the expected tensor/socket configuration
-        uint32_t bank_id = 0;  //
+        // TODO #24995: This should be derived from the expected tensor/socket configuration
+        uint32_t bank_id = 0;
         std::vector<uint32_t> reader_rt_args = {mesh_socket.get_config_buffer()->address(), bank_id};
         tt::tt_fabric::append_fabric_connection_rt_args(
             receiver_fabric_node_id,
@@ -196,7 +205,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         auto override_runtime_arguments_callback =
             [receiver_core_coord, writer_kernel](
                 const void* operation,
-                Program& program,
+                tt::tt_metal::Program& program,
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<Tensor>& output_tensors) {
@@ -213,7 +222,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         auto override_runtime_arguments_callback =
             [receiver_core_coord, reader_kernel, writer_kernel](
                 const void* operation,
-                Program& program,
+                tt::tt_metal::Program& program,
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<Tensor>& output_tensors) {

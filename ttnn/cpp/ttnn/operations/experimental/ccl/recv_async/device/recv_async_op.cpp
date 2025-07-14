@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "recv_async_op.hpp"
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/math.hpp"
-#include <tt-metalium/mesh_socket.hpp>
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include <algorithm>
+#include <vector>
+
+#include <tt-metalium/mesh_socket.hpp>
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn {
 
@@ -76,9 +78,6 @@ namespace operations::experimental::ccl {
 
 std::vector<Tensor> recv_async_impl(
     const Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "recv_async op is only supported for Fast Dispatch");
-
     return tt::tt_metal::operation::run(ttnn::RecvAsync(mesh_socket), {output_tensor});
 }
 

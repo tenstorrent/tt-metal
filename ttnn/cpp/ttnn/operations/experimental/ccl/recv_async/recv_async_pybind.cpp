@@ -7,10 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/recv_async/recv_async.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/mesh_socket.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -19,8 +15,6 @@ namespace {
 
 template <typename ccl_operation_t>
 void bind_recv_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
-    // namespace py = pybind11;
-
     bind_registered_operation(
         module,
         operation,
@@ -52,7 +46,7 @@ void py_bind_recv_async(pybind11::module& module) {
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
 
         Returns:
-            std::vector<ttnn.Tensor>: a vector of tensors from all the devices.
+            std::vector<ttnn.Tensor>: A vector containing the output tensor.
 
         )doc");
 }

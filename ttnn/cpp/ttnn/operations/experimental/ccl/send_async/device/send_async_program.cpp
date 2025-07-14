@@ -3,6 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "send_async_op.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -12,10 +21,10 @@ using namespace tt::constants;
 
 namespace ttnn {
 
-using namespace ccl;
-
 tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
-    const Tensor& input_tensor, IDevice* target_device, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    const Tensor& input_tensor,
+    tt::tt_metal::IDevice* target_device,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
@@ -134,7 +143,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         sender_core_coord,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
-    // TODO: These parameters should be derived from the expected tensor/socket configuration
+    // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
     uint32_t bank_id = 0;
     if (!socket_storage_in_dram) {
         bank_id = target_device->allocator()->get_bank_ids_from_logical_core(
@@ -159,7 +168,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     auto override_runtime_arguments_callback =
         [sender_core_coord, worker_reader_kernel_id, worker_writer_kernel_id](
             const void* operation,
-            Program& program,
+            tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

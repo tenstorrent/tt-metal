@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+#include <tuple>
 #include "ttnn/tensor/tensor_spec.hpp"
 
 namespace tt::tt_metal {

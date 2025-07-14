@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+
 #include "dataflow_api.h"
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"
 
@@ -23,10 +25,6 @@ constexpr uint32_t whole_packet_size = get_compile_time_arg_val(9);
 constexpr uint32_t input_args_cta_idx = 10;
 constexpr uint32_t input_args_crta_idx = 0;
 
-/*
- * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
- * dispatch implementations depending on those invocation parameters.
- */
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -37,7 +35,7 @@ void kernel_main() {
     auto input_addr_gen_args = make_tensor_accessor_args<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = make_tensor_accessor_from_args(input_addr_gen_args, input_base_addr, input_page_size);
 
-    // TODO: Instead of page by page transfers, we can transfer bank by bank
+    // TODO #24995: Instead of page by page transfers, we can transfer bank by bank
 
     // Small pages. We pack multiple pages into a single packet.
     uint32_t page_index = 0;
@@ -71,7 +69,7 @@ void kernel_main() {
     }
     // Large pages. We pack page chunks into a single packet.
     else {
-        // TODO: Could read whole page into scratch, then copy locally
+        // TODO #24995: Could read whole page into scratch, then copy locally
         for (uint32_t i = 0; i < num_pages; ++i) {
             auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {

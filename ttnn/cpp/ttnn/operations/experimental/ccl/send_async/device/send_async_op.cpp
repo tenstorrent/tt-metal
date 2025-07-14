@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "send_async_op.hpp"
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/math.hpp"
-#include <tt-metalium/mesh_socket.hpp>
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include <algorithm>
+#include <vector>
+
+#include <tt-metalium/mesh_socket.hpp>
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn {
 
@@ -44,10 +46,14 @@ void SendAsync::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<ttnn::TensorSpec> SendAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    // Op does not return any output tensors
     return {};
 }
 
-std::vector<Tensor> SendAsync::create_output_tensors(const std::vector<Tensor>& input_tensors) const { return {}; }
+std::vector<Tensor> SendAsync::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    // Op does not return any output tensors
+    return {};
+}
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks SendAsync::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -74,9 +80,6 @@ namespace operations::experimental::ccl {
 
 std::vector<Tensor> send_async_impl(
     const Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "send_async op is only supported for Fast Dispatch");
-
     return tt::tt_metal::operation::run(ttnn::SendAsync(mesh_socket), {input_tensor});
 }
 

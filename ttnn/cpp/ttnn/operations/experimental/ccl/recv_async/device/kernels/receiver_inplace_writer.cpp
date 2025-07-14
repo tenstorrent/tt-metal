@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
+#include <cstdint>
+
 #include "dataflow_api.h"
 #include "socket_api.h"
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"

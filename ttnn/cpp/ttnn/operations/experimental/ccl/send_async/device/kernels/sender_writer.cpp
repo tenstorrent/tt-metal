@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
+#include <cstdint>
+
 #include "dataflow_api.h"
 #include "socket_api.h"
 
@@ -37,10 +40,7 @@ FORCE_INLINE void write_data_to_remote_core(
         (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     cb_pop_front(cb_id, 1);
 }
-/*
- * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
- * dispatch implementations depending on those invocation parameters.
- */
+
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS

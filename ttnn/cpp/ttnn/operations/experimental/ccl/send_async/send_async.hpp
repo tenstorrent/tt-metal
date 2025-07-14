@@ -4,8 +4,9 @@
 
 #pragma once
 
+#include <vector>
+
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include <tt-metalium/mesh_socket.hpp>
 
 namespace ttnn {
