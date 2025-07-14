@@ -15,7 +15,6 @@ from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tabulate import tabulate
 import pandas as pd
-from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 
 from conftest import is_6u
 
@@ -549,8 +548,6 @@ def run_fabric_edm(
     logger.warning("removing file profile_log_device.csv")
     subprocess.run(["rm", "-rf", f"{os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv"])
 
-    enable_persistent_kernel_cache()
-
     use_direct_exec = get_direct_mode()
 
     # Create the args string for daemon
@@ -592,7 +589,6 @@ def run_fabric_edm(
         result = subprocess.run(cmd, shell=True, capture_output=False)
         rc = result.returncode
 
-    disable_persistent_kernel_cache()
     if rc != 0:
         # Handle exit codes differently for daemon vs direct execution
         if rc == 1:
