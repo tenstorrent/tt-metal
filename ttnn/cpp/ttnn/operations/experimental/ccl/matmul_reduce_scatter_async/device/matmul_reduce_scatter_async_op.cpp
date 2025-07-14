@@ -263,7 +263,8 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         dim,
         num_links,
         devices.size(),
-        memory_config_rs.value_or(input_tensor.memory_config()),
+        persistent_intermediate_buffer.memory_config(),
+        memory_config_rs.value_or(persistent_output_buffer.memory_config()),
         topology,
         multi_device_global_semaphore,
         sub_device_id);
