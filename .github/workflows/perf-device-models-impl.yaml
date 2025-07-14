@@ -108,7 +108,7 @@ jobs:
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov10x/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov7/tests/perf/test_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            WH_ARCH_YAML=$MAGIC_ENV HF_HOME=/mnt/MLPerf/tt_dnn-models/stable_diffusion_xl_base pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
           fi
 
