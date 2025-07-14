@@ -109,7 +109,7 @@ class VideoProcessor(VideoProcessorBase):
 
         # Parse API URL once at the class level for efficiency
         if not hasattr(self, "api_url"):
-            parser = argparse.ArgumentParser(description="YOLOv8 script")
+            parser = argparse.ArgumentParser(description="YOLOv11 script")
             parser.add_argument("--api-url", type=str, required=True, help="URL for the object detection API")
             args = parser.parse_args()
             self.api_url = args.api_url
@@ -152,7 +152,7 @@ class VideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
-st.title("YOLOv8s_world Detection Demo")
+st.title("YOLOv11 Detection Demo")
 
 webrtc_streamer(
     key="example",
