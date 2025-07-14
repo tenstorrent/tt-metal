@@ -476,7 +476,7 @@ auto default_create_output_tensors(
 template <class OutputTensorsT = Tensors>
 class DeviceOperation final {
 public:
-    using storage_t = std::array<std::byte, 1152>;
+    using storage_t = std::array<std::byte, 1192>;
     using OutputTensors = OutputTensorsT;
     using ComputedSpecs = std::vector<ttnn::TensorSpec>;
 
