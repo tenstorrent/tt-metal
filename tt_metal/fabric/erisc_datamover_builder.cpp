@@ -76,8 +76,39 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     uint32_t num_sender_channels = get_sender_channel_count(topology);
     uint32_t num_downstream_edms = get_downstream_edm_count(topology);
     // Global
-    this->handshake_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base() /* + 1024*/;
-    this->edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
+    size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    this->handshake_addr = next_l1_addr;
+    next_l1_addr += eth_channel_sync_size;
+
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        this->receiver_txq_id = 1;
+    }
+    this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+        this->risc_configs.emplace_back(risc_id);
+    }
+
+    if (this->sender_txq_id != this->receiver_txq_id) {
+        for (size_t i = 0; i < num_sender_channels; i++) {
+            this->to_sender_channel_remote_ack_counter_addrs[i] = next_l1_addr;
+            next_l1_addr += field_size;
+        }
+        for (size_t i = 0; i < num_sender_channels; i++) {
+            this->to_sender_channel_remote_completion_counter_addrs[i] = next_l1_addr;
+            next_l1_addr += field_size;
+        }
+        for (size_t i = 0; i < num_receiver_channels; i++) {
+            this->receiver_channel_remote_ack_counter_addrs[i] = next_l1_addr;
+            next_l1_addr += field_size;
+        }
+        for (size_t i = 0; i < num_receiver_channels; i++) {
+            this->receiver_channel_remote_completion_counter_addrs[i] = next_l1_addr;
+            next_l1_addr += field_size;
+        }
+    }
+
+    this->edm_channel_ack_addr = next_l1_addr;
     this->termination_signal_address =
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
@@ -85,11 +116,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
-    this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
-        this->risc_configs.emplace_back(risc_id);
-    }
 
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;
@@ -396,6 +422,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     FabricEriscDatamoverConfig(topology) {
     this->sender_txq_id = 0;
     this->receiver_txq_id = 0;
+
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->num_used_sender_channels = get_sender_channel_count(topology);
     this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
@@ -1054,6 +1081,23 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);
 
+    bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
+    if (multi_txq_enabled) {
+        for (size_t i = 0; i < num_sender_channels; i++) {
+            ct_args.push_back(config.to_sender_channel_remote_ack_counter_addrs[i]);
+        }
+        for (size_t i = 0; i < num_sender_channels; i++) {
+            ct_args.push_back(config.to_sender_channel_remote_completion_counter_addrs[i]);
+        }
+        for (size_t i = 0; i < num_receiver_channels; i++) {
+            ct_args.push_back(config.receiver_channel_remote_ack_counter_addrs[i]);
+        }
+        for (size_t i = 0; i < num_receiver_channels; i++) {
+            ct_args.push_back(config.receiver_channel_remote_completion_counter_addrs[i]);
+        }
+    }
+
+    ct_args.push_back(0x20c0ffee);
     return ct_args;
 }
 
