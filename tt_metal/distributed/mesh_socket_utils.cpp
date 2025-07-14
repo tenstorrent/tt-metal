@@ -136,7 +136,8 @@ Tag generate_descriptor_exchange_tag(Rank peer_rank) {
     // This is used to ensure that the sender and receiver are
     // exchanging the correct descriptors.
     static std::unordered_map<Rank, uint32_t> exchange_tags;
-    return Tag{exchange_tags[peer_rank]++};
+    // return Tag{exchange_tags[peer_rank]++};
+    return Tag{0};
 }
 }  // namespace
 
