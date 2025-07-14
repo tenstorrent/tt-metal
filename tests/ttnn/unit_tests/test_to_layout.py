@@ -444,3 +444,13 @@ def test_untilize_with_unpad_int32(shape, device):
     output_tensor = ttnn.untilize_with_unpadding(input_tensor, end_shape)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[32, 1024], [64, 512]])
+def test_untilize_int32_t(shape, device):
+    torch.manual_seed(2005)
+    input_a = torch.randint(1, 64, shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)
+    output_tensor = ttnn.untilize(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
