@@ -118,8 +118,8 @@ struct address_map {
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
 
     static constexpr std::uint32_t CRC_ERR_ADDR = 0x1F7C;
-    static constexpr std::uint32_t CORR_CW_LO_ADDR = 0x1F90;
-    static constexpr std::uint32_t UNCORR_CW_LO_ADDR = 0x1F98;
+    static constexpr std::uint32_t CORR_CW_HI_ADDR = 0x1F90;
+    static constexpr std::uint32_t UNCORR_CW_HI_ADDR = 0x1F98;
 
     static constexpr uint32_t ETH_LINK_REMOTE_INFO_ADDR = 0x1EC0;
     static constexpr std::uint32_t INTERMESH_ETH_LINK_CONFIG_ADDR = 0x104C;
