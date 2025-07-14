@@ -96,7 +96,9 @@ void validate_remote_desc(const SocketPeerDescriptor& local_desc, const SocketPe
     // Verify that socket connection config matches
     TT_FATAL(
         local_desc.config.socket_connection_config.size() == remote_desc.config.socket_connection_config.size(),
-        "Mismatch in number of socket connections during handshake.");
+        "Mismatch in number of socket connections during handshake. Local connections {} Remote connections {}",
+        local_desc.config.socket_connection_config.size(),
+        remote_desc.config.socket_connection_config.size());
     for (size_t i = 0; i < local_desc.config.socket_connection_config.size(); ++i) {
         const auto& local_conn = local_desc.config.socket_connection_config[i];
         const auto& remote_conn = remote_desc.config.socket_connection_config[i];
