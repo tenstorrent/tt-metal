@@ -103,6 +103,11 @@ private:
 
         const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
     };
+
+    // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
+    // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
+    // on the device may not be thread safe.
+    std::mutex api_mutex_;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -278,6 +283,8 @@ public:
     bool is_local(const MeshCoordinate& coord) const;
 
     const MeshShape& shape() const;
+
+    std::unique_lock<std::mutex> lock_api() { return std::unique_lock<std::mutex>(api_mutex_); }
 
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
     // Reshaping Rules:

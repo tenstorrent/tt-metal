@@ -50,6 +50,7 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index)
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    auto lock = mesh_device_->lock_api();
     if (!blocking) {
         log_warning(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
@@ -76,6 +77,7 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {}
+void SDMeshCommandQueue::finish_locked(tt::stl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(bool, uint32_t, const vector_aligned<uint32_t>&) {}
 

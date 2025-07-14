@@ -81,6 +81,8 @@ SubDeviceManager::~SubDeviceManager() {
             allocator->clear();
             // Deallocate all buffers
             // This is done to set buffer object status to Deallocated
+            // Don't lock the allocator here, since no other thread should be accessing it while we're deallocating, and
+            // DeallocateBuffer will need to lock it.
             const auto& allocated_buffers = allocator->get_allocated_buffers();
             for (auto buf = allocated_buffers.begin(); buf != allocated_buffers.end();) {
                 tt::tt_metal::DeallocateBuffer(*(*(buf++)));
