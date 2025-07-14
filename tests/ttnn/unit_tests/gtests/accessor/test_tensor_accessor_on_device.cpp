@@ -194,10 +194,10 @@ void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distributed::M
 using namespace tensor_accessor_device_tests;
 using namespace tt::tt_metal;
 
-class ShardedAccessorTestsOnDevice : public GenericMeshDeviceFixture,
-                                     public ::testing::WithParamInterface<InputOutputBufferParams> {};
+class ShardedAccessorTestsReshardOnDevice : public GenericMeshDeviceFixture,
+                                            public ::testing::WithParamInterface<InputOutputBufferParams> {};
 
-TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
+TEST_P(ShardedAccessorTestsReshardOnDevice, SingleCoreReshard) {
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -331,12 +331,12 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    ShardedAccessorTests, ShardedAccessorTestsOnDevice, testing::ValuesIn(get_sharded_accessor_test_params()));
+    ShardedAccessorTests, ShardedAccessorTestsReshardOnDevice, testing::ValuesIn(get_sharded_accessor_test_params()));
 
-class ShardedAccessorTestsOnDevice2 : public GenericMeshDeviceFixture,
-                                      public ::testing::WithParamInterface<CopyParams> {};
+class ShardedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
+                                         public ::testing::WithParamInterface<CopyParams> {};
 
-TEST_P(ShardedAccessorTestsOnDevice2, CopyLocal) {
+TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -348,7 +348,7 @@ TEST_P(ShardedAccessorTestsOnDevice2, CopyLocal) {
 
 INSTANTIATE_TEST_SUITE_P(
     ShardedAccessorTests,
-    ShardedAccessorTestsOnDevice2,
+    ShardedAccessorTestsCopyOnDevice,
     testing::ValuesIn(
         {CopyParams{
              .tensor_shape = tt::tt_metal::Shape{4, 64, 96},

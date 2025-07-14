@@ -144,8 +144,8 @@ public:
 
     // Locality APIs
     FORCE_INLINE
-    bool is_local_bank(uint32_t x, uint32_t y, uint8_t noc = noc_index) const {
-        return x == my_x[noc] && y == my_y[noc];
+    bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y, uint8_t noc = noc_index) const {
+        return virtual_x == my_x[noc] && virtual_y == my_y[noc];
     }
 
     FORCE_INLINE
