@@ -131,9 +131,6 @@ public:
         size_t base_l1_address,
         CoreType core_type = CoreType::WORKER);
 
-    size_t get_memory_map_start_address() const;
-    size_t get_memory_map_end_address() const;
-
     // Returns the compile time args to be passed for the mux kernel
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
@@ -157,6 +154,9 @@ public:
     size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     void set_num_full_size_channel_iters(size_t new_val);
     void set_num_iters_between_teardown_checks(size_t new_val);
+
+    size_t get_memory_map_end_address() const;
+    std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
 private:
     uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
@@ -195,10 +195,6 @@ private:
     size_t num_full_size_channel_iters_ = default_num_full_size_channel_iters;
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
 
-    // memory map
-    size_t memory_map_start_address_ = 0;
-    size_t memory_map_end_address_ = 0;
-
     // memory regions
     MemoryRegion status_region_;
     MemoryRegion local_fabric_router_status_region_;
@@ -209,6 +205,8 @@ private:
     MemoryRegion buffer_index_region_;
     MemoryRegion full_size_channels_region_;
     MemoryRegion header_only_channels_region_;
+
+    size_t memory_map_end_address_;
 };
 
 }  // namespace tt::tt_fabric

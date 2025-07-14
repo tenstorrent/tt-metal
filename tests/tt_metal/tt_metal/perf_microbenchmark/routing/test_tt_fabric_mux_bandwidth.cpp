@@ -163,14 +163,21 @@ void create_mux_kernel(
         drainer_kernel_config->get_num_buffers(default_channel_type),
         test_params.num_full_size_channel_iters,
         test_params.num_iters_between_teardown_checks,
-        hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX),
-        mux_kernel_config->get_memory_map_start_address(),
-        mux_kernel_config->get_memory_map_end_address()};
+        hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)};
 
     // semaphores needed to build connection with drainer core using the build_from_args API
     auto worker_flow_control_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
     auto worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
     auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
+
+    auto memory_regions_to_clear = mux_kernel_config->get_memory_regions_to_clear();
+    std::vector<uint32_t> memory_regions_to_clear_args;
+    memory_regions_to_clear_args.reserve(memory_regions_to_clear.size() * 2 + 1);
+    memory_regions_to_clear_args.push_back(static_cast<uint32_t>(memory_regions_to_clear.size()));
+    for (const auto& [address, size] : memory_regions_to_clear) {
+        memory_regions_to_clear_args.push_back(static_cast<uint32_t>(address));
+        memory_regions_to_clear_args.push_back(static_cast<uint32_t>(size));
+    }
 
     // mux to drainer will always be a full size channel connection
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
@@ -187,7 +194,7 @@ void create_mux_kernel(
         .buffer_index_semaphore_id = drainer_kernel_config->get_buffer_index_address(drainer_channel_type, 0),
         .edm_direction = tt::tt_fabric::eth_chan_directions::EAST, /* ignored, direction */
     };
-    std::vector<uint32_t> mux_rt_args;
+    std::vector<uint32_t> mux_fabric_connection_rt_args;
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
         sender_worker_adapter_spec,
         device->id(),
@@ -195,7 +202,12 @@ void create_mux_kernel(
         worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
-        mux_rt_args);
+        mux_fabric_connection_rt_args);
+
+    std::vector<uint32_t> mux_rt_args;
+    mux_rt_args.reserve(memory_regions_to_clear_args.size() + mux_fabric_connection_rt_args.size());
+    mux_rt_args.insert(mux_rt_args.end(), memory_regions_to_clear_args.begin(), memory_regions_to_clear_args.end());
+    mux_rt_args.insert(mux_rt_args.end(), mux_fabric_connection_rt_args.begin(), mux_fabric_connection_rt_args.end());
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
@@ -218,10 +230,18 @@ void create_drainer_kernel(
         drainer_kernel_config->get_connection_info_address(drainer_channel_type, 0),
         drainer_kernel_config->get_connection_handshake_address(drainer_channel_type, 0),
         drainer_kernel_config->get_flow_control_address(drainer_channel_type, 0),
-        drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),
-        drainer_kernel_config->get_memory_map_start_address(),
-        drainer_kernel_config->get_memory_map_end_address()};
-    std::vector<uint32_t> drainer_rt_args = {};
+        drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0)};
+
+    auto memory_regions_to_clear = drainer_kernel_config->get_memory_regions_to_clear();
+    std::vector<uint32_t> memory_regions_to_clear_args;
+    memory_regions_to_clear_args.reserve(memory_regions_to_clear.size() * 2 + 1);
+    memory_regions_to_clear_args.push_back(static_cast<uint32_t>(memory_regions_to_clear.size()));
+    for (const auto& [address, size] : memory_regions_to_clear) {
+        memory_regions_to_clear_args.push_back(static_cast<uint32_t>(address));
+        memory_regions_to_clear_args.push_back(static_cast<uint32_t>(size));
+    }
+
+    std::vector<uint32_t> drainer_rt_args = memory_regions_to_clear_args;
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(

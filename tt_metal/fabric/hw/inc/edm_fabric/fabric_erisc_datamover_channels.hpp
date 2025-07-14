@@ -59,8 +59,8 @@ public:
         channel_id(channel_id) {
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
-            for (size_t j = 0; j < this->max_eth_payload_size_in_bytes; j++) {
-                reinterpret_cast<volatile uint8_t*>(this->buffer_addresses[i])[j] = 0;
+            for (size_t j = 0; j < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
         set_cached_next_buffer_slot_addr(this->buffer_addresses[0]);

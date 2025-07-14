@@ -107,12 +107,10 @@ FabricMuxConfig::FabricMuxConfig(
     full_size_channel_size_bytes_ = num_buffers_full_size_channel_ * buffer_size_bytes_full_size_channel_;
     header_only_channel_size_bytes_ = num_buffers_header_only_channel_ * buffer_size_bytes_header_only_channel_;
 
-    memory_map_start_address_ = base_l1_address;
-
     auto num_total_channels = num_full_size_channels_ + num_header_only_channels_;
 
     // Initialize memory regions sequentially
-    size_t current_address = memory_map_start_address_;
+    size_t current_address = base_l1_address;
 
     // Status region (single address)
     status_region_ = MemoryRegion(current_address, noc_aligned_address_size_bytes_, 1);
@@ -150,9 +148,8 @@ FabricMuxConfig::FabricMuxConfig(
     // Header only channels region
     header_only_channels_region_ =
         MemoryRegion(current_address, header_only_channel_size_bytes_, num_header_only_channels_);
-    current_address = header_only_channels_region_.get_end_address();
 
-    memory_map_end_address_ = current_address;
+    memory_map_end_address_ = header_only_channels_region_.get_end_address();
 
     const auto& hal = tt_metal::MetalContext::instance().hal();
     tt_metal::HalProgrammableCoreType hal_core_type;
@@ -167,16 +164,14 @@ FabricMuxConfig::FabricMuxConfig(
     core_type_index_ = hal.get_programmable_core_type_index(hal_core_type);
     auto l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
                           hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
+
+    // The memory map ends at the end of the last region (header-only channels)
     TT_FATAL(
         memory_map_end_address_ <= l1_end_address,
         "Memory map end address: {} is greater than L1 end address: {}",
         memory_map_end_address_,
         l1_end_address);
 }
-
-size_t FabricMuxConfig::get_memory_map_start_address() const { return memory_map_start_address_; }
-
-size_t FabricMuxConfig::get_memory_map_end_address() const { return memory_map_end_address_; }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
     const auto& fabric_router_config =
@@ -198,9 +193,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
         fabric_router_config.sender_channels_num_buffers[0],
         num_full_size_channel_iters_,
         num_iters_between_teardown_checks_,
-        core_type_index_,
-        get_memory_map_start_address(),
-        get_memory_map_end_address()};
+        core_type_index_};
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
@@ -210,8 +203,19 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     tt::tt_metal::Program& mux_program,
     const CoreCoord& mux_logical_core) const {
     std::vector<uint32_t> args;
+
+    auto regions_to_clear = get_memory_regions_to_clear();
+    const auto num_regions_to_clear = regions_to_clear.size();
+    args.reserve(num_regions_to_clear * 2 + 1);
+    args.push_back(static_cast<uint32_t>(num_regions_to_clear));
+    for (const auto& [address, size] : regions_to_clear) {
+        args.push_back(static_cast<uint32_t>(address));
+        args.push_back(static_cast<uint32_t>(size));
+    }
+
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program, mux_logical_core, args, core_type_);
+
     return args;
 }
 
@@ -278,6 +282,8 @@ void FabricMuxConfig::set_num_iters_between_teardown_checks(size_t new_val) {
     num_iters_between_teardown_checks_ = new_val;
 }
 
+size_t FabricMuxConfig::get_memory_map_end_address() const { return memory_map_end_address_; }
+
 uint8_t FabricMuxConfig::get_num_channels(FabricMuxChannelType channel_type) const {
     return channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL ? num_full_size_channels_
                                                                    : num_header_only_channels_;
@@ -295,6 +301,14 @@ void FabricMuxConfig::validate_channel_id(FabricMuxChannelType channel_type, uin
 uint8_t FabricMuxConfig::get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const {
     return (channel_type == FabricMuxChannelType::HEADER_ONLY_CHANNEL) ? num_full_size_channels_ + channel_id
                                                                        : channel_id;
+}
+
+std::vector<std::pair<size_t, size_t>> FabricMuxConfig::get_memory_regions_to_clear() const {
+    return {
+        {termination_signal_region_.get_address(), termination_signal_region_.get_total_size()},
+        {connection_handshake_region_.get_address(), connection_handshake_region_.get_total_size()},
+        {flow_control_region_.get_address(), flow_control_region_.get_total_size()},
+        {buffer_index_region_.get_address(), buffer_index_region_.get_total_size()}};
 }
 
 }  // namespace tt::tt_fabric

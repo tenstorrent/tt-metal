@@ -77,6 +77,18 @@ FORCE_INLINE void fabric_client_connect(WorkerToFabricMuxSender<FABRIC_MUX_CHANN
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+FORCE_INLINE void fabric_client_connect_start(
+    WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
+    connection_handle.open_start();
+}
+
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+FORCE_INLINE void fabric_client_connect_finish(
+    WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
+    connection_handle.open_finish();
+}
+
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE void fabric_client_disconnect(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
     connection_handle.close();
 }

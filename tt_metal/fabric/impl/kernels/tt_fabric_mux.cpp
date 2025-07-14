@@ -37,9 +37,6 @@ constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15
 
 constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
 
-constexpr size_t memory_map_start_address = get_compile_time_arg_val(17);
-constexpr size_t memory_map_end_address = get_compile_time_arg_val(18);
-
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
 namespace tt::tt_fabric {
@@ -119,15 +116,19 @@ void forward_data(
 }
 
 void kernel_main() {
-    // clear out memory map
-    zero_l1_buf(
-        reinterpret_cast<tt_l1_ptr uint32_t*>(memory_map_start_address),
-        memory_map_end_address - memory_map_start_address);
+    size_t rt_args_idx = 0;
 
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
-    size_t rt_args_idx = 0;
+    // clear out memory regions
+    auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
+    for (uint32_t i = 0; i < num_regions_to_clear; i++) {
+        auto address = get_arg_val<uint32_t>(rt_args_idx++);
+        auto size = get_arg_val<uint32_t>(rt_args_idx++);
+        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
+    }
+
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
