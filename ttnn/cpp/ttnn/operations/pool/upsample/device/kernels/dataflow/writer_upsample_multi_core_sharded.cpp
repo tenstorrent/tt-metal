@@ -30,17 +30,20 @@ void kernel_main() {
     }
 
     uint32_t config_l1_addr = get_read_ptr(config_cb_id);
+    // Interpreted as a vector of 32bit elements to lessen the number of l1 reads
     volatile tt_l1_ptr uint32_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
 
     uint32_t reader_idx = 0;
     if constexpr (!is_reader) {
+        // Skip first half of config vector, 2 is for number of 32bit elements per entry
+        // | core.x |  core.y  | stick_offset_start | stick_offset_end |  (each 16 bits)
         reader_idx = elem_per_core_reader * 2;
     }
 
     for (uint32_t row_begin = 0; row_begin < elem_per_core_reader; ++row_begin) {
-        uint16_t cores = config_data[reader_idx++] & 0xFFFF;  // Extract the core coordinates
-        uint16_t corey = cores & 0xFF;
-        uint16_t corex = cores >> 8;
+        uint32_t cores = config_data[reader_idx++];  // Extract the core coordinates
+        uint16_t corex = cores & 0xFFFF;
+        uint16_t corey = cores >> 16;
 
         uint32_t offset_info = config_data[reader_idx++];  // Extract offset start and offset end
         uint16_t offset_start = offset_info & 0xFFFF;      // Little endian RISCV

@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <tt-logger/tt-logger.hpp>
 #include <vector>
 
 #include "upsample_op.hpp"
@@ -24,6 +23,15 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::upsample {
 using namespace tt;
 
+struct StickInterval {
+    uint16_t core_x, core_y;
+    uint16_t offset_start;
+    uint16_t offset_end;
+
+    StickInterval(uint16_t cx, uint16_t cy, uint16_t start) :
+        core_x(cx), core_y(cy), offset_start(start), offset_end(start) {}
+};
+
 static Tensor create_config_tensor(
     IDevice* device,
     ShardSpec shard_spec,
@@ -33,11 +41,13 @@ static Tensor create_config_tensor(
     const uint32_t scale_factor_h,
     const uint32_t scale_factor_w,
     const bool is_height_sharded) {
-    uint16_t core_idx = 0;  // Tracks the current core being processed
-    uint16_t core_idx_start = 0;
-    uint16_t stick_offset = 0;        // Tracks the current stick offset within the core
-    uint16_t stick_offset_start = 0;  // Tracks the current stick offset within the core
-    uint32_t stick_cnt = 0;
+    uint16_t core_idx = 0;        // Tracks the current core being processed
+    uint16_t core_idx_start = 0;  // Tracks the starting core index for each row of input, used when scale_factor_h > 1
+    uint16_t stick_offset = 0;    // Tracks the current stick offset within the core
+    uint16_t stick_offset_start =
+        0;  // Tracks starting stick offset within the core before adding in_w sticks, used when scale_factor_h > 1
+    uint32_t stick_cnt =
+        0;  // Counts the number of sticks processed, used for splitting output sticks accross NCRISC and BRISC
     uint16_t ch_start_core = 0;   // Starting core index where channels are distributed
     uint16_t ch_end_core = 0;     // Ending core index where channels are distributed
     uint16_t nhw_start_core = 0;  // Starting core index for NHW distribution
@@ -63,11 +73,12 @@ static Tensor create_config_tensor(
         }
     }
 
-    std::vector<uint16_t> logical_core_to_stick_map;
+    std::vector<StickInterval> logical_core_to_stick_map;
     std::vector<uint16_t> dst_core_end_idx_map;
-    const size_t logical_core_to_stick_map_entry_size = 4;
-    bool do_insert = false;
 
+    bool force_new_interval = false;
+    bool is_new_dst_core_reader = false;
+    bool is_new_src_core_reader = false;
     uint32_t last_ind = 0;
     uint32_t elems_per_core_reader = 0;
     uint32_t elem_num = 0;
@@ -83,56 +94,54 @@ static Tensor create_config_tensor(
                         stick_offset = 0;
                         core_idx++;
                     }
-                    if (stick_offset == 0 || stick_cnt % output_nsticks_per_core_reader == 0 || do_insert) {
-                        if (stick_cnt != 0 && stick_cnt % output_nsticks_per_core_reader == 0) {
+                    is_new_dst_core_reader = stick_cnt == output_nsticks_per_core_reader;
+                    is_new_src_core_reader = stick_offset == 0;
+
+                    if (is_new_src_core_reader || is_new_dst_core_reader || force_new_interval) {
+                        if (is_new_dst_core_reader) {
                             dst_core_end_idx_map.push_back(logical_core_to_stick_map.size());  // didn't -1, < later
                             if (output_nsticks_per_core > 1) {
                                 output_nsticks_per_core_reader =
                                     output_nsticks_per_core - output_nsticks_per_core_reader;
                             }
                             stick_cnt = 0;
-                            elem_num =
-                                (logical_core_to_stick_map.size() - last_ind) / logical_core_to_stick_map_entry_size;
+                            elem_num = logical_core_to_stick_map.size() - last_ind;
                             elems_per_core_reader = elem_num > elems_per_core_reader ? elem_num : elems_per_core_reader;
                             last_ind = logical_core_to_stick_map.size();
                         }
-                        if (do_insert) {
-                            do_insert = false;
+                        if (force_new_interval) {
+                            force_new_interval = false;
                         }
                         if (is_height_sharded) {
-                            auto& c = logical_cores[core_idx];
-                            logical_core_to_stick_map.push_back(c.x);
-                            logical_core_to_stick_map.push_back(c.y);
+                            logical_core_to_stick_map.push_back(
+                                StickInterval(logical_cores[core_idx].x, logical_cores[core_idx].y, stick_offset));
                         } else {
-                            logical_core_to_stick_map.push_back(nhw_start_core + core_idx);
-                            logical_core_to_stick_map.push_back(0);
+                            logical_core_to_stick_map.push_back(
+                                StickInterval(0, nhw_start_core + core_idx, stick_offset));
                         }
-                        logical_core_to_stick_map.push_back(stick_offset);  // stick_offset_start
-                        logical_core_to_stick_map.push_back(stick_offset);  // stick_offset_end, updated later
                     } else {
-                        logical_core_to_stick_map[logical_core_to_stick_map.size() - 1]++;
+                        logical_core_to_stick_map.back().offset_end++;
                     }
                 }
                 if (j < scale_factor_h - 1) {
                     stick_offset = stick_offset_start;
                     core_idx = core_idx_start;
-                    do_insert = true;  // insert new entry in next loop
+                    force_new_interval = true;  // insert new entry in next loop
                 }
             }
         }
     }
     dst_core_end_idx_map.push_back(logical_core_to_stick_map.size());
 
-    elem_num = (logical_core_to_stick_map.size() - last_ind) / logical_core_to_stick_map_entry_size;
+    elem_num = logical_core_to_stick_map.size() - last_ind;
     elems_per_core_reader = elem_num > elems_per_core_reader ? elem_num : elems_per_core_reader;
 
     /* Each entry in config_vector contains 4 elements:
-     * {{core_coords.x, core_coords.y}, stick_offset(in input_cb)}
+     * {core_coords.x, core_coords.y, stick_offset_start, stick_offset_end(in input_cb)}
      * - core_coords.x: X coordinate of the core
      * - core_coords.y: Y coordinate of the core
      * - stick_offset_start: Offset start within the input circular buffer
      * - stick_offset_end: Offset end within the input circular buffer
-     * - pad: Padding element to ensure entry size is a multiple of 4*bfloat16
      */
     std::vector<uint16_t> config_vector;
 
@@ -152,29 +161,31 @@ static Tensor create_config_tensor(
             (elems_per_core_reader - (slice_length % elems_per_core_reader)) % elems_per_core_reader;
         if (remainder != 0) {
             for (int i = 0; i < remainder / config_buffer_entry_size; i++) {
-                config_vector.push_back(0);  // core
-                config_vector.push_back(0);  // pad
+                config_vector.push_back(0);  // core x
+                config_vector.push_back(0);  // core y
                 config_vector.push_back(1);  // stick offset start
                 config_vector.push_back(0);  // stick offset end
             }
         }
     };
+
     uint32_t per_core_start_idx = 0;
-    if (is_height_sharded) {
+    for (size_t i = ch_start_core; i <= ch_end_core; i++) {
         for (size_t ind = 0, j = 0; ind < dst_core_end_idx_map.size(); ind++) {
             const size_t chan_slice_begin = config_vector.size();
             if (ind % 2 == 0) {
                 per_core_start_idx = config_vector.size();
             }
-            for (; j < dst_core_end_idx_map[ind]; j += 4) {
+            for (; j < dst_core_end_idx_map[ind]; ++j) {
                 core_coords = device->worker_core_from_logical_core(
-                    CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
+                    is_height_sharded
+                        ? CoreCoord(logical_core_to_stick_map[j].core_x, logical_core_to_stick_map[j].core_y)
+                        : CoreCoord(i, logical_core_to_stick_map[j].core_y));
                 // Combine the x and y coordinates of the core into a single 16-bit value.
-                const uint16_t cores = (core_coords.x << 8) + core_coords.y;
-                config_vector.push_back(cores);
-                config_vector.push_back(0);
-                config_vector.push_back(logical_core_to_stick_map[j + 2]);
-                config_vector.push_back(logical_core_to_stick_map[j + 3]);
+                config_vector.push_back(core_coords.x);
+                config_vector.push_back(core_coords.y);
+                config_vector.push_back(logical_core_to_stick_map[j].offset_start);
+                config_vector.push_back(logical_core_to_stick_map[j].offset_end);
             }
             if (output_nsticks_per_core > 1) {
                 pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
@@ -183,28 +194,8 @@ static Tensor create_config_tensor(
             }
         }
         pad_uneven_shards(config_vector, elems_per_core, per_core_start_idx);
-    } else {
-        for (size_t i = ch_start_core; i <= ch_end_core; i++) {
-            for (size_t ind = 0, j = 0; ind < dst_core_end_idx_map.size(); ind++) {
-                const size_t chan_slice_begin = config_vector.size();
-                for (; j < dst_core_end_idx_map[ind]; j += 4) {
-                    core_coords = device->worker_core_from_logical_core(CoreCoord(i, logical_core_to_stick_map[j]));
-                    // Combine the x and y coordinates of the core into a single 16-bit value.
-                    const uint16_t cores = (core_coords.x << 8) + core_coords.y;
-                    config_vector.push_back(cores);
-                    config_vector.push_back(0);
-                    config_vector.push_back(logical_core_to_stick_map[j + 2]);
-                    config_vector.push_back(logical_core_to_stick_map[j + 3]);
-                }
-                if (output_nsticks_per_core > 1) {
-                    pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
-                } else {
-                    pad_uneven_shards(config_vector, elems_per_core, chan_slice_begin);
-                }
-            }
-            pad_uneven_shards(config_vector, elems_per_core, per_core_start_idx);
-        }
     }
+
     TT_FATAL(
         config_vector.size() % elems_per_core == 0,
         "Config vector size {} should be multiple of {}",
