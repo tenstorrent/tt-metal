@@ -125,13 +125,6 @@ void Application() {
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 
-    // Stall for the host to set this flag to 1 otherwise we could exit
-    // the base firmware while the host is still initializing
-    while (enable_fw_flag[0] != 1) {
-        // Wait for sync from host
-        invalidate_l1_cache();
-    }
-
     set_deassert_addresses();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
@@ -152,6 +145,13 @@ void Application() {
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
+    // Stall for the host to set this flag to 1 otherwise we could exit
+    // the base firmware while the host is still initializing
+    while (enable_fw_flag[0] != 1) {
+        // Wait for sync from host
+        invalidate_l1_cache();
+    }
+
     while (1) {
         // Wait...
         WAYPOINT("GW");
@@ -161,7 +161,6 @@ void Application() {
             invalidate_l1_cache();
             if (!enable_fw_flag[0]) {
                 internal_::disable_erisc_app();
-                ((volatile uint32_t*)(0x40000))[1] = 0xdeaddead;
                 return;
             }
 

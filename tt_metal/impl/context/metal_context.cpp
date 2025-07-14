@@ -562,6 +562,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             std::vector<uint32_t> clear_flag_data = {0};
             tt::llrt::write_hex_vec_to_core(
                 device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+            cluster_->l1_barrier(device_id);
             llrt::internal_::wait_for_heartbeat(device_id, virtual_core);
         }
     }
@@ -660,9 +661,6 @@ void MetalContext::assert_cores(chip_id_t device_id) {
 
         for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
             assert_eth_core(eth_core, true);
-        }
-        for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
-            assert_eth_core(eth_core, false);
         }
     }
 }
@@ -937,6 +935,10 @@ void MetalContext::initialize_firmware(
                     tt_cxy_pair(device_id, virtual_core),
                     jit_build_config.fw_launch_addr);
             } else {
+                cluster_->l1_barrier(device_id);
+                std::vector<uint32_t> enable_data = {1};
+                tt::llrt::write_hex_vec_to_core(
+                    device_id, virtual_core, enable_data, get_active_erisc_launch_flag_addr());
                 // Active ethernet firmware launched immediately. Note, reset_cores (called before this),
                 // enable_fw_flag is set to 0. So we when launch, active_erisc.cc will stall until we set it to 1.
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
@@ -945,10 +947,6 @@ void MetalContext::initialize_firmware(
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
                     true);  // Wait for ack is not needed because we will wait for cores to be ready
-                cluster_->l1_barrier(device_id);
-                std::vector<uint32_t> enable_data = {1};
-                tt::llrt::write_hex_vec_to_core(
-                    device_id, virtual_core, enable_data, get_active_erisc_launch_flag_addr());
             }
 
             break;
