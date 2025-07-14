@@ -435,7 +435,7 @@ def test_to_layout_wh2(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[32, 128], [2, 4, 96, 256], [1, 160, 64]])
+@pytest.mark.parametrize("shape", [[32, 128], [2, 4, 96, 256], [1, 160, 64], [64, 512]])
 def test_untilize_with_unpad_int32(shape, device):
     torch.manual_seed(2005)
     end_shape = [x - 1 for x in shape]
@@ -446,7 +446,7 @@ def test_untilize_with_unpad_int32(shape, device):
     assert_with_pcc(input_a, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[32, 1024], [64, 512]])
+@pytest.mark.parametrize("shape", [[3072, 1024], [2048, 512]])
 def test_untilize_int32_t(shape, device):
     torch.manual_seed(2005)
     input_a = torch.randint(1, 64, shape, dtype=torch.int32)
