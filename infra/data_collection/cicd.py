@@ -78,16 +78,12 @@ def create_cicd_json_for_data_analysis(
 
         logger.info(f"Found {len(tests)} tests for job {github_job_id}")
 
-        try:
-            job = pydantic_models.Job(
-                **raw_job,
-                tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
-                tests=tests,
-            )
-        except ValueError as e:
-            logger.warning(f"Skipping insert for job {github_job_id}, model validation failed: {e}")
-        else:
-            jobs.append(job)
+        job = pydantic_models.Job(
+            **raw_job,
+            tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
+            tests=tests,
+        )
+        jobs.append(job)
 
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,
