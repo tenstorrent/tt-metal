@@ -153,9 +153,9 @@ static Tensor create_config_tensor(
         if (remainder != 0) {
             for (int i = 0; i < remainder / config_buffer_entry_size; i++) {
                 config_vector.push_back(0);  // core
+                config_vector.push_back(0);  // pad
                 config_vector.push_back(1);  // stick offset start
                 config_vector.push_back(0);  // stick offset end
-                config_vector.push_back(0);  // pad
             }
         }
     };
@@ -172,9 +172,9 @@ static Tensor create_config_tensor(
                 // Combine the x and y coordinates of the core into a single 16-bit value.
                 const uint16_t cores = (core_coords.x << 8) + core_coords.y;
                 config_vector.push_back(cores);
+                config_vector.push_back(0);
                 config_vector.push_back(logical_core_to_stick_map[j + 2]);
                 config_vector.push_back(logical_core_to_stick_map[j + 3]);
-                config_vector.push_back(0);
             }
             if (output_nsticks_per_core > 1) {
                 pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
@@ -192,9 +192,9 @@ static Tensor create_config_tensor(
                     // Combine the x and y coordinates of the core into a single 16-bit value.
                     const uint16_t cores = (core_coords.x << 8) + core_coords.y;
                     config_vector.push_back(cores);
+                    config_vector.push_back(0);
                     config_vector.push_back(logical_core_to_stick_map[j + 2]);
                     config_vector.push_back(logical_core_to_stick_map[j + 3]);
-                    config_vector.push_back(0);
                 }
                 if (output_nsticks_per_core > 1) {
                     pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
