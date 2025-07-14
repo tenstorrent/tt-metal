@@ -4,7 +4,12 @@ set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
 # Smoke
 add_executable(tt-nn-validation-smoke)
 
-target_link_libraries(tt-nn-validation-smoke PRIVATE TTNN::Test::Smoke)
+target_link_libraries(
+    tt-nn-validation-smoke
+    PRIVATE
+        TTNN::Test::Smoke
+        TTNN::Test::Basic::Tensor
+)
 
 install(TARGETS tt-nn-validation-smoke RUNTIME COMPONENT ttnn-validation)
 
