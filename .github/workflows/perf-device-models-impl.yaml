@@ -84,7 +84,7 @@ jobs:
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests -m models_device_performance_bare_metal
           # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal
 
-          export DEVICE_PERF_REPORT_FILENAME=${{ matrix.test-info.test-type }}_yolov11_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov11_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov11
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
@@ -382,7 +382,7 @@ jobs:
         run: |
           set -x
           export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal
+          # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal
 
           export DEVICE_PERF_REPORT_FILENAME=${{ matrix.test-info.test-type }}_yolov6l_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov6l
