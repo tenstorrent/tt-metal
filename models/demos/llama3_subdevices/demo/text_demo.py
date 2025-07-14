@@ -655,7 +655,7 @@ def test_demo_text(
         except Exception as e:
             logger.error(f"Error switching to decode mode: {str(e)}")
             model.tt_ccl.close()
-        logger.info(f"Starting decode loop...")
+        logger.info(f"Starting decode loop from positions: {decoding_pos}")
 
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
