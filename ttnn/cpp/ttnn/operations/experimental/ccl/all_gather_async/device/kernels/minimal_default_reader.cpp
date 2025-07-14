@@ -216,9 +216,9 @@ void kernel_main() {
                     if (chunk_count % chunks_per_sync == 0) {
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                        sem_target++;
                     }
                     chunk_count++;
-                    sem_target++;
 
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
