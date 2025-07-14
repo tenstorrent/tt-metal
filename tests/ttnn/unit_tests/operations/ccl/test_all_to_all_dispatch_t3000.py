@@ -15,6 +15,15 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
 
+def get_max_links(cluster_axis, fabric_config):
+    if fabric_config == ttnn.FabricConfig.FABRIC_2D:
+        return 1
+    elif cluster_axis is None:
+        return 1
+    else:
+        return 2 if cluster_axis == 0 else 1
+
+
 def tt_to_torch_dtype(tt_dtype):
     if tt_dtype == ttnn.bfloat16:
         return torch.bfloat16
@@ -638,7 +647,7 @@ def run_all_to_all_dispatch_test(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
-@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("batches_per_device", [16])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -649,7 +658,7 @@ def run_all_to_all_dispatch_test(
     ],
     ids=["s2"],
 )
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
@@ -671,6 +680,7 @@ def test_all_to_all_dispatch_no_trace(
     dtype,
     input_memory_config,
     output_memory_config,
+    device_params,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -679,6 +689,9 @@ def test_all_to_all_dispatch_no_trace(
 
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
+
+    if num_links == "MAX_LINKS":
+        num_links = get_max_links(cluster_axis, device_params["fabric_config"])
 
     run_all_to_all_dispatch_test(
         mesh_device,
@@ -742,7 +755,7 @@ def test_all_to_all_dispatch_no_trace(
     ids=["dram"],
 )
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_dispatch_trace(
@@ -762,6 +775,7 @@ def test_all_to_all_dispatch_trace(
     dtype,
     input_memory_config,
     output_memory_config,
+    device_params,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -770,6 +784,9 @@ def test_all_to_all_dispatch_trace(
 
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
+
+    if num_links == "MAX_LINKS":
+        num_links = get_max_links(cluster_axis, device_params["fabric_config"])
 
     run_all_to_all_dispatch_test(
         mesh_device,
