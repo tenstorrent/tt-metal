@@ -17,16 +17,17 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs element-wise xlogy operation. The value to be filled in the tile is provided as const param0. The DST
- * register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+ * Performs element-wise xlogy operation y = xlogy(x0, x1) with x0 as first operand and x1 as second operand.
+ * Output overwrites first operand in DST.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
  * compute engine.
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The value the output is if the input is greater than 0                     | float    |                                                       | True     |
+ * | Argument              | Description                                                                 | Type     | Valid Range                                           | Required |
+ * |-----------------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0                 | The index of the tile in DST register buffer to use as first operand        | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst1                 | The index of the tile in DST register buffer to use as second operand       | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
 ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1) {
