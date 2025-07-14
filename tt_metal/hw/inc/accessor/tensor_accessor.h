@@ -156,12 +156,21 @@ public:
     }
 
     FORCE_INLINE
+    bool is_local_page(const uint32_t page_id, uint8_t noc = noc_index) const {
+        auto page_mapping = get_bank_and_offset(page_id);
+        const auto& packed_xy_coords = dspec().packed_xy_coords();
+        auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
+        return is_local_bank(bank_x, bank_y, noc);
+    }
+
+    FORCE_INLINE
     bool is_local_shard(const uint32_t shard_id, uint8_t noc = noc_index) const {
         uint32_t bank_id = shard_id % dspec().num_banks();
 
         const auto& packed_xy_coords = dspec().packed_xy_coords();
-        auto bank_x = (packed_xy_coords[bank_id] >> 8) & 0xFF;
-        auto bank_y = (packed_xy_coords[bank_id]) & 0xFF;
+        auto bank_x = get_bank_x(packed_xy_coords[bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[bank_id]);
         return is_local_bank(bank_x, bank_y, noc);
     }
 
@@ -171,8 +180,8 @@ private:
     std::uint64_t get_noc_addr(
         const PageMapping page_mapping, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         const auto& packed_xy_coords = dspec().packed_xy_coords();
-        auto bank_x = (packed_xy_coords[page_mapping.bank_id] >> 8) & 0xFF;
-        auto bank_y = packed_xy_coords[page_mapping.bank_id] & 0xFF;
+        auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         return NOC_XY_ADDR(
             DYNAMIC_NOC_X(noc, bank_x),
             DYNAMIC_NOC_Y(noc, bank_y),
@@ -199,6 +208,12 @@ private:
 
         return {bank_id, bank_page_offset};
     }
+
+    FORCE_INLINE
+    uint16_t get_bank_x(uint16_t packed_xy_coord) const { return (packed_xy_coord >> 8) & 0xFF; }
+
+    FORCE_INLINE
+    uint16_t get_bank_y(uint16_t packed_xy_coord) const { return packed_xy_coord & 0xFF; }
 
 public:
     const size_t bank_base_address = 0;
