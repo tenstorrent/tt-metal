@@ -152,7 +152,7 @@ class VideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
-st.title("YOLOv8s_world Detection Demo")
+st.title("YOLOv7 Detection Demo")
 
 webrtc_streamer(
     key="example",
