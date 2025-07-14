@@ -34,19 +34,6 @@
 #include "ttnn/types.hpp"
 
 namespace ttnn {
-
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-TensorSpec get_tensor_spec(
-    const ttnn::Shape& shape,
-    DataType dtype,
-    Layout layout = Layout::ROW_MAJOR,
-    const MemoryConfig& memory_config = MemoryConfig{}) {
-    return TensorSpec(shape, TensorLayout(dtype, layout, memory_config));
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-
 namespace {
 
 using ::testing::Eq;
@@ -69,6 +56,14 @@ const std::vector<ttnn::Shape>& get_shapes_for_test() {
         ttnn::Shape{1, 1, 1, 1, 10},
     };
     return *shapes;
+}
+
+TensorSpec get_tensor_spec(
+    const ttnn::Shape& shape,
+    DataType dtype,
+    Layout layout = Layout::ROW_MAJOR,
+    const MemoryConfig& memory_config = MemoryConfig{}) {
+    return TensorSpec(shape, TensorLayout(dtype, layout, memory_config));
 }
 
 template <typename T>
@@ -96,8 +91,7 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW((void)Tensor::from_vector(
-        input, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
+    EXPECT_ANY_THROW((void)Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
 }
 
 TYPED_TEST(VectorConversionTest, InvalidDtype) {
@@ -106,7 +100,7 @@ TYPED_TEST(VectorConversionTest, InvalidDtype) {
 
     EXPECT_ANY_THROW((void)Tensor::from_vector(
         input,
-        CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(
+        get_tensor_spec(
             shape,
             // Use INT32 for verification, except for when the actual type is int32_t.
             (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32))));
@@ -115,8 +109,7 @@ TYPED_TEST(VectorConversionTest, InvalidDtype) {
 TYPED_TEST(VectorConversionTest, Roundtrip) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input = arange<TypeParam>(0, shape.volume(), 1);
-        auto tensor = Tensor::from_vector(
-            input, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, convert_to_data_type<TypeParam>()));
+        auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()));
 
         EXPECT_THAT(tensor.logical_shape(), Eq(shape)) << "for shape: " << shape;
         EXPECT_THAT(tensor.dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
@@ -130,8 +123,7 @@ TYPED_TEST(VectorConversionTest, Roundtrip) {
 TYPED_TEST(VectorConversionTest, RoundtripTilizedLayout) {
     ttnn::Shape shape{128, 128};
     auto input = arange<TypeParam>(0, shape.volume(), 1);
-    auto tensor = Tensor::from_vector(
-        input, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
+    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
 
     EXPECT_THAT(tensor.logical_shape(), ShapeIs(128, 128));
     EXPECT_THAT(tensor.padded_shape(), ShapeIs(128, 128));
@@ -144,8 +136,7 @@ TYPED_TEST(VectorConversionTest, RoundtripTilizedLayout) {
 TYPED_TEST(VectorConversionTest, RoundtripTilizedLayoutOddShape) {
     ttnn::Shape shape{1, 40, 3, 121};
     auto input = arange<TypeParam>(0, shape.volume(), 1);
-    auto tensor = Tensor::from_vector(
-        input, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
+    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
 
     EXPECT_THAT(tensor.logical_shape(), ShapeIs(1, 40, 3, 121));
     EXPECT_THAT(tensor.padded_shape(), ShapeIs(1, 40, 32, 128));
@@ -160,7 +151,7 @@ TYPED_TEST(VectorConversionTest, RoundtripWithShardedLayout) {
     auto input = arange<TypeParam>(0, shape.volume(), 1);
     auto tensor = Tensor::from_vector(
         input,
-        CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(
+        get_tensor_spec(
             shape,
             convert_to_data_type<TypeParam>(),
             Layout::TILE,
@@ -191,13 +182,10 @@ TEST(FloatVectorConversionTest, Float32Bfloat16Interop) {
         });
 
         auto output_bf16 =
-            Tensor::from_vector(input_ft, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, DataType::BFLOAT16))
-                .to_vector<bfloat16>();
+            Tensor::from_vector(input_ft, get_tensor_spec(shape, DataType::BFLOAT16)).to_vector<bfloat16>();
         EXPECT_THAT(output_bf16, Pointwise(Eq(), input_bf16)) << "for shape: " << shape;
 
-        auto output_ft =
-            Tensor::from_vector(input_bf16, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, DataType::BFLOAT16))
-                .to_vector<float>();
+        auto output_ft = Tensor::from_vector(input_bf16, get_tensor_spec(shape, DataType::BFLOAT16)).to_vector<float>();
         EXPECT_THAT(output_ft, Pointwise(Eq(), input_ft)) << "for shape: " << shape;
     }
 }
@@ -297,15 +285,14 @@ TEST_P(BlockFloatVectorConversionTest, InvalidLayout) {
     ttnn::Shape shape{32, 32};
     // Block float types are only supported in TILE layout.
     EXPECT_ANY_THROW((void)Tensor::from_vector(
-        std::vector<float>(shape.volume()),
-        CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
+        std::vector<float>(shape.volume()), get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
 }
 
 TEST_P(BlockFloatVectorConversionTest, Roundtrip) {
     ttnn::Shape shape{32, 32};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
-    auto tensor = Tensor::from_vector(input, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, GetParam(), Layout::TILE));
+    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
 
     EXPECT_THAT(tensor.logical_shape(), Eq(shape));
     EXPECT_THAT(tensor.dtype(), Eq(GetParam()));
@@ -316,7 +303,7 @@ TEST_P(BlockFloatVectorConversionTest, RoundtripWithPadding) {
     ttnn::Shape shape{14, 47};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
-    auto tensor = Tensor::from_vector(input, CMAKE_UNIQUE_NAMESPACE::get_tensor_spec(shape, GetParam(), Layout::TILE));
+    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
 
     EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
     EXPECT_THAT(tensor.padded_shape(), ShapeIs(32, 64));
