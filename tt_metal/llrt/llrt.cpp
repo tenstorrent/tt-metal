@@ -333,12 +333,14 @@ void send_msg_to_eth_mailbox(
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start).count();
             if (elapsed > timeout_ms) {
                 TT_THROW(
-                    "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} mailbox {:#x}. Is the "
-                    "firmware updated? Minimum tt-firmware version is 18.2.0",
+                    "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} mailbox {:#x}. Retrain "
+                    "count: {}. "
+                    "Is the firmware updated? Minimum tt-firmware version is 18.2.0",
                     device_id,
                     timeout_ms,
                     virtual_core.str(),
-                    mailbox_val);
+                    mailbox_val,
+                    get_retrain_count(device_id, virtual_core));
             }
 
             if (cond(mailbox_val)) {

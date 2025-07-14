@@ -132,6 +132,13 @@ void Application() {
         invalidate_l1_cache();
     }
 
+    set_deassert_addresses();
+
+    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
+    }
+
     // There may be some random data from the base FW
     // We only use NOC0 here
     noc_async_full_barrier(0 /* noc */);
@@ -139,13 +146,6 @@ void Application() {
     // It is not used in dataflow api, so it can be set to 0
     // one time here instead of setting it everytime in dataflow_api.
     NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
-
-    set_deassert_addresses();
-
-    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        noc_local_state_init(n);
-    }
 
     deassert_all_reset();
     wait_subordinate_eriscs();
@@ -161,6 +161,7 @@ void Application() {
             invalidate_l1_cache();
             if (!enable_fw_flag[0]) {
                 internal_::disable_erisc_app();
+                mailboxes->go_message.signal = RUN_MSG_DONE;
                 return;
             }
 
