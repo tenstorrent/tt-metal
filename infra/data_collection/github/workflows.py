@@ -379,6 +379,7 @@ def deduplicate_tests_by_name(tests):
         else:
             # Multiple tests with same name, apply deduplication logic
             # First, try to find one with elapsed time > 0
+            logger.warning(f"Found {len(test_list)} tests with the same name: {test_name}. Will deduplicate.")
             test_with_elapsed_time = None
             for test in test_list:
                 if test.test_end_ts != test.test_start_ts:
