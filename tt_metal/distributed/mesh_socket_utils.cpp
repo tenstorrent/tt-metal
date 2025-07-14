@@ -31,16 +31,16 @@ std::unordered_map<MeshCoordinate, std::vector<std::pair<uint32_t, SocketConnect
 }
 
 void validate_fabric_config_for_sockets(
-    FabricConfig fabric_config, tt_fabric::FabricNodeId sender_node, tt_fabric::FabricNodeId recv_node) {
+    tt_fabric::FabricConfig fabric_config, tt_fabric::FabricNodeId sender_node, tt_fabric::FabricNodeId recv_node) {
     if (sender_node != recv_node) {
-        TT_FATAL(fabric_config != FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
+        TT_FATAL(fabric_config != tt_fabric::FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
     }
 
-    static const std::unordered_set<FabricConfig> supported_fabrics = {
-        FabricConfig::FABRIC_1D,
-        FabricConfig::FABRIC_1D_RING,
-        FabricConfig::FABRIC_2D_DYNAMIC,
-        FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same physical device
+    static const std::unordered_set<tt_fabric::FabricConfig> supported_fabrics = {
+        tt_fabric::FabricConfig::FABRIC_1D,
+        tt_fabric::FabricConfig::FABRIC_1D_RING,
+        tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same physical device
     };
 
     bool fabric_config_supported = supported_fabrics.count(fabric_config) > 0;
@@ -52,13 +52,13 @@ void validate_fabric_config_for_sockets(
 std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
     tt_fabric::FabricNodeId sender_node_id,
     tt_fabric::FabricNodeId recv_node_id,
-    FabricConfig fabric_config,
+    tt_fabric::FabricConfig fabric_config,
     SocketEndpoint socket_endpoint) {
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
 
     validate_fabric_config_for_sockets(fabric_config, sender_node_id, recv_node_id);
 
-    if (fabric_config == FabricConfig::FABRIC_1D or fabric_config == FabricConfig::FABRIC_1D_RING) {
+    if (fabric_config == tt_fabric::FabricConfig::FABRIC_1D or fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING) {
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         // Assume 1D is a single mesh
         auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -142,7 +142,6 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint) {
     const auto& socket_connections = config.socket_connection_config;
     const auto& socket_mem_config = config.socket_mem_config;
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
 
     uint32_t config_buffer_size = is_sender ? sizeof(sender_socket_md) : sizeof(receiver_socket_md);
@@ -235,7 +234,7 @@ void write_socket_configs(
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
 
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     if (is_sender) {
         std::vector<sender_socket_md> config_data(config_buffer->size() / sizeof(sender_socket_md), sender_socket_md());
@@ -350,7 +349,6 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
 
-    static constexpr uint32_t NUM_SOCKET_HEADER_ELEMENTS = 1;
     // Query the size of the serialized descriptor first (this is the only element in the header)
     auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
     TT_FATAL(

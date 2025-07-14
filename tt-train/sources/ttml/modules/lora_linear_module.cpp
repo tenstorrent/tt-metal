@@ -21,7 +21,7 @@ namespace ttml::modules {
 namespace {
 ttml::autograd::TensorPtr create_weight(uint32_t in_features, uint32_t out_features) {
     auto* device = &autograd::ctx().get_device();
-    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
+    auto weight_shape = ttnn::Shape({1, 1, out_features, in_features});
     auto weight = ttml::autograd::create_tensor();
     const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
     init::uniform_init(weight, weight_shape, init::UniformRange{-init_k, init_k});
@@ -30,7 +30,7 @@ ttml::autograd::TensorPtr create_weight(uint32_t in_features, uint32_t out_featu
 
 ttml::autograd::TensorPtr create_lora_a(uint32_t rank, uint32_t out_features) {
     auto* device = &autograd::ctx().get_device();
-    auto weight_shape = core::create_shape({1, 1, out_features, rank});
+    auto weight_shape = ttnn::Shape({1, 1, out_features, rank});
     auto weight = ttml::autograd::create_tensor();
     init::constant_init(weight, weight_shape, 0.F);
     return weight;
@@ -38,7 +38,7 @@ ttml::autograd::TensorPtr create_lora_a(uint32_t rank, uint32_t out_features) {
 
 ttml::autograd::TensorPtr create_lora_b(uint32_t in_features, uint32_t rank) {
     auto* device = &autograd::ctx().get_device();
-    auto weight_shape = core::create_shape({1, 1, rank, in_features});
+    auto weight_shape = ttnn::Shape({1, 1, rank, in_features});
     auto weight = ttml::autograd::create_tensor();
     const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
     init::uniform_init(weight, weight_shape, init::UniformRange{-init_k, init_k});
@@ -48,7 +48,7 @@ ttml::autograd::TensorPtr create_lora_b(uint32_t in_features, uint32_t rank) {
 ttml::autograd::TensorPtr create_bias(uint32_t in_features, uint32_t out_features) {
     const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
     auto* device = &ttml::autograd::ctx().get_device();
-    auto bias_shape = ttml::core::create_shape({1, 1, 1, out_features});
+    auto bias_shape = ttnn::Shape({1, 1, 1, out_features});
     auto bias = ttml::autograd::create_tensor();
     ttml::init::uniform_init(bias, bias_shape, ttml::init::UniformRange{-init_k, init_k});
     return bias;

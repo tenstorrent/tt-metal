@@ -731,6 +731,32 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
         use_legacy);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationAddalpha<binary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    return BinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
+        queue_id, lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    return BinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
+        queue_id, lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
+}
+
 template struct BinaryOperation<BinaryOpType::ADD>;
 template struct InplaceBinaryOperation<BinaryOpType::ADD>;
 template struct BinaryOperation<BinaryOpType::SUB>;
@@ -759,6 +785,7 @@ template struct BinaryOperation<BinaryOpType::BITWISE_OR>;
 template struct BinaryOperation<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperation<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperation<BinaryOpType::RIGHT_SHIFT>;
+template struct BinaryOperation<BinaryOpType::LOGICAL_RIGHT_SHIFT>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;
@@ -784,9 +811,13 @@ template struct BinaryOperationSfpu<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_OR>;
 template struct BinaryOperationSfpu<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::RIGHT_SHIFT>;
+template struct BinaryOperationSfpu<BinaryOpType::LOGICAL_RIGHT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::MINIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::GCD>;
 template struct BinaryOperationSfpu<BinaryOpType::LCM>;
+
+template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
+template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
 
 }  // namespace ttnn::operations::binary

@@ -110,14 +110,14 @@ public:
     BaseFabricFixture() : device_open(false) {}
 
     BaseFabricFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
     }
 
-    virtual ~BaseFabricFixture() { tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED); }
+    virtual ~BaseFabricFixture() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED); }
 
     virtual void SetupDevices() = 0;
     virtual void TearDown() = 0;
@@ -156,9 +156,9 @@ public:
     Fabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
 
     Fabric1DFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         BaseFabricFixture(fabric_config, reliability_mode) {
         this->SetupDevices();
     }
@@ -179,7 +179,7 @@ public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
     // Gets the appropriate mesh shape based on device configuration
-    MeshShape GetDeterminedMeshShape() const { return SystemMesh::instance().get_shape(); }
+    MeshShape GetDeterminedMeshShape() const { return SystemMesh::instance().shape(); }
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
@@ -217,17 +217,17 @@ public:
     Fabric1DDeviceInitFixture() : device_open(false) { this->SetupDevices(); }
 
     Fabric1DDeviceInitFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
         this->SetupDevices();
     }
 
     ~Fabric1DDeviceInitFixture() {
         TearDown();
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 };
 
@@ -251,9 +251,9 @@ public:
     MeshFabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
 
     MeshFabric1DFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         BaseFabricFixture(fabric_config, reliability_mode) {
         this->SetupDevices();
     }
@@ -267,36 +267,36 @@ public:
 
 class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
 public:
-    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D) {}
+    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
 };
 
 class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
 public:
-    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
+    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
 };
 class Fabric1DRingStrictDeviceInitFixture : public Fabric1DDeviceInitFixture {
 public:
     Fabric1DRingStrictDeviceInitFixture() :
         Fabric1DDeviceInitFixture(
-            tt::tt_metal::FabricConfig::FABRIC_1D_RING,
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {}
+            tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {}
 };
 class Fabric1DRingRelaxedDeviceInitFixture : public Fabric1DDeviceInitFixture {
 public:
     Fabric1DRingRelaxedDeviceInitFixture() :
         Fabric1DDeviceInitFixture(
-            tt::tt_metal::FabricConfig::FABRIC_1D_RING,
-            tt::tt_metal::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE) {}
+            tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE) {}
 };
 
 class MeshFabric1DLineDeviceInitFixture : public MeshFabric1DFixture {
 public:
-    MeshFabric1DLineDeviceInitFixture() : MeshFabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D) {}
+    MeshFabric1DLineDeviceInitFixture() : MeshFabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
 };
 
 class MeshFabric1DRingDeviceInitFixture : public MeshFabric1DFixture {
 public:
-    MeshFabric1DRingDeviceInitFixture() : MeshFabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
+    MeshFabric1DRingDeviceInitFixture() : MeshFabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
 };
 
 struct BankedConfig {
@@ -2090,7 +2090,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     }
 
     // Initialize MeshDevice with 1D Fabric
-    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
+    MeshFabric1DFixture test_fixture(tt::tt_fabric::FabricConfig::FABRIC_1D);
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
@@ -2159,7 +2159,7 @@ void run_ring_all_gather_with_persistent_fabric(
     }
 
     // Initialize MeshDevice with 1D Fabric
-    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING);
+    MeshFabric1DFixture test_fixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
     test_fixture.mesh_device_->reshape(MeshShape(1, 8));
     auto view = test_fixture.mesh_device_->get_view();
 
@@ -2454,13 +2454,13 @@ void create_fabric_fixture(std::unique_ptr<Fabric1DFixture>& test_fixture, bool 
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         return (
             // prev not Fabric1D, now Fabric1D
-            (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
+            (fabric_config != tt::tt_fabric::FabricConfig::DISABLED &&
              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
             // prev not Fabric1DLine, now Fabric1DLine
-            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D &&
+            (fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D &&
              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
             // prev not Fabric1DRing, now Fabric1DRing
-            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D_RING &&
+            (fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D_RING &&
              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>));
     }();
 
