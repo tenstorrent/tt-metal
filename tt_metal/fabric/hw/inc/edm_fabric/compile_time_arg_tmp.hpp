@@ -159,13 +159,3 @@ template <bool GET_THE_ARG, size_t ARG_IDX>
 constexpr auto conditional_get_compile_time_arg() -> typename std::enable_if<!GET_THE_ARG, uint32_t>::type {
     return 0;
 }
-
-template <bool GET_THE_ARG, typename T, size_t CT_ARGS_START_IDX, size_t NUM_ELEMS_TO_TAKE>
-constexpr auto conditional_get_next_n_args() -> typename std::enable_if<GET_THE_ARG, std::array<T, NUM_ELEMS_TO_TAKE>>::type {
-    return fill_array_with_next_n_args<T, CT_ARGS_START_IDX, NUM_ELEMS_TO_TAKE>();
-}
-
-template <bool GET_THE_ARG, typename T, size_t CT_ARGS_START_IDX, size_t NUM_ELEMS_TO_TAKE>
-constexpr auto conditional_get_next_n_args() -> typename std::enable_if<!GET_THE_ARG, std::array<T, NUM_ELEMS_TO_TAKE>>::type {
-    return std::array<T, NUM_ELEMS_TO_TAKE>{};
-}
