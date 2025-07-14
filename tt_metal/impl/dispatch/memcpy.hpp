@@ -36,6 +36,15 @@
         dst8 += sizeof(int32_t);                          \
     } while (0)
 
+#define LOAD_STREAM_4_UNALIGNED()                 \
+    do {                                          \
+        int32_t val = 0;                          \
+        std::memcpy(&val, src8, sizeof(int32_t)); \
+        _mm_stream_si32((int32_t*)dst8, val);     \
+        src8 += sizeof(int32_t);                  \
+        dst8 += sizeof(int32_t);                  \
+    } while (0)
+
 namespace tt::tt_metal {
 
 // Ideally would work by cachelines, but the min size is less than that
@@ -111,8 +120,14 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
         // PHASE 2.3: Process remaining 4-byte chunks
         num_lines = n / sizeof(int32_t);  // Number of 4-byte blocks to process
         if (num_lines > 0) {
-            for (size_t i = 0; i < num_lines; ++i) {
-                LOAD_STREAM_4();
+            if ((uintptr_t)src8 % sizeof(int32_t) != 0) {
+                for (size_t i = 0; i < num_lines; ++i) {
+                    LOAD_STREAM_4_UNALIGNED();
+                }
+            } else {
+                for (size_t i = 0; i < num_lines; ++i) {
+                    LOAD_STREAM_4();
+                }
             }
             n -= num_lines * sizeof(int32_t);
         }
@@ -151,3 +166,4 @@ __attribute((nonnull(1, 2))) static inline void memcpy_to_device(
 #undef LOAD_STREAM_32
 #undef LOAD_STREAM_16
 #undef LOAD_STREAM_4
+#undef LOAD_STREAM_4_UNALIGNED
