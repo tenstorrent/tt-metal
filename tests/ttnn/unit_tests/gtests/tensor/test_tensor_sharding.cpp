@@ -80,7 +80,7 @@ void pretty_print_data_as_shards(
 
 }  // namespace
 
-namespace {
+namespace ttnn_test {
 struct ShardWithAlignmentInputs {
     Shape shape;
     Shape2D logical_shard_shape;
@@ -100,8 +100,9 @@ struct ShardWithAlignmentParams {
     ShardWithAlignmentInputs inputs;
     ShardWithAlignmentExpected expected;
 };
-}  // namespace
-// namespace
+}  // namespace ttnn_test
+
+using namespace ttnn_test;
 
 class ShardWithAlignmentTests : public ::testing::TestWithParam<ShardWithAlignmentParams> {};
 
