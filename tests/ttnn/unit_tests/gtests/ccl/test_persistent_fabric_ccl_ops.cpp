@@ -50,7 +50,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
-    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
+    MeshFabric1DFixture test_fixture(tt::tt_fabric::FabricConfig::FABRIC_1D);
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices

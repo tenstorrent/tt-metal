@@ -316,7 +316,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture) {
         target_address,
         0 /* mcast_mode */,
         true,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC};
+        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC};
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
 
