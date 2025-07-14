@@ -28,6 +28,7 @@ def test_unet(
     temb_shape,
     time_ids_shape,
     iterations,
+    is_ci_env,
     reset_seeds,
 ):
     run_unet_model(
@@ -37,6 +38,7 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        is_ci_env,
         iterations=iterations,
     )
 
