@@ -40,15 +40,17 @@ void kernel_main() {
     constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(39);
 
     constexpr bool write_page_by_page = get_compile_time_arg_val(40);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(41);
 
 #ifdef AXIS
     constexpr int axis = AXIS;
     constexpr uint32_t dispatch_devices = axis == 0 ? mesh_rows : mesh_cols;
-    constexpr uint32_t dispatch_index = axis == 0 ? src_chip_id % mesh_rows : src_chip_id % mesh_cols;
+    constexpr uint32_t dispatch_index =
+        axis == 0 ? linearized_mesh_coord % mesh_rows : linearized_mesh_coord % mesh_cols;
 #else
     constexpr int axis = -1;
     constexpr uint32_t dispatch_devices = num_devices;
-    constexpr uint32_t dispatch_index = src_chip_id;
+    constexpr uint32_t dispatch_index = linearized_mesh_coord;
 #endif
 
     uint32_t input_tensor_address = get_arg_val<uint32_t>(0);
