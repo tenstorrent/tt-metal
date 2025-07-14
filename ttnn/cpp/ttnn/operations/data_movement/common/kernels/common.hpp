@@ -124,8 +124,9 @@ FORCE_INLINE float bfloat16_to_float32(uint16_t bfloat16_data) {
     return ieee_float.f;
 }
 
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
+template <typename T = uint32_t>
+FORCE_INLINE void fill_with_val(T begin_addr, uint32_t n, T val) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(begin_addr);
     for (uint32_t i = 0; i < n; ++i) {
         ptr[i] = val;
     }
