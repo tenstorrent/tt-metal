@@ -6,11 +6,10 @@ target_link_libraries(
         test_common_libs
 )
 
-set(TT_METAL_TESTS_SRCS
+set(TT_METAL_TESTS_SRCS_SLOW_DISPATCH
     test_bmm.cpp
     test_add_two_ints.cpp
     # test_compile_args.cpp         <- not tested in run_tt_metal.py
-    test_eltwise_binary.cpp
     # test_eltwise_unary.cpp        <- not tested in run_tt_metal.py
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
@@ -36,10 +35,9 @@ set(TT_METAL_TESTS_SRCS
     test_core_range_set.cpp
     test_compile_sets_kernel_binaries.cpp
     test_compile_program.cpp
-    test_clean_init.cpp
 )
 
-foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
+foreach(TEST_SRC ${TT_METAL_TESTS_SRCS_SLOW_DISPATCH})
     get_filename_component(TEST ${TEST_SRC} NAME_WE)
     add_executable(${TEST} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SRC})
     target_link_libraries(${TEST} PUBLIC test_metal_common_libs)
@@ -57,7 +55,33 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/tt_metal
     )
-    list(APPEND METAL_TEST_TARGETS ${TEST})
+    list(APPEND METAL_TEST_TARGETS_SLOW_DISPATCH ${TEST})
+endforeach()
+
+set(TT_METAL_TESTS_SRCS_FAST_DISPATCH
+    test_eltwise_binary.cpp
+    test_clean_init.cpp
+)
+
+foreach(TEST_SRC ${TT_METAL_TESTS_SRCS_FAST_DISPATCH})
+    get_filename_component(TEST ${TEST_SRC} NAME_WE)
+    add_executable(${TEST} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SRC})
+    target_link_libraries(${TEST} PUBLIC test_metal_common_libs)
+    target_include_directories(
+        ${TEST}
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+            ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    set_target_properties(
+        ${TEST}
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal
+    )
+    list(APPEND METAL_TEST_TARGETS_FAST_DISPATCH ${TEST})
 endforeach()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
@@ -76,7 +100,8 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 add_custom_target(
     metal_tests
     DEPENDS
-        ${METAL_TEST_TARGETS}
+        ${METAL_TEST_TARGETS_FAST_DISPATCH}
+        ${METAL_TEST_TARGETS_SLOW_DISPATCH}
         metal_perf_microbenchmark_tests
         unit_tests_api
         unit_tests_data_movement
@@ -107,26 +132,42 @@ target_sources(
         BASE_DIRS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
         FILES
-            test_kernels/compute/bcast_w.cpp
             test_kernels/compute/bcast_h.cpp
             test_kernels/compute/bcast_hw.cpp
-            test_kernels/compute/increment_runtime_arg.cpp
+            test_kernels/compute/bcast_w.cpp
+            test_kernels/compute/bmm.cpp
+            test_kernels/compute/eltwise_copy.cpp
             test_kernels/compute/eltwise_copy_3m.cpp
+            test_kernels/compute/increment_runtime_arg.cpp
+            test_kernels/compute/matmul.cpp
+            test_kernels/compute/matmul_large_block_zm.cpp
+            test_kernels/compute/untilA_elwbin_3m.cpp
+            test_kernels/dataflow/dram_copy.cpp
+            test_kernels/dataflow/dram_copy_sticks.cpp
+            test_kernels/dataflow/generic_binary_reader_blocked.cpp
+            test_kernels/dataflow/reader_bcast_h_8bank.cpp
+            test_kernels/dataflow/reader_bcast_hw_8bank.cpp
+            test_kernels/dataflow/reader_bcast_w_8bank.cpp
+            test_kernels/dataflow/reader_binary.cpp
+            test_kernels/dataflow/reader_bmm_8bank.cpp
+            test_kernels/dataflow/reader_cb_test.cpp
+            test_kernels/dataflow/reader_dual_8bank.cpp
+            test_kernels/dataflow/reader_matmul_blocked.cpp
+            test_kernels/dataflow/reader_matmul_small_block.cpp
+            test_kernels/dataflow/reader_unary_push_4.cpp
+            test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp
+            test_kernels/dataflow/reader_unary_8bank.cpp
             test_kernels/dataflow/semaphore_across_core_types.cpp
+            test_kernels/dataflow/transpose_hc_8bank.cpp
             test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp
             test_kernels/dataflow/unit_tests/command_queue/dispatcher_kernel_size_and_runtime.cpp
             test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp
             test_kernels/dataflow/unit_tests/command_queue/random_program.cpp
-            test_kernels/dataflow/reader_cb_test.cpp
-            test_kernels/dataflow/reader_bcast_w_8bank.cpp
-            test_kernels/dataflow/reader_bcast_h_8bank.cpp
+            test_kernels/dataflow/writer_bmm_8bank.cpp
             test_kernels/dataflow/writer_cb_test.cpp
             test_kernels/dataflow/writer_unary_8bank.cpp
-            test_kernels/dataflow/dram_copy.cpp
-            test_kernels/dataflow/reader_unary_push_4.cpp
-            test_kernels/dataflow/reader_bcast_hw_8bank.cpp
-            test_kernels/dataflow/reader_matmul_blocked.cpp
-            test_kernels/compute/matmul.cpp
+            test_kernels/dataflow/writer_unary_stick_layout_8bank.cpp
+            test_kernels/dataflow/writer_unswizzle.cpp
             test_kernels/misc/add_two_ints.cpp
             test_kernels/misc/brisc_print.cpp
             test_kernels/misc/circular_buffer/cb_init.cpp
@@ -174,4 +215,43 @@ install(
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
         COMPONENT metalium-validation
+)
+
+install(
+    TARGETS
+        ${METAL_TEST_TARGETS_FAST_DISPATCH}
+        DESTINATION
+        ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/unit_cpp_tests/fast_dispatch
+        COMPONENT
+        metalium-cpp-tests
+        PERMISSIONS
+        OWNER_READ
+        OWNER_WRITE
+        OWNER_EXECUTE
+        GROUP_READ
+        GROUP_EXECUTE
+)
+
+set(EXCLUDE_TEST "test_stress_noc_mcast")
+
+set(METAL_TEST_TARGETS_SLOW_DISPATCH_INSTALL "")
+foreach(target ${METAL_TEST_TARGETS_SLOW_DISPATCH})
+    if(NOT target STREQUAL ${EXCLUDE_TEST})
+        list(APPEND METAL_TEST_TARGETS_SLOW_DISPATCH_INSTALL ${target})
+    endif()
+endforeach()
+
+install(
+    TARGETS
+        ${METAL_TEST_TARGETS_SLOW_DISPATCH_INSTALL}
+        DESTINATION
+        ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/unit_cpp_tests/slow_dispatch
+        COMPONENT
+        metalium-cpp-tests
+        PERMISSIONS
+        OWNER_READ
+        OWNER_WRITE
+        OWNER_EXECUTE
+        GROUP_READ
+        GROUP_EXECUTE
 )

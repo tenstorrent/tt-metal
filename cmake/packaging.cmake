@@ -112,6 +112,17 @@ cpack_add_component(
 )
 cpack_add_component(gtest GROUP metalium-validation)
 
+cpack_add_component_group(metalium-cpp-tests)
+cpack_add_component(
+    metalium-cpp-tests
+    DEPENDS
+        metalium
+        metalium-jit
+        metalium-validation
+    GROUP metalium-cpp-tests
+    DESCRIPTION "TT-Metalium C++ unit tests"
+)
+
 cpack_add_component_group(nn)
 cpack_add_component(nn DEPENDS metalium GROUP nn DESCRIPTION "TT-NN runtime library")
 cpack_add_component(ttnn-runtime GROUP nn)

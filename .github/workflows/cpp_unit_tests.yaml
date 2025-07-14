@@ -44,3 +44,6 @@ jobs:
           set -euo pipefail
           apt update
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb
+      - name: Run tests
+        run: |
+          set -euo pipefail
