@@ -32,7 +32,7 @@ void MAIN {
         // Copy num_single_transfer tiles from in_cb to DEST
         copy_block_matmul_partials(in_cb_id, 0, 0, num_single_transfer);
         // Pack num_single_transfer tiles to out_cb
-        matmul_pack_tile(0, out_cb_id, num_single_transfer);
+        pack_tile_block(0, out_cb_id, num_single_transfer);
 
         // Release DEST reg marking compute/pack complete
         release_dst();

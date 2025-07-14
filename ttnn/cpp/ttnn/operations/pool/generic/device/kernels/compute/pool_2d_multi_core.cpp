@@ -44,7 +44,7 @@ inline void reduce_h_fused(
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
     tile_regs_commit();
-    pack_untilize_dst<num_output_tiles>(
+    pack_untilize_dest<num_output_tiles>(
         out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
     cb_push_back(out_cb_id, num_output_tiles);
@@ -97,7 +97,7 @@ void MAIN {
     constexpr uint32_t face_r_dim = window_size_hw > 16 ? 16 : window_size_hw;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_tile, face_r_dim);
-    pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
+    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
 
     // tilize reconfiguration is needed if we have more than one block and the number of tiles
     // is not a multiple of MAX_TILES_PER_REDUCTION

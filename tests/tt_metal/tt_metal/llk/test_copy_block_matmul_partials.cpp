@@ -200,7 +200,7 @@ void run_single_core_copy_block_matmul_partials(
 // ------------------------------------------------------------------------
 // These tests aim to cover usage of these API calls:
 // - copy_block_matmul_partials
-// - matmul_pack_tile
+// - pack_tile_block
 ////////////////////////////////////////////////////////////////////////////
 
 TEST_F(DeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
