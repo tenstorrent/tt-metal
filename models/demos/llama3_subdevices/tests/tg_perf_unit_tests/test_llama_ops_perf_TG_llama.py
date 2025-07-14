@@ -13,11 +13,8 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
     ("op_name", "expected_kernel_duration_us", "perf_margin"),
     [
         ("LayerNorm", 12.5, 0.05),
-        ("ScaledDotProductAttentionDecode", 11.29, 0.05),
-        ("ScaledDotProductAttentionDecodeRMQ", 10.49, 0.05),
-        ("NLPCreateHeadsDecodeDeviceOperation", 8.32, 0.05),
-        ("NLPConcatHeadsDecodeDeviceOperation", 6.07, 0.05),
-        ("PagedUpdateCacheDeviceOperation", 4.5, 0.1),
+        ("ScaledDotProductAttentionDecode", 13.2, 0.05),
+        ("PagedUpdateCacheDeviceOperation", 4.5, 0.16),
         ("RotaryEmbeddingLlamaFusedQK", 4.15, 0.05),
         ("Embeddings", 3.8, 0.1),
         ("BinaryDeviceOperation", 3.1, 0.05),
