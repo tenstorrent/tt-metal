@@ -7,6 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/experimental/ccl/recv_async/recv_async.hpp"
 #include <tt-metalium/mesh_socket.hpp>
 
 namespace ttnn::operations::experimental::ccl {

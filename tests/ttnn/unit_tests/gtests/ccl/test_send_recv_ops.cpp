@@ -112,8 +112,8 @@ void test_send_recv_async(
 TEST_P(T3K2DFabricSendRecvFixture, SendRecvAsync) {
     auto [tensor_spec, socket_buffer_type] = GetParam();
     auto mesh_device = get_mesh_device();
-    auto mesh_shape = distributed::MeshShape(1, 1);
-    auto md0 = mesh_device->create_submesh(mesh_shape, distributed::MeshCoordinate(0, 1));
+    auto mesh_shape = distributed::MeshShape(2, 2);
+    auto md0 = mesh_device->create_submesh(mesh_shape, distributed::MeshCoordinate(0, 0));
     auto md1 = mesh_device->create_submesh(mesh_shape, distributed::MeshCoordinate(0, 2));
     for (uint32_t i = 0; i < 10; i++) {
         test_send_recv_async(md0, md1, tensor_spec, socket_buffer_type, i);
