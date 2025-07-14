@@ -36,22 +36,23 @@ constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
 constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(11));
 constexpr bool direction = get_compile_time_arg_val(12);  // 1 is forward, 0 is backward
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(13);
 
-constexpr bool is_2d_fabric = get_compile_time_arg_val(13);
-constexpr bool terminate_from_kernel = get_compile_time_arg_val(14);
-constexpr bool is_termination_master = get_compile_time_arg_val(15);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(16);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(17);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(26);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(27);
+constexpr bool is_2d_fabric = get_compile_time_arg_val(14);
+constexpr bool terminate_from_kernel = get_compile_time_arg_val(15);
+constexpr bool is_termination_master = get_compile_time_arg_val(16);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(17);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(18);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(26);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(27);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(28);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -208,7 +209,6 @@ void kernel_main() {
     pkt_hdr_sem_inc->to_chip_unicast(1);
 
     uint32_t chunk_count = 0;
-    uint32_t chunks_per_sync = 32;
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         chunk_count = 0;
         while (tiles_read < tiles_to_read) {

@@ -97,7 +97,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_async_minimal_default_helper(
@@ -115,7 +118,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         semaphore,
         barrier_semaphore,
         sub_device_id,
-        empty_fused_op_signaler);
+        empty_fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
@@ -134,6 +140,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
     // Tensor Info
     const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
@@ -145,6 +154,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const auto output_tensor_page_layout = output_tensor.layout();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
+
+    // op hyperparams
+    uint32_t chunks_per_sync_val = chunks_per_sync.value_or(1);
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
+    uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
@@ -183,7 +197,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     // 2 senders (reader + writer) per direction (forward, backward) per link
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
-    uint32_t num_workers_per_direction = 2;
 
     uint32_t num_cores_per_link =
         num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
@@ -310,7 +323,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             auto num_full_size_channels = num_workers_per_direction;
             auto num_header_only_channels = 0;
             uint32_t payload_size_bytes = num_tiles_to_write_per_packet * op_config.get_page_size();
-            uint32_t num_buffers_full_size_channels = 2;
             size_t buffer_size_bytes_full_size_channel =
                 tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
             const uint32_t l1_unreserved_base_address =
@@ -380,6 +392,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     static_cast<uint32_t>(topology),                   // topology
                     dir,                                               // direction
                     fuse_op,                                           // fused op
+                    chunks_per_sync_val,
                 };
 		if (input_is_sharded) {
 		  shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -447,6 +460,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     fuse_op,                                           // fused op
                     static_cast<uint32_t>(topology),                   // topology
                     dir,                                               // direction
+                    chunks_per_sync_val,
                 };
                 fabric_mux_connection_ct_args(
                     false,  // is_2d_fabric

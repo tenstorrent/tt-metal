@@ -29,6 +29,7 @@ constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(8));
 constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(10);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(11);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -162,8 +163,6 @@ void kernel_main() {
     }
 
     uint32_t chunk_count = 0;
-    uint32_t chunks_per_sync = 32;
-
     while (slices_received < slices_expected) {
         // Do i expect more from the backward direction?
         // In the linear case, I expect num_targets_backward_direction slices from the left
