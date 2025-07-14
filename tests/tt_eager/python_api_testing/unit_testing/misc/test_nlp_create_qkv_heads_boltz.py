@@ -63,10 +63,6 @@ def run_nlp_create_qkv_heads_boltz_test(batch, seq_len, head_dim, n_heads, dtype
     out_pass_k, output_pcc_k = comp_pcc(k_from_ttnn, ref_k, pcc=0.99)
     out_pass_v, output_pcc_v = comp_pcc(v_from_ttnn, ref_v, pcc=0.99)
 
-    # print(f"Q PCC: {output_pcc_q}, Pass: {out_pass_q}")
-    # print(f"K PCC: {output_pcc_k}, Pass: {out_pass_k}")
-    # print(f"V PCC: {output_pcc_v}, Pass: {out_pass_v}")
-
     assert out_pass_q, f"Q tensor quality check failed with PCC: {output_pcc_q}"
     assert out_pass_k, f"K tensor quality check failed with PCC: {output_pcc_k}"
     assert out_pass_v, f"V tensor quality check failed with PCC: {output_pcc_v}"
