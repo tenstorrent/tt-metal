@@ -32,7 +32,10 @@ def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_c
     if is_ci_env:
         os.environ["HF_HOME"] = SDXL_CI_WEIGHTS_PATH
     pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_env,
     )
 
     scheduler = pipe.scheduler
