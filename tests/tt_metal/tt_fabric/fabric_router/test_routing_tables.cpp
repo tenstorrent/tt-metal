@@ -20,8 +20,8 @@
 
 namespace {
 
-constexpr auto k_FabricConfig = tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
-constexpr auto k_ReliabilityMode = tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());

@@ -91,5 +91,11 @@ def test_get_noc_addr_page_id():
     impl_test("AccessorTests/AccessorBenchmarks.GetNocAddr/*", res_dir="accessor_get_noc_addr_benchmarks")
 
 
+def test_get_noc_addr_page_coord():
+    impl_test(
+        "AccessorTests/AccessorBenchmarks.GetNocAddrPageCoord/*", res_dir="accessor_get_noc_addr_page_coord_benchmarks"
+    )
+
+
 def test_constructor():
     impl_test("AccessorTests/AccessorBenchmarks.Constructor/*", res_dir="accessor_constructor_benchmarks")
