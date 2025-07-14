@@ -136,7 +136,10 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         (uint32_t)ntiles_per_block,  // per_block_ntiles
         (uint32_t)src0_cb_index,
         (uint32_t)output_cb_index};
-
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (a.dtype() == DataType::INT32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
@@ -151,7 +154,8 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         program,
         compute_kernel,
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
 
     uint32_t tile_start_id = 0;
     uint32_t offset_within_stick = 0;
@@ -328,6 +332,10 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         (uint32_t)src0_cb_index,
         (uint32_t)output_cb_index};
 
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (a.dtype() == DataType::INT32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
@@ -343,7 +351,8 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
             program,
             compute_kernel,
             core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
     }
     if (core_range_cliff.ranges().size() > 0) {
         auto untilize_cliff_kernel_id = CreateKernel(
@@ -811,6 +820,10 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
         (uint32_t)output_cb_index};
 
     // Compute kernel
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (a.dtype() == DataType::INT32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel;
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
@@ -825,7 +838,10 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
         program,
         compute_kernel,
         shard_spec.grid,
-        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = compute_compile_time_args,
+            .defines = compute_kernel_defines});
 
     // Run-time args
     auto cores =
@@ -1108,6 +1124,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input
     KernelHandle untilize_kernel_id = 0;
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (a.dtype() == DataType::INT32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     if (full_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args = {
             (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
@@ -1115,7 +1135,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
             program,
             compute_kernel,
             full_compute_core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .compile_args = compute_compile_time_args,
+                .defines = compute_kernel_defines});
     }
 
     // Compute Cliff compile_time args and kernel
@@ -1431,6 +1454,10 @@ operation::ProgramWithCallbacks untilize_single_core(
     }
 
     // Untilized writer
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (a.dtype() == DataType::INT32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
@@ -1459,7 +1486,10 @@ operation::ProgramWithCallbacks untilize_single_core(
         program,
         compute_kernel,
         core,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = compute_compile_time_args,
+            .defines = compute_kernel_defines});
 
     // Reader run-time args
     uint32_t start_page_id = 0;

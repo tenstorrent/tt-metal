@@ -8,9 +8,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 
 // Helper constexpr function to compute num_blocks_per_col
-constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {
-    const uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
-
+constexpr uint32_t compute_num_blocks(uint32_t per_core_block_tile_cnt, uint32_t max_bct) {
     for (uint32_t bct = max_bct; bct >= 1; --bct) {
         if (per_core_block_tile_cnt % bct == 0) {
             return per_core_block_tile_cnt / bct;
@@ -21,6 +19,11 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 }
 namespace NAMESPACE {
 void MAIN {
+#ifdef DST_ACCUM_MODE
+    constexpr uint32_t max_bct = 4;
+#else
+    constexpr uint32_t max_bct = 8;
+#endif
     const uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(0);
@@ -28,7 +31,7 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);
 
     // Compute optimal num_blocks_per_col and block_ct_dim
-    constexpr uint32_t num_blocks_per_col = compute_num_blocks_per_col(per_core_block_tile_cnt);
+    constexpr uint32_t num_blocks_per_col = compute_num_blocks(per_core_block_tile_cnt, max_bct);
     constexpr uint32_t block_ct_dim = per_core_block_tile_cnt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
     pack_untilize_init<block_ct_dim, full_ct_dim>(src_cb_id, out_cb_id);

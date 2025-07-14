@@ -168,6 +168,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         uint32_t(src0_cb_index),
         uint32_t(output_cb_index)};
 
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
@@ -181,7 +185,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         program,
         compute_kernel,
         core,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
 
     tt::tt_metal::SetRuntimeArgs(
         program, unary_reader_kernel_id, core, {src0_buffer->address(), uint32_t(num_tiles), 0});
@@ -764,7 +769,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     /** compute
      */
-
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
@@ -778,7 +786,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16}});
+                .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff) {
         auto tilize_cliff_kernel_id = CreateKernel(
@@ -787,7 +796,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16}});
+                .compile_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
+                .defines = compute_kernel_defines});
     }
 
     uint32_t tile_height = output.tensor_spec().tile().get_height();
@@ -1015,6 +1025,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         (uint32_t)output_cb_index,
     };
 
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (unpad_tensor_w_16) {
@@ -1032,7 +1046,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         program,
         compute_kernel,
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
 
     // reader runtime args
     const std::array reader_rt_args = {
