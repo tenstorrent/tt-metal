@@ -74,7 +74,7 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
             py::arg("multi_device_global_semaphore"),
             py::arg("all_gather_core_grid_offset"),
             py::kw_only(),
-            py::arg("persistent_output_buffer"),
+            py::arg("persistent_output_buffer") = std::nullopt,
             py::arg("bias") = std::nullopt,
             py::arg("num_links") = 1,
             py::arg("memory_config_ag") = std::nullopt,
