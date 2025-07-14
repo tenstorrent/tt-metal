@@ -353,36 +353,19 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const auto half_tile = tt::tt_metal::Tile({16, 32});
     const auto full_tile = tt::tt_metal::Tile({32, 32});
 
-    auto q_tile = full_tile;
+    const auto q_tile = full_tile;
     const auto k_tile = full_tile;
     const auto v_tile = full_tile;
-    auto mask_tile = full_tile;
+    const auto mask_tile = full_tile;
 
-    auto out_tile = full_tile;
+    const auto out_tile = full_tile;
 
-    auto scalar_tile = full_tile;
-    auto im_tile = full_tile;
-    auto stats_tile = full_tile;
-
-    // TODO: Directly get q input as tensor with 16x32 tiny tiles
-    // For now, use this flag in reader differentiate
-    // - In non-causal mode, mask can be an input tensor which needs proper handling to read as 16x32 tiles
-    // - Only support Float16_b since block float w/ shared exp needs special handling to read as 16x32 tiles
-    // In compute, need to find a proper way to get num_faces for sfpu functions
-    const bool use_half_tile =
-        (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b and
-         device->arch() == tt::ARCH::WORMHOLE_B0 and not tilize_q);
-    if (use_half_tile) {
-        q_tile = half_tile;
-        mask_tile = half_tile;
-
-        // TODO: out_tile is re-packed as full 32x32 with PACK for now
-        // out_tile = half_tile;
-
-        scalar_tile = half_tile;
-        im_tile = half_tile;
-        stats_tile = half_tile;
-    }
+    // const auto scalar_tile = half_tile;
+    // const auto im_tile = half_tile;
+    // const auto stats_tile = full_tile;
+    const auto scalar_tile = full_tile;
+    const auto im_tile = full_tile;
+    const auto stats_tile = full_tile;
 
     uint32_t q_tile_size = q_tile.get_tile_size(q_df);
     uint32_t k_tile_size = k_tile.get_tile_size(k_df);
@@ -654,10 +637,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
     auto output_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
 
-    // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
-    // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
-    const uint32_t q_chunk_size_bytes =
-        q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
     std::vector<uint32_t> reader_compile_time_args_common = {
         B,
         PNHt,
@@ -683,8 +662,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         max_dynamic_chunk_size,
         tilize_q,
         (uint32_t)use_mla,
-        use_half_tile,
-        q_chunk_size_bytes,
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
@@ -741,7 +718,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         max_dynamic_chunk_size,
         tilize_q,
         q_heads_parallel_factor,
-        use_half_tile,
     };
 
     // Determine granularity for compute loops
