@@ -289,7 +289,7 @@ void MAIN {
 
             if constexpr (untilize_output) {
                 if constexpr (use_pack_untilize) {
-                    pack_untilize_init_short<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
+                    pack_untilize_init<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
                 } else {
                     untilize_init_short(cb_out_accumulate_im);
                 }
