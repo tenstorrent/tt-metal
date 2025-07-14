@@ -36,11 +36,16 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
     TT_ASSERT(input_tensors.size() == 2, "AllGatherMatmulAsync requires 2 input tensors: [input, weight]");
     auto& input_tensor = input_tensors[0];
     auto& weight_tensor = input_tensors[1];
-    auto& all_gather_output_tensor = output_tensors.at(0).value();
-    // All Gather validate
-    this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
-    // Matmul validate.
-    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
+
+    TT_FATAL(output_tensors.size() == 1, "AllGatherMatmulAsync requires 1 optional output tensor");
+    if (output_tensors[0].has_value()) {
+        auto& all_gather_output_tensor = output_tensors.at(0).value();
+        // All Gather validate
+        this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
+        // Matmul validate.
+        this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
+    }
+
     // All Gather Matmul validate
     TT_FATAL(
         this->all_gather_async_struct.dim == 3, "AllGatherMatmulAsync requires dim=3 for the AllGather operaitons.");
@@ -61,16 +66,20 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
         },
         this->matmul_struct.program_config.value());
 
-    const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
-    if (all_gather_output_tensor_shard_spec.has_value()) {
-        const auto& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
-        const auto& shard_grid_start = shard_grid.start_coord;
-        const auto& shard_grid_end = shard_grid.end_coord;
-        const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
-        TT_FATAL(
-            this->all_gather_async_struct.ring_size == num_all_gather_output_shards,
-            "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "
-            "all_gather.");
+    if (output_tensors[0].has_value()) {
+        auto& all_gather_output_tensor = output_tensors.at(0).value();
+        const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
+        if (all_gather_output_tensor_shard_spec.has_value()) {
+            const auto& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
+            const auto& shard_grid_start = shard_grid.start_coord;
+            const auto& shard_grid_end = shard_grid.end_coord;
+            const uint32_t num_all_gather_output_shards =
+                shard_builder::get_sharding_core_count(all_gather_output_tensor);
+            TT_FATAL(
+                this->all_gather_async_struct.ring_size == num_all_gather_output_shards,
+                "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "
+                "all_gather.");
+        }
     }
 }
 
@@ -90,7 +99,8 @@ std::vector<ttnn::TensorSpec> AllGatherMatmulAsync::compute_output_specs(
 std::vector<Tensor> AllGatherMatmulAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     // All Gather output tensor
-    auto& all_gather_output_tensor = optional_output_tensors.at(0).value();
+    ttnn::Tensor all_gather_output_tensor =
+        this->all_gather_async_struct.create_output_tensors({input_tensors.at(0)}, {optional_output_tensors.at(0)})[0];
 
     // Matmul output tensor
     ttnn::Tensor matmul_output_tensor =
