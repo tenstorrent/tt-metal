@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+
+using namespace ttnn::operations::ccl::common;
 
 void kernel_main() {
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
@@ -43,12 +46,12 @@ void kernel_main() {
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(41);
 
 #ifdef AXIS
-    constexpr int axis = AXIS;
-    constexpr uint32_t dispatch_devices = axis == 0 ? mesh_rows : mesh_cols;
+    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
+    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t dispatch_index =
-        axis == 0 ? linearized_mesh_coord % mesh_rows : linearized_mesh_coord % mesh_cols;
+        axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
 #else
-    constexpr int axis = -1;
+    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
     constexpr uint32_t dispatch_devices = num_devices;
     constexpr uint32_t dispatch_index = linearized_mesh_coord;
 #endif

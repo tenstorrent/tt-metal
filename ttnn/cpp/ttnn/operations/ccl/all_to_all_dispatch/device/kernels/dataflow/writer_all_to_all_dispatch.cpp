@@ -233,7 +233,8 @@ void kernel_main() {
         for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
             uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
             uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
-            uint32_t token_indices_address = base_indices_addr + (local_token * aligned_indices_page_size);
+            uint32_t token_indices_address =
+                base_indices_addr + ((local_token - token_start_idx) * aligned_indices_page_size);
 
             // dispatch the metadata to all other devices
             for (uint32_t d = 0; d < num_devices; d++) {
