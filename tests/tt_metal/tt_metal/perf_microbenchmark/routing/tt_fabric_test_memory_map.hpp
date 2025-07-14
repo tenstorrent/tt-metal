@@ -64,6 +64,10 @@ struct SenderMemoryMap {
     BaseMemoryRegion packet_headers;
     BaseMemoryRegion payload_buffers;
 
+    // sync addresses
+    BaseMemoryRegion global_sync_region;
+    BaseMemoryRegion local_sync_region;
+
     // Calculated values needed for kernel arguments
     uint32_t highest_usable_address;
 
@@ -95,6 +99,18 @@ struct SenderMemoryMap {
         current_addr += payload_buffer_size;
         payload_buffers = BaseMemoryRegion(payload_buffer_base, payload_buffer_size);
 
+        // global sync region
+        uint32_t global_sync_region_base = current_addr;
+        uint32_t global_sync_region_size = l1_alignment;
+        current_addr += global_sync_region_size;
+        global_sync_region = BaseMemoryRegion(global_sync_region_base, global_sync_region_size);
+
+        // local sync region
+        uint32_t local_sync_region_base = current_addr;
+        uint32_t local_sync_region_size = l1_alignment;
+        current_addr += local_sync_region_size;
+        local_sync_region = BaseMemoryRegion(local_sync_region_base, local_sync_region_size);
+
         TT_FATAL(
             current_addr <= highest_usable_address,
             "Sender memory layout overflow: need {} bytes but only have {} bytes available",
@@ -113,6 +129,12 @@ struct SenderMemoryMap {
 
         return args;
     }
+
+    uint32_t get_global_sync_address() const { return global_sync_region.start; }
+    uint32_t get_local_sync_address() const { return local_sync_region.start; }
+
+    uint32_t get_global_sync_region_size() const { return global_sync_region.size; }
+    uint32_t get_local_sync_region_size() const { return local_sync_region.size; }
 
     // Convenience methods for reading results
     uint32_t get_result_buffer_address() const { return common.get_result_buffer_address(); }
