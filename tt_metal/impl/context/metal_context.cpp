@@ -117,13 +117,15 @@ void MetalContext::initialize(
         rtoptions_.set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(rtoptions_);
     }
+    watcher_server_ =
+        std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
         return;
     }
 
-    // TODO: Move FW, fabric, dispatch init here
+    // Clear state, build FW
     auto all_devices = cluster_->all_chip_ids();
     for (chip_id_t device_id : all_devices) {
         // Clear L1/DRAM if requested
@@ -166,11 +168,10 @@ void MetalContext::initialize(
     // Initialize debug tools, reset cores, init FW
     if (dprint_server_) {
         dprint_server_->attach_devices();
-    };
+    }
+    watcher_server_->init_devices();
     for (chip_id_t device_id : all_devices) {
-        // Init debug tools
         ClearNocData(device_id);
-        watcher_init(device_id);
 
         // TODO: as optimization, investigate removing all this call for already initialized devivces
         if (!rtoptions_.get_skip_reset_cores_on_init()) {
@@ -178,11 +179,10 @@ void MetalContext::initialize(
         }
 
         initialize_and_launch_firmware(device_id);
-
-        // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
-        // starts since it also writes to watcher mailboxes.
-        watcher_attach(device_id);
     }
+    // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
+    // starts since it also writes to watcher mailboxes.
+    watcher_server_->attach_devices();
 
     // Register teardown function, but only once.
     if (not teardown_registered_) {
@@ -193,6 +193,9 @@ void MetalContext::initialize(
 }
 
 void MetalContext::teardown() {
+    if (!initialized_) {
+        return;
+    }
     initialized_ = false;
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
@@ -205,8 +208,9 @@ void MetalContext::teardown() {
     }
 
     auto all_devices = cluster_->all_chip_ids();
+    watcher_server_->detach_devices();
+    watcher_server_.reset();
     for (chip_id_t device_id : all_devices) {
-        watcher_detach(device_id);
         assert_cores(device_id);
 
         cluster_->l1_barrier(device_id);
@@ -374,7 +378,7 @@ void MetalContext::set_custom_control_plane_mesh_graph(
 
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
         mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-    this->set_fabric_config(fabric_config_, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 void MetalContext::set_default_control_plane_mesh_graph() {
@@ -382,11 +386,11 @@ void MetalContext::set_default_control_plane_mesh_graph() {
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
     global_control_plane_.reset();
-    this->set_fabric_config(fabric_config_, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 void MetalContext::teardown_fabric_config() {
-    this->fabric_config_ = tt_metal::FabricConfig::DISABLED;
+    this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
@@ -396,12 +400,12 @@ void MetalContext::teardown_fabric_config() {
 }
 
 void MetalContext::set_fabric_config(
-    const tt_metal::FabricConfig fabric_config,
-    tt_metal::FabricReliabilityMode reliability_mode,
+    const tt_fabric::FabricConfig fabric_config,
+    tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
     force_reinit_ = true;
-    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED || fabric_config == tt_metal::FabricConfig::DISABLED) {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED || fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
     } else {
@@ -412,7 +416,7 @@ void MetalContext::set_fabric_config(
             fabric_config);
     }
 
-    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED) {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         if (num_routing_planes.has_value()) {
             log_warning(
                 tt::LogMetal,
@@ -451,7 +455,7 @@ void MetalContext::set_fabric_config(
 }
 
 void MetalContext::initialize_fabric_config() {
-    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED) {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
 
@@ -465,7 +469,7 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->fabric_reliability_mode_);
 }
 
-tt_metal::FabricConfig MetalContext::get_fabric_config() const {
+tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
     return fabric_config_;
 }
 

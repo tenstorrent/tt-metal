@@ -40,10 +40,6 @@ def run_reduce_scatter_impl(
 
     tile = (32, 32)
 
-    # Set the default config
-    if mem_config_intermediate is None:
-        mem_config_intermediate = mem_config_rs
-
     ##### Fabric setup #####
     compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -77,7 +73,7 @@ def run_reduce_scatter_impl(
             device=t3k_mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=rs_input_dtype,
-            memory_config=mem_config_intermediate,
+            memory_config=mem_config_rs,
             mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
         )
         for _ in range(num_iters)
@@ -278,9 +274,6 @@ def test_reduce_scatter_async(
     ones_tensor,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     run_reduce_scatter_impl(
         t3k_mesh_device,
         num_devices,

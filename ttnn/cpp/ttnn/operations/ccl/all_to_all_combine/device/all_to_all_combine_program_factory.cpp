@@ -221,7 +221,10 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         max_packet_size_bytes,
-        operation_attributes.locally_reduced};
+        common::get_linearized_index(mesh_coordinate, mesh_view),
+        (uint32_t)tt::tt_fabric::get_fabric_topology(),
+        operation_attributes.locally_reduced,
+    };
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;

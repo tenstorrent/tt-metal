@@ -32,7 +32,7 @@ void AllGatherAsync::validate_with_output_tensors(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-        "Unsupported input tensor memory layout {}.",
+        "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
     if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
@@ -62,14 +62,6 @@ void AllGatherAsync::validate_with_output_tensors(
             "Error, Output tensor memory config should be same as output_mem_config but has {}",
             output_tensor.value().memory_config());
 
-        TT_FATAL(
-            output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-                output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-                output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-            "Unsupported output tensor memory layout {}.",
-            output_tensor.value().memory_config().memory_layout());
-
         // check the output tensor size
         auto output_shape = output_tensor.value().padded_shape();
         auto input_shape = input_tensor.padded_shape();
@@ -95,33 +87,11 @@ void AllGatherAsync::validate_with_output_tensors(
             }
         }
 
-        if (layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
-            // Checks specific to the MINIMAL_DEFAULT case
-
-            // Don't support output DRAM block sharding
-            if (output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-                TT_FATAL(
-                    output_tensor.value().memory_config().buffer_type() == BufferType::L1,
-                    "We don't support output DRAM block sharding");
-            }
-        } else {
-            // Checks specific to cases that are not MINIMAL_DEFAULT
-
-            TT_FATAL(
-                output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
-                "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-                output_tensor.value().memory_config().memory_layout());
-        }
-    }
-
-    // Checks specific to the MINIMAL_DEFAULT case
-    if (layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
-        // Don't support input DRAM block sharding
-        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_FATAL(
-                input_tensor.memory_config().buffer_type() == BufferType::L1,
-                "We don't support input DRAM block sharding");
-        }
+        // check memory layout
+        TT_FATAL(
+            output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
+            "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
+            output_tensor.value().memory_config().memory_layout());
     }
 }
 
@@ -168,10 +138,15 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] input_shard_num_cores: {}", input_shard_num_cores);
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
+    // Check for minimal interleaved case
+    if (input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        input_tensor_page_layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
+        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED;
+    }
+
     log_trace(tt::LogOp, "[select_version] input_is_sharded: {}", input_is_sharded);
     log_trace(tt::LogOp, "[select_version] output_is_sharded: {}", output_is_sharded);
 
-    // Check for minimal sharded case
     if (input_is_sharded && output_is_sharded) {
         // Check for llama post binary mult+silu case
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
@@ -218,14 +193,6 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
         }
     }
-
-    // Check for default minimal case
-    // Note: Since default minimal implementation also supports sharding,
-    // should check for the special llama sharding case first before falling back to this implementation
-    if (input_tensor_page_layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
-        return AllGatherAsyncVersion::MINIMAL_DEFAULT;
-    }
-
     log_trace(tt::LogOp, "Using generic implementation");
     return AllGatherAsyncVersion::GENERIC;
 }
@@ -279,6 +246,23 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     switch (version) {
+        case AllGatherAsyncVersion::MINIMAL_INTERLEAVED: {
+            log_trace(
+                tt::LogOp, "Detected all gather specialized shape. all_gather_async_minimal_interleaved is called");
+            return all_gather_async_minimal_interleaved(
+                input_tensors[0],
+                target_device,
+                forward_device,
+                backward_device,
+                output_tensors[0],
+                this->dim,
+                this->num_links,
+                target_ring_size,
+                device_index,
+                this->topology,
+                this->semaphore,
+                this->sub_device_id);
+        }
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED:
             log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
             return all_gather_async_llama_sharded(
@@ -295,22 +279,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 this->semaphore.at(0),
                 this->sub_device_id,
                 this->use_optimal_ccl_for_llama);
-
-        case AllGatherAsyncVersion::MINIMAL_DEFAULT:
-            log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_minimal_default is called");
-            return all_gather_async_minimal_default(
-                input_tensors[0],
-                target_device,
-                forward_device,
-                backward_device,
-                output_tensors[0],
-                this->dim,
-                this->num_links,
-                target_ring_size,
-                device_index,
-                this->topology,
-                this->semaphore,
-                this->sub_device_id);
 
         case AllGatherAsyncVersion::GENERIC:
         default:

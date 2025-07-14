@@ -197,10 +197,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->initialize_device_drivers();
 
-    // Only enable for not TG systems
-    if (!this->is_galaxy_cluster() && this->arch_ != tt::ARCH::BLACKHOLE) {
-        rtoptions.set_fd_fabric(true);
-    }
+    rtoptions.set_fd_fabric(true);
 
     this->disable_ethernet_cores_with_retrain();
 
@@ -1124,8 +1121,8 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 }
 
 void Cluster::configure_ethernet_cores_for_fabric_routers(
-    tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
-    if (fabric_config != tt_metal::FabricConfig::DISABLED) {
+    tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
+    if (fabric_config != tt_fabric::FabricConfig::DISABLED) {
         TT_FATAL(num_routing_planes.has_value(), "num_routing_planes should be set for reserving cores for fabric");
         TT_FATAL(num_routing_planes.value() > 0, "Expected non-zero num_routing_planes for reserving cores for fabric");
         this->reserve_ethernet_cores_for_fabric_routers(num_routing_planes.value());

@@ -1,6 +1,7 @@
 set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/coordinate_translation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/distributed_coordinate_system.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_command_queue_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fd_mesh_command_queue.cpp

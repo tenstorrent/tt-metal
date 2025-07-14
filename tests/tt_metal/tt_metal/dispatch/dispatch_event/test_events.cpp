@@ -23,7 +23,6 @@
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "gtest/gtest.h"
-#include "impl/debug/watcher_server.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -157,12 +156,12 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang)
     auto future = std::async(std::launch::async, [this, future_event]() { return EventSynchronize(future_event); });
 
     bool seen_expected_hang = future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout;
-    tt::watcher_server_set_error_flag(
+    MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(
         seen_expected_hang);  // Signal to terminate thread. Don't care about it's exception.
 
     // Briefly wait before clearing error flag, and wrapping up via finish.
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    tt::watcher_server_set_error_flag(false);
+    MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
     Finish(this->device_->command_queue());
 
     log_info(
@@ -190,12 +189,12 @@ TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventHang) {
     auto future = std::async(std::launch::async, [this]() { return Finish(this->device_->command_queue()); });
 
     bool seen_expected_hang = future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout;
-    tt::watcher_server_set_error_flag(
+    MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(
         seen_expected_hang);  // Signal to terminate thread. Don't care about it's exception.
 
     // Clear error flag before exiting to restore state for next test.
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    tt::watcher_server_set_error_flag(false);
+    MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
 
     log_info(
         tt::LogTest,
