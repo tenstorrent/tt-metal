@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import warnings
 import ttnn
 from models.experimental.vadv2.tt.tt_temporal_self_attention import multi_scale_deformable_attn
