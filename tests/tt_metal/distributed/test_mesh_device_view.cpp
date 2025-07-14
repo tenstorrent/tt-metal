@@ -56,13 +56,13 @@ TEST(MeshDeviceViewTest, GetRingCoordinatesDonut) {
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinatesLineTooBig) {
-    EXPECT_ANY_THROW((void)MeshDeviceView::get_line_coordinates(
-        /*length*/ 10, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0)));
+    EXPECT_ANY_THROW((void)MeshDeviceView::get_snake_coordinates(
+        /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0), /*length*/ 10));
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinatesWithShorterLine) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 3, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0));
+    auto line_coords = MeshDeviceView::get_snake_coordinates(
+        /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0), /*length*/ 3);
     ASSERT_THAT(line_coords, SizeIs(3));
     EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
     EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
@@ -70,8 +70,8 @@ TEST(MeshDeviceViewTest, GetLineCoordinatesWithShorterLine) {
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates2x2) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 4, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0));
+    auto line_coords = MeshDeviceView::get_snake_coordinates(
+        /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0), /*length*/ 4);
     ASSERT_THAT(line_coords, SizeIs(4));
     EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
     EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
@@ -80,16 +80,16 @@ TEST(MeshDeviceViewTest, GetLineCoordinates2x2) {
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates2x2WithOffset) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 2, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(1, 0));
+    auto line_coords = MeshDeviceView::get_snake_coordinates(
+        /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(1, 0), /*length*/ 2);
     ASSERT_THAT(line_coords, SizeIs(2));
     EXPECT_EQ(line_coords[0], MeshCoordinate(1, 0));
     EXPECT_EQ(line_coords[1], MeshCoordinate(1, 1));
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates3x3) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 9, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0));
+    auto line_coords = MeshDeviceView::get_snake_coordinates(
+        /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0), /*length*/ 9);
     ASSERT_THAT(line_coords, SizeIs(9));
     EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
     EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
@@ -103,8 +103,8 @@ TEST(MeshDeviceViewTest, GetLineCoordinates3x3) {
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates3x3WithOffset) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 5, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(1, 1));
+    auto line_coords = MeshDeviceView::get_snake_coordinates(
+        /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(1, 1), /*length*/ 5);
     ASSERT_THAT(line_coords, SizeIs(5));
     EXPECT_EQ(line_coords[0], MeshCoordinate(1, 1));
     EXPECT_EQ(line_coords[1], MeshCoordinate(1, 2));

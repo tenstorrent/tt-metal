@@ -21,6 +21,7 @@ using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
+using ::testing::SizeIs;
 
 TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -56,7 +57,7 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
     Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
-    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
     for (const auto& device_tensor : device_tensors) {
         EXPECT_THAT(device_tensor.to_vector<float>(), ElementsAre(42.F, 13.F, -99.F));
     }
@@ -94,10 +95,16 @@ TEST_F(TensorDistributionT3000Test, Shard1DFewerShardsThanDevices) {
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices() - 1);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices() - 1);
-    for (int i = 0; i < device_tensors.size(); i++) {
-        EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
-    }
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices() - 1));
+
+    // Note: snake-order iteration.
+    EXPECT_THAT(device_tensors[0].to_vector<float>(), ElementsAre(0, 0, 0));
+    EXPECT_THAT(device_tensors[1].to_vector<float>(), ElementsAre(1, 2, 3));
+    EXPECT_THAT(device_tensors[2].to_vector<float>(), ElementsAre(2, 4, 6));
+    EXPECT_THAT(device_tensors[3].to_vector<float>(), ElementsAre(3, 6, 9));
+    EXPECT_THAT(device_tensors[4].to_vector<float>(), ElementsAre(6, 12, 18));
+    EXPECT_THAT(device_tensors[5].to_vector<float>(), ElementsAre(5, 10, 15));
+    EXPECT_THAT(device_tensors[6].to_vector<float>(), ElementsAre(4, 8, 12));
 
     auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
@@ -118,10 +125,17 @@ TEST_F(TensorDistributionT3000Test, Shard1DNegativeDim) {
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
-    for (int i = 0; i < device_tensors.size(); i++) {
-        EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i));
-    }
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
+
+    // Note: snake-order iteration.
+    EXPECT_THAT(device_tensors[0].to_vector<float>(), ElementsAre(0));
+    EXPECT_THAT(device_tensors[1].to_vector<float>(), ElementsAre(1));
+    EXPECT_THAT(device_tensors[2].to_vector<float>(), ElementsAre(2));
+    EXPECT_THAT(device_tensors[3].to_vector<float>(), ElementsAre(3));
+    EXPECT_THAT(device_tensors[4].to_vector<float>(), ElementsAre(7));
+    EXPECT_THAT(device_tensors[5].to_vector<float>(), ElementsAre(6));
+    EXPECT_THAT(device_tensors[6].to_vector<float>(), ElementsAre(5));
+    EXPECT_THAT(device_tensors[7].to_vector<float>(), ElementsAre(4));
 }
 
 TEST_F(TensorDistributionT3000Test, Shard1D) {
@@ -139,10 +153,17 @@ TEST_F(TensorDistributionT3000Test, Shard1D) {
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices());
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
-    for (int i = 0; i < device_tensors.size(); i++) {
-        EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
-    }
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
+
+    // Note: snake-order iteration.
+    EXPECT_THAT(device_tensors[0].to_vector<float>(), ElementsAre(0, 0, 0));
+    EXPECT_THAT(device_tensors[1].to_vector<float>(), ElementsAre(1, 2, 3));
+    EXPECT_THAT(device_tensors[2].to_vector<float>(), ElementsAre(2, 4, 6));
+    EXPECT_THAT(device_tensors[3].to_vector<float>(), ElementsAre(3, 6, 9));
+    EXPECT_THAT(device_tensors[4].to_vector<float>(), ElementsAre(7, 14, 21));
+    EXPECT_THAT(device_tensors[5].to_vector<float>(), ElementsAre(6, 12, 18));
+    EXPECT_THAT(device_tensors[6].to_vector<float>(), ElementsAre(5, 10, 15));
+    EXPECT_THAT(device_tensors[7].to_vector<float>(), ElementsAre(4, 8, 12));
 
     auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
@@ -223,7 +244,7 @@ TEST_P(TensorDistributionT3000Test2D, FullyReplicated) {
     EXPECT_EQ(count_unique_buffers(sharded_tensor), 1);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    EXPECT_EQ(device_tensors.size(), num_devices);
+    ASSERT_THAT(device_tensors, SizeIs(num_devices));
 
     for (int i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), Pointwise(FloatEq(), test_data));
@@ -260,7 +281,7 @@ TEST_P(TensorDistributionT3000Test2D, ReplicateDim) {
     EXPECT_EQ(count_unique_buffers(sharded_tensor), num_rows);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    EXPECT_EQ(device_tensors.size(), num_devices);
+    ASSERT_THAT(device_tensors, SizeIs(num_devices));
 
     {
         int i = 0;
@@ -296,7 +317,7 @@ TEST_P(TensorDistributionT3000Test2D, ShardDims) {
     EXPECT_EQ(count_unique_buffers(sharded_tensor), num_rows * num_cols);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    EXPECT_EQ(device_tensors.size(), num_devices);
+    ASSERT_THAT(device_tensors, SizeIs(num_devices));
     for (int i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
@@ -413,7 +434,7 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     EXPECT_EQ(count_unique_buffers(sharded_tensor), 2 * 2);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
     for (const auto& tensor : device_tensors) {
         EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
     }

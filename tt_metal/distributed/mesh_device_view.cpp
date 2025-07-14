@@ -182,16 +182,19 @@ chip_id_t MeshDeviceView::find_device_id(const MeshCoordinate& coord) const {
 
 bool MeshDeviceView::is_mesh_2d() const { return shape_2d_.has_value(); }
 
-std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
-    size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset) {
+std::vector<MeshCoordinate> MeshDeviceView::get_snake_coordinates(
+    const Shape2D& mesh_shape, const std::optional<Shape2D>& mesh_offset, std::optional<size_t> length) {
+    const auto actual_mesh_offset = mesh_offset.value_or(Shape2D(0, 0));
+    const auto actual_length = length.value_or(mesh_shape.height() * mesh_shape.width());
+
     // Iterate in a zigzag pattern from top-left to bottom-right, starting at the offset.
     std::vector<MeshCoordinate> line_coords;
-    line_coords.reserve(length);
+    line_coords.reserve(actual_length);
     const auto [num_rows, num_cols] = mesh_shape;
-    auto [row_index, col_index] = mesh_offset;
+    auto [row_index, col_index] = actual_mesh_offset;
     bool left_to_right = true;
 
-    for (size_t i = 0; i < length && row_index < num_rows && col_index < num_cols; ++i) {
+    for (size_t i = 0; i < actual_length && row_index < num_rows && col_index < num_cols; ++i) {
         line_coords.emplace_back(MeshCoordinate(row_index, col_index));
 
         if (left_to_right && col_index < num_cols - 1) {
@@ -204,7 +207,7 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
         }
     }
 
-    TT_FATAL(line_coords.size() == length, "Failed to get line coordinates");
+    TT_FATAL(line_coords.size() == actual_length, "Failed to get line coordinates");
     return line_coords;
 }
 
@@ -248,10 +251,9 @@ std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& 
     return boundary_coords;
 }
 
-std::vector<IDevice*> MeshDeviceView::get_line_devices() const {
+std::vector<IDevice*> MeshDeviceView::get_snake_devices() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
-    auto boundary_coords =
-        get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_, /*mesh_offset=*/Shape2D(0, 0));
+    auto boundary_coords = get_snake_coordinates(*shape_2d_);
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 

@@ -156,7 +156,7 @@ std::vector<int> SystemMesh::Impl::get_mapped_physical_device_ids(
 
         auto line_length = shape.mesh_size();
         for (const auto& logical_coordinate :
-             MeshDeviceView::get_line_coordinates(line_length, system_mesh_2d, system_offset_2d)) {
+             MeshDeviceView::get_snake_coordinates(system_mesh_2d, system_offset_2d, line_length)) {
             physical_device_ids.push_back(get_maybe_remote_device_id(logical_coordinate));
         }
         return extract_locals(physical_device_ids);

@@ -66,7 +66,7 @@ struct MeshMapperConfig {
     tt::stl::SmallVector<Placement> placements;
 
     // If provided, the sharding will be performed according to this shape, but re-mapped to the mesh device shape in
-    // either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
+    // either snake order, or preserving the original coordinates (if the shape fits within the mesh device
     // entirely).
     std::optional<ttnn::MeshShape> mesh_shape_override = std::nullopt;
 };
@@ -127,7 +127,7 @@ struct MeshComposerConfig {
     tt::stl::SmallVector<int> dims;
 
     // If provided, the concatenation will be performed according to this shape, but re-mapped to the mesh device shape
-    // in either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
+    // in either snake order, or preserving the original coordinates (if the shape fits within the mesh device
     // entirely).
     std::optional<ttnn::MeshShape> mesh_shape_override = std::nullopt;
 };

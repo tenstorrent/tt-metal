@@ -33,8 +33,11 @@ using ::tt::tt_metal::distributed::MeshContainer;
 
 // Specifies how a tensor sharded over a specific shape will be distributed to a mesh device
 enum class DistributionMode {
-    // Tensor shards will be distributed in row-major order over a mesh device.
-    ROW_MAJOR,
+    // Tensor shards will be distributed in a snake order over a mesh device; for example:
+    // 0 1 2
+    // 5 4 3
+    // 6 7 8
+    SNAKE,
 
     // Shards will be mapped to a mesh device as is, preserving coordinates.
     // This requires a submesh to fit within the mesh device.
@@ -42,11 +45,11 @@ enum class DistributionMode {
 };
 
 // Returns a function that remaps a mesh coordinates from the mesh mapper / composer distribution shape to the device
-// shape. `global_range` must outlive the use of the returned function.
-auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange* global_range) {
-    return [distribution_mode, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
+// shape. `snake_coords` must outlive the use of the returned function.
+auto get_remap_fn(DistributionMode distribution_mode, const std::vector<MeshCoordinate>* snake_coords) {
+    return [distribution_mode, snake_coords_dst = snake_coords->begin()](const MeshCoordinate& src_coord) mutable {
         switch (distribution_mode) {
-            case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
+            case DistributionMode::SNAKE: return *(snake_coords_dst++);
             case DistributionMode::SUBMESH: return src_coord;
         }
         TT_THROW("Unreachable");
@@ -61,13 +64,13 @@ DistributionMode compute_distribution_mode(
         return DistributionMode::SUBMESH;
     } else if (mesh_shape_override->dims() != device_shape.dims()) {
         // Shapes have different dimensions, so a reshape will be required.
-        return DistributionMode::ROW_MAJOR;
+        return DistributionMode::SNAKE;
     } else {
         // Check if `shape` fits within the mesh device. If it does, we can use submesh distribution. Otherwise,
-        // a reshape will be required, and shards will be distributed in row-major order over the mesh device.
+        // a reshape will be required, and shards will be distributed in snake order over the mesh device.
         for (size_t i = 0; i < mesh_shape_override->dims(); ++i) {
             if ((*mesh_shape_override)[i] > device_shape[i]) {
-                return DistributionMode::ROW_MAJOR;
+                return DistributionMode::SNAKE;
             }
         }
         return DistributionMode::SUBMESH;
@@ -186,7 +189,7 @@ public:
         const MeshMapperConfig& config,
         const tt::tt_metal::DistributedTensorConfig& distributed_tensor_config) :
         global_shape_(mesh_device.shape()),
-        global_range_(global_shape_),
+        snake_coords_(MeshDeviceView::get_snake_coordinates(tt::tt_metal::Shape2D(global_shape_[0], global_shape_[1]))),
         local_shape_(mesh_device.shape()),
         local_offset_(MeshCoordinate::zero_coordinate(mesh_device.shape().dims())),
         distribution_mode_(distribution_mode),
@@ -257,7 +260,7 @@ public:
 
             auto distributed_buffer =
                 tt::tt_metal::DistributedHostBuffer::create(global_shape_, local_shape_, local_offset_);
-            auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+            auto remap_fn = get_remap_fn(distribution_mode_, &snake_coords_);
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
                 distributed_buffer.emplace_shard(remap_fn(coord), [&b = replicated_buffer]() { return b; });
             }
@@ -333,7 +336,7 @@ private:
 
         auto distributed_buffer =
             tt::tt_metal::DistributedHostBuffer::create(global_shape_, local_shape_, local_offset_);
-        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+        auto remap_fn = get_remap_fn(distribution_mode_, &snake_coords_);
 
         // Deduplicate processing of replicated buffers, by keeping a cache of already converted buffers.
         using XTensorViewKey = decltype(&sharded_xtensor_views.values().front()->get());
@@ -370,10 +373,10 @@ private:
 
     // MeshDevice parameters.
     MeshShape global_shape_;
-    MeshCoordinateRange global_range_;
+    std::vector<MeshCoordinate> snake_coords_;
     MeshShape local_shape_;
     MeshCoordinate local_offset_;
-    DistributionMode distribution_mode_ = DistributionMode::ROW_MAJOR;
+    DistributionMode distribution_mode_ = DistributionMode::SNAKE;
 
     // Distribution parameters.
     MeshShape distribution_shape_;
@@ -388,7 +391,8 @@ public:
         DistributionMode distribution_mode,
         const MeshShape& distribution_shape,
         const MeshComposerConfig& config) :
-        global_range_(mesh_device.shape()),
+        snake_coords_(MeshDeviceView::get_snake_coordinates(
+            tt::tt_metal::Shape2D(mesh_device.shape()[0], mesh_device.shape()[1]))),
         distribution_mode_(distribution_mode),
         distribution_shape_(distribution_shape),
         config_(config) {}
@@ -398,7 +402,7 @@ public:
         const auto cpu_tensor = tensor.cpu();
         const auto& src_buffer = cpu_tensor.host_storage().buffer();
 
-        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+        auto remap_fn = get_remap_fn(distribution_mode_, &snake_coords_);
         auto dst_buffer = tt::tt_metal::DistributedHostBuffer::create(distribution_shape_);
 
         for (const auto& dst_coord : MeshCoordinateRange(dst_buffer.shape())) {
@@ -467,7 +471,7 @@ public:
 
 private:
     // MeshDevice parameters.
-    MeshCoordinateRange global_range_;
+    std::vector<MeshCoordinate> snake_coords_;
 
     // Distribution parameters.
     DistributionMode distribution_mode_;
