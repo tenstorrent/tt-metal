@@ -250,11 +250,10 @@ inline void llk_unpack_fast_tilize_hw_configure_disaggregated(const std::uint32_
     llk_unpack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
 }
 
-inline void llk_unpack_fast_tilize_init(
-    const std::uint32_t operand, const std::uint32_t unit_dim, std::uint32_t full_dim) {
+inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
-    _llk_unpack_fast_tilize_init_(unit_dim, full_dim);
+    _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -271,5 +270,6 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
-    _llk_unpack_fast_tilize_block_(base_address, tile_index, unit_dim, num_units, full_dim);
+    _llk_unpack_fast_tilize_block_(
+        base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim);
 }

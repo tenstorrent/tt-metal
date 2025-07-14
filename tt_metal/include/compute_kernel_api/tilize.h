@@ -233,9 +233,9 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 }
 
 ALWI void fast_tilize_init_short(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    UNPACK((llk_unpack_fast_tilize_init(icb, full_dim == 1 ? 1 : 2, full_dim)));
-    MATH((llk_math_fast_eltwise_unary_datacopy_init(full_dim == 1 ? 1 : 2)));
-    PACK((llk_pack_fast_tilize_init(full_dim == 1 ? 1 : 2)));
+    UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
+    MATH((llk_math_fast_tilize_init_(icb, full_dim == 1 ? 1 : 2)));
+    PACK((llk_pack_fast_tilize_init(icb, ocb, full_dim == 1 ? 1 : 2)));
 }
 
 ALWI void fast_tilize_init_short_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
@@ -249,7 +249,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     UNPACK((llk_unpack_fast_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_fast_eltwise_unary_datacopy_hw_configure_disaggregated(icb, icb)));
+    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
 
     PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_fast_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(ocb)));
@@ -259,7 +259,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
 
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_fast_tilize_uninit<DST_ACCUM_MODE>()));
-    MATH((llk_math_fast_eltwise_unary_datacopy_uninit<DST_ACCUM_MODE>()));
+    MATH((llk_math_fast_tilize_uninit_<DST_ACCUM_MODE>(icb)));
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
 }
 
@@ -276,57 +276,57 @@ ALWI void fast_tilize_block(
 
     uint32_t packed_tiles = 0;
     uint32_t remaining_tiles = block_dim;
-    uint32_t pack_size = full_dim == 1 ? 1 : 2;
+    uint32_t dest_size = DST_ACCUM_MODE ? 4 : 8;
+    uint32_t unit_dim = full_dim == 1 ? 1 : 2;
+    uint32_t num_units = dest_size / unit_dim;
 
     while (packed_tiles < block_dim) {
+        uint32_t read_tile_index = input_tile_index + packed_tiles;
+        uint32_t write_tile_index = output_tile_index + packed_tiles;
+
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
-        if (remaining_tiles > 16) {
+        if (remaining_tiles > 2 * dest_size) {
             // Three or more dests
-            UNPACK((llk_unpack_fast_tilize_block(
-                icb, packed_tiles + input_tile_index, pack_size, 8 / pack_size, full_dim)));
-            MATH((llk_math_fast_eltwise_unary_datacopy_block(0, pack_size, 8 / pack_size)));
-            PACK((llk_pack_fast_tilize_block(0, ocb, packed_tiles + output_tile_index, pack_size, 8 / pack_size)));
-            packed_tiles += 8;
-            remaining_tiles -= 8;
-        } else if (remaining_tiles > 8) {
+            UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
+            MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
+            PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
+            packed_tiles += dest_size;
+            remaining_tiles -= dest_size;
+        } else if (remaining_tiles > dest_size) {
             // Two dests
-            uint32_t even_remainder = (remaining_tiles / 4) * 2;
-            UNPACK((llk_unpack_fast_tilize_block(
-                icb, packed_tiles + input_tile_index, pack_size, even_remainder / pack_size, full_dim)));
-            MATH((llk_math_fast_eltwise_unary_datacopy_block(0, pack_size, even_remainder / pack_size)));
-            PACK((llk_pack_fast_tilize_block(
-                0, ocb, packed_tiles + output_tile_index, pack_size, even_remainder / pack_size)));
+            uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+            num_units = even_remainder / unit_dim;
+            UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
+            MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
+            PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
             packed_tiles += even_remainder;
             remaining_tiles -= even_remainder;
         } else {
             // Last dest
-            if (remaining_tiles % 2 == 0 || pack_size == 1) {
+            if (remaining_tiles % 2 == 0 || unit_dim == 1) {
                 // Single sequence
-                UNPACK((llk_unpack_fast_tilize_block(
-                    icb, packed_tiles + input_tile_index, pack_size, remaining_tiles / pack_size, full_dim)));
-                MATH((llk_math_fast_eltwise_unary_datacopy_block(0, pack_size, remaining_tiles / pack_size)));
-                PACK((llk_pack_fast_tilize_block(
-                    0, ocb, packed_tiles + output_tile_index, pack_size, remaining_tiles / pack_size)));
+                num_units = remaining_tiles / unit_dim;
+                UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
+                MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
+                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
             } else if (remaining_tiles == 3) {
                 // only odd pack
-                UNPACK((llk_unpack_fast_tilize_block(icb, packed_tiles + input_tile_index, 3, 1, full_dim)));
-                MATH((llk_math_fast_eltwise_unary_datacopy_block(0, 3, 1)));
-                PACK((llk_pack_fast_tilize_block(0, ocb, packed_tiles + output_tile_index, 3, 1)));
+                UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, 3, 1, full_dim)));
+                MATH((llk_math_fast_tilize_block_(0, icb, 3, 1)));
+                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, 3, 1)));
             } else {
                 // even packs plus odd pack
-                UNPACK((llk_unpack_fast_tilize_block(
-                    icb, packed_tiles + input_tile_index, pack_size, (remaining_tiles - 3) / pack_size, full_dim)));
-                MATH((llk_math_fast_eltwise_unary_datacopy_block(0, pack_size, (remaining_tiles - 3) / pack_size)));
-                PACK((llk_pack_fast_tilize_block(
-                    0, ocb, packed_tiles + output_tile_index, pack_size, (remaining_tiles - 3) / pack_size)));
+                num_units = (remaining_tiles - 3) / unit_dim;
+                UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
+                MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
+                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
 
-                UNPACK((llk_unpack_fast_tilize_block(
-                    icb, packed_tiles + input_tile_index + remaining_tiles - 3, 3, 1, full_dim)));
-                MATH((llk_math_fast_eltwise_unary_datacopy_block(remaining_tiles - 3, 3, 1)));
+                UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index + remaining_tiles - 3, 3, 1, full_dim)));
+                MATH((llk_math_fast_tilize_block_(remaining_tiles - 3, icb, 3, 1)));
                 PACK((llk_pack_fast_tilize_block(
-                    remaining_tiles - 3, ocb, packed_tiles + output_tile_index + remaining_tiles - 3, 3, 1)));
+                    remaining_tiles - 3, ocb, write_tile_index + remaining_tiles - 3, 3, 1)));
             }
             packed_tiles += remaining_tiles;
             remaining_tiles = 0;

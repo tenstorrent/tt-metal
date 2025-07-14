@@ -301,7 +301,14 @@ inline void llk_pack_fast_tilize_hw_configure_disaggregated(const std::uint32_t 
     llk_pack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
-inline void llk_pack_fast_tilize_init(const std::uint32_t unit_dim) { _llk_pack_fast_tilize_init_(unit_dim); }
+inline void llk_pack_fast_tilize_init(
+    const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
+    const std::uint8_t input_id = get_output_id(input_operand);
+    const std::uint8_t output_id = get_output_id(pack_output);
+    const bool use_32bit_dest =
+        pack_src_format[input_id] == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32);
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim);
+}
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
@@ -311,7 +318,7 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_fast_tilize_uninit_<is_fp32_dest_acc_en>(
+    _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
