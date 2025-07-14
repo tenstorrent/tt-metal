@@ -305,7 +305,7 @@ def evaluation(
 
             results = post_processing(img, 0.3, 0.4, output)
         elif model_name == "YOLOv10":
-            from models.experimental.yolov10.demo.demo_utils import postprocess as postprocess_yolov10
+            from models.demos.yolov10x.demo.demo_utils import postprocess as postprocess_yolov10
 
             results = postprocess_yolov10(preds, im, im0s, batch, classes)[0]
         elif model_name == "YOLOv7":
@@ -537,9 +537,9 @@ def test_yolov8x(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov10x(device, model_type, res, reset_seeds):
-    from models.experimental.yolov10.tt.performant_runner import YOLOv10PerformantRunner
-    from models.experimental.yolov10.tests.common import load_torch_model
+def test_yolov10x(device, model_type, res, use_program_cache, reset_seeds):
+    from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
+    from models.demos.yolov10x.tests.common import load_torch_model
 
     if model_type == "torch_model":
         model = load_torch_model()
@@ -552,7 +552,7 @@ def test_yolov10x(device, model_type, res, reset_seeds):
         )
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/experimental/yolov10/demo/runs"
+    save_dir = "models/demos/yolov10x/demo/runs"
 
     input_dtype = ttnn.bfloat8_b
     input_layout = ttnn.ROW_MAJOR_LAYOUT
