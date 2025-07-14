@@ -311,10 +311,12 @@ void DevicePool::initialize(
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     if (any_remote_devices) {
-        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-        if (fabric_config == FabricConfig::DISABLED) {
-            tt::tt_metal::detail::SetFabricConfig(
-                FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+        auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            tt::tt_fabric::SetFabricConfig(
+                tt::tt_fabric::FabricConfig::FABRIC_1D,
+                tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+                1);
             // Call initialize again because previously it was a no-op
             tt::tt_metal::MetalContext::instance().initialize_fabric_config();
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
@@ -877,7 +879,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         pass &= dev->close();
     }
 
-    tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
     return pass;
 }
