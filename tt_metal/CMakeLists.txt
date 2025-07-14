@@ -45,6 +45,12 @@ target_sources(
         hal.cpp
         ${API_GENERATED_HEADERS}
 )
+set_source_files_properties(
+    api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
+    PROPERTIES
+        SKIP_LINTING
+            ON
+)
 
 # TODO(afuller): this should be self-describing modules.
 #   For now just cherry-pick all the files I discovered empirally by trying to run a test.
