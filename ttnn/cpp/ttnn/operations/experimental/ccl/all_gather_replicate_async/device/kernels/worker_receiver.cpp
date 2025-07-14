@@ -13,8 +13,10 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     constexpr uint32_t sem_wait_val = get_compile_time_arg_val(0);
     constexpr uint32_t inter_cb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
     DPRINT << "sem_wait_val: " << sem_wait_val << ENDL();
     DPRINT << "inter_cb_index: " << inter_cb_index << ENDL();
+    DPRINT << "tensor0_page_size: " << tensor0_page_size << ENDL();
 
     // runtime args
     size_t arg_idx = 0;
@@ -23,6 +25,12 @@ void kernel_main() {
         arg_idx++);  // core id, corresponds to the id of which device it expect data from, will be reset later
     const uint32_t ring_index = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t aggregated_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t bbox_start_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t bbox_start_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t bbox_end_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t bbox_end_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t bbox_size = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t intermediate_tensor_shard_num_pages = get_arg_val<uint32_t>(arg_idx++);
     DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
     DPRINT << "core_id: " << core_id << ENDL();
     DPRINT << "ring_index: " << ring_index << ENDL();
@@ -42,4 +50,12 @@ void kernel_main() {
         // uint64_t t2 = ckernel::read_wall_clock();
         // DPRINT << "time taken(in us): " << (t2 - t1) << ENDL();
     }
+
+    // 2. multicast data to mm cores
+    size_t l1_read_addr = get_read_ptr(inter_cb_index);
+    const uint64_t multicast_addr =
+        get_noc_multicast_addr(bbox_start_x, bbox_start_y, bbox_end_x, bbox_end_y, aggregated_tensor_addr);
+    noc_async_write_multicast(
+        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
+    noc_async_write_barrier();
 }

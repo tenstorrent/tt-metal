@@ -202,8 +202,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     // Receiver
     auto receiver_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     receiver_kernel_config.compile_args = {
-        num_links,  // sem_wait_val
-        inter_cb_index,
+        num_links,                  // sem_wait_val
+        inter_cb_index,             // intermediate cb index
+        op_config.get_page_size(),  // tensor0_page_size
     };
     auto worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -215,12 +216,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         program,
         worker_receiver_kernel_id,
         intermediate_tensor_cores,
-        {
-            semaphore.address(),  // sem_address
-            0,           // core id, corresponds to the id of which device it expect data from, will be reset later
-            ring_index,  // device id
-            aggregated_tensor.buffer()->address(),
-        });
+        {semaphore.address(),  // sem_address
+         0,           // core id, corresponds to the id of which device it expect data from, will be reset later
+         ring_index,  // device id
+         aggregated_tensor.buffer()->address(),
+         static_cast<uint32_t>(bbox.start_coord.x),
+         static_cast<uint32_t>(bbox.start_coord.y),
+         static_cast<uint32_t>(bbox.end_coord.x),
+         static_cast<uint32_t>(bbox.end_coord.y),
+         static_cast<uint32_t>(bbox.size()),
+         intermediate_tensor_shard_num_pages});
     // Kernel Runtime Args
 
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
@@ -233,7 +238,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             program,
             worker_receiver_kernel_id,
             {intermediate_cores_vec[i]},
-            {semaphore.address(), i, ring_index, aggregated_tensor.buffer()->address()});
+            {semaphore.address(),
+             i,
+             ring_index,
+             aggregated_tensor.buffer()->address(),
+             static_cast<uint32_t>(bbox.start_coord.x),
+             static_cast<uint32_t>(bbox.start_coord.y),
+             static_cast<uint32_t>(bbox.end_coord.x),
+             static_cast<uint32_t>(bbox.end_coord.y),
+             static_cast<uint32_t>(bbox.size()),
+             intermediate_tensor_shard_num_pages});
     }
     log_info(tt::LogOp, "LLONG cores_per_device: {}", cores_per_device);
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
