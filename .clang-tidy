@@ -185,7 +185,6 @@ Checks: >
   -readability-named-parameter,
   -readability-non-const-parameter,
   -readability-qualified-auto,
-  -readability-redundant-access-specifiers,
   -readability-redundant-control-flow,
   -readability-redundant-member-init,
   -readability-redundant-smartptr-get,

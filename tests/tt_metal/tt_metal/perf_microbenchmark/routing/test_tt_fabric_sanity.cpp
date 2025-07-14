@@ -9,6 +9,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -167,7 +168,7 @@ struct test_board_t {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::CUSTOM);
 
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         control_plane = &tt::tt_metal::MetalContext::instance().get_control_plane();

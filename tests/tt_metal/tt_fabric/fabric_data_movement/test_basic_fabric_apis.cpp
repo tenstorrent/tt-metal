@@ -882,6 +882,9 @@ TEST_F(Fabric2DFixture, DISABLED_TestAsyncRawWriteAtomicInc) {
     RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true);
 }
 
+// 1D Routing Validation Test
+TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
+
 // 2D Dynamic Routing Unicast Tests
 TEST_F(Fabric2DDynamicFixture, TestUnicastRaw) {
     for (uint32_t i = 0; i < 10; i++) {
