@@ -108,7 +108,7 @@ void kernel_main() {
         noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
 
-        for (uint32_t t = 0; t < tokens_per_device; t++) {
+        for (uint32_t t = token_start_idx; t < token_end_idx; t++) {
             for (uint32_t d = 0; d < dispatch_devices; d++) {
                 uint32_t page = d * tokens_per_device + t;
                 uint32_t l1_write_addr = get_write_ptr(metadata_buffer_id) + page * aligned_indices_page_size;
