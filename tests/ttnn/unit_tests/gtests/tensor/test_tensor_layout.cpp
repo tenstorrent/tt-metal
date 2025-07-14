@@ -50,7 +50,7 @@ struct TensorLayoutTestParams {
 
 class TensorLayoutComputeTests : public ::testing::TestWithParam<TensorLayoutTestParams> {};
 
-TEST_P(TensorLayoutComputeTests, DISABLED_TensorLayout_Generic) {
+TEST_P(TensorLayoutComputeTests, TensorLayout_Generic) {
     const auto& params = GetParam();
     TensorLayout layout(params.inputs.data_type, PageConfig(params.inputs.layout), DefaultMemoryConfig);
 
