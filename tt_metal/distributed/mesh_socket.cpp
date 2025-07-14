@@ -97,17 +97,17 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
         socket_type_str,
         local_endpoint_desc.config.sender_rank,
         local_endpoint_desc.config.receiver_rank);
-    // if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
-    //     forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
-    //     remote_endpoint_desc =
-    //         receive_and_verify_descriptor_from_peer(local_endpoint_desc, socket_endpoint_type_, context);
-    //     fabric_node_id_map_ = generate_fabric_node_id_map(config_, local_endpoint_desc, remote_endpoint_desc);
-    // } else {
-    //     remote_endpoint_desc =
-    //         receive_and_verify_descriptor_from_peer(local_endpoint_desc, socket_endpoint_type_, context);
-    //     forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
-    //     fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
-    // }
+    if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
+        forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
+        // remote_endpoint_desc =
+        //     receive_and_verify_descriptor_from_peer(local_endpoint_desc, socket_endpoint_type_, context);
+        // fabric_node_id_map_ = generate_fabric_node_id_map(config_, local_endpoint_desc, remote_endpoint_desc);
+    } else {
+        remote_endpoint_desc =
+            receive_and_verify_descriptor_from_peer(local_endpoint_desc, socket_endpoint_type_, context);
+        // forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
+        // fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
+    }
     fmt::println("BEFORE WRITE SOCKET CONFIGS");
     // write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
     fmt::println("BEFORE POINT TO POINT BARRIER");
