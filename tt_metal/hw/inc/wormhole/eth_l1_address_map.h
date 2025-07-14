@@ -118,6 +118,8 @@ struct address_map {
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
 
     static constexpr std::uint32_t CRC_ERR_ADDR = 0x1F7C;
+
+    // The following access 64-bit values, low bits located at +4 Byte offset
     static constexpr std::uint32_t CORR_CW_HI_ADDR = 0x1F90;
     static constexpr std::uint32_t UNCORR_CW_HI_ADDR = 0x1F98;
 
