@@ -362,9 +362,18 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    fmt::println(
+        "DEBUG RECEIVE AND VERIFY TO PEER RANK {} IS SENDER {}",
+        peer_rank.get(),
+        is_sender);  // Debugging output to track descriptor forwarding
 
     // Query the size of the serialized descriptor first (this is the only element in the header)
+
     auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
+    fmt::println(
+        "BEFORE SNOOP INCOMING MSG SIZE: {}",
+        msg_header_size);  // Debugging output to track snooping incoming message size
+    // Validate that the size in the header matches the expected size
     TT_FATAL(
         msg_header_size == sizeof(int),
         "Expected {} bytes in the header for socket descriptor, but got {} bytes during multi-host handshake.",
@@ -372,13 +381,22 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
         msg_header_size);
 
     int expected_descriptor_size_bytes = 0;
+    fmt::println(
+        "BEFORE RECEIVING EXPECTED DESCRIPTOR SIZE: {}",
+        expected_descriptor_size_bytes);  // Debugging output to track expected descriptor size
     context->recv(
         tt::stl::Span<std::byte>(
             reinterpret_cast<std::byte*>(&expected_descriptor_size_bytes), sizeof(expected_descriptor_size_bytes)),
         Rank{peer_rank},
         desc.exchange_tag  // Read the descriptor over the specified tag
     );
+    fmt::println(
+        "AFTER RECEIVING EXPECTED DESCRIPTOR SIZE: {}",
+        expected_descriptor_size_bytes);  // Debugging output to track received descriptor size
     // Validate that the size in the header matches the descriptor message size
+    fmt::println(
+        "BEFORE NEXT SNOOP INCOMING MSG SIZE: {}",
+        expected_descriptor_size_bytes);  // Debugging output to track snooping incoming message size
     auto descriptor_size_bytes = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
     TT_FATAL(
         descriptor_size_bytes == expected_descriptor_size_bytes,
@@ -386,6 +404,9 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
         expected_descriptor_size_bytes,
         descriptor_size_bytes);
 
+    fmt::println(
+        "BEFORE NEXT RECEIVING DESCRIPTOR SIZE: {}",
+        descriptor_size_bytes);  // Debugging output to track receiving descriptor size
     // Allocate a buffer to receive the serialized descriptor
     std::vector<uint8_t> serialized_remote_desc(descriptor_size_bytes);
     // Receive the serialized descriptor
@@ -395,6 +416,9 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
         Rank{peer_rank},
         desc.exchange_tag  // Read the descriptor over the specified tag
     );
+    fmt::println(
+        "AFTER RECEIVING DESCRIPTOR SIZE: {}",
+        serialized_remote_desc.size());  // Debugging output to track received descriptor size
     // Deserialize the received descriptor
     auto remote_desc = deserialize_from_bytes(serialized_remote_desc);
     // Validate that socket configs from remote and local descriptors match
