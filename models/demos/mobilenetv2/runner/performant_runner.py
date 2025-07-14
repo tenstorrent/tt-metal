@@ -1,13 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.mobilenetv2.tests.mobilenetv2_test_infra import create_test_infra
+from models.demos.mobilenetv2.runner.performant_runner_infra import create_test_infra
 
 try:
-    pass
-
     use_signpost = True
 except ModuleNotFoundError:
     use_signpost = False
@@ -74,16 +72,14 @@ class MobileNetV2Trace2CQ:
 
     def execute_mobilenetv2_trace_2cqs_inference(self, tt_inputs_host=None):
         ttnn.wait_for_event(1, self.op_event)
-
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        # TODO: Add in place support to ttnn to_memory_config
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.device)
         outputs = ttnn.from_device(self.test_infra.output_tensor, blocking=True)
-
         return outputs
 
     def release_mobilenetv2_trace_2cqs_inference(self):

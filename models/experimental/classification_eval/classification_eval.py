@@ -10,7 +10,7 @@ import torchvision
 import pytest
 import transformers
 from transformers import AutoImageProcessor
-
+from models.demos.mobilenetv2.tests.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 import ttnn
 from models.experimental.classification_eval.classification_eval_utils import get_data_loader
 
@@ -27,6 +27,8 @@ def evaluation(
     get_batch=None,
     batch_size=None,
     res=None,
+    mesh_mapper=None,
+    mesh_composer=None,
 ):
     # Loading the dataset
     input_loc = str(model_location_generator("ImageNet_data"))
@@ -45,18 +47,23 @@ def evaluation(
         # preprocess
         if model_name == "mobilenetv2":
             n, c, h, w = inputs.shape
-            torch_input_tensor = inputs.reshape(batch_size, 3, res, res)
-            tt_inputs = torch.permute(inputs, (0, 2, 3, 1))
-            ttnn_input_tensor = tt_inputs.reshape(
-                1,
-                1,
-                n * h * w,
-                c,
+            ttnn_input_tensor = torch.permute(inputs, (0, 2, 3, 1))
+            ttnn_input_tensor = ttnn.from_torch(
+                ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper
+            )
+            ttnn_input_tensor = ttnn.reshape(
+                ttnn_input_tensor,
+                (
+                    1,
+                    1,
+                    ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
+                    ttnn_input_tensor.shape[3],
+                ),
+            )
+            ttnn_input_tensor = ttnn.pad(
+                ttnn_input_tensor, [1, 1, (n // (device.get_num_devices())) * h * w, 16], [0, 0, 0, 0], 0
             )
 
-            ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-        elif model_name == "resnet50":
             torch_input_tensor = inputs
             if model_type == "tt_model":
                 tt_inputs_host = ttnn.from_torch(
@@ -95,7 +102,7 @@ def evaluation(
         # post_process
         if model_name == "mobilenetv2":
             if model_type == "tt_model":
-                final_output = ttnn.to_torch(output)
+                final_output = ttnn.to_torch(output, mesh_composer=mesh_composer)
             else:
                 final_output = output
             prediction = final_output.argmax(dim=-1)
@@ -103,7 +110,6 @@ def evaluation(
             for i in range(batch_size):
                 pred_id.append(prediction[i].item())
                 gt_id.append(labels[i])
-
             del output, final_output
 
         elif model_name == "vit":
@@ -249,27 +255,17 @@ def test_resnet50_image_classification_eval(
     )
 
 
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
-)
-@pytest.mark.parametrize(
-    "model_type",
-    [
-        ("tt_model"),
-        ("torch_model"),
-    ],
-)
-@pytest.mark.parametrize("batch_size, res", [[8, 224]])
-def test_mobilenetv2_image_classification_eval(
+def run_mobilenetv2_image_classification_eval(
     device, model_type, batch_size, res, model_location_generator, reset_seeds
 ):
     from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-    from models.demos.mobilenetv2.tests.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
+    from models.demos.mobilenetv2.runner.performant_runner import MobileNetV2Trace2CQ
     import torchvision.models as models
     from models.demos.ttnn_resnet.tests.demo_utils import get_batch
+    from models.demos.mobilenetv2.tt.model_preprocessing import get_mesh_mappers
 
     weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
-
+    inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
     model_version = "microsoft/resnet-50"
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 
@@ -310,6 +306,56 @@ def test_mobilenetv2_image_classification_eval(
         image_processor=image_processor,
         config=None,
         get_batch=get_batch,
-        batch_size=batch_size,
+        batch_size=batch_size * device.get_num_devices(),
         res=res,
+        mesh_mapper=inputs_mesh_mapper,
+        mesh_composer=output_mesh_composer,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    ((MOBILENETV2_BATCH_SIZE),),
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+def test_mobilenetv2_image_classification_eval(
+    device, model_type, batch_size, model_location_generator, reset_seeds, res=224
+):
+    run_mobilenetv2_image_classification_eval(
+        device, model_type, batch_size, res, model_location_generator, reset_seeds
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    ((MOBILENETV2_BATCH_SIZE),),
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+def test_mobilenetv2_image_classification_eval_dp(
+    mesh_device, model_type, batch_size, model_location_generator, reset_seeds, res=224
+):
+    run_mobilenetv2_image_classification_eval(
+        mesh_device, model_type, batch_size, res, model_location_generator, reset_seeds
     )
