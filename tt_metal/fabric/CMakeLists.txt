@@ -1,20 +1,7 @@
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
-target_sources(
-    fabric
-    PRIVATE
-        control_plane.cpp
-        routing_table_generator.cpp
-        mesh_graph.cpp
-        erisc_datamover_builder.cpp
-        fabric.cpp
-        fabric_host_utils.cpp
-        fabric_context.cpp
-        serialization/intermesh_link_table.cpp
-)
-
-# These headers are for the device, not host; will require cross compiling to verify.
+# These headers are for the device, not host; will require cross compiling to lint them (future work).
 set_target_properties(
     fabric
     PROPERTIES
@@ -42,6 +29,15 @@ target_sources(
             hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
             hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
+    PRIVATE
+        control_plane.cpp
+        routing_table_generator.cpp
+        mesh_graph.cpp
+        erisc_datamover_builder.cpp
+        fabric.cpp
+        fabric_host_utils.cpp
+        fabric_context.cpp
+        serialization/intermesh_link_table.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
