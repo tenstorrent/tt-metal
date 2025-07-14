@@ -7,7 +7,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace {
+namespace ttnn_test {
 struct NDShardingParams {
     Shape shape;
     Shape shard_shape;
@@ -89,7 +89,9 @@ TensorSpec get_nd_sharding_tensor_spec(
     TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
     return TensorSpec(params.shape, tensor_layout);
 }
-}  // namespace
+}  // namespace ttnn_test
+
+using namespace ttnn_test;
 
 class NDShardingTests
     : public ttnn::TTNNFixtureWithDevice,
