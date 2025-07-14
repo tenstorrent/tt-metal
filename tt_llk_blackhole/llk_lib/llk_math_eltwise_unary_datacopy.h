@@ -80,10 +80,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
                 ckernel_template::run(instrn_buffer);
             }
         }
-        else
-        {
-            FWASSERT("Unsupported op!", false);
-        }
 
         math::clear_dst_reg_addr();
     }
@@ -257,10 +253,6 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     else if constexpr (type == B2D)
     {
         eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
-    }
-    else
-    {
-        FWASSERT("Unsupported op!", false);
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);

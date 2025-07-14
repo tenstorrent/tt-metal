@@ -72,7 +72,6 @@
 #include <cstdint>
 
 #include "ckernel_include.h"
-#include "fw_debug.h"
 
 // #include <cstring>
 #if defined(PERF_DUMP) || DELAY_EN > 0
@@ -150,8 +149,7 @@ static constexpr bool is_valid(const T val, const uint8_t wid)
 inline void mmio_register_write(register_space_e space, uint addr, uint data)
 {
     const uint regaddr = (space << 6) | (addr & 0x3F);
-    // FWLOG2("Regaddr: 0x%x, data: 0x%x", regaddr, data);
-    reg_base[regaddr] = data;
+    reg_base[regaddr]  = data;
 }
 
 inline uint8_t semaphore_read(const uint8_t index)

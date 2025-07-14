@@ -9,8 +9,6 @@
 #include "ckernel_ops.h"
 #include "sfpi.h"
 
-// #include "debug/fw_debug.h"
-
 namespace ckernel
 {
 namespace sfpu
@@ -22,9 +20,6 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_dropout_(const int iterations, uint probability, uint scale)
 {
     // SFPU microcode
-
-    // FWLOG1("calculate_dropout() -- probability:%x", probability);
-    // FWLOG1("calculate_dropout() -- scale:%x", scale);
 
     TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
