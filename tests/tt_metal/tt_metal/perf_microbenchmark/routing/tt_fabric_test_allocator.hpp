@@ -148,6 +148,7 @@ public:
         const BaseMemoryRegion& atomic_region);
 
     void initialize_receiver_pool();
+    CoreCoord reserve_sync_core();
     CoreCoord reserve_sender_core(const std::optional<CoreCoord>& specified_core);
     CoreCoord reserve_receiver_core(const std::optional<CoreCoord>& specified_core);
     CoreResources& get_or_create_core_resources(const CoreCoord& core, CoreType core_type);
@@ -165,6 +166,7 @@ public:
 private:
     void reserve_core_internal(const CoreCoord& core, CoreType core_type);
     CoreCoord find_next_available_core(CorePool& pool);
+    CoreCoord find_next_available_sync_core(CorePool& pool);
     void refill_pool(CorePool& pool);
 };
 
@@ -205,6 +207,18 @@ inline void TestDeviceResources::initialize_receiver_pool() {
         pristine_cores_.clear();
         receiver_pool.initialized = true;
     }
+}
+
+inline CoreCoord TestDeviceResources::reserve_sync_core() {
+    CorePool& pool = core_pools_[SENDER_TYPE_IDX];
+    if (!pool.initialized) {
+        refill_pool(pool);
+        pool.initialized = true;
+    }
+
+    CoreCoord core = find_next_available_sync_core(pool);
+    reserve_core_internal(core, CoreType::SENDER);
+    return core;
 }
 
 inline CoreCoord TestDeviceResources::reserve_sender_core(const std::optional<CoreCoord>& specified_core) {
@@ -275,6 +289,13 @@ inline void TestDeviceResources::refill_pool(CorePool& pool) {
         pristine_cores_.pop_back();
     }
     std::sort(pool.active_pool.begin(), pool.active_pool.end());
+}
+
+inline CoreCoord TestDeviceResources::find_next_available_sync_core(CorePool& pool) {
+    size_t current_pool_idx = pool.next_pool_idx;
+    const CoreCoord& core = pool.active_pool[current_pool_idx];
+    pool.next_pool_idx = (current_pool_idx + 1) % pool.active_pool.size();
+    return core;
 }
 
 inline CoreCoord TestDeviceResources::find_next_available_core(CorePool& pool) {
@@ -421,6 +442,12 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
 }
 
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
+    // PASS 0: Reserve sync cores for synchronization
+    for (auto& sync_sender : test_config.global_sync_configs) {
+        auto& device_resources = get_or_create_device_resources(sync_sender.device);
+        sync_sender.core = device_resources.reserve_sync_core();
+    }
+
     // PASS 1: Reserve all specified sender cores first. This establishes the pool of
     // cores that are *not* available for receivers.
     for (const auto& sender : test_config.senders) {

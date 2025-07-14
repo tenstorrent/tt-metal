@@ -9,9 +9,16 @@ constexpr uint8_t USE_DYNAMIC_ROUTING = get_compile_time_arg_val(1);
 constexpr uint8_t NUM_FABRIC_CONNECTIONS = get_compile_time_arg_val(2);
 constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(3);
 constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(4);
+constexpr bool LINE_SYNC = get_compile_time_arg_val(5);
+constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(6);
 
-using SenderKernelConfig = tt::tt_fabric::fabric_tests::
-    SenderKernelConfig<NUM_FABRIC_CONNECTIONS, NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>;
+using SenderKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig<
+    NUM_FABRIC_CONNECTIONS,
+    NUM_TRAFFIC_CONFIGS,
+    IS_2D_FABRIC,
+    USE_DYNAMIC_ROUTING,
+    LINE_SYNC,
+    NUM_LOCAL_SYNC_CORES>;
 
 void kernel_main() {
     size_t rt_args_idx = 0;
@@ -22,12 +29,18 @@ void kernel_main() {
         sender_config.get_result_buffer_address(), sender_config.get_result_buffer_size());
     tt::tt_fabric::fabric_tests::write_test_status(sender_config.get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
 
+    // Local sync (as participant, not master)
+    if constexpr (LINE_SYNC) {
+        sender_config.local_sync();
+    }
+
     sender_config.open_connections();
 
     bool packets_left_to_send = true;
     uint64_t total_packets_sent = 0;
     uint64_t total_elapsed_cycles = 0;
 
+    // Round-robin packet sending: send one packet from each config per iteration
     while (packets_left_to_send) {
         packets_left_to_send = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
@@ -39,7 +52,8 @@ void kernel_main() {
             // TODO: might want to check if the buffer has wrapped or not
             // if wrapped, then wait for credits from the receiver
 
-            traffic_config->send_packets<BENCHMARK_MODE>();
+            // Always send exactly one packet per config per round
+            traffic_config->send_one_packet<BENCHMARK_MODE>();
             packets_left_to_send |= traffic_config->has_packets_to_send();
         }
     }
