@@ -693,6 +693,26 @@ public:
         return std::make_pair(dst_node_forward, dst_node_backward);
     }
 
+    uint32_t get_num_sync_devices() const override {
+        uint32_t num_devices;
+        switch (topology_) {
+            case tt::tt_fabric::Topology::Linear: {
+                num_devices = mesh_shape_[NS_DIM] + mesh_shape_[EW_DIM] - 1;
+                return num_devices;
+            }
+            case tt::tt_fabric::Topology::Ring: {
+                // sync using full ring mcast, ie, mcast on both forward/backward path.
+                num_devices = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1);
+                return num_devices;
+            }
+            case tt::tt_fabric::Topology::Mesh: {
+                num_devices = mesh_shape_[NS_DIM] * mesh_shape_[EW_DIM];
+                return num_devices;
+            }
+            default: TT_THROW("Unsupported topology for get_num_sync_devices: {}", static_cast<int>(topology_));
+        }
+    }
+
     std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
@@ -830,6 +850,53 @@ public:
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
         const auto& neighbor_node_id = get_neighbor_node_id(src_node_id, direction);
         return this->get_forwarding_link_indices_in_direction(src_node_id, neighbor_node_id, direction);
+    }
+
+    /// Helper to compute per‐direction hops and the global sync value
+    std::pair<std::unordered_map<RoutingDirection, uint32_t>, uint32_t> get_sync_hops_and_val(
+        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const override {
+        std::unordered_map<RoutingDirection, uint32_t> multi_directional_hops;
+        uint32_t global_sync_val = 0;
+
+        switch (topology_) {
+            case tt::tt_fabric::Topology::Ring: {
+                // Get ring neighbors - returns nullopt for non-perimeter devices
+                auto ring_neighbors = this->get_wrap_around_mesh_ring_neighbors(src_device, devices);
+
+                // Check if the result is valid (has value)
+                if (!ring_neighbors.has_value()) {
+                    // Skip this device as it's not on the perimeter and can't participate in ring multicast
+                    log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_device.chip_id);
+                    return {{}, 0};
+                }
+
+                // Extract the valid ring neighbors
+                auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
+
+                multi_directional_hops = this->get_full_or_half_ring_mcast_hops(
+                    src_device, dst_node_forward, dst_node_backward, HighLevelTrafficPattern::FullRingMulticast);
+
+                // minus 2 because full ring pattern traverse each node twice.
+                auto num_sync_devices = this->get_num_sync_devices();
+                global_sync_val =
+                    2 * num_sync_devices - 2;  // minus 2 because in a full ring pattern we dont mcast to self (twice).
+                break;
+            }
+            case tt::tt_fabric::Topology::Linear: {
+                multi_directional_hops = this->get_full_mcast_hops(src_device);
+                global_sync_val = this->get_num_sync_devices() - 1;
+                break;
+            }
+            case tt::tt_fabric::Topology::Mesh: {
+                multi_directional_hops = this->get_full_mcast_hops(src_device);
+                global_sync_val = this->get_num_sync_devices() - 1;
+                TT_THROW("We need mcast support for mesh topology to perform sync");
+                break;
+            }
+            default: TT_THROW("Unsupported topology for line sync: {}", static_cast<int>(topology_));
+        }
+
+        return {std::move(multi_directional_hops), global_sync_val};
     }
 
 private:
