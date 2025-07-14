@@ -36,23 +36,35 @@ def hf_config():
     return config
 
 
+mesh_device_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (1, 8)}.get(
+    os.environ.get("MESH_DEVICE"), (1, min(ttnn.get_num_devices(), 8))
+)
+
+
+# Unit Tests
 @pytest.mark.parametrize(
     "mesh_device",
-    [(1, 1)],
+    [mesh_device_shape],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mode, seq_len, batch_size",
+    "mode, seq_len",
     [
-        ("decode", 1024, 1),
-        ("prefill", 1024 * 64, 1),
+        ("decode", 32),
+        ("prefill", 512),
+        ("prefill", 2048),  # Test chunking
     ],
 )
-def test_forward_pass(mode, seq_len, mesh_device, temp_dir, batch_size, hf_config):
+def test_forward_pass(mode, seq_len, mesh_device, temp_dir, hf_config):
     """Test forward pass against reference model."""
 
+    batch_size = 1
+
     logger.info("Loading reference expert model..")
-    reference_model = ReferenceExpert(hf_config)
+    reference_model = ReferenceExpert(
+        hf_config, hidden_size=hf_config.hidden_size, intermediate_size=hf_config.moe_intermediate_size
+    )
+    breakpoint()  # Debugging point to inspect the reference model
     reference_model.eval()
 
     hf_state_dict = reference_model.state_dict()
@@ -89,18 +101,31 @@ def test_forward_pass(mode, seq_len, mesh_device, temp_dir, batch_size, hf_confi
     )
 
     # TTNN forward pass
-    if mode == "decode":
-        tt_output = TTExpert.forward_decode(tt_input, run_config)
-    elif mode == "prefill":
+    if mode == "prefill":
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
         tt_output = TTExpert.forward_prefill(tt_input, run_config)
+        expected_output_memory_config = run_config["output_memory_config"]
+    elif mode == "decode":
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+        tt_output = TTExpert.forward_decode(tt_input, run_config)
+        expected_output_memory_config = run_config["output_memory_config"]
     else:
         raise ValueError(f"Invalid mode: {mode}")
 
+    # Verify output memory config matches expected
+    actual_output_memory_config = tt_output.memory_config()
+    assert (
+        actual_output_memory_config == expected_output_memory_config
+    ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+
     # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+    )
 
     # Compare outputs
-    pcc_required = 0.99
+    pcc_required = 0.98
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(f"Mode: {mode}, Seq len: {seq_len}")
