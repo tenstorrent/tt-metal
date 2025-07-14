@@ -8,8 +8,8 @@
 
 #include "gtest/gtest.h"
 
-#include "ttnn/operations/experimental/ccl/send_async/send_async.hpp"
-#include "ttnn/operations/experimental/ccl/recv_async/recv_async.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -22,7 +22,7 @@
 namespace tt::tt_metal {
 
 class T3K2DFabricSendRecvFixture : public T3000MeshDevice2DFabricFixture,
-                                   public testing::WithParamInterface<std::tuple<TensorSpec, BufferType>> {};
+                                   public testing::WithParamInterface<SocketTestArgs> {};
 
 template <typename T>
 void test_send_recv_async_(
@@ -120,6 +120,7 @@ TEST_P(T3K2DFabricSendRecvFixture, SendRecvAsync) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(T3K2DFabricSendRecvTests, T3K2DFabricSendRecvFixture, ::testing::ValuesIn(tensor_specs));
+INSTANTIATE_TEST_SUITE_P(
+    T3K2DFabricSendRecvTests, T3K2DFabricSendRecvFixture, ::testing::ValuesIn(get_socket_test_args()));
 
 }  // namespace tt::tt_metal

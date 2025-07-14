@@ -4,45 +4,18 @@
 
 #include "recv_async_op.hpp"
 
-#include <algorithm>
 #include <vector>
 
 #include <tt-metalium/mesh_socket.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn {
 
 void RecvAsync::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "recv_async op requires exactly one input tensor");
-    const auto& input_tensor = input_tensors[0];
-    TT_FATAL(input_tensor.device() != nullptr, "recv_async op requires a device");
-    TT_FATAL(
-        this->mesh_socket.get_socket_endpoint_type() == tt::tt_metal::distributed::SocketEndpoint::RECEIVER,
-        "recv_async op requires a receiver socket");
-    const auto* socket_mesh_device = this->mesh_socket.get_config_buffer()->device();
-    const auto& socket_connection_config = this->mesh_socket.get_config().socket_connection_config;
-    TT_FATAL(
-        this->mesh_socket.get_config().socket_mem_config.fifo_size >= input_tensor.buffer()->aligned_page_size(),
-        "recv_async op requires a fifo size greater than or equal to the input tensor page size");
-
-    auto device_ids = input_tensor.mesh_device()->get_device_ids();
-    for (const auto& connection : socket_connection_config) {
-        auto found_device = std::find(
-            device_ids.begin(),
-            device_ids.end(),
-            socket_mesh_device->get_device(connection.sender_core.device_coord)->id());
-        if (found_device != device_ids.end()) {
-            device_ids.erase(found_device);
-            if (device_ids.empty()) {
-                break;
-            }
-        }
-    }
-    TT_FATAL(
-        device_ids.empty(),
-        "recv_async op input tensor devices {} is not part of the connected cores of the socket",
-        device_ids);
+    ttnn::send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
+        input_tensors, this->mesh_socket, "recv_async");
 }
 
 std::vector<ttnn::TensorSpec> RecvAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

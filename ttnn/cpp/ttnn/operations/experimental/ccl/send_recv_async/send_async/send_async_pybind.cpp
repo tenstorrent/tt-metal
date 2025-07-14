@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/send_async/send_async.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
 #include <tt-metalium/mesh_socket.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -39,16 +39,16 @@ void py_bind_send_async(pybind11::module& module) {
         ttnn::experimental::send_async,
         R"doc(
 
-        Performs a send operation on multi-device :attr:`input_tensor` to a multi-device :attr:`mesh_socket`.
+        Performs a send operation on multi-device :attr:`input_tensor` to a :attr:`mesh_socket`.
 
         Args:
-            input_tensor (ttnn.Tensor): multi-device tensor.
+            input_tensor (ttnn.Tensor): device tensor.
             mesh_socket (ttnn.MeshSocket): MeshSocket to send the tensor to.
 
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Returns:
-            std::vector<ttnn.Tensor>: am empty vector.
+            std::vector<ttnn.Tensor>: an empty vector.
 
         )doc");
 }
