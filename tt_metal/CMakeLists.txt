@@ -180,77 +180,35 @@ target_sources(
             impl/dispatch/kernels/packet_queue.hpp
             impl/dispatch/kernels/packet_queue_ctrl.hpp
             include/compute_kernel_api.h
-            include/compute_kernel_api/add_int_sfpu.h
             include/compute_kernel_api/bcast.h
-            include/compute_kernel_api/binary_bitwise_sfpu.h
-            include/compute_kernel_api/binary_max_min.h
-            include/compute_kernel_api/binary_shift.h
             include/compute_kernel_api/blank.h
             include/compute_kernel_api/cb_api.h
             include/compute_kernel_api/common.h
             include/compute_kernel_api/common_globals.h
             include/compute_kernel_api/compute_kernel_hw_startup.h
-            include/compute_kernel_api/copy_dest_values.h
-            include/compute_kernel_api/cumsum.h
             include/compute_kernel_api/eltwise_binary.h
-            include/compute_kernel_api/eltwise_binary_sfpu.h
-            include/compute_kernel_api/eltwise_unary/binop_with_scalar.h
-            include/compute_kernel_api/eltwise_unary/bitwise_and.h
-            include/compute_kernel_api/eltwise_unary/bitwise_not.h
-            include/compute_kernel_api/eltwise_unary/bitwise_or.h
-            include/compute_kernel_api/eltwise_unary/bitwise_xor.h
             include/compute_kernel_api/eltwise_unary/comp.h
-            include/compute_kernel_api/eltwise_unary/dropout.h
             include/compute_kernel_api/eltwise_unary/eltwise_unary.h
-            include/compute_kernel_api/eltwise_unary/elu.h
-            include/compute_kernel_api/eltwise_unary/erf_erfc.h
-            include/compute_kernel_api/eltwise_unary/erfinv.h
             include/compute_kernel_api/eltwise_unary/exp.h
-            include/compute_kernel_api/eltwise_unary/fill.h
-            include/compute_kernel_api/eltwise_unary/fmod.h
-            include/compute_kernel_api/eltwise_unary/gelu.h
-            include/compute_kernel_api/eltwise_unary/i0.h
-            include/compute_kernel_api/eltwise_unary/i1.h
-            include/compute_kernel_api/eltwise_unary/identity.h
-            include/compute_kernel_api/eltwise_unary/isinf_isnan.h
-            include/compute_kernel_api/eltwise_unary/left_shift.h
-            include/compute_kernel_api/eltwise_unary/log1p.h
-            include/compute_kernel_api/eltwise_unary/logical_not_noti.h
             include/compute_kernel_api/eltwise_unary/negative.h
-            include/compute_kernel_api/eltwise_unary/prelu.h
-            include/compute_kernel_api/eltwise_unary/rand.h
             include/compute_kernel_api/eltwise_unary/recip.h
             include/compute_kernel_api/eltwise_unary/relu.h
-            include/compute_kernel_api/eltwise_unary/remainder.h
-            include/compute_kernel_api/eltwise_unary/reverseops.h
-            include/compute_kernel_api/eltwise_unary/right_shift.h
-            include/compute_kernel_api/eltwise_unary/rounding.h
-            include/compute_kernel_api/eltwise_unary/sfpu_int_sum.h
             include/compute_kernel_api/eltwise_unary/sfpu_split_includes.h
-            include/compute_kernel_api/eltwise_unary/softplus.h
             include/compute_kernel_api/eltwise_unary/sqrt.h
-            include/compute_kernel_api/eltwise_unary/trigonometry.h
-            include/compute_kernel_api/eltwise_unary/typecast.h
-            include/compute_kernel_api/gcd.h
-            include/compute_kernel_api/layernorm.h
-            include/compute_kernel_api/lcm.h
             include/compute_kernel_api/mask.h
             include/compute_kernel_api/matmul.h
-            include/compute_kernel_api/mul_int_sfpu.h
             include/compute_kernel_api/pack.h
             include/compute_kernel_api/pack_untilize.h
-            include/compute_kernel_api/quantization.h
             include/compute_kernel_api/reconfig_data_format.h
             include/compute_kernel_api/reduce.h
             include/compute_kernel_api/reg_api.h
-            include/compute_kernel_api/reshuffle.h
             include/compute_kernel_api/softmax.h
-            include/compute_kernel_api/sub_int_sfpu.h
             include/compute_kernel_api/tile_move_copy.h
             include/compute_kernel_api/tilize.h
             include/compute_kernel_api/transpose_wh.h
-            include/compute_kernel_api/transpose_wh_dest.h
             include/compute_kernel_api/untilize.h
+            include/compute_kernel_api/eltwise_binary.h
+            include/compute_kernel_api/tile_move_copy.h
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
