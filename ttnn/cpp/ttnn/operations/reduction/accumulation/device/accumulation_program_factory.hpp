@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cumulation_device_operation_types.hpp"
+#include "accumulation_device_operation_types.hpp"
 
 #include <optional>
 #include <type_traits>
@@ -16,13 +16,13 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::reduction::cumulation {
+namespace ttnn::operations::reduction::accumulation {
 
 using namespace tt::tt_metal;
 using namespace tt::stl;
 
-struct CumulationProgramFactory {
-    enum class CumulationCB : std::underlying_type_t<tt::CBIndex> {
+struct AccumulationProgramFactory {
+    enum class AccumulationCB : std::underlying_type_t<tt::CBIndex> {
         SRC = tt::CBIndex::c_0,
         DST = tt::CBIndex::c_1,
         START = tt::CBIndex::c_2,
@@ -30,16 +30,16 @@ struct CumulationProgramFactory {
     };
 
     static constexpr std::array<const char*, 3> KERNEL_PATHS{
-        "ttnn/cpp/ttnn/operations/reduction/cumulation/device/kernels/dataflow/"
-        "cumulation_reader.cpp",
-        "ttnn/cpp/ttnn/operations/reduction/cumulation/device/kernels/compute/cumulation_compute.cpp",
-        "ttnn/cpp/ttnn/operations/reduction/cumulation/device/kernels/dataflow/"
-        "cumulation_writer.cpp"};
+        "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
+        "accumulation_reader.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/compute/accumulation_compute.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
+        "accumulation_writer.cpp"};
     struct shared_variables_t {
-        KernelHandle cumulation_reader_kernel_id;
-        KernelHandle cumulation_compute_kernel_id;
-        std::optional<KernelHandle> cumulation_compute_kernel_id_2;
-        KernelHandle cumulation_writer_kernel_id;
+        KernelHandle accumulation_reader_kernel_id;
+        KernelHandle accumulation_compute_kernel_id;
+        std::optional<KernelHandle> accumulation_compute_kernel_id_2;
+        KernelHandle accumulation_writer_kernel_id;
         std::vector<CoreCoord> cores;
     };
 
@@ -59,7 +59,7 @@ struct CumulationProgramFactory {
     static CBHandle create_cb(
         Program& program,
         const DataType& dtype,
-        const CumulationCB& cumulation_cb,
+        const AccumulationCB& accumulation_cb,
         const CoreRangeSet& core_range_set,
         const uint32_t& tiles_num);
 
@@ -73,4 +73,4 @@ struct CumulationProgramFactory {
     static uint32_t calc_input_tile_offset(const Shape& input_shape, const int32_t& dim);
 };
 
-}  // namespace ttnn::operations::reduction::cumulation
+}  // namespace ttnn::operations::reduction::accumulation

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cumulation_device_operation.hpp"
+#include "accumulation_device_operation.hpp"
 
 #include "tt-metalium/base_types.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
@@ -13,10 +13,10 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::reduction::cumulation {
+namespace ttnn::operations::reduction::accumulation {
 
-// calculate the offset between consecutive tiles between cumulation axis and last dimension
-uint32_t CumulationProgramFactory::calc_input_tile_offset(const Shape& input_shape, const int32_t& dim) {
+// calculate the offset between consecutive tiles between accumulation axis and last dimension
+uint32_t AccumulationProgramFactory::calc_input_tile_offset(const Shape& input_shape, const int32_t& dim) {
     uint32_t input_tile_offset{1};
     for (int32_t i = dim + 1; i < input_shape.rank() - 2; ++i) {
         input_tile_offset *= input_shape[i];
@@ -31,7 +31,7 @@ uint32_t CumulationProgramFactory::calc_input_tile_offset(const Shape& input_sha
     return input_tile_offset;
 }
 
-CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
+AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -63,11 +63,11 @@ CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
 
     const auto& tile = input_tensor.tensor_spec().tile();
-    // how many tiles along cumulation axis
+    // how many tiles along accumulation axis
     const uint32_t tiles_per_row{input_tensor.padded_shape()[dim]};
-    // all work units (product of all row lengths besides the cumulation row)
+    // all work units (product of all row lengths besides the accumulation row)
     const uint32_t num_rows_total{input_tensor.physical_volume() / tile.get_tile_hw() / tiles_per_row};
-    // tiles between consecutive tiles along cumulation row
+    // tiles between consecutive tiles along accumulation row
     const uint32_t input_tile_offset{calc_input_tile_offset(input_shape, dim)};
 
     const auto
@@ -79,10 +79,10 @@ CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
     constexpr uint32_t start_tiles = 4;
     constexpr uint32_t out_tiles = 4;
 
-    auto cb_src{create_cb(program, input_tensor.dtype(), CumulationCB::SRC, all_cores, in_tiles)};
-    auto cb_acc{create_cb(program, output_tensor.dtype(), CumulationCB::ACC, all_cores, op_tiles)};
-    auto cb_start{create_cb(program, output_tensor.dtype(), CumulationCB::START, all_cores, start_tiles)};
-    auto cb_dst{create_cb(program, output_tensor.dtype(), CumulationCB::DST, all_cores, out_tiles)};
+    auto cb_src{create_cb(program, input_tensor.dtype(), AccumulationCB::SRC, all_cores, in_tiles)};
+    auto cb_acc{create_cb(program, output_tensor.dtype(), AccumulationCB::ACC, all_cores, op_tiles)};
+    auto cb_start{create_cb(program, output_tensor.dtype(), AccumulationCB::START, all_cores, start_tiles)};
+    auto cb_dst{create_cb(program, output_tensor.dtype(), AccumulationCB::DST, all_cores, out_tiles)};
 
     const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
@@ -102,14 +102,14 @@ CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
         .defines = defines_kernel_args};
     const WriterDataMovementConfig writer_config{{dst_is_dram}};
 
-    auto cumulation_reader_kernel_id{create_kernel(program, KERNEL_PATHS[0], all_cores, reader_config)};
-    auto cumulation_compute_kernel_id{create_kernel(program, KERNEL_PATHS[1], core_group_1, compute_config)};
+    auto accumulation_reader_kernel_id{create_kernel(program, KERNEL_PATHS[0], all_cores, reader_config)};
+    auto accumulation_compute_kernel_id{create_kernel(program, KERNEL_PATHS[1], core_group_1, compute_config)};
     std::optional<KernelHandle> compute_kernel_2_id{std::nullopt};
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
         compute_kernel_2_id = create_kernel(program, KERNEL_PATHS[1], core_group_2, compute_config);
     }
-    auto cumulation_writer_kernel_id{create_kernel(program, KERNEL_PATHS[2], all_cores, writer_config)};
+    auto accumulation_writer_kernel_id{create_kernel(program, KERNEL_PATHS[2], all_cores, writer_config)};
 
     for (uint32_t i{0}, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core{i / num_cores_y, i % num_cores_y};
@@ -125,7 +125,7 @@ CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
 
         SetRuntimeArgs(
             program,
-            cumulation_reader_kernel_id,
+            accumulation_reader_kernel_id,
             core,
             {src_buffer->address(),
              num_tiles_per_core,
@@ -139,7 +139,7 @@ CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
 
         SetRuntimeArgs(
             program,
-            cumulation_writer_kernel_id,
+            accumulation_writer_kernel_id,
             core,
             {dst_buffer->address(),
              num_tiles_per_core,
@@ -153,7 +153,7 @@ CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(
                 program,
-                cumulation_compute_kernel_id,
+                accumulation_compute_kernel_id,
                 core,
                 {num_tiles_per_core, tiles_per_row, static_cast<uint32_t>(operation_attributes.op)});
         } else if (core_group_2.contains(core)) {
@@ -173,21 +173,21 @@ CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
     auto cores = grid_to_cores(num_cores, grid.x, grid.y);
     return {
         std::move(program),
-        {.cumulation_reader_kernel_id = cumulation_reader_kernel_id,
-         .cumulation_compute_kernel_id = cumulation_compute_kernel_id,
-         .cumulation_compute_kernel_id_2 = compute_kernel_2_id,
-         .cumulation_writer_kernel_id = cumulation_writer_kernel_id,
+        {.accumulation_reader_kernel_id = accumulation_reader_kernel_id,
+         .accumulation_compute_kernel_id = accumulation_compute_kernel_id,
+         .accumulation_compute_kernel_id_2 = compute_kernel_2_id,
+         .accumulation_writer_kernel_id = accumulation_writer_kernel_id,
          .cores = cores}};
 }
 
-void CumulationProgramFactory::override_runtime_arguments(
+void AccumulationProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.cumulation_reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.cumulation_writer_kernel_id;
+    const auto& reader_kernel_id = cached_program.shared_variables.accumulation_reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.accumulation_writer_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
 
     auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
@@ -200,14 +200,14 @@ void CumulationProgramFactory::override_runtime_arguments(
     }
 }
 
-CBHandle CumulationProgramFactory::create_cb(
+CBHandle AccumulationProgramFactory::create_cb(
     Program& program,
     const DataType& dtype,
-    const CumulationCB& cumulation_cb,
+    const AccumulationCB& accumulation_cb,
     const CoreRangeSet& core_range_set,
     const uint32_t& num_tiles) {
     using tt::tt_metal::detail::TileSize;
-    const uint32_t cb_id{static_cast<uint32_t>(cumulation_cb)};
+    const uint32_t cb_id{static_cast<uint32_t>(accumulation_cb)};
     const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
     const uint32_t single_tile_size{TileSize(cb_data_format)};
     const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
@@ -215,7 +215,7 @@ CBHandle CumulationProgramFactory::create_cb(
     return CreateCircularBuffer(program, core_range_set, cb_config);
 }
 
-KernelHandle CumulationProgramFactory::create_kernel(
+KernelHandle AccumulationProgramFactory::create_kernel(
     Program& program,
     const char* kernel_path,
     const CoreRangeSet& core_range_set,
@@ -228,4 +228,4 @@ KernelHandle CumulationProgramFactory::create_kernel(
     return kernel_id;
 }
 
-}  // namespace ttnn::operations::reduction::cumulation
+}  // namespace ttnn::operations::reduction::accumulation

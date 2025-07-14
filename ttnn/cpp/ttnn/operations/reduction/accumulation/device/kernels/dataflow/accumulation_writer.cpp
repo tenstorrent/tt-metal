@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#include "../cumulation_common.hpp"
+#include "../accumulation_common.hpp"
 
 void kernel_main() {
     uint32_t output_base_addr = get_arg_val<uint32_t>(0);
@@ -14,9 +14,9 @@ void kernel_main() {
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
     const uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
     const uint32_t start_id = get_arg_val<uint32_t>(4);
-    // This is the offset of all dimensions below the cumulation axis
+    // This is the offset of all dimensions below the accumulation axis
     uint32_t low_rank_offset = get_arg_val<uint32_t>(5);
-    // This is the offset of all dimensions above the cumulation axis (HtWt for last two axes)
+    // This is the offset of all dimensions above the accumulation axis (HtWt for last two axes)
     uint32_t high_rank_offset = get_arg_val<uint32_t>(6);
 
     const uint32_t flip = get_arg_val<uint32_t>(7);

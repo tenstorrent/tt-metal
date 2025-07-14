@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cumulation_program_factory.hpp"
+#include "accumulation_program_factory.hpp"
 
 #include <optional>
 #include <type_traits>
@@ -16,17 +16,17 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::reduction::cumulation {
+namespace ttnn::operations::reduction::accumulation {
 
 using namespace tt::tt_metal;
 using namespace tt::stl;
 
-struct CumulationDeviceOperation {
-    using operation_attributes_t = cumulation::operation_attributes_t;
-    using tensor_args_t = cumulation::tensor_args_t;
-    using spec_return_value_t = cumulation::spec_return_value_t;
-    using tensor_return_value_t = cumulation::tensor_return_value_t;
-    using program_factory_t = std::variant<cumulation::CumulationProgramFactory>;
+struct AccumulationDeviceOperation {
+    using operation_attributes_t = accumulation::operation_attributes_t;
+    using tensor_args_t = accumulation::tensor_args_t;
+    using spec_return_value_t = accumulation::spec_return_value_t;
+    using tensor_return_value_t = accumulation::tensor_return_value_t;
+    using program_factory_t = std::variant<accumulation::AccumulationProgramFactory>;
 
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;
 
@@ -45,16 +45,17 @@ struct CumulationDeviceOperation {
     static invocation_result_t invoke(
         const Tensor& input_tensor,
         const int32_t& dim,
-        std::optional<DataType>& dtype,
+        const std::optional<DataType>& dtype,
+        const bool& reverse_order,
         std::optional<Tensor> optional_out,
         const std::optional<MemoryConfig>& memory_config,
-        bool flip,
-        CumulationOp op);
+        AccumulationOp op);
 };
 
-}  // namespace ttnn::operations::reduction::cumulation
+}  // namespace ttnn::operations::reduction::accumulation
 
 namespace ttnn::prim {
-constexpr auto cumulation = ttnn::
-    register_operation<"ttnn::prim::cumulation", ttnn::operations::reduction::cumulation::CumulationDeviceOperation>();
+constexpr auto accumulation = ttnn::register_operation<
+    "ttnn::prim::accumulation",
+    ttnn::operations::reduction::accumulation::AccumulationDeviceOperation>();
 }  // namespace ttnn::prim

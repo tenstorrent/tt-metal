@@ -23,10 +23,11 @@ target_sources(
         argmax/device/argmax_op.cpp
         argmax/device/argmax_program_factory.cpp
         argmax/argmax.cpp
-        cumulation/cumprod/cumprod.cpp
-        cumulation/cumsum/cumsum.cpp
-        cumulation/device/cumulation_device_operation.cpp
-        cumulation/device/cumulation_program_factory.cpp
+        accumulation/accumulation_common.cpp
+        accumulation/cumprod/cumprod.cpp
+        accumulation/cumsum/cumsum.cpp
+        accumulation/device/accumulation_device_operation.cpp
+        accumulation/device/accumulation_program_factory.cpp
         sampling/device/sampling_op.cpp
         sampling/device/sampling_program_factory.cpp
         sampling/sampling.cpp

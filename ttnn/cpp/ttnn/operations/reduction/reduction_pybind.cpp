@@ -12,8 +12,8 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions_pybind.hpp"
 #include "ttnn/operations/reduction/argmax/argmax_pybind.hpp"
-#include "ttnn/operations/reduction/cumulation/cumprod/cumprod_pybind.hpp"
-#include "ttnn/operations/reduction/cumulation/cumsum/cumsum_pybind.hpp"
+#include "ttnn/operations/reduction/accumulation/cumprod/cumprod_pybind.hpp"
+#include "ttnn/operations/reduction/accumulation/cumsum/cumsum_pybind.hpp"
 #include "ttnn/operations/reduction/moe/moe_pybind.hpp"
 #include "ttnn/operations/reduction/prod/prod_pybind.hpp"
 #include "ttnn/operations/reduction/sampling/sampling_pybind.hpp"
@@ -34,9 +34,8 @@ void py_module(py::module& module) {
 
     // Special reductions
     detail::bind_reduction_argmax_operation(module);
-    cumulation::detail::bind_cumsum_operation(module);
-    cumulation::detail::bind_cumsum_backward_operation(module);
-    cumulation::detail::bind_reduction_cumprod_operation(module);
+    accumulation::detail::bind_reduction_cumsum_operation(module);
+    accumulation::detail::bind_reduction_cumprod_operation(module);
     detail::bind_reduction_moe_operation(module);
     detail::bind_reduction_prod_operation(module, ttnn::prod);
     detail::bind_reduction_sampling_operation(module);

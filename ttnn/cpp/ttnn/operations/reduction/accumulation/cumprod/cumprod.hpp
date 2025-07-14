@@ -10,7 +10,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::reduction::cumulation {
+namespace operations::reduction::accumulation {
 
 struct CumprodOperation {
     static Tensor invoke(
@@ -18,13 +18,14 @@ struct CumprodOperation {
         const Tensor& input_tensor,
         const int32_t& dim,
         std::optional<DataType>& dtype,
+        const bool& reverse_order,
         std::optional<Tensor> optional_out,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace operations::reduction::cumulation
+}  // namespace operations::reduction::accumulation
 
 constexpr auto cumprod =
-    ttnn::register_operation<"ttnn::cumprod", ttnn::operations::reduction::cumulation::CumprodOperation>();
+    ttnn::register_operation<"ttnn::cumprod", ttnn::operations::reduction::accumulation::CumprodOperation>();
 
 }  // namespace ttnn

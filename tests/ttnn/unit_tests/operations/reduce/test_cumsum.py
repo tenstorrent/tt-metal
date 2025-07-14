@@ -10,7 +10,6 @@ from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
 from models.utility_functions import comp_allclose_and_pcc
 
 
-# From test_moreh_cum
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     torch.manual_seed(2023)
     npu_dtype = ttnn.bfloat16
@@ -149,7 +148,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
 
-    output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype, output=preallocated_output_tensor)
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype, out=preallocated_output_tensor)
     torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
 
     expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
@@ -200,7 +199,7 @@ def test_cumsum_callback(size, dim, dtypes, device):
     if not is_supported(size, dim, expected_output_dtype):
         pytest.skip("Unsupported configuration by ttnn.cumsum")
 
-    for _ in range(0, 2):  # Test with program cache
+    for _ in range(2):  # Test with program cache
         output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
 
         assert output_tensor.dtype == expected_output_dtype
@@ -249,28 +248,17 @@ def test_cumsum_backward(size, dim, dtypes, device):
     torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype, requires_grad=True)
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
-    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
-
-    tensor_rank = len(size)
-    # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
-    if not is_supported(size, dim, expected_output_dtype):
-        return
-
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(size, size, device)
 
     torch_output = torch.cumsum(torch_input_tensor, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-
-    tt_input_grad_cpu = ttnn.to_torch(ttnn.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad))
+    tt_input_grad_cpu = ttnn.to_torch(
+        ttnn.cumsum(tt_output_grad, dim, dtype=ttnn_dtype, reverse_order=True, out=tt_input_grad)
+    )
 
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
 
     # test for equivalance
     rtol = atol = 0.1
-    passing, output_pcc = comp_allclose_and_pcc(
-        torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol
-    )
-
-    assert passing
+    assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)

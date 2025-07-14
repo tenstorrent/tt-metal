@@ -16,7 +16,7 @@ constexpr uint32_t cb_acc = tt::CBIndex::c_3;
 constexpr uint32_t INT32_TILE_DEST = WORKING_REG;
 constexpr uint32_t INT32_TILE_ACC = 1;
 
-enum class CumulationOp : uint8_t { CUMSUM, CUMPROD };
+enum class AccumulationOp : uint8_t { CUMSUM, CUMPROD };
 
 FORCE_INLINE uint32_t get_tile_id(
     uint32_t low_rank_offset,

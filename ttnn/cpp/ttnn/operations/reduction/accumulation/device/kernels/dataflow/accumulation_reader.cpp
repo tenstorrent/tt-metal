@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compile_time_args.h"
 #include "dataflow_api.h"
 
-#include "../cumulation_common.hpp"
+#include "../accumulation_common.hpp"
 
 namespace {
 
@@ -24,14 +23,14 @@ void kernel_main() {
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
     const uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
     const uint32_t start_id = get_arg_val<uint32_t>(4);
-    // This is the offset of all dimensions below the cumulation axis
+    // This is the offset of all dimensions below the accumulation axis
     uint32_t low_rank_offset = get_arg_val<uint32_t>(5);
-    // This is the offset of all dimensions above the cumulation axis (HtWt for last two axes)
+    // This is the offset of all dimensions above the accumulation axis (HtWt for last two axes)
     uint32_t high_rank_offset = get_arg_val<uint32_t>(6);
     // backward flag (from n-1 to 0)
     const uint32_t flip = get_arg_val<uint32_t>(7);
-    // type of cumulation
-    const CumulationOp cumulation_op = static_cast<CumulationOp>(get_arg_val<uint32_t>(8));
+    // type of accumulation
+    const AccumulationOp accumulation_op = static_cast<AccumulationOp>(get_arg_val<uint32_t>(8));
 
     cb_reserve_back(cb_start, ONE_TILE);
     uint32_t data_start_addr = get_write_ptr(cb_start);
@@ -51,7 +50,7 @@ void kernel_main() {
     const uint32_t input_tile_bytes = ublock_size_bytes;
     uint32_t scaler = 0;
 
-    if (cumulation_op == CumulationOp::CUMPROD) {
+    if (accumulation_op == AccumulationOp::CUMPROD) {
         switch (input_data_format) {
             case DataFormat::Float32: scaler = ACC_START_VALUE_F32; break;
             case DataFormat::Float16_b:
@@ -65,7 +64,7 @@ void kernel_main() {
             case DataFormat::UInt32: scaler = ACC_START_VALUE_I32; break;
             default: scaler = 1; break;
         }
-    } else if (cumulation_op == CumulationOp::CUMSUM) {
+    } else if (accumulation_op == AccumulationOp::CUMSUM) {
         scaler = 0;
     }
 

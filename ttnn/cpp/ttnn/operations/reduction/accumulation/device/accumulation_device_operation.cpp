@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cumulation_device_operation.hpp"
+#include "accumulation_device_operation.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::cumulation {
+namespace ttnn::operations::reduction::accumulation {
 
-CumulationDeviceOperation::program_factory_t CumulationDeviceOperation::select_program_factory(
+AccumulationDeviceOperation::program_factory_t AccumulationDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return CumulationProgramFactory{};
+    return AccumulationProgramFactory{};
 }
 
-void CumulationDeviceOperation::validate_on_program_cache_miss(
+void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor{tensor_args.input_tensor};
     auto& optional_out{tensor_args.opt_output};
@@ -36,22 +36,24 @@ void CumulationDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         ((dim >= -static_cast<decltype(dim)>(input_tensor.padded_shape().rank())) &&
          (dim < static_cast<decltype(dim)>(input_tensor.padded_shape().rank()))),
-        "The requested cumulation axis is {}, while the input thensor has rank {}.",
+        "The requested accumulation axis is {}, while the input thensor has rank {}.",
         dim,
         input_tensor.padded_shape().rank());
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
-        "ttnn cumulation operations require input to be on a Tenstorrent device. "
+        "ttnn accumulation operations (cumprod, cumsum) require input to be on a Tenstorrent device. "
         "The input tensor is stored on {}.",
         magic_enum::enum_name(input_tensor.storage_type()));
 
     TT_FATAL(
         input_tensor.buffer() != nullptr,
-        "ttnn cumulation operations require to be allocated in buffers on the device. "
+        "ttnn accumulation operations (cumprod, cumsum) require to be allocated in buffers on the device. "
         "The buffer is null.");
 
-    TT_FATAL(!input_tensor.is_sharded(), "ttnn cumulation operations do not support sharded input tensors.");
+    TT_FATAL(
+        !input_tensor.is_sharded(),
+        "ttnn accumulation operations (cumprod, cumsum) do not support sharded input tensors.");
 
     TT_FATAL(
         input_tensor.layout() == Layout::TILE,
@@ -60,17 +62,17 @@ void CumulationDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "ttnn cumulation operations require the memory layout of the input tensor to be "
+        "ttnn accumulation operations (cumprod, cumsum) require the memory layout of the input tensor to be "
         "interleaved. Instead, it is {}.",
         magic_enum::enum_name(input_tensor.memory_config().memory_layout()));
 }
 
-void CumulationDeviceOperation::validate_on_program_cache_hit(
+void AccumulationDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(attributes, tensor_args);
 }
 
-CumulationDeviceOperation::spec_return_value_t CumulationDeviceOperation::compute_output_specs(
+AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.opt_output.has_value()) {
         return tensor_args.opt_output->tensor_spec();
@@ -81,12 +83,16 @@ CumulationDeviceOperation::spec_return_value_t CumulationDeviceOperation::comput
         output_layout = tensor_args.input_tensor.layout();
     }
 
+    const DataType dtype =
+        tensor_args.opt_output
+            ? tensor_args.opt_output->dtype()
+            : ((attributes.dtype == DataType::INVALID) ? tensor_args.input_tensor.dtype() : attributes.dtype);
+
     const auto output_shape{tensor_args.input_tensor.logical_shape()};
-    return TensorSpec{
-        output_shape, TensorLayout{tensor_args.input_tensor.dtype(), output_layout, attributes.output_memory_config}};
+    return TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};
 }
 
-CumulationDeviceOperation::tensor_return_value_t CumulationDeviceOperation::create_output_tensors(
+AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.opt_output.has_value()) {
         // a copy of a Python object (referencing to the same tensor though) is returned here
@@ -96,9 +102,9 @@ CumulationDeviceOperation::tensor_return_value_t CumulationDeviceOperation::crea
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-operation::Hash CumulationDeviceOperation::compute_program_hash(
+operation::Hash AccumulationDeviceOperation::compute_program_hash(
     const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
-    return operation::hash_operation<CumulationDeviceOperation>(
+    return operation::hash_operation<AccumulationDeviceOperation>(
         select_program_factory(op_args, tensor_args).index(),
         op_args.dim,
         op_args.output_memory_config,
@@ -113,23 +119,25 @@ operation::Hash CumulationDeviceOperation::compute_program_hash(
         tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().dtype() : DataType{});
 }
 
-CumulationDeviceOperation::invocation_result_t CumulationDeviceOperation::invoke(
+AccumulationDeviceOperation::invocation_result_t AccumulationDeviceOperation::invoke(
     const Tensor& input_tensor,
     const int32_t& dim,
-    std::optional<DataType>& dtype,
+    const std::optional<DataType>& dtype,
+    const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
-    bool flip,
-    CumulationOp op) {
+    AccumulationOp op) {
     return {
         operation_attributes_t{
             dim,
-            dtype.has_value() ? dtype.value() : DataType::INVALID,
-            memory_config.has_value() ? *memory_config
-                                      : (optional_out.has_value() ? optional_out->memory_config() : MemoryConfig{}),
-            flip,
+            dtype.has_value() ? dtype.value()
+                              : (optional_out.has_value() ? optional_out->dtype() : input_tensor.dtype()),
+            memory_config.has_value()
+                ? *memory_config
+                : (optional_out.has_value() ? optional_out->memory_config() : input_tensor.memory_config()),
+            reverse_order,
             op},
         tensor_args_t{input_tensor, std::move(optional_out)}};
 }
 
-}  // namespace ttnn::operations::reduction::cumulation
+}  // namespace ttnn::operations::reduction::accumulation

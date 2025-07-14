@@ -9,17 +9,16 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::cumulation {
+namespace ttnn::operations::reduction::accumulation {
 
-enum class CumulationOp : uint8_t { CUMSUM, CUMPROD };
+enum class AccumulationOp : uint8_t { CUMSUM, CUMPROD };
 
 struct operation_attributes_t {
-    // scatter dim
     const int32_t dim;
     const DataType dtype;
-    const tt::tt_metal::MemoryConfig output_memory_config;
+    const MemoryConfig output_memory_config;
     const bool flip;
-    const CumulationOp op;
+    const AccumulationOp op;
 };
 
 struct tensor_args_t {
@@ -30,4 +29,4 @@ struct tensor_args_t {
 using spec_return_value_t = TensorSpec;
 using tensor_return_value_t = Tensor;
 
-}  // namespace ttnn::operations::reduction::cumulation
+}  // namespace ttnn::operations::reduction::accumulation

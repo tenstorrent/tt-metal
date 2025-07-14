@@ -11,13 +11,13 @@
 #define APPROX false
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "../cumulation_common.hpp"
+#include "../accumulation_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
-    const CumulationOp cumulation_op = static_cast<CumulationOp>(get_arg_val<uint32_t>(2));
+    const AccumulationOp accumulation_op = static_cast<AccumulationOp>(get_arg_val<uint32_t>(2));
 
     cb_wait_front(cb_start, ONE_TILE);
 
@@ -41,10 +41,10 @@ void MAIN {
 
             // cumulating tiles along the first dimension,
             // data is not dependent on itself within tiles
-            if (cumulation_op == CumulationOp::CUMPROD) {
+            if (accumulation_op == AccumulationOp::CUMPROD) {
                 mul_tiles_init(cb_in, cb_op);
                 mul_tiles(cb_in, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
-            } else if (cumulation_op == CumulationOp::CUMSUM) {
+            } else if (accumulation_op == AccumulationOp::CUMSUM) {
 #ifdef CUMSUM_USE_INT32
                 add_int_tile_init();
                 add_int32_tile(INT32_TILE_DEST, INT32_TILE_ACC);
