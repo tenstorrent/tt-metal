@@ -185,8 +185,8 @@ class RunTimeOptions {
     // Force disables using DMA for reads and writes
     bool disable_dma_ops = false;
 
-    // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time.
-    // TODO: Once all of init is moved to MetalContext, investigate removing this option.
+    // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
+    // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
 
 public:
