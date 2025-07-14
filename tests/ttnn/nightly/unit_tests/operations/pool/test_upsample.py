@@ -70,10 +70,11 @@ def test_bilinear_interleaved_memory(
     allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
     assert allclose
 
+
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [1, 640, 16, 32],
+        [1, 640, 32, 32],
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
