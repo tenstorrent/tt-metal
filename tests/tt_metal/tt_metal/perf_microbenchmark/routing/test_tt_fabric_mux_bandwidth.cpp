@@ -19,6 +19,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -185,12 +186,12 @@ void create_mux_kernel(
         .edm_noc_x = drainer_test_config.drainer_virtual_core.x,
         .edm_noc_y = drainer_test_config.drainer_virtual_core.y,
         .edm_buffer_base_addr = drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),
-        .num_buffers_per_channel = drainer_kernel_config->num_buffers_full_size_channel,
+        .num_buffers_per_channel = drainer_kernel_config->get_num_buffers(drainer_channel_type),
         .edm_l1_sem_addr = drainer_kernel_config->get_flow_control_address(drainer_channel_type, 0),
         .edm_connection_handshake_addr =
             drainer_kernel_config->get_connection_handshake_address(drainer_channel_type, 0),
         .edm_worker_location_info_addr = drainer_kernel_config->get_connection_info_address(drainer_channel_type, 0),
-        .buffer_size_bytes = drainer_kernel_config->buffer_size_bytes_full_size_channel,
+        .buffer_size_bytes = drainer_kernel_config->get_buffer_size_bytes(drainer_channel_type),
         .buffer_index_semaphore_id = drainer_kernel_config->get_buffer_index_address(drainer_channel_type, 0),
         .edm_direction = tt::tt_fabric::eth_chan_directions::EAST, /* ignored, direction */
     };

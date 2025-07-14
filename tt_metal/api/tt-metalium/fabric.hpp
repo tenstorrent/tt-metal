@@ -156,6 +156,8 @@ public:
     void set_num_iters_between_teardown_checks(size_t new_val);
 
     size_t get_memory_map_end_address() const;
+
+    // Returns vector of pairs of base addresses and size to clear
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
 private:
@@ -163,7 +165,7 @@ private:
     void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
 
-    // Private nested struct for memory region management
+    // Private struct for memory management
     struct MemoryRegion {
         size_t base_address;
         size_t unit_size;

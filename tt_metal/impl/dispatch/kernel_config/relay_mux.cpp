@@ -85,7 +85,6 @@ void RelayMux::GenerateStaticConfigs() {
     uint32_t mux_buffer_end = mux_kernel_config_->get_memory_map_end_address();
     TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
 
-    mux_rt_args_.clear();
     int destination_device_id = -1;
     TT_FATAL(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
     if (d2h_) {
@@ -148,8 +147,8 @@ void RelayMux::GenerateStaticConfigs() {
         dst_fabric_node_id,
         link_index);
 
-    tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_}, mux_rt_args_, GetCoreType());
+    mux_rt_args_ = mux_kernel_config_->get_fabric_mux_run_time_args(
+        src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_});
 }
 
 void RelayMux::GenerateDependentConfigs() {}
