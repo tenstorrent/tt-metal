@@ -91,7 +91,8 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
     //  - Sender Endpoint sends its descriptor first, then receives the peer's descriptor.
     //  - Receiver Endpoint receives the peer's descriptor first, then sends its own descriptor.
     // Asymmetry ensures that the blocking send/recv do not deadlock.
-    fmt::println("INSIDE CONNECT WITH PEER");
+    std::string socket_type_str = socket_endpoint_type_ == SocketEndpoint::SENDER ? "Sender" : "Receiver";
+    fmt::println("INSIDE CONNECT WITH PEER:::: {} SOCKET", socket_type_str);
     if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
         forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
         remote_endpoint_desc =
@@ -106,7 +107,7 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
     fmt::println("BEFORE WRITE SOCKET CONFIGS");
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
     fmt::println("BEFORE POINT TO POINT BARRIER");
-    point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
+    // point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
     fmt::println("AFTER POINT TO POINT BARRIER");
 }
 
