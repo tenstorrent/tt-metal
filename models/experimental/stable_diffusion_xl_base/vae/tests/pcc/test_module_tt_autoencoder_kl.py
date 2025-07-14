@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
 import gc
 import torch
 import pytest
@@ -25,17 +26,14 @@ from loguru import logger
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae(device, input_shape, pcc, is_ci_env, reset_seeds):
     if is_ci_env:
-        vae = AutoencoderKL.from_pretrained(
-            SDXL_CI_WEIGHTS_PATH,
-            torch_dtype=torch.float32,
-            use_safetensors=True,
-            subfolder="vae",
-            local_files_only=True,
-        )
-    else:
-        vae = AutoencoderKL.from_pretrained(
-            "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
-        )
+        os.environ["HF_HOME"] = SDXL_CI_WEIGHTS_PATH
+    vae = AutoencoderKL.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="vae",
+        local_files_only=is_ci_env,
+    )
     vae.eval()
     state_dict = vae.state_dict()
 
