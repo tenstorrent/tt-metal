@@ -232,7 +232,6 @@ TEST(Cluster, ReportSystemHealth) {
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
                            << connected_chip_id;
-
                     eth_ss << "\n\tCRC Errors: 0x" << std::hex << crc_error_val << " ";
                     eth_ss << "Corrected Codewords: 0x" << std::hex << ((uint64_t)corr_val_hi << 32) + corr_val_lo
                            << " Uncorrected Codewords: 0x" << std::hex
