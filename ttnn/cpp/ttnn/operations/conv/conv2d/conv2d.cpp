@@ -460,11 +460,11 @@ Result conv2d_DRAM(
     if (conv_config.deallocate_activation) {
         input_tensor_on_device.deallocate(true);
     }
-    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
-    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
-
-    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
-
+    if (dram_slice_config.reshape_output_to_2d) {
+        const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
+        const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
+        dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
+    }
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 

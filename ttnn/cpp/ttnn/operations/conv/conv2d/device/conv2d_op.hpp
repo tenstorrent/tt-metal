@@ -144,6 +144,9 @@ struct Conv2dSliceConfig {
 
     // Number of slices that the output tensor should be divided into.
     uint32_t num_slices = 0;
+
+    // Reshape output tensor to 2D
+    bool reshape_output_to_2d = true;
 };
 
 // TODO: Accept parallelization
