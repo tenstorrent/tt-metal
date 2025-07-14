@@ -93,7 +93,7 @@ void py_bind_all_broadcast_async(pybind11::module& module) {
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on.
             mesh_device (MeshDevice): Device mesh to perform the operation on.
 
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-broadcast operation. Defaults to `1`.
