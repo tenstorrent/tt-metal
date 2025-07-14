@@ -5,12 +5,12 @@
 #pragma once
 
 #include "dataflow_api_common.h"
-#include <noc/noc_parameters.h>
 #include "dataflow_cmd_bufs.h"
+#include "debug/assert.h"
 #include "debug/sanitize_noc.h"
 #include "debug/waypoint.h"
 #include "utils/utils.h"
-#include "debug/assert.h"
+
 #include <type_traits>
 
 namespace interleaved_addr_gen {

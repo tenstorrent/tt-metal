@@ -362,6 +362,9 @@
 #define NOC_XY_PCIE_ENCODING(x, y) \
     ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
 
+// Mask for the 60th bit of the address in NOC_TARG/RET_ADDR_MID, which is set to enable PCIe transactions
+#define NOC_PCIE_MASK 0x1000000F
+
 #define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                                                         \
     ((((uint32_t)(x_start)) << (2 * NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(y_start)) << (3 * NOC_ADDR_NODE_ID_BITS)) | \
      (((uint32_t)(x_end))) | (((uint32_t)(y_end)) << (NOC_ADDR_NODE_ID_BITS)))
