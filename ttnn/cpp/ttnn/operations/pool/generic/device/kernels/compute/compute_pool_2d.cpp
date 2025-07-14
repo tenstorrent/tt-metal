@@ -123,6 +123,8 @@ void MAIN {
             }
             tile_regs_release();
         }
+        reduce_h_fused<1, last_tile_is_partial, max_rows_for_reduction, neginf_srca_maxpool, zero_srca_avgpool>(
+            interm_cb_id, in_one_cb_id, partial_iter_output_tiles - 1, out_cb_id);
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
