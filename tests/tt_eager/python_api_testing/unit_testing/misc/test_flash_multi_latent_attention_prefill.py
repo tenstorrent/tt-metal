@@ -46,17 +46,6 @@ def scaled_dot_product_attention_reference(Q, K, V, scale, is_causal=True):
     )
 
 
-def flash_mla_prefill_tt(
-    query,
-    key,
-    value,
-    nh,
-    nkv,
-    is_causal=True,
-):
-    pass
-
-
 def run_flash_mla_prefill_impl(
     device,
     batch,

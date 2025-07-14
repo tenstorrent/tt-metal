@@ -105,7 +105,7 @@ void ScaledDotProductAttention::validate(
         // Shape checks
         const auto q_shape = input_tensors.at(0).logical_shape();
         const auto k_shape = input_tensors.at(1).logical_shape();
-        const auto v_shape = use_mla ? input_tensors.at(1).padded_shape() : input_tensors.at(2).padded_shape();
+        const auto v_shape = use_mla ? input_tensors.at(1).logical_shape() : input_tensors.at(2).logical_shape();
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
@@ -187,7 +187,7 @@ void ScaledDotProductAttention::validate(
         // Additional chunked-specific validations
         const auto q_shape = input_tensors.at(0).logical_shape();
         const auto k_shape = input_tensors.at(1).logical_shape();
-        const auto v_shape = use_mla ? input_tensors.at(1).padded_shape() : input_tensors.at(2).padded_shape();
+        const auto v_shape = use_mla ? input_tensors.at(1).logical_shape() : input_tensors.at(2).logical_shape();
         const auto page_table_shape = page_table.logical_shape();
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
