@@ -54,10 +54,10 @@ void kernel_main() {
     // 2. multicast data to mm cores
     size_t l1_read_addr = get_read_ptr(inter_cb_index);
     const uint64_t multicast_addr =
-        get_noc_multicast_addr(bbox_start_x, bbox_start_y, bbox_start_x + 1, bbox_start_y + 1, aggregated_tensor_addr);
+        get_noc_multicast_addr(bbox_start_x, bbox_start_y, bbox_start_x + 3, bbox_start_y + 5, aggregated_tensor_addr);
     // noc_async_write_multicast(
     //     l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
     noc_async_write_multicast(
-        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, 4, false);
+        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, 15, false);
     noc_async_write_barrier();
 }
