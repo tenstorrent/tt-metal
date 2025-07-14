@@ -75,6 +75,8 @@ enum class FWMailboxMsg : uint8_t {
     ETH_MSG_RELEASE_CORE,
     // Heartbeat counter which indicates base firmware is running
     HEARTBEAT,
+    // Retrain count
+    RETRAIN_COUNT,
     // Number of mailbox message types
     COUNT,
 };

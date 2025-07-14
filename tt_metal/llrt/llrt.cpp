@@ -421,6 +421,17 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
     }
 }
 
+uint32_t get_retrain_count(chip_id_t device_id, const CoreCoord& virtual_core) {
+    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
+    const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RETRAIN_COUNT);
+    return read_hex_vec_from_core(device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
+}
+
 }  // namespace internal_
 
 }  // namespace llrt

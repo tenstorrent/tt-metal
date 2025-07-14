@@ -120,6 +120,9 @@ void send_msg_to_eth_mailbox(
 // Used to check if the base firmware is running and ready to service the eth mailbox
 void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
 
+// Read the retrain count from the ethernet firmware mailbox, if supported
+uint32_t get_retrain_count(chip_id_t device_id, const CoreCoord& virtual_core);
+
 }  // namespace internal_
 
 }  // namespace llrt

@@ -125,11 +125,11 @@ void Application() {
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 
-    set_deassert_addresses();
-
-    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        noc_local_state_init(n);
+    // Stall for the host to set this flag to 1 otherwise we could exit
+    // the base firmware while the host is still initializing
+    while (enable_fw_flag[0] != 1) {
+        // Wait for sync from host
+        invalidate_l1_cache();
     }
 
     // There may be some random data from the base FW
@@ -140,17 +140,17 @@ void Application() {
     // one time here instead of setting it everytime in dataflow_api.
     NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
+    set_deassert_addresses();
+
+    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
+    }
+
     deassert_all_reset();
     wait_subordinate_eriscs();
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
-
-    // Stall for the host to set this flag to 1 otherwise we could exit
-    // the base firmware while the host is still initializing
-    while (enable_fw_flag[0] != 1) {
-        // Wait for sync from host
-        invalidate_l1_cache();
-    }
 
     while (1) {
         // Wait...
