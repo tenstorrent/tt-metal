@@ -334,6 +334,10 @@ void forward_descriptor_to_peer(
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    fmt::println(
+        "DEBUG FORWARDING DESCRIPTOR TO PEER RANK {} IS SENDER {}",
+        peer_rank.get(),
+        is_sender);  // Debugging output to track descriptor forwarding
     // Serialize the local endpoint descriptor
     std::vector<uint8_t> serialized_local_desc = serialize_to_bytes(desc);
     // Send size of serialized descriptor first, so that the peer knows the amount of data to expect
