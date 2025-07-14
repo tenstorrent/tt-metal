@@ -7,9 +7,6 @@ Data Movement APIs
   noc_async_read_with_state
   noc_async_read_one_packet_set_state
   noc_async_read_one_packet_with_state
-  noc_async_read_tile
-  noc_async_read_page
-  noc_async_read_partial_page
   noc_async_read_tile_dram_sharded_set_state
   noc_async_read_tile_dram_sharded_with_state
   noc_async_write
