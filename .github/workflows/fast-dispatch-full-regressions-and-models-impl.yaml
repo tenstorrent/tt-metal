@@ -87,7 +87,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, whisper, yolov8s_world, yolov9c, vgg_unet, ufld_v2, mobilenetv2, vanilla_unet, yolov10, openpdn_mnist, yolov8x, vit, sentence_bert, yolov7, yolov8s, swin_s, yolov11, yolov6l, swin_v2]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, whisper, yolov8s_world, yolov9c, vgg_unet, ufld_v2, mobilenetv2, vanilla_unet, yolov10x, openpdn_mnist, yolov8x, vit, sentence_bert, yolov7, yolov8s, swin_s, yolov11, yolov6l, swin_v2]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
         include:
           - model: stable_diffusion_xl_base
