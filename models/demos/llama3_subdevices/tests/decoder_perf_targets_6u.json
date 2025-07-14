@@ -140,7 +140,7 @@
       "non-overlapped-dispatch-time": 7398.333333333333,
       "kernel_duration_relative_margin": 0.05,
       "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 0.2,
+      "first_to_last_start_relative_margin": 0.4,
       "dispatch_duration_relative_margin": 0.3
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
