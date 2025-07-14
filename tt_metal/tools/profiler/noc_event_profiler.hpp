@@ -41,7 +41,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> decode_noc_addr_to_multicast_
     // bits like normal noc address; Start coordinate is in higher bits
     auto [xend, yend] = decode_noc_coord_reg_to_coord(noc_addr >> NOC_ADDR_LOCAL_BITS);
     auto [xstart, ystart] =
-        decode_noc_coord_reg_to_coord((noc_addr >> NOC_ADDR_LOCAL_BITS) + (2 * NOC_ADDR_NODE_ID_BITS));
+        decode_noc_coord_reg_to_coord(noc_addr >> (NOC_ADDR_LOCAL_BITS + 2 * NOC_ADDR_NODE_ID_BITS));
 
     return {xstart, ystart, xend, yend};
 }

@@ -1534,11 +1534,20 @@ void DeviceProfiler::dumpResults(
     if (state == ProfilerDumpState::NORMAL && rtoptions.get_profiler_noc_events_enabled()) {
         serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id, routing_lookup);
         dumpClusterCoordinatesAsJson(std::filesystem::path(rpt_path) / "cluster_coordinates.json");
-        dumpRoutingInfo(std::filesystem::path(rpt_path) / "topology.json");
     }
 
     log_file_ofs.close();
 #endif
+}
+
+void DeviceProfiler::dumpRoutingInfo() {
+    // if defined, used profiler_noc_events_report_path to to dump routing info. otherwise use output_dir
+    std::string rpt_path = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
+    if (rpt_path.empty()) {
+        rpt_path = output_dir.string();
+    }
+
+    tt::tt_metal::dumpRoutingInfo(std::filesystem::path(rpt_path) / "topology.json");
 }
 
 bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
