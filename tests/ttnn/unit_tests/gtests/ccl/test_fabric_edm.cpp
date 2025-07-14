@@ -13,6 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
+#include "persistent_kernel_cache.hpp"
 
 // Global state for daemon mode
 static bool daemon_running = true;
@@ -385,6 +386,7 @@ static void run_daemon_mode() {
 }
 
 int main(int argc, char** argv) {
+    tt::tt_metal::detail::EnablePersistentKernelCache();
     if (argc > 1 && std::string(argv[1]) == "daemon_mode") {
         run_daemon_mode();
         return 0;
