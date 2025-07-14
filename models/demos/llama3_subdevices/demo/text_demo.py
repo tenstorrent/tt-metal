@@ -728,7 +728,7 @@ def test_demo_text(
                 tokens_per_second_per_user = 1 / decode_iteration_time
 
                 logger.info(
-                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+                    f"Iteration {iteration}: {1000*decode_iteration_time:.4f}ms @ {tokens_per_second_per_user:.2f} tok/s/user ({batch_size*tokens_per_second_per_user:.2f} tok/s throughput)"
                 )
 
                 # Save output token to print out later
