@@ -18,8 +18,6 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -45,12 +43,12 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
 )
-def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
+def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=True)

@@ -246,7 +246,8 @@ namespace matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
-    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
     tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
@@ -287,7 +288,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer* out_buffer = output.buffer();
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 

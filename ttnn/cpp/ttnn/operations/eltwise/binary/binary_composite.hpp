@@ -78,17 +78,6 @@ struct ExecuteBinaryCompositeOps {
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsFloat {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        float alpha,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, alpha, memory_config);
-    }
-};
-
-template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteBinaryCompositeOpsIsClose {
     static Tensor invoke(
         const Tensor& input_tensor_a,
@@ -310,7 +299,7 @@ struct ExecuteMaximum {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_a,
-        const float value,
+        std::variant<int32_t, float> value,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -336,7 +325,7 @@ struct ExecuteMinimum {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_a,
-        const float value,
+        std::variant<int32_t, float> value,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -524,12 +513,6 @@ constexpr auto atan2 = ttnn::register_operation<
 constexpr auto nextafter = ttnn::register_operation<
     "ttnn::nextafter",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>>();
-constexpr auto addalpha = ttnn::register_operation<
-    "ttnn::addalpha",
-    operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::ADDALPHA>>();
-constexpr auto subalpha = ttnn::register_operation<
-    "ttnn::subalpha",
-    operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::SUBALPHA>>();
 constexpr auto isclose = ttnn::register_operation<
     "ttnn::isclose",
     operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>();

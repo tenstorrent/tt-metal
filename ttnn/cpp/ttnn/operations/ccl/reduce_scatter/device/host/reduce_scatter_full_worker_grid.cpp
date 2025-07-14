@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
+#include <string>
+
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "ttnn/operation.hpp"
@@ -16,7 +18,7 @@
 
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
 
 // Includes that need to be moved to CCL datastructures header
 #include <vector>
@@ -237,7 +239,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
     std::vector<uint32_t> compute_kernel_args = {};
     constexpr bool fp32_dest_acc_en = false;
     constexpr bool math_approx_mode = false;
-    std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
+    std::map<std::string, std::string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
     worker_reduce_kernel_id = tt::tt_metal::CreateKernel(
         program,
         reduce_kernel_path,

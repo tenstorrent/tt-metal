@@ -28,7 +28,7 @@ public:
 
     bool hook_program(tt::tt_metal::Program* program) override;
 
-    virtual ~ProcessorHooks() = default;
+    ~ProcessorHooks() override = default;
 
     void set_block(bool block);
 

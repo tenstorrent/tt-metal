@@ -46,15 +46,11 @@ std::vector<CoreCoord> reorder_connected_sockets(
 EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     const std::vector<tt::tt_metal::IDevice*>& device_sequence,
     const std::vector<tt::tt_metal::Program*>& program_sequence,
-    bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
     Topology topology,
     bool is_galaxy,
-    bool en_dateline_sender_extra_buffer,
-    bool en_dateline_receiver_extra_buffer,
-    bool en_dateline_upstream_sender_extra_buffer,
-    bool en_dateline_upstream_receiver_extra_buffer) :
+    const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -139,22 +135,39 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     dest_device->id() == device_sequence.back()->id()) {
                     src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
                     dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
+                } else if (
+                    src_device->id() == device_sequence.at(1)->id() &&
+                    dest_device->id() != device_sequence.front()->id()) {
+                    src_device_edm_type =
+                        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+                    if (dest_device->id() == device_sequence.at(device_sequence.size() - 2)->id()) {
+                        dest_device_edm_type =
+                            tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+                    }
+                } else if (
+                    src_device->id() == device_sequence.at(device_sequence.size() - 3)->id() &&
+                    dest_device->id() == device_sequence.at(device_sequence.size() - 2)->id()) {
+                    dest_device_edm_type =
+                        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
                 }
+            }
+
+            auto edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+            // change to long axis variantion, and using more buffer slots.
+            if (device_sequence.size() >=
+                tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+                edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
             }
             // if ring topology set extra buffer on dateline edms.
             auto src_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = src_device_edm_type,
-                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
-                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
-                .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
-                .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
+                .edm_axis = edm_axis,
+                .edm_buffer_config = edm_buffer_config,
             };
             auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = dest_device_edm_type,
-                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
-                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
-                .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
-                .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
+                .edm_axis = edm_axis,
+                .edm_buffer_config = edm_buffer_config,
             };
             const auto src_curr_edm_config =
                 tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
@@ -183,7 +196,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         src_device->id(),
                         dest_device->id(),
                         src_curr_edm_config,
-                        enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline));
 
@@ -200,7 +212,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         dest_device->id(),
                         src_device->id(),
                         dest_curr_edm_config,
-                        enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline));
             }
@@ -251,7 +262,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
                     for (size_t l = 0; l < num_links; l++) {
                         auto& edm = direction_edm[l];
-                        auto edm_noc_vc = l & edm.config.MAX_EDM_NOC_VC;
+                        auto edm_noc_vc = edm.config.DEFAULT_NOC_VC + (l % edm.config.NUM_EDM_NOC_VCS);
                         edm.config.edm_noc_vc = edm_noc_vc;
                     }
                 }
@@ -285,8 +296,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
                         log_info(
                             tt::LogOp,
-                            "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
-                            edm_fwd.my_chip_id,
+                            "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
+                            *(edm_fwd.local_fabric_node_id.mesh_id),
+                            edm_fwd.local_fabric_node_id.chip_id,
                             edm_fwd.my_noc_x,
                             edm_fwd.my_noc_y,
                             edm_bwd.my_noc_x,
@@ -307,8 +319,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
                         log_info(
                             tt::LogOp,
-                            "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
-                            edm_fwd.my_chip_id,
+                            "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
+                            *(edm_fwd.local_fabric_node_id.mesh_id),
+                            edm_fwd.local_fabric_node_id.chip_id,
                             edm_fwd.my_noc_x,
                             edm_fwd.my_noc_y,
                             edm_bwd.my_noc_x,
@@ -351,7 +364,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::optional<tt::tt_metal::IDevice*> forward_device,
     std::optional<tt::tt_metal::IDevice*> backward_device,
     tt::tt_metal::Program* program,
-    bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
     Topology topology) :
@@ -425,7 +437,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 device_pairs[i].first->id(),
                 device_pairs[i].second.value()->id(),
                 config,
-                enable_persistent_mode,
                 build_in_worker_connection_mode));
         }
         if (!counted_num_links.has_value()) {
@@ -479,11 +490,9 @@ tt::tt_fabric::SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connec
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
     const std::vector<tt::tt_metal::IDevice*>& device_sequence,
     const std::vector<tt::tt_metal::Program*>& program_sequence,
-    bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     Topology topology) {
-    return EdmLineFabricOpInterface(
-        device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true, topology);
+    return EdmLineFabricOpInterface(device_sequence, program_sequence, desired_num_links, true, topology);
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -491,7 +500,6 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     tt::tt_metal::IDevice* forward_device,
     tt::tt_metal::IDevice* backward_device,
     tt::tt_metal::Program* program,
-    bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     Topology topology) {
     return EdmLineFabricOpInterface(
@@ -499,7 +507,6 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
         forward_device == nullptr ? std::nullopt : std::optional<tt::tt_metal::IDevice*>(forward_device),
         backward_device == nullptr ? std::nullopt : std::optional<tt::tt_metal::IDevice*>(backward_device),
         program,
-        enable_persistent_mode,
         desired_num_links,
         true,
         topology);
@@ -659,7 +666,7 @@ void initialize_edm_fabric(
                 return &p;
             });
         EdmLineFabricOpInterface fabric_device_builders =
-            EdmLineFabricOpInterface(devices, program_ptrs, true, std::nullopt, false, topology);
+            EdmLineFabricOpInterface(devices, program_ptrs, std::nullopt, false, topology);
         if (context_switch_interval_override.has_value()) {
             fabric_device_builders.set_firmware_context_switch_interval(context_switch_interval_override.value());
         }
@@ -692,7 +699,7 @@ void initialize_edm_fabric(
                     return &p;
                 });
             row_fabric_lines.push_back(EdmLineFabricOpInterface(
-                mesh_device->get_view().get_row_views()[i], program_ptrs, true, std::nullopt, false, topology));
+                mesh_device->get_view().get_row_views()[i], program_ptrs, std::nullopt, false, topology));
             if (context_switch_interval_override.has_value()) {
                 row_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
             }
@@ -705,7 +712,7 @@ void initialize_edm_fabric(
                 program_ptrs.push_back(&programs[r][i]);
             }
             col_fabric_lines.push_back(EdmLineFabricOpInterface(
-                mesh_device->get_view().get_column_views()[i], program_ptrs, true, std::nullopt, false, topology));
+                mesh_device->get_view().get_column_views()[i], program_ptrs, std::nullopt, false, topology));
             if (context_switch_interval_override.has_value()) {
                 col_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
             }
@@ -733,7 +740,7 @@ void teardown_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_
         program_ptrs.reserve(programs.size());
         std::transform(
             programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
-        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true, std::nullopt, false, topology);
+        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, std::nullopt, false, topology);
         edm_fabric.teardown_from_host(tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     };
     if (wrap_fabric_around_mesh) {

@@ -8,9 +8,10 @@
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
-#include <small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include <system_mesh.hpp>
+#include <maybe_remote.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -24,27 +25,35 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
+#include "buffer.hpp"
 #include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "host_api.hpp"
 #include "mesh_trace.hpp"
+#include "profiler_types.hpp"
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/api/tt-metalium/control_plane.hpp"
+#include "tt_metal/api/tt-metalium/fabric_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+#include "tt_metal/distributed/distributed_coordinate_system.hpp"
 
 #include "llrt/hal.hpp"
 #include <env_lib.hpp>
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.h>
+#include "impl/context/metal_context.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -153,6 +162,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_devices_.empty()) {
         std::vector<IDevice*> devices_to_close;
+        devices_to_close.reserve(opened_devices_.size());
         for (auto& [id, device] : opened_devices_) {
             devices_to_close.push_back(device);
         }
@@ -164,7 +174,7 @@ const std::vector<IDevice*>& MeshDevice::ScopedDevices::root_devices() const { r
 
 uint8_t MeshDevice::num_hw_cqs() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->num_hw_cqs(); });
+        this->get_devices(), [](const auto* device) { return device->num_hw_cqs(); });
 }
 
 bool MeshDevice::is_initialized() const {
@@ -172,17 +182,17 @@ bool MeshDevice::is_initialized() const {
         return false;
     }
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->is_initialized(); });
+        this->get_devices(), [](const auto* device) { return device->is_initialized(); });
 }
 
 uint32_t MeshDevice::l1_size_per_core() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->l1_size_per_core(); });
+        this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
 }
 
 uint32_t MeshDevice::dram_size_per_channel() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->dram_size_per_channel(); });
+        this->get_devices(), [](const auto* device) { return device->dram_size_per_channel(); });
 }
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
@@ -197,7 +207,9 @@ MeshDevice::MeshDevice(
     parent_mesh_(std::move(parent_mesh)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
-    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {}
+    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {
+    Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
+}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -210,9 +222,20 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
-    MeshContainer<IDevice*> devices(config.mesh_shape(), root_devices);
+
+    // When the mesh is distributed across multiple ranks, the DistributedCoordinateSystem
+    // is used to provide information on what part of the mesh is locally available vs. remote.
+    // For single-process/ single-host, the "global" mesh is the same as the "local" mesh.
+    auto coord_system = DistributedCoordinateSystem::from_control_plane();
+
+    // Create distributed mesh container and populate local devices
+    DistributedMeshContainer<IDevice*> global_devices(config.mesh_shape());
+    global_devices.populate_local_region(coord_system, root_devices);
+
     auto mesh_device = std::make_shared<MeshDevice>(
-        std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
+        std::move(scoped_devices),
+        std::make_unique<MeshDeviceView>(global_devices),
+        std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
@@ -332,9 +355,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     for (auto device : submesh->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(submesh);
     }
-    if (program_cache_->is_enabled()) {
-        submesh->enable_program_cache();
-    }
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
@@ -369,7 +389,10 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
     return submeshes;
 }
 
-MeshDevice::~MeshDevice() { close(); }
+MeshDevice::~MeshDevice() {
+    Inspector::mesh_device_destroyed(this);
+    close();
+}
 
 IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     for (auto device : this->get_devices()) {
@@ -389,6 +412,11 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
 
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
 
+tt_fabric::FabricNodeId MeshDevice::get_device_fabric_node_id(const MeshCoordinate& coord) const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_node_id_from_physical_chip_id(view_->get_device(coord)->id());
+}
+
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
     TT_FATAL(cq_id < mesh_command_queues_.size(), "cq_id {} is out of range", cq_id);
     return *(mesh_command_queues_[cq_id]);
@@ -406,12 +434,11 @@ size_t MeshDevice::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDevice::compute_with_storage_grid_size() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->compute_with_storage_grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
 tt::ARCH MeshDevice::arch() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->arch(); });
+    return validate_and_get_reference_value(this->get_devices(), [](const auto* device) { return device->arch(); });
 }
 
 size_t MeshDevice::num_rows() const { return view_->num_rows(); }
@@ -421,6 +448,9 @@ size_t MeshDevice::num_cols() const { return view_->num_cols(); }
 const MeshShape& MeshDevice::shape() const { return view_->shape(); }
 
 std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
+    TT_FATAL(
+        this->shape() == this->local_shape(), "Cannot reshape a mesh that is not the same shape as the local shape");
+
     // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
     // The physical connectivity between devices must be preserved when reshaping.
     //
@@ -444,7 +474,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
-    if (is_line_topology(new_shape)) {
+    if (new_shape.is_line_topology()) {
         return view_->get_line_devices();
     }
 
@@ -470,6 +500,10 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
 void MeshDevice::reshape(const MeshShape& new_shape) {
     TT_FATAL(
+        this->shape() == this->local_shape(),
+        "Cannot reshape a mesh that is not the same shape as the local shape");
+
+    TT_FATAL(
         new_shape.mesh_size() == this->num_devices(),
         "New shape must have the same number of devices as current shape");
 
@@ -479,6 +513,20 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDevice::close() {
+    ZoneScoped;
+    log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
+
+    // We only dump profile results for mesh devices that don't have any submeshes as they have active mesh command
+    // queues, whereas mesh devices with submeshes don't.
+    if (this->submeshes_.empty()) {
+        DumpMeshDeviceProfileResults(*this);
+    }
+
+    // TODO #20966: Remove these calls
+    for (auto device : view_->get_devices()) {
+        dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
+    }
+
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
@@ -519,6 +567,11 @@ void MeshDevice::enable_program_cache() {
     program_cache_->enable();
 }
 
+void MeshDevice::clear_program_cache() {
+    log_info(tt::LogMetal, "Clearing program cache on MeshDevice {}", this->id());
+    program_cache_->clear();
+}
+
 void MeshDevice::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
     if (program_cache_->is_enabled()) {
@@ -541,62 +594,57 @@ void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_i
 }
 void MeshDevice::clear_loaded_sub_device_manager() { sub_device_manager_tracker_->clear_loaded_sub_device_manager(); }
 
-std::tuple<SubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-}
 CoreCoord MeshDevice::dram_grid_size() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->dram_grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
 }
 
 bool MeshDevice::using_slow_dispatch() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->using_slow_dispatch(); });
+        this->get_devices(), [](const auto* device) { return device->using_slow_dispatch(); });
 }
 
 bool MeshDevice::using_fast_dispatch() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->using_fast_dispatch(); });
+        this->get_devices(), [](const auto* device) { return device->using_fast_dispatch(); });
 }
 
 // Device property methods that can be delegated to reference device
 CoreCoord MeshDevice::grid_size() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->grid_size(); });
 }
 CoreCoord MeshDevice::logical_grid_size() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->logical_grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->logical_grid_size(); });
 }
 CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, coord](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [noc_index, coord](const auto* device) {
         return device->virtual_noc0_coordinate(noc_index, coord);
     });
 }
 std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_cores](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
         return device->worker_cores_from_logical_cores(logical_cores);
     });
 }
-std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment() {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [](const auto& device) {
-        return device->get_optimal_dram_bank_to_logical_worker_assignment();
+std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+    return validate_and_get_reference_value(this->get_devices(), [noc](auto* device) {
+        return device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
     });
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [logical_coord, core_type](const auto& device) {
-            return device->virtual_core_from_logical_core(logical_coord, core_type);
-        });
+    return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
+        return device->virtual_core_from_logical_core(logical_coord, core_type);
+    });
 }
 CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
         return device->worker_core_from_logical_core(logical_core);
     });
 }
 CoreCoord MeshDevice::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [ethernet_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [ethernet_core](const auto* device) {
         return device->logical_core_from_ethernet_core(ethernet_core);
     });
 }
@@ -604,12 +652,12 @@ CoreCoord MeshDevice::logical_core_from_ethernet_core(const CoreCoord& ethernet_
 // These methods require some change / or assert out for now
 std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
     const std::vector<CoreCoord>& logical_cores) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_cores](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
         return device->ethernet_cores_from_logical_cores(logical_cores);
     });
 }
 CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
         return device->ethernet_core_from_logical_core(logical_core);
     });
 }
@@ -655,17 +703,17 @@ uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDevi
 int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_channels(); }
 
 CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [dram_channel](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
         return device->logical_core_from_dram_channel(dram_channel);
     });
 }
 uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
         return device->dram_channel_from_logical_core(logical_core);
     });
 }
 uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [virtual_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [virtual_core](const auto* device) {
         return device->dram_channel_from_virtual_core(virtual_core);
     });
 }
@@ -673,21 +721,20 @@ uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_cor
 // Core management and network operations
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(),
-        [](const auto& device) -> const std::set<CoreCoord>& { return device->ethernet_cores(); });
+        this->get_devices(), [](const auto* device) -> const std::set<CoreCoord>& { return device->ethernet_cores(); });
 }
 const std::set<CoreCoord>& MeshDevice::storage_only_cores() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(),
-        [](const auto& device) -> const std::set<CoreCoord>& { return device->storage_only_cores(); });
+    return validate_and_get_reference_value(this->get_devices(), [](const auto* device) -> const std::set<CoreCoord>& {
+        return device->storage_only_cores();
+    });
 }
 uint32_t MeshDevice::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [noc_index, core](const auto* device) {
         return device->get_noc_unicast_encoding(noc_index, core);
     });
 }
 uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, cores](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [noc_index, cores](const auto* device) {
         return device->get_noc_multicast_encoding(noc_index, cores);
     });
 }
@@ -809,17 +856,10 @@ bool MeshDevice::initialize(
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(this, cq_id));
         }
     }
+    Inspector::mesh_device_initialized(this);
     return true;
 }
 
-void MeshDevice::reset_cores() {
-    TT_THROW("reset_cores() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->reset_cores();
-}
-void MeshDevice::initialize_and_launch_firmware() {
-    TT_THROW("initialize_and_launch_firmware() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->initialize_and_launch_firmware();
-}
 void MeshDevice::init_command_queue_host() {
     TT_THROW("init_command_queue_host() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_host();
@@ -827,6 +867,14 @@ void MeshDevice::init_command_queue_host() {
 void MeshDevice::init_command_queue_device() {
     TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_device();
+}
+bool MeshDevice::compile_fabric() {
+    TT_THROW("compile_fabric() is not supported on MeshDevice - use individual devices instead");
+    return reference_device()->compile_fabric();
+}
+void MeshDevice::configure_fabric() {
+    TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
+    reference_device()->configure_fabric();
 }
 void MeshDevice::init_fabric() {
     TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
@@ -866,9 +914,8 @@ SubDeviceManagerId MeshDevice::get_default_sub_device_manager_id() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
 }
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [cq_id](const auto& device) {
-        return device->virtual_program_dispatch_core(cq_id);
-    });
+    return validate_and_get_reference_value(
+        this->get_devices(), [cq_id](const auto* device) { return device->virtual_program_dispatch_core(cq_id); });
 }
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
@@ -910,5 +957,17 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+
+MeshCoordinate MeshDevice::local_offset() const {
+    return view_->local_offset();
+}
+
+MeshShape MeshDevice::local_shape() const {
+    return view_->local_shape();
+}
+
+bool MeshDevice::is_local_coordinate(const MeshCoordinate& coord) const {
+    return view_->is_local_coordinate(coord);
+}
 
 }  // namespace tt::tt_metal::distributed

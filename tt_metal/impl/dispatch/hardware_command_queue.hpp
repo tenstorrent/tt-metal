@@ -33,6 +33,7 @@
 #include "trace/trace_node.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
+#include "ringbuffer_cache.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -58,7 +59,7 @@ public:
 
     const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
 
-    void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
+    void record_begin(uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
     void record_end() override;
 
     void reset_worker_state(
@@ -79,7 +80,7 @@ public:
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 
-    void enqueue_trace(const uint32_t trace_id, bool blocking) override;
+    void enqueue_trace(uint32_t trace_id, bool blocking) override;
     void enqueue_program(Program& program, bool blocking) override;
     void enqueue_read_buffer(
         const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
@@ -166,6 +167,20 @@ private:
     CoreCoord completion_queue_writer_core_;
     NOC noc_index_;
 
+    const uint32_t prefetcher_dram_aligned_block_size_;
+    const uint64_t prefetcher_cache_sizeB_;
+    const uint32_t prefetcher_dram_aligned_num_blocks_;
+    const uint32_t prefetcher_cache_manager_size_;
+    // The prefetcher cache manager is used to track the state of the prefetcher cache.
+    std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
+
+    // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
+    // Trace recording will change the state of the host side cache manager, without actually enqueueing the
+    // corresponding commands, which would cause the bookkeeping to go out of sync from the prefetcher cache. Hence we
+    // will use the following variable to swap out the cache manager into a backup variable before starting trace
+    // recording. At the end of the recording, we will reset the cache manager, and swap it with the backup.
+    std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
+
     void allocate_trace_programs();
     void read_completion_queue();
 
@@ -175,6 +190,12 @@ private:
 
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
+
+    std::pair<bool, size_t> query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB);
+
+    void reset_prefetcher_cache_manager();
+
+    int get_prefetcher_cache_sizeB() const;
 };
 
 }  // namespace tt::tt_metal

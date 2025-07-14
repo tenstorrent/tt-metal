@@ -1,5 +1,7 @@
 # TTNN Device to MeshDevice Migration Guide
 
+April 23, 2025
+
 # Introduction
 
 There is a major change being merged to TT-Metal & TTNN in relation to working with multiple devices. Currently, TTNN manages multi-device tensors and operations by creating a tensor on each of user exposed device and deploying the same OP on each device with a lot of non-trivial multi-threading and synchronization involved.
@@ -96,8 +98,8 @@ Ideally, TTNN users should use Tensors and TT-NN OPs instead of direct access to
 auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device,  tensor_spec);
 auto  storage = tt::tt_metal::DeviceStorage{input_buffer};
 
-// New allocate_tensor_on_mesh (preferred replacement)
-auto  input_tensor = allocate_tensor_on_mesh(tensor_spec, device.get());
+// New allocate_tensor_on_device (preferred replacement)
+auto  input_tensor = allocate_tensor_on_device(tensor_spec, device.get());
 
 // New tensor_impl::allocate_mesh_buffer_on_device
 auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);

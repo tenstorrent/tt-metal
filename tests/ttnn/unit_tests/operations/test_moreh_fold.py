@@ -75,9 +75,7 @@ def test_fold(device, input_shape, output_size, kernel_size, dilation, padding, 
         torch.bfloat16,
     ],
 )
-def test_fold_callback(
-    device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype, use_program_cache
-):
+def test_fold_callback(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
     torch.manual_seed(0)
     num_program_cache_entries_list = []
     for i in range(2):

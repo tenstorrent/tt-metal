@@ -37,7 +37,6 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 @pytest.mark.parametrize("pre_embed", [False, True])
 def test_conv2d_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     # Input params
     bsz,

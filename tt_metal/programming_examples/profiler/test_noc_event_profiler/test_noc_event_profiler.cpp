@@ -6,6 +6,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 
 using namespace tt::tt_metal;
 
@@ -57,10 +58,8 @@ int main() {
         auto l1_buffer = CreateBuffer(l1_config);
 
         auto input_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
         auto output_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
         // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
         const uint32_t input_bank_id = 0;
@@ -86,14 +85,14 @@ int main() {
         pass &= CloseDevice(device);
 
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
+        fmt::print(stderr, "Test failed with exception!\n");
+        fmt::print(stderr, "{}\n", e.what());
 
         throw;
     }
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

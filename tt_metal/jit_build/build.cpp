@@ -257,6 +257,7 @@ void JitBuildEnv::init(
         "..",
         root_,
         root_ + "ttnn",
+        root_ + "ttnn/cpp",
         root_ + "tt_metal",
         root_ + "tt_metal/include",
         root_ + "tt_metal/hw/inc",
@@ -271,8 +272,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
         root_ + "tt_metal/api/",
         root_ + "tt_metal/api/tt-metalium/",
-        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
-    };
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"};
 
     std::ostringstream oss;
     for (size_t i = 0; i < includeDirs.size(); ++i) {
@@ -802,18 +802,18 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
     // ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {
-        if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            std::remove(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
+        if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+            std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
         }
 
-        if (!std::filesystem::exists(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            tt::utils::create_file(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG);
+        if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+            tt::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
         // Only interested in log entries with KERNEL_PROFILER inside them as device code
         // tags source location info with it using pragma messages
         string cmd = "cat " + log_file + " | grep KERNEL_PROFILER";
-        tt::utils::run_command(cmd, tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
+        tt::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
     }
 }
 
@@ -876,6 +876,12 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
     events.emplace_back(detail::async(build_func));
+}
+
+void sync_build_steps(std::vector<std::shared_future<void>>& events) {
+    for (auto& event : events) {
+        event.wait();
+    }
 }
 
 }  // namespace tt::tt_metal

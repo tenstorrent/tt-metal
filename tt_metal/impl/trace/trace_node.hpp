@@ -19,6 +19,13 @@ struct TraceDispatchMetadata {
     uint32_t sync_count = 0;
     uint32_t stall_first = false;
     uint32_t stall_before_program = false;
+    bool reset_worker_counts_before_program = false;
+
+    struct {
+        uint32_t mesh_max_program_kernels_sizeB;  // TBD: max program size across all programs in a mesh
+        bool is_cached;
+        uint32_t offset;
+    } prefetcher_cache_info;
 };
 
 // This struct contains all the information needed to execute a program on a device.

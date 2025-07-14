@@ -81,7 +81,7 @@ def interpolate_pos_encoding(
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [448])
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit_highres, ttnn_optimized_vit_highres])
-def test_performance_vit_encoder(device, use_program_cache, model_name, batch_size, sequence_size, functional_vit):
+def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, functional_vit):
     # disable_persistent_kernel_cache()
 
     config = transformers.ViTConfig.from_pretrained(model_name)
@@ -181,9 +181,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
 @pytest.mark.parametrize("image_size", [960])
 @pytest.mark.parametrize("sequence_size", [448])
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit_highres, ttnn_optimized_vit_highres])
-def test_performance_vit_e2e(
-    device, use_program_cache, model_name, batch_size, image_size, sequence_size, functional_vit
-):
+def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequence_size, functional_vit):
     disable_persistent_kernel_cache()
 
     config = transformers.ViTConfig.from_pretrained(model_name)

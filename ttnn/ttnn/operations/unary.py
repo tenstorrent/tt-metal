@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import os
 
 
 def register_ttnn_cpp_unary_function(unary_function):
@@ -70,7 +71,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "softplus": torch.nn.functional.softplus,
             "sigmoid_accurate": torch.sigmoid,
             "asinh": torch.asinh,
-            "atanh": torch.atanh,
             "cbrt": torch_cbrt,
             "cosh": torch.cosh,
             "deg2rad": torch.deg2rad,
@@ -153,7 +153,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.sigmoid_accurate,
     # Other unaries (composite operations - tt_eager dependency)
     ttnn.asinh,
-    ttnn.atanh,
     ttnn.cbrt,
     ttnn.cosh,
     ttnn.deg2rad,
@@ -197,15 +196,28 @@ def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
 ttnn.attach_golden_function(ttnn.acos, golden_function=_golden_function_acos)
 
 
-def _golden_function_acosh(input_tensor_a, *args, device, **kwargs):
+def _golden_function_acosh(input_tensor_a, *args, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.acosh(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
-    )
+    result = torch.acosh(input_tensor_a)
+    return result.masked_fill_(input_tensor_a < 1, float("inf")) if input_tensor_a.dtype == torch.bfloat16 else result
 
 
 ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)
+
+
+def _golden_function_atanh(input_tensor_a, *args, **kwargs):
+    import torch
+
+    result = torch.atanh(input_tensor_a)
+    return (
+        result.masked_fill_((input_tensor_a <= -1) | (input_tensor_a >= 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
+    )
+
+
+ttnn.attach_golden_function(ttnn.atanh, golden_function=_golden_function_atanh)
 
 
 def _golden_function_reciprocal(input_tensor_a, *args, device, **kwargs):

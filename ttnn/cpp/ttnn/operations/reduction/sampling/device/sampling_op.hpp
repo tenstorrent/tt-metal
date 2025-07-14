@@ -15,7 +15,7 @@ namespace ttnn::operations::reduction {
 struct Sampling {
     const std::vector<uint16_t> k;
     const std::vector<float> p;
-    const uint32_t seed;
+    const std::optional<uint32_t> seed;
     const std::optional<CoreRangeSet> sub_core_grids;
 
     void validate_with_output_tensors(

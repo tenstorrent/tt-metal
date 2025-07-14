@@ -29,6 +29,8 @@ void SingleHostContext::set_current_world(const ContextPtr& ctx) {
     SingleHostContext::current_world_ = ctx;
 }
 
+bool SingleHostContext::is_initialized() { return current_world_ != nullptr; }
+
 // basic info
 Rank SingleHostContext::rank() const { return Rank(rank_); }
 Size SingleHostContext::size() const { return Size(size_); }
@@ -117,6 +119,10 @@ ContextPtr SingleHostContext::create_sub_context(tt::stl::Span<int> ranks) const
 
 void SingleHostContext::revoke_and_shrink() {
     TT_THROW("method revoke_and_shrink is unsupported for single-host distributed contexts.");
+}
+
+std::size_t SingleHostContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
+    TT_THROW("method snoop_incoming_msg_size is unsupported for single-host distributed contexts.");
 }
 
 }  // namespace tt::tt_metal::distributed::multihost

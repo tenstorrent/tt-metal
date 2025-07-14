@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <atomic>
 
 #include "assert.hpp"
 #include "buffer.hpp"
@@ -35,6 +36,8 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "util.hpp"
 #include "tracy/Tracy.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/impl/debug/inspector.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -45,7 +48,13 @@ enum class HalProgrammableCoreType;
 }  // namespace tt_metal
 }  // namespace tt
 
+static uint64_t get_next_counter() {
+    static std::atomic<uint64_t> workload_counter = 0;
+    return workload_counter++;
+}
+
 namespace tt::tt_metal::distributed {
+
 namespace {
 
 // Returns an intersecting range from `programs` if it exists, otherwise returns std::nullopt.
@@ -61,12 +70,17 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() {
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
     ZoneScoped;
     // A MeshWorkload tracks maintains its own handles to kernels across all
     // encapsulated programs
     kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
     kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
+    Inspector::mesh_workload_created(this);
+}
+
+MeshWorkloadImpl::~MeshWorkloadImpl() {
+    Inspector::mesh_workload_destroyed(this);
 }
 
 void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
@@ -77,6 +91,7 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
         "Program range {} overlaps with the previously added range {}",
         device_range,
         *potential_intersection);
+    Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
     programs_[device_range] = std::move(program);
 }
 
@@ -137,7 +152,6 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             DeviceLocalBufferConfig device_local_kernel_bin_buf_config = {
                 .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                 .buffer_type = BufferType::DRAM,
-                .buffer_layout = TensorMemoryLayout::INTERLEAVED,
                 .bottom_up = false,
             };
             ReplicatedBufferConfig global_kernel_bin_buf_config = {
@@ -168,13 +182,12 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     kernel_bin_size,
                     HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                     BufferType::DRAM,
-                    TensorMemoryLayout::INTERLEAVED,
                     std::nullopt,
                     false);
                 program.set_kernels_bin_buffer(buffer_view);
             }
         }
-        program_binary_status_[mesh_device->id()] = ProgramBinaryStatus::InFlight;
+        set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::InFlight);
     }
 }
 
@@ -189,6 +202,7 @@ ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh
 void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
     ZoneScoped;
     program_binary_status_[mesh_id] = status;
+    Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status);
 }
 
 void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
@@ -197,9 +211,15 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto mesh_device = mesh_cq.device();
+    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map(dispatch_core_type).ringbuffer_size();
+
+    bool use_prefetcher_cache =
+        this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
     for (auto& [device_range, program] : programs_) {
-        program.generate_dispatch_commands(mesh_device);
+        program.generate_dispatch_commands(mesh_device, use_prefetcher_cache);
     }
+    this->use_prefetcher_cache_ = use_prefetcher_cache;
 }
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
@@ -306,7 +326,6 @@ std::unordered_set<SubDeviceId> MeshWorkloadImpl::determine_sub_device_ids(MeshD
     // Get the sub device ids for all program across all devices in the Workload
     std::unordered_set<SubDeviceId> sub_devices_;
     for (auto& [device_range, program] : programs_) {
-        IDevice* device = mesh_device->get_device(device_range.start_coord());
         auto sub_devs_for_program = program.determine_sub_device_ids(mesh_device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);
@@ -417,7 +436,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     }
     tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
-    tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
+    this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
 
     set_finalized();

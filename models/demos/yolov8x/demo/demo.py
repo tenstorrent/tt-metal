@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -13,40 +12,29 @@ from ultralytics import YOLO
 
 import ttnn
 from models.demos.yolov8x.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
-from models.demos.yolov8x.reference import yolov8x
-from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
+from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache
 
 
-def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
-    model_save_dir = os.path.join(save_dir, model_name)
-    os.makedirs(model_save_dir, exist_ok=True)
+def save_yolo_predictions(result, save_dir, image_path, model_name):
+    model_dir = os.path.join(save_dir, model_name)
+    os.makedirs(model_dir, exist_ok=True)
 
     image = cv2.imread(image_path)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    if model_name == "torch_model":
-        bounding_box_color, label_color = (0, 255, 0), (0, 255, 0)
-    else:
-        bounding_box_color, label_color = (255, 0, 0), (255, 255, 0)
+    box_color = (0, 255, 0) if model_name == "torch_model" else (255, 0, 0)
+    label_color = (0, 255, 0) if model_name == "torch_model" else (255, 255, 0)
 
-    boxes = result["boxes"]["xyxy"]
-    scores = result["boxes"]["conf"]
-    classes = result["boxes"]["cls"]
-    names = result["names"]
-
-    for box, score, cls in zip(boxes, scores, classes):
+    for box, score, cls in zip(result["boxes"]["xyxy"], result["boxes"]["conf"], result["boxes"]["cls"]):
         x1, y1, x2, y2 = map(int, box)
-        label = f"{names[int(cls)]} {score.item():.2f}"
-        cv2.rectangle(image, (x1, y1), (x2, y2), bounding_box_color, 3)
+        label = f"{result['names'][int(cls)]} {score.item():.2f}"
+        cv2.rectangle(image, (x1, y1), (x2, y2), box_color, 3)
         cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
 
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_name = f"prediction_{timestamp}.jpg"
-    output_path = os.path.join(model_save_dir, output_name)
-
+    output_path = os.path.join(model_dir, f"prediction_{timestamp}.jpg")
     cv2.imwrite(output_path, image)
 
     logger.info(f"Predictions saved to {output_path}")
@@ -62,56 +50,33 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
         ("models/demos/yolov8x/demo/images/bus.jpg", "tt_model"),
     ],
 )
-@pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
-    [True],
-)
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use_program_cache):
+def test_demo(device, source, model_type, res):
     disable_persistent_kernel_cache()
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov8x.pt")
-        torch_model = torch_model.model
-        model = torch_model.eval()
+
+    if model_type == "torch_model":
+        model = YOLO("yolov8x.pt").model.eval()
     else:
-        model = yolov8x.DetectionModel()
-
-    if model_type == "tt_model":
-        yolov8x_trace_2cq = Yolov8xTrace2CQ()
-        yolov8x_trace_2cq.initialize_yolov8x_trace_2cqs_inference(
-            device,
-            1,
-        )
-
-    save_dir = "models/demos/yolov8x/demo/runs"
+        runner = YOLOv8xPerformantRunner(device, device_batch_size=1)
 
     dataset = LoadImages(path=source)
+    class_names = load_coco_class_names()
+    save_dir = "models/demos/yolov8x/demo/runs"
 
-    model_save_dir = os.path.join(save_dir, model_type)
-    os.makedirs(model_save_dir, exist_ok=True)
-
-    names = load_coco_class_names()
     for batch in dataset:
-        paths, im0s, s = batch
-
+        _, im0s, _ = batch
         im = preprocess(im0s, res=res)
 
         if model_type == "torch_model":
             preds = model(im)
         else:
-            ttnn_im = im.clone()
-            n, c, h, w = ttnn_im.shape
-            ttnn_im = ttnn_im.permute(0, 2, 3, 1)
-            ttnn_im = ttnn_im.reshape(1, 1, h * w * n, c)
-            ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn_im = ttnn.pad(ttnn_im, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-            preds = yolov8x_trace_2cq.execute_yolov8x_trace_2cqs_inference(ttnn_im)
+            preds = runner.run(im.clone())
             preds = ttnn.to_torch(preds, dtype=torch.float32)
-        results = postprocess(preds, im, im0s, batch, names)[0]
 
-        save_yolo_predictions_by_model(results, save_dir, source, model_type)
+        results = postprocess(preds, im, im0s, batch, class_names)[0]
+        save_yolo_predictions(results, save_dir, source, model_type)
 
     if model_type == "tt_model":
-        yolov8x_trace_2cq.release_yolov8x_trace_2cqs_inference()
+        runner.release()
 
-    logger.info("Inference done")
+    logger.info(f"Inference completed for {model_type}")

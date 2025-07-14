@@ -45,9 +45,12 @@ enum class UnaryOpType {
     SIGNBIT,
     ASIN,
     ACOS,
+    ACOSH,
     RSQRT,
     RELU6,
     ATAN,
+    ASINH,
+    ATANH,
     ERF,
     ERFC,
     ISINF,
@@ -70,11 +73,12 @@ enum class UnaryOpType {
     SUB_UNARY_SFPU,
     MUL_UNARY_SFPU,
     DIV_UNARY_SFPU,
-    IDENTITY_UINT32,
     UNARY_NE,
     UNARY_EQ,
     UNARY_GT,
     UNARY_LT,
+    UNARY_GE,
+    UNARY_LE,
     TILED_PROD,
     TYPECAST,
     BITWISE_XOR,
@@ -84,6 +88,7 @@ enum class UnaryOpType {
     RIGHT_SHIFT,
     FLOOR,
     CEIL,
+    TRUNC,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,
@@ -126,7 +131,7 @@ using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
 }  // namespace ttnn::operations::unary
 
-namespace tt::stl::json {
+namespace ttsl::json {
 
 template <>
 struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
@@ -136,4 +141,4 @@ struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
             from_json<std::vector<float>>(json_object["params"])};
     }
 };
-};  // namespace tt::stl::json
+};  // namespace ttsl::json

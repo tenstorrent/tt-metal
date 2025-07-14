@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
@@ -168,7 +168,8 @@ void kernel_main() {
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+        noc_semaphore_wait(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
     }
 
     // Set up for mcasting to concat workers
@@ -228,7 +229,7 @@ void kernel_main() {
     }
 
     if (reset_global_semaphore) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
     // noc_async_read_barrier();

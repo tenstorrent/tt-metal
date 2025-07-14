@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <random>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -21,19 +20,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
-
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << ", ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
 
 std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
     if (N == K) {
@@ -341,7 +327,7 @@ int main(int argc, char** argv) {
         //                      Initial Runtime Args Parse
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
+        std::string arch_name = "";
         try {
             std::tie(arch_name, input_args) =
                 test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
@@ -432,7 +418,8 @@ int main(int argc, char** argv) {
                 result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
                 result_iter += 512;
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(tt::stl::make_const_span(result_bfp16));
+                auto result_flat_layout =
+                    convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
 
                 pass &= (golden_tile == result_flat_layout);
             }

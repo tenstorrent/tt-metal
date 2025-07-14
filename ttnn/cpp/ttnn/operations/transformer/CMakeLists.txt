@@ -1,5 +1,5 @@
 add_library(ttnn_op_transformer ${LIB_TYPE})
-add_library(TT::NN::Ops::Transformer ALIAS ttnn_op_transformer)
+add_library(TTNN::Ops::Transformer ALIAS ttnn_op_transformer)
 
 target_precompile_headers(ttnn_op_transformer REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_transformer)
@@ -9,8 +9,11 @@ target_sources(
     PRIVATE
         attention_softmax/attention_softmax.cpp
         concatenate_heads/concatenate_heads.cpp
+        sdpa/device/ring_fusion.cpp
         sdpa/device/joint_sdpa_op.cpp
         sdpa/device/joint_sdpa_program_factory.cpp
+        sdpa/device/ring_joint_sdpa_op.cpp
+        sdpa/device/ring_joint_sdpa_program_factory.cpp
         sdpa/device/sdpa_op.cpp
         sdpa/device/sdpa_program_factory.cpp
         sdpa/sdpa.cpp
@@ -25,7 +28,7 @@ target_link_libraries(
     ttnn_op_transformer
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_transformer LIBRARY COMPONENT tar)

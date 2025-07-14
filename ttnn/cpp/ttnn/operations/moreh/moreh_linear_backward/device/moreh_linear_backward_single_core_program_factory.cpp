@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"
@@ -95,7 +96,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 

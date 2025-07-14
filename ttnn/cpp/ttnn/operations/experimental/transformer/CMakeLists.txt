@@ -1,5 +1,5 @@
 add_library(ttnn_op_experimental_transformer ${LIB_TYPE})
-add_library(TT::NN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_transformer)
+add_library(TTNN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_transformer)
 
 target_precompile_headers(ttnn_op_experimental_transformer REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
@@ -61,7 +61,7 @@ target_link_libraries(
     ttnn_op_experimental_transformer
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_experimental_transformer LIBRARY COMPONENT tar)

@@ -34,4 +34,6 @@ ALWI void negative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_negative_init
  // clang-format on
 ALWI void negative_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_negative<APPROX>(idst))); }
 
+ALWI void negative_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_negative_int<APPROX>(idst))); }
+
 }  // namespace ckernel

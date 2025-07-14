@@ -17,8 +17,6 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
@@ -67,7 +65,6 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
 
     // validate for create qkv heads
     const auto& input_shape = input_tensor.logical_shape();
-    const auto& batch_offset = input_tensors.at(2);
 
     // TODO: Rewrite validation for this decode case
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
@@ -89,7 +86,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     TT_FATAL(num_users <= num_users_supported, "Unsupported input shape = {}", input_shape);  // 32 users
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape = {}", input_shape);
     TT_FATAL(input_shape[0] == 1, "Unsupported input shape = {}", input_shape);
-    const auto QKV_memcfg = input_tensor.memory_config();
+    const auto& QKV_memcfg = input_tensor.memory_config();
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             QKV_memcfg.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -163,7 +160,7 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
 
     const Shape q_output_shape({input_shape[0], batch, this->num_heads, head_dim});
     const Shape v_output_shape({input_shape[0], batch, this->num_kv_heads, head_dim});
-    const Shape k_output_shape = v_output_shape;
+    const Shape& k_output_shape = v_output_shape;
 
     auto num_q_heads_padded = ((this->num_heads - 1) / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
     auto num_kv_heads_padded = ((this->num_heads - 1) / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
@@ -254,9 +251,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     }
 
     auto input_tensor_shape = input_tensor.padded_shape();
-    auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
-    auto input_tensor_page_layout = input_tensor.layout();
-
     auto input_tensor_memory_config = input_tensor.memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
     uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
@@ -292,7 +286,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
         this->sub_device_id,
         this->num_heads,
         this->num_kv_heads,
-        this->head_dim);
+        this->head_dim,
+        this->use_noc1_only);
 }
 
 tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
@@ -330,13 +325,14 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     uint32_t head_dim,
+    bool use_noc1_only,
     uint32_t num_heads,
     uint32_t num_kv_heads,
     bool input_on_subcoregrids,
     std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& final_memory_config,
     const std::optional<const DataType> dtype) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -350,6 +346,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
             multi_device_global_semaphore,
             subdevice_id,
             head_dim,
+            use_noc1_only,
             num_heads,
             num_kv_heads,
             input_on_subcoregrids,
@@ -368,42 +365,36 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,
     size_t num_workers_per_link,
-    bool persistent_fabric_mode,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<CoreRangeSet>& reserved_core_range) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
-    if (persistent_fabric_mode) {
-        const size_t num_workers_preferred = num_workers_per_link * num_links;
-        auto available_cores = device->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX,
-            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-        if (reserved_core_range.has_value()) {
-            available_cores = available_cores.subtract(*reserved_core_range);
-        }
-        if (available_cores.num_cores() < num_workers_preferred) {
-            log_warning(
-                tt::LogOp,
-                "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
-                "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
-                "performance loss.",
-                num_workers_preferred,
-                num_workers_per_link,
-                num_links,
-                available_cores.num_cores());
-        }
-        for (const auto& cr : available_cores.ranges()) {
-            auto start = cr.start_coord;
-            auto end = cr.end_coord;
-            for (size_t y = start.y; y <= end.y; y++) {
-                for (size_t x = start.x; x <= end.x; x++) {
-                    sender_worker_core_range =
-                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
-                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                        break;
-                    }
-                }
+    const size_t num_workers_preferred = num_workers_per_link * num_links;
+    auto available_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (reserved_core_range.has_value()) {
+        available_cores = available_cores.subtract(*reserved_core_range);
+    }
+    if (available_cores.num_cores() < num_workers_preferred) {
+        log_warning(
+            tt::LogOp,
+            "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
+            "performance loss.",
+            num_workers_preferred,
+            num_workers_per_link,
+            num_links,
+            available_cores.num_cores());
+    }
+    for (const auto& cr : available_cores.ranges()) {
+        auto start = cr.start_coord;
+        auto end = cr.end_coord;
+        for (size_t y = start.y; y <= end.y; y++) {
+            for (size_t x = start.x; x <= end.x; x++) {
+                sender_worker_core_range =
+                    sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
                 if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                     break;
                 }
@@ -412,9 +403,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
                 break;
             }
         }
-    } else {
-        sender_worker_core_range =
-            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
+        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+            break;
+        }
     }
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }

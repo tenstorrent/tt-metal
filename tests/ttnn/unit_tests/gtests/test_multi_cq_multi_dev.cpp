@@ -81,15 +81,13 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceProgramsOnCQ1) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
+
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
                 TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
                 ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-                auto input_tensor = allocate_tensor_on_mesh(tensor_spec, device.get());
+                auto input_tensor = allocate_tensor_on_device(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(0),
@@ -139,13 +137,11 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceProgramsOnCQ0) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
+
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_tensor = allocate_tensor_on_mesh(tensor_spec, device.get());
+                auto input_tensor = allocate_tensor_on_device(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(1),
@@ -193,15 +189,12 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceWithCQ1Only) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
 
                 TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
-                auto input_tensor = allocate_tensor_on_mesh(tensor_spec, device.get());
+                auto input_tensor = allocate_tensor_on_device(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(1),

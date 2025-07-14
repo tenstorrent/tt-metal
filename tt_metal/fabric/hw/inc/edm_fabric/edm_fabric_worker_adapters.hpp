@@ -12,10 +12,10 @@
 #include "fabric_edm_packet_header_validate.hpp"
 #include "fabric_stream_regs.hpp"
 #include "fabric_edm_types.hpp"
+#include "fabric_host_interface.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"
-#include "tt_metal/hw/inc/wormhole/core_config.h"
 #include "debug/assert.h"
 
 #include <cstdint>
@@ -66,17 +66,46 @@ struct WorkerToFabricEdmSenderImpl {
 
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
-        bool is_persistent_fabric = get_arg_val<uint32_t>(arg_idx++);
-        const auto direction = get_arg_val<uint32_t>(arg_idx++);
-        const WorkerXY edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
-        const auto edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
-        const uint8_t num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
-        const size_t edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-        const auto edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-        const auto edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
-        const uint16_t buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-        const auto edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
+        constexpr bool is_persistent_fabric = true;
+        uint32_t direction;
+        WorkerXY edm_worker_xy(0, 0);
+        uint32_t edm_buffer_base_addr;
+        uint32_t num_buffers_per_channel;
+        uint32_t edm_l1_sem_id;
+        uint32_t edm_connection_handshake_l1_addr;
+        uint32_t edm_worker_location_info_addr;
+        uint32_t buffer_size_bytes;
+        uint32_t edm_copy_of_wr_counter_addr;
+
+        if constexpr (my_core_type == ProgrammableCoreType::TENSIX) {
+            tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+                reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+            uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
+            const auto& conn = connection_info->connections[eth_channel];
+            direction = conn.edm_direction;
+            edm_worker_xy = WorkerXY::from_uint32(conn.edm_noc_xy);
+            edm_buffer_base_addr = conn.edm_buffer_base_addr;
+            num_buffers_per_channel = conn.num_buffers_per_channel;
+            edm_l1_sem_id = conn.edm_l1_sem_addr;
+            edm_connection_handshake_l1_addr = conn.edm_connection_handshake_addr;
+            edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
+            buffer_size_bytes = conn.buffer_size_bytes;
+            edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
+        } else {
+            // TODO: will be deprecated. currently for ethernet dispatch case
+            //       ethernet core need to have same memory mapping as worker
+            direction = get_arg_val<uint32_t>(arg_idx++);
+            edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+            edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
+            num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
+            edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
+            edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
+            edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
+            buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+            edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
+        }
         const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
+
         auto writer_send_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(writer_send_sem_id));
 
@@ -217,7 +246,7 @@ struct WorkerToFabricEdmSenderImpl {
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
     FORCE_INLINE void setup_edm_noc_cmd_buf() const {
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, EDM_TO_DOWNSTREAM_NOC);
-        noc_async_write_one_packet_with_trid_set_state(
+        noc_async_write_one_packet_with_trid_set_state<true>(
             edm_noc_addr, this->data_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
         const uint64_t noc_sem_addr = get_noc_addr(
             this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, EDM_TO_DOWNSTREAM_NOC);
@@ -226,6 +255,7 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
+        invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             return (this->buffer_slot_write_counter.counter - *this->from_remote_buffer_free_slots_ptr) <
                    this->num_buffers_per_channel;
@@ -276,14 +306,33 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
-    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api>
+    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api, bool increment_poiners>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
             EDM_IO_BLOCKING_MODE::NON_BLOCKING,
             enable_ring_support,
             EDM_TO_DOWNSTREAM_NOC,
-            stateful_api>(source_address, size_bytes, trid);
+            stateful_api,
+            increment_poiners>(source_address, size_bytes, trid);
+    }
+
+    template <bool inc_pointers = true>
+    FORCE_INLINE void update_edm_buffer_slot_word(uint32_t offset, uint32_t data, uint8_t noc = noc_index) {
+        uint64_t noc_addr;
+        if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+            noc_addr = get_noc_addr(
+                this->edm_noc_x,
+                this->edm_noc_y,
+                this->edm_buffer_slot_addrs[this->get_buffer_slot_index()] + offset,
+                noc);
+        } else {
+            noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr + offset, noc);
+        }
+        noc_inline_dw_write(noc_addr, data, 0xf, noc);
+        if constexpr (inc_pointers) {
+            post_send_payload_increment_pointers(noc);
+        }
     }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
@@ -501,7 +550,7 @@ private:
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+            noc_inline_dw_write<true>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)
@@ -525,7 +574,6 @@ private:
                     BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
                     this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
-                ;
             } else {
                 this->buffer_slot_index = BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
@@ -578,7 +626,8 @@ private:
         EDM_IO_BLOCKING_MODE blocking_mode,
         bool enable_ring_support,
         uint8_t EDM_TO_DOWNSTREAM_NOC,
-        bool stateful_api>
+        bool stateful_api,
+        bool increment_pointers>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
@@ -589,7 +638,7 @@ private:
                 source_address,
                 1,
                 size_bytes,
-                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
                 this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
@@ -599,13 +648,15 @@ private:
                 source_address,
                 1,
                 size_bytes,
-                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
                 this->edm_buffer_addr,
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         }
-        post_send_payload_increment_pointers<stateful_api, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
+        if constexpr (increment_pointers) {
+            post_send_payload_increment_pointers<stateful_api, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
+        }
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>

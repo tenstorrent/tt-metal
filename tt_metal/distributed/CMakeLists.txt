@@ -1,6 +1,7 @@
 set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/coordinate_translation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/distributed_coordinate_system.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_command_queue_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fd_mesh_command_queue.cpp
@@ -10,6 +11,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket_serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
@@ -17,6 +19,11 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multihost/distributed_context.cpp
 )
+
+# Include helper functions and generate headers from flatbuffer schemas
+include(flatbuffers)
+
+set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/socket_peer_descriptor.fbs)
 
 # Check if distributed compute is enabled
 if(NOT DEFINED ENABLE_DISTRIBUTED)
@@ -71,6 +78,11 @@ endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
+foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE} TARGET distributed)
+    target_sources(distributed PRIVATE ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 target_link_libraries(
     distributed
     PUBLIC
@@ -79,9 +91,13 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
+        FlatBuffers::FlatBuffers
 )
+add_dependencies(distributed metalium_GeneratedHeaders)
 
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
 endif()
+
+target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)

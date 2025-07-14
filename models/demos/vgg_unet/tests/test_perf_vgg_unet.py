@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ from models.utility_functions import profiler, run_for_wormhole_b0
 
 
 def get_expected_times(name):
-    base = {"vgg_unet": (31.6, 0.15)}
+    base = {"vgg_unet": (31.6, 0.18)}
     return base[name]
 
 
@@ -49,7 +49,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
 
     # Pre-trained weights processing
     if use_pretrained_weight:
-        weights_pth = "models/experimental/vgg_unet/vgg_unet_torch.pth"
+        weights_pth = "models/demos/vgg_unet/vgg_unet_torch.pth"
         torch_dict = torch.load(weights_pth)
         new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
         torch_model.load_state_dict(new_state_dict)
@@ -97,7 +97,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
     expected_compile_time, expected_inference_time = get_expected_times("vgg_unet")
 
     prep_perf_report(
-        model_name="models/experimental/vgg_unet",
+        model_name="models/demos/vgg_unet",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,

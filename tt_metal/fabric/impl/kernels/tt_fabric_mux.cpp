@@ -55,11 +55,7 @@ void setup_channel(
     size_t& sender_flow_control_address,
     StreamId my_channel_free_slots_stream_id) {
     new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
-        channel_base_address,
-        buffer_size_bytes,
-        sizeof(PACKET_HEADER_TYPE),
-        0, /* unused, eth_transaction_ack_word_addr */
-        channel_id);
+        channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE), channel_id);
     channel_base_address += NUM_BUFFERS * buffer_size_bytes;
     init_ptr_val(my_channel_free_slots_stream_id, NUM_BUFFERS);
 
@@ -189,22 +185,6 @@ void kernel_main() {
     uint32_t heartbeat = 0;
 #endif
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
-        if (got_graceful_termination) {
-            bool all_channels_drained = false;
-            for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
-            }
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                all_channels_drained &=
-                    get_ptr_val(channel_id + NUM_FULL_SIZE_CHANNELS) == NUM_BUFFERS_HEADER_ONLY_CHANNEL;
-            }
-
-            if (all_channels_drained) {
-                return;
-            }
-        }
-
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
                 for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {

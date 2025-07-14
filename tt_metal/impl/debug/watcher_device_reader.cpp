@@ -175,23 +175,16 @@ const launch_msg_t* get_valid_launch_message(const mailboxes_t* mbox_data) {
 }
 }  // anonymous namespace
 
-namespace tt::watcher {
+namespace tt::tt_metal {
 
-WatcherDeviceReader::WatcherDeviceReader(
-    FILE* f,
-    chip_id_t device_id,
-    std::vector<string>& kernel_names,
-    void (*set_watcher_exception_message)(const string&)) :
-    f(f),
-    device_id(device_id),
-    kernel_names(kernel_names),
-    set_watcher_exception_message(set_watcher_exception_message) {
+WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std::vector<string>& kernel_names) :
+    f(f), device_id(device_id), kernel_names(kernel_names) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
@@ -212,7 +205,7 @@ WatcherDeviceReader::~WatcherDeviceReader() {
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
@@ -231,11 +224,14 @@ WatcherDeviceReader::~WatcherDeviceReader() {
                     virtual_core,
                     num_events);
             }
-            fprintf(
-                f,
-                "%s\n",
-                fmt::format("\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
-                    .c_str());
+            if (f) {
+                fprintf(
+                    f,
+                    "%s\n",
+                    fmt::format(
+                        "\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
+                        .c_str());
+            }
         }
     }
 }
@@ -281,12 +277,12 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
     // Dump eth cores
     for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, true);
     }
     for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, false);
     }
@@ -616,7 +612,7 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         DumpRingBuffer(core, mbox_data, true);
         LogRunningKernels(core, launch_msg);
         // Save the error string for checking later in unit tests.
-        set_watcher_exception_message(fmt::format("{}: {}", core_str, error_msg));
+        MetalContext::instance().watcher_server()->set_exception_message(fmt::format("{}: {}", core_str, error_msg));
         TT_THROW("{}: {}", core_str, error_msg);
     }
 }
@@ -708,7 +704,7 @@ void WatcherDeviceReader::DumpAssertTrippedDetails(
     DumpRingBuffer(core, mbox_data, true);
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
     LogRunningKernels(core, launch_msg);
-    set_watcher_exception_message(error_msg);
+    MetalContext::instance().watcher_server()->set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
@@ -727,7 +723,8 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
             DumpRingBuffer(core, mbox_data, true);
             LogRunningKernels(core, get_valid_launch_message(mbox_data));
             // Save the error string for checking later in unit tests.
-            set_watcher_exception_message(fmt::format("{}: {}", core_str, error_reason));
+            MetalContext::instance().watcher_server()->set_exception_message(
+                fmt::format("{}: {}", core_str, error_reason));
             TT_THROW("{}", error_reason);
         }
     }
@@ -1072,4 +1069,4 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
     return "";
 }
 
-}  // namespace tt::watcher
+}  // namespace tt::tt_metal

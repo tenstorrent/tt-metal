@@ -2,8 +2,11 @@ add_executable(distributed_unit_tests)
 target_sources(
     distributed_unit_tests
     PRIVATE
+        test_auto_mpi_init.cpp
+        test_control_plane_local_mesh_binding.cpp
         test_end_to_end_eltwise.cpp
         test_distributed_host_buffer.cpp
+        test_maybe_remote.cpp
         test_mesh_buffer.cpp
         test_mesh_coord.cpp
         test_mesh_device.cpp
@@ -40,27 +43,35 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
-add_executable(thread_pool_benchmark)
-target_sources(thread_pool_benchmark PRIVATE benchmark_thread_pool.cpp)
+add_executable(distributed_benchmarks)
+target_sources(
+    distributed_benchmarks
+    PRIVATE
+        benchmark_thread_pool.cpp
+        benchmark_distributed_host_buffer.cpp
+)
 
 target_link_libraries(
-    thread_pool_benchmark
+    distributed_benchmarks
     PRIVATE
         tt_metal
         test_common_libs
         benchmark::benchmark
+        benchmark::benchmark_main
 )
 
 target_include_directories(
-    thread_pool_benchmark
+    distributed_benchmarks
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
 )
 
 set_target_properties(
-    thread_pool_benchmark
+    distributed_benchmarks
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
+
+add_subdirectory(multiprocess)

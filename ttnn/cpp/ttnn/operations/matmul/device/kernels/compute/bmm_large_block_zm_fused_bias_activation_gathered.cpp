@@ -155,7 +155,12 @@ void MAIN {
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
     constexpr bool in1_is_dram_sharded = get_compile_time_arg_val(17);
-    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = 18;
+    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in2_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t sync_cb = get_compile_time_arg_val(21);
+    constexpr uint32_t sync_cb2 = get_compile_time_arg_val(22);
+    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = get_compile_time_arg_val(23);
     constexpr std::array<uint32_t, batch> mm_out_cb_ids =
         fill_array_with_next_n_args<uint32_t, OUTPUT_CB_ARRAY_IDX, batch>();
     constexpr uint32_t INTERM_CB_ARRAY_IDX = OUTPUT_CB_ARRAY_IDX + batch;
@@ -176,12 +181,6 @@ void MAIN {
     rt_args_idx += ring_size;
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
-
-    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t in2_cb_id = tt::CBIndex::c_2;
-    constexpr uint32_t sync_cb = tt::CBIndex::c_3;
-    constexpr uint32_t sync_cb2 = tt::CBIndex::c_4;
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION

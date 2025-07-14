@@ -9,6 +9,7 @@
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <tt-metalium/program.hpp>
+#include "sub_device_types.hpp"
 #include "trace/trace_buffer.hpp"
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -28,18 +29,19 @@
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/host_runtime_commands.hpp"
-#include "dprint_server.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "trace/trace_node.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "data_collection.hpp"
+#include "ringbuffer_cache.hpp"
+#include "program/dispatch.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -82,7 +84,17 @@ HWCommandQueue::HWCommandQueue(
     uint32_t completion_queue_reader_core) :
     manager_(device->sysmem_manager()),
     completion_queue_thread_{},
-    completion_queue_reader_core_(completion_queue_reader_core) {
+    completion_queue_reader_core_(completion_queue_reader_core),
+    prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+    prefetcher_cache_sizeB_(
+        MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
+    prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
+    prefetcher_cache_manager_size_(
+        1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
+    prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
+    dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
     this->cq_shared_state_ = std::move(cq_shared_state);
@@ -235,52 +247,53 @@ void HWCommandQueue::enqueue_read_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
-    Buffer& buffer_obj = get_buffer_object(buffer);
+    auto buffer_obj = get_buffer_object(buffer).view(region);
+
+    // Reading from device would clobber prefetcher cache, so reset it now
+    this->reset_prefetcher_cache_manager();
 
     // This is to make sure we block on the same sub_device_ids at the end
     // TODO: enqueue_read_from_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    if (is_sharded(buffer_obj.buffer_layout())) {
+    if (is_sharded(buffer_obj->buffer_layout())) {
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            buffer_obj, this->id_, this->expected_num_workers_completed_, region);
-        auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
-            dispatch_params.width_split, dispatch_params.buffer_page_mapping, buffer_obj);
-        for (uint32_t core_id = 0; core_id < buffer_obj.num_cores(); ++core_id) {
-            buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
-                core_id,
-                buffer_obj,
-                dispatch_params,
-                sub_device_ids,
-                cores[core_id],
-                MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
-            if (dispatch_params.pages_per_txn > 0) {
-                this->issued_completion_q_reads_.push(
-                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
-                this->increment_num_entries_in_completion_q();
+            *buffer_obj, this->id_, this->expected_num_workers_completed_);
+        const auto& cores = dispatch_params.buffer_page_mapping->all_cores;
+        for (uint32_t core_id = 0; core_id < buffer_obj->num_cores(); ++core_id) {
+            for (const auto& core_page_mapping : dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
+                buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
+                    core_id,
+                    core_page_mapping,
+                    *buffer_obj,
+                    dispatch_params,
+                    sub_device_ids,
+                    cores[core_id],
+                    MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
+                if (dispatch_params.pages_per_txn > 0) {
+                    this->issued_completion_q_reads_.push(
+                        buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *buffer_obj));
+                    this->increment_num_entries_in_completion_q();
+                }
             }
         }
     } else {
         // Forward data from device to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
-        buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
+        buffer_dispatch::BufferReadDispatchParams dispatch_params =
             buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-                buffer_obj, this->id_, this->expected_num_workers_completed_, region);
-
-        buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
-            [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
-            dispatch_params_variant);
+                *buffer_obj, this->id_, this->expected_num_workers_completed_);
 
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            *dispatch_params,
-            buffer_obj,
+            dispatch_params,
+            *buffer_obj,
             sub_device_ids,
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
-        if (dispatch_params->pages_per_txn > 0) {
+        if (dispatch_params.pages_per_txn > 0) {
             this->issued_completion_q_reads_.push(
-                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
+                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *buffer_obj));
             this->increment_num_entries_in_completion_q();
         }
     }
@@ -304,7 +317,7 @@ void HWCommandQueue::enqueue_write_buffer(
             [](const void* raw_data) -> const void* { return raw_data; },
             [](const auto& data) -> const void* { return data->data(); }},
         src);
-    Buffer& buffer_obj = get_buffer_object(buffer);
+    auto buffer_obj = get_buffer_object(buffer).view(region);
 
     // This is to make sure we block on the same sub_device_ids at the end
     // TODO: enqueue_write_to_core will call select_sub_device_ids every loop which will have minor overhead
@@ -312,7 +325,7 @@ void HWCommandQueue::enqueue_write_buffer(
 
     auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     buffer_dispatch::write_to_device_buffer(
-        data, buffer_obj, region, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
+        data, *buffer_obj, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -415,16 +428,44 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
         program.set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
     }
+
     // Lower the program to device: Generate dispatch commands.
     // Values in these commands will get updated based on kernel config ring
     // buffer state at runtime.
-    program.generate_dispatch_commands(device_);
+    auto program_sizeB = program.impl().kernel_bins_sizeB;
+    bool use_prefetcher_cache = program_sizeB and program_sizeB <= this->prefetcher_cache_sizeB_;
+    program.generate_dispatch_commands(device_, use_prefetcher_cache);
     program.set_last_used_command_queue_for_testing(this);
 
     if (this->manager_.get_bypass_mode()) {
-        this->trace_nodes_.push_back(program_dispatch::create_trace_node(program.impl(), device_));
+        this->trace_nodes_.push_back(
+            program_dispatch::create_trace_node(program.impl(), device_, use_prefetcher_cache));
         return;
     }
+
+    const auto sub_device_id = sub_device_ids[0];
+    const auto sub_device_index = *sub_device_id;
+
+    uint32_t num_additional_workers = 0;
+    if (program.runs_on_noc_multicast_only_cores()) {
+        num_additional_workers +=
+            calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
+    }
+    if (program.runs_on_noc_unicast_only_cores()) {
+        num_additional_workers +=
+            calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
+    }
+
+    // Expected number of workers from the previous run. Used to generate the wait command in the EnqueueProgramCommand
+    const auto updated_worker_counts = program_dispatch::get_expected_num_workers_completed_updates(
+        expected_num_workers_completed_[sub_device_index], num_additional_workers);
+    if (updated_worker_counts.wrapped) {
+        program_dispatch::reset_expected_num_workers_completed_on_device(
+            device_, sub_device_id, expected_num_workers_completed_[sub_device_index], id());
+        get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
+    }
+    uint32_t expected_workers_completed = updated_worker_counts.previous;
+    expected_num_workers_completed_[sub_device_index] = updated_worker_counts.current;
 
 #ifdef DEBUG
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
@@ -439,22 +480,29 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 #endif
-    auto sub_device_id = sub_device_ids[0];
-    auto sub_device_index = *sub_device_id;
-
-    // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
-    uint32_t expected_workers_completed = this->expected_num_workers_completed_[sub_device_index];
-    if (program.runs_on_noc_multicast_only_cores()) {
-        this->expected_num_workers_completed_[sub_device_index] +=
-            device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-    }
-    if (program.runs_on_noc_unicast_only_cores()) {
-        this->expected_num_workers_completed_[sub_device_index] +=
-            device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
-    }
 
     auto& worker_launch_message_buffer_state =
         this->cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id];
+
+    // Dispatch metadata contains runtime information based on
+    // the kernel config ring buffer state
+    program_dispatch::ProgramDispatchMetadata dispatch_metadata;
+    if (use_prefetcher_cache) {
+        bool& is_cached = dispatch_metadata.prefetcher_cache_info.is_cached;
+        uint32_t& cache_offset = dispatch_metadata.prefetcher_cache_info.offset;
+        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.get_id(), program_sizeB);
+        TT_ASSERT(
+            cache_offset + program_sizeB <= this->prefetcher_cache_sizeB_,
+            "Prefetcher cache overflow: offset: {}, program size: {}, cache size: {}",
+            cache_offset,
+            program_sizeB,
+            this->prefetcher_cache_sizeB_);
+        dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = program_sizeB;
+    } else {
+        // prefetcher cache will be overwritten, reset for next program
+        this->reset_prefetcher_cache_manager();
+    }
+
     auto command = EnqueueProgramCommand(
         this->id_,
         this->device_,
@@ -467,7 +515,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         // The assembled program command will encode the location of the launch messages in the ring buffer
         worker_launch_message_buffer_state.get_mcast_wptr(),
         worker_launch_message_buffer_state.get_unicast_wptr(),
-        sub_device_id);
+        sub_device_id,
+        dispatch_metadata);
     // Update wptrs for tensix and eth launch message in the device class
     if (program.runs_on_noc_multicast_only_cores()) {
         worker_launch_message_buffer_state.inc_mcast_wptr(1);
@@ -574,6 +623,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
         this->expected_num_workers_completed_,
         virtual_enqueue_program_dispatch_core_);
 
+    // Reset the prefetcher cache manager, since trace capture modifies the state on host for subsequent non-trace
+    // programs
+    this->reset_prefetcher_cache_manager();
+
     trace_dispatch::update_worker_state_post_trace_execution(
         trace_inst->desc->descriptors,
         this->cq_shared_state_->worker_launch_message_buffer_state,
@@ -663,11 +716,12 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
-            if (DPrintServerHangDetected()) {
+            if (MetalContext::instance().dprint_server() and
+                MetalContext::instance().dprint_server()->hang_detected()) {
                 // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
-            } else if (tt::watcher_server_killed_due_to_error()) {
+            } else if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
                 // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
@@ -705,6 +759,8 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     this->tid_ = tid;
     this->trace_ctx_ = std::move(ctx);
     this->manager_.set_bypass_mode(true, true);  // start trace capture
+
+    swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
 // Allocate space for program binaries and other data in the worker config ring buffer.
@@ -717,19 +773,28 @@ void HWCommandQueue::allocate_trace_programs() {
         auto sub_device_index = *sub_device_id;
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
+
+        const auto updated_worker_counts =
+            program_dispatch::get_expected_num_workers_completed_updates(expected_workers_completed, num_workers);
+        bool must_reset_worker_counts = updated_worker_counts.wrapped;
+        if (must_reset_worker_counts) {
+            node.dispatch_metadata.reset_worker_counts_before_program = true;
+            get_config_buffer_mgr(sub_device_index).mark_completely_full(0);
+        }
+
         program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-        // Reserve space for this program in the kernel config ring buffer
+        // Reserve space for this program in the kernel config ring buffer, potentially after a wrap and reset above
         program_dispatch::reserve_space_in_kernel_config_buffer(
-            this->config_buffer_mgr_[sub_device_index],
+            get_config_buffer_mgr(sub_device_index),
             program.get_program_config_sizes(),
             program.get_program_binary_status(device_->id()),
             num_workers,
-            expected_workers_completed,
+            updated_worker_counts.previous,
             dispatch_metadata);
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         ProgramConfig& program_config = program.get_program_config(index);
@@ -744,7 +809,7 @@ void HWCommandQueue::allocate_trace_programs() {
         // addresses don't need adjustment.
         node.dispatch_metadata.binary_kernel_config_addrs[index].addr += program_config.kernel_text_offset;
 
-        expected_workers_completed += num_workers;
+        expected_workers_completed = updated_worker_counts.current;
     }
 }
 
@@ -760,12 +825,14 @@ void HWCommandQueue::record_end() {
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
+
         }
         if (program.runs_on_noc_unicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
+        // May be changed below if clear count is needed
         this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
 
         RecordProgramRun(program.get_id());
@@ -775,6 +842,40 @@ void HWCommandQueue::record_end() {
         auto& cached_program_command_sequence = program.get_trace_cached_program_command_sequences().at(command_hash);
         auto& worker_launch_message_buffer_state =
             this->cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id];
+
+        // Dispatch metadata contains runtime information based on
+        // the kernel config ring buffer state
+        auto& dispatch_metadata = node.dispatch_metadata;
+        auto use_prefetcher_cache = cached_program_command_sequence.prefetcher_cache_used;
+        auto program_sizeB = cached_program_command_sequence.kernel_bins_sizeB;
+        if (dispatch_metadata.send_binary) {
+            if (use_prefetcher_cache) {
+                bool& is_cached = dispatch_metadata.prefetcher_cache_info.is_cached;
+                uint32_t& cache_offset = dispatch_metadata.prefetcher_cache_info.offset;
+                std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.get_id(), program_sizeB);
+                TT_ASSERT(
+                    cache_offset + program_sizeB <= this->prefetcher_cache_sizeB_,
+                    "Prefetcher cache overflow: offset: {}, program size: {}, cache size: {}",
+                    cache_offset,
+                    program_sizeB,
+                    this->prefetcher_cache_sizeB_);
+                dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = program_sizeB;
+            } else {
+                // prefetcher cache will be overwritten, reset for next program
+                this->reset_prefetcher_cache_manager();
+            }
+        }
+
+        if (node.dispatch_metadata.reset_worker_counts_before_program) {
+            // Wait for the previous node to complete and then clear count
+            program_dispatch::reset_expected_num_workers_completed_on_device(
+                device_, node.sub_device_id, expected_workers_completed, id());
+            // Number of completion worker cores is just num workers now
+            this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores = num_workers;
+            // Expected workers completed to pass into update_traced_program_dispatch_commands
+            // for the mcast go signal is zero now because we already waited and cleared
+            expected_workers_completed = 0;
+        }
         // Update the generated dispatch commands based on the state of the CQ and the ring buffer
         program_dispatch::update_traced_program_dispatch_commands(
             node,
@@ -820,7 +921,6 @@ void HWCommandQueue::record_end() {
     // separately
     this->trace_ctx_->sub_device_ids.reserve(this->trace_ctx_->descriptors.size());
     for (const auto& [id, _] : this->trace_ctx_->descriptors) {
-        auto index = *id;
         this->trace_ctx_->sub_device_ids.push_back(id);
     }
     this->tid_ = std::nullopt;
@@ -838,6 +938,11 @@ void HWCommandQueue::record_end() {
         this->expected_num_workers_completed_reset_,
         this->config_buffer_mgr_reset_);
     this->manager_.set_bypass_mode(false, true);  // stop trace capture
+
+    // Trace has modified the prefetcher cache manager so reset it first and then swap to restore the state as before
+    // the recording
+    this->reset_prefetcher_cache_manager();
+    swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
 void HWCommandQueue::terminate() {
@@ -849,5 +954,19 @@ void HWCommandQueue::terminate() {
 }
 
 WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; }
+
+std::pair<bool, size_t> HWCommandQueue::query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB) {
+    auto result = prefetcher_cache_manager_->get_cache_offset(pgm_id, lengthB);
+    TT_FATAL(
+        result.has_value(),
+        "Prefetcher cache query failed. Cache size: {}, requested: {}",
+        this->prefetcher_cache_manager_->get_cache_sizeB(),
+        lengthB);
+    return std::make_pair(result.value().is_cached, result.value().offset * this->prefetcher_dram_aligned_block_size_);
+}
+
+void HWCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
+
+int HWCommandQueue::get_prefetcher_cache_sizeB() const { return this->prefetcher_cache_manager_->get_cache_sizeB(); }
 
 }  // namespace tt::tt_metal

@@ -15,13 +15,25 @@
 
 namespace tt::tt_metal {
 
-struct HostStorage {
-    HostBuffer buffer;
-    HostStorage() = default;
-    HostStorage(HostBuffer buffer_) : buffer(std::move(buffer_)) {}
+class HostStorage {
+public:
+    // Creates HostStorage distributed over a mesh that matches `buffer` shape.
+    explicit HostStorage(DistributedHostBuffer buffer);
+
+    // Creates HostStorage distributed over 1x1 mesh.
+    explicit HostStorage(HostBuffer buffer);
+
+    // Returns the distributed host buffer.
+    const DistributedHostBuffer& buffer() const;
+
+    // Applies a transformation function to each device buffer in parallel, returning a new HostStorage.
+    HostStorage transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
+
+private:
+    DistributedHostBuffer distributed_buffer_;
 };
 
 struct DeviceStorage {
@@ -48,23 +60,6 @@ struct DeviceStorage {
     bool is_uniform_storage() const;
 };
 
-class MultiDeviceHostStorage {
-public:
-    explicit MultiDeviceHostStorage(std::vector<HostBuffer> buffers);
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    auto attribute_values() const { return std::forward_as_tuple(); }
-
-    // Returns `HostBuffer` at position `buffer_index`;
-    HostBuffer get_buffer(int buffer_index) const;
-
-    // Returns the number of `HostBuffer`s in the storage;
-    size_t num_buffers() const;
-
-private:
-    std::vector<HostBuffer> buffers_;
-};
-
-using Storage = std::variant<HostStorage, DeviceStorage, MultiDeviceHostStorage>;
+using Storage = std::variant<HostStorage, DeviceStorage>;
 
 }  // namespace tt::tt_metal

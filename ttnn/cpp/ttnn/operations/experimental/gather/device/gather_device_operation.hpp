@@ -32,9 +32,9 @@ struct GatherDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const int8_t dim,
+        int8_t dim,
         const Tensor& input_index_tensor,
-        const bool sparse_grad,
+        bool sparse_grad,
         const MemoryConfig& output_memory_config,
         const std::optional<Tensor>& output_tensors);
 };

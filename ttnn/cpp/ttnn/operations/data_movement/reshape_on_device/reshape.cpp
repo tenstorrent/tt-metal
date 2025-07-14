@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
 
-#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -31,14 +31,14 @@ static Tensor manual_insertion(
         logical_shape.volume(),
         input_tensor.logical_volume());
     auto cpu_tensor = input_tensor.cpu();
-    auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(cpu_tensor);
     auto output =
         Tensor(
-            std::move(host_buffer),
+            cpu_tensor.storage(),
             TensorSpec(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
-                    DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
+                    DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)),
+            cpu_tensor.distributed_tensor_config())
             .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);

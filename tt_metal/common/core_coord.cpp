@@ -179,6 +179,16 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
+CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords) {
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(core_coords.size());
+    for (const auto& core_coord : core_coords) {
+        core_ranges.push_back(CoreRange(core_coord));
+    }
+    CoreRangeSet unmerged_set(std::move(core_ranges));
+    *this = unmerged_set.merge_ranges();
+}
+
 void swap(CoreRangeSet& first, CoreRangeSet& second) { std::swap(first.ranges_, second.ranges_); }
 
 CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) { this->ranges_ = other.ranges_; }
@@ -316,7 +326,6 @@ bool CoreRangeSet::contains(const CoreRange& other) const {
     } else if (this->num_cores() < num_remaining_cores) {
         return false;
     }
-    uint32_t num_intersect_cores = 0;
     for (const auto& cr : this->ranges_) {
         const auto& intersection = cr.intersection(other);
         if (intersection.has_value()) {
@@ -669,7 +678,7 @@ std::size_t hash<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) c
 
 }  // namespace std
 
-namespace tt::stl::json {
+namespace ttsl::json {
 
 nlohmann::json to_json_t<CoreCoord>::operator()(const CoreCoord& core_coord) noexcept {
     return {{"x", to_json(core_coord.x)}, {"y", to_json(core_coord.y)}};
@@ -704,4 +713,4 @@ CoreRangeSet from_json_t<CoreRangeSet>::operator()(const nlohmann::json& json) n
     return CoreRangeSet(from_json<std::vector<CoreRange>>(json));
 }
 
-}  // namespace tt::stl::json
+}  // namespace ttsl::json
