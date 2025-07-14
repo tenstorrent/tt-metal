@@ -310,10 +310,6 @@ inline void set_packer_config(const uint pack_src_format, const uint pack_dst_fo
             config.f.exp_section_size                              = 1 + 0 + 12;
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
-        else
-        {
-            FWASSERT("Other data formats not supported", false);
-        }
     }
 
     // Save to GPR for quick data format reconfig
@@ -429,10 +425,6 @@ inline void reconfig_packer_data_format(const uint pack_src_format, const uint p
             TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP2);
             TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP2);
             TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP2);
-        }
-        else
-        {
-            FWASSERT("Other data formats not supported", false);
         }
     }
     else if ((pack_dst_format == static_cast<DataFormatType>(DataFormat::Lf8)) || ((pack_dst_format & 0xF) == static_cast<DataFormatType>(DataFormat::Int8)))

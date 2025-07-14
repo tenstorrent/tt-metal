@@ -10,7 +10,6 @@
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "cunpack_common.h"
-#include "fw_debug.h"
 
 #ifdef PERF_DUMP
 #include "ckernel_perf_api.h"

@@ -47,10 +47,6 @@ inline void reset_counters(const uint setrwc)
 
 inline void incr_counters(const uint incr_a, const uint incr_b, const uint incr_d, const uint incr_cr)
 {
-    FWASSERT("Value exceeds RWC_A width of 4 bits", incr_a < 16);
-    FWASSERT("Value exceeds RWC_B width of 4 bits", incr_b < 16);
-    FWASSERT("Value exceeds RWC_D width of 4 bits", incr_d < 16);
-    FWASSERT("Value exceeds RWC_CR width of 4 bits", incr_cr < 16);
     TT_INCRWC(incr_cr, incr_d, incr_b, incr_a);
 }
 
@@ -201,7 +197,6 @@ inline void inc_dst_addr()
 
 inline void math_dest_wait()
 {
-    FWLOG0("XX math_full_dest_sync()->wait for whole dest available");
     TTI_SEMWAIT(p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
 }
 

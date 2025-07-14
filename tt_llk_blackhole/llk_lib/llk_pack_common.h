@@ -10,7 +10,6 @@
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "cpack_common.h"
-#include "fw_debug.h"
 #include "llk_defs.h"
 
 using namespace ckernel;

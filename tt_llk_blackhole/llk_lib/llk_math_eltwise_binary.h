@@ -262,10 +262,6 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
             }
         }
     }
-    else
-    {
-        FWASSERT("Unsupported op!", false);
-    }
     math::clear_dst_reg_addr();
 }
 
@@ -421,10 +417,6 @@ inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, const 
     if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL))
     {
         eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, MATH_FIDELITY_PHASES, binary_reuse_dest>(acc_to_dest, num_faces);
-    }
-    else
-    {
-        FWASSERT("Unsupported op!", false);
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
