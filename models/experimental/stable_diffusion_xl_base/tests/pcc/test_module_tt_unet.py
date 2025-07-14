@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_CI_WEIGHTS_PATH
 
 
 def prepare_ttnn_tensors(
@@ -75,11 +75,24 @@ def run_unet_model(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    is_ci_env,
     iterations=1,
 ):
-    unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
-    )
+    if is_ci_env:
+        unet = UNet2DConditionModel.from_pretrained(
+            SDXL_CI_WEIGHTS_PATH,
+            torch_dtype=torch.float32,
+            use_safetensors=True,
+            subfolder="unet",
+            local_files_only=True,
+        )
+    else:
+        unet = UNet2DConditionModel.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            torch_dtype=torch.float32,
+            use_safetensors=True,
+            subfolder="unet",
+        )
     unet.eval()
     state_dict = unet.state_dict()
 
@@ -185,6 +198,7 @@ def test_unet(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    is_ci_env,
     reset_seeds,
 ):
     run_unet_model(
@@ -194,4 +208,5 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        is_ci_env,
     )

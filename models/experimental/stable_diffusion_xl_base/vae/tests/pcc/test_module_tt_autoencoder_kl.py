@@ -7,7 +7,7 @@ import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_CI_WEIGHTS_PATH
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -23,10 +23,19 @@ from loguru import logger
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae(device, input_shape, pcc, reset_seeds):
-    vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
-    )
+def test_vae(device, input_shape, pcc, is_ci_env, reset_seeds):
+    if is_ci_env:
+        vae = AutoencoderKL.from_pretrained(
+            SDXL_CI_WEIGHTS_PATH,
+            torch_dtype=torch.float32,
+            use_safetensors=True,
+            subfolder="vae",
+            local_files_only=True,
+        )
+    else:
+        vae = AutoencoderKL.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
+        )
     vae.eval()
     state_dict = vae.state_dict()
 
