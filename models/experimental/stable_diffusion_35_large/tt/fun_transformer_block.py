@@ -172,6 +172,7 @@ def sd_dual_attn_block(
         spatial_scaled = ttnn.experimental.all_gather_async(
             spatial_scaled,
             dim=3,
+            num_links=parallel_manager.num_links,
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
@@ -181,6 +182,7 @@ def sd_dual_attn_block(
         prompt_scaled = unpadded_all_gather_async(
             prompt_scaled,
             dim=3,
+            num_links=parallel_manager.num_links,
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
@@ -223,6 +225,7 @@ def sd_gated_ff_block(
         scaled = unpadded_all_gather_async(
             scaled,
             dim=3,
+            num_links=parallel_manager.num_links,
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,

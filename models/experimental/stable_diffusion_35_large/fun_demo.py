@@ -24,10 +24,10 @@ from .tt.parallel_config import StableDiffusionParallelManager
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, topology",
+    "mesh_device, cfg, sp, tp, topology, num_links",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
@@ -52,6 +52,7 @@ def test_sd3(
     sp,
     tp,
     topology,
+    num_links,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -67,6 +68,7 @@ def test_sd3(
         cfg_axis=cfg_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        num_links=num_links,
     )
 
     if guidance_scale > 1 and cfg_factor == 1:

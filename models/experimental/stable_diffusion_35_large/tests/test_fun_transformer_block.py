@@ -40,13 +40,14 @@ TILE_SIZE = 32
         "sp",
         "tp",
         "topology",
+        "num_links",
     ),
     [
-        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear],
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
-        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear],
-        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear],
-        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear],
+        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear, 3],
     ],
     ids=[
         "t3k_cfg2_sp1_tp4",
@@ -72,6 +73,7 @@ def test_transformer_block(
     sp: int,
     tp: int,
     topology: ttnn.Topology,
+    num_links: int,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -87,6 +89,7 @@ def test_transformer_block(
         cfg_axis=cfg_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        num_links=num_links,
     )
     submesh = parallel_manager.submesh_devices[0]
     torch_dtype = torch.float32

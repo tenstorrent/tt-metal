@@ -86,7 +86,7 @@ def sd_feed_forward(
             persistent_output_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, output_buffer_name),
             dim=3,
             multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(cfg_index),
-            num_links=1,
+            num_links=parallel_manager.num_links,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
             topology=parallel_manager.dit_parallel_config.topology,
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,

@@ -22,7 +22,6 @@ class TtAttentionPartParameters:
     norm_q: TtRmsNormParameters
     norm_k: TtRmsNormParameters
     out_proj: TtLinearParameters | None
-    sharding_proj: TTLinearParameters
 
 
 @dataclass
@@ -73,9 +72,6 @@ class TtAttentionParameters:
                     hidden_dim_padding=hidden_dim_padding,
                     parallel_config=parallel_config,
                 ),
-                sharding_proj=TtLinearParameters.from_torch_sharding_projection(
-                    dict(weight=torch.eye(4096)), dtype=ttnn.bfloat8_b, device=device, shard_dim=-1
-                ),
             ),
             prompt=TtAttentionPartParameters(
                 qkv_proj=TtLinearParameters.from_torch_col_parallel(
@@ -103,7 +99,6 @@ class TtAttentionParameters:
                 )
                 if has_substate(state, "to_add_out")
                 else None,
-                sharding_proj=None,
             )
             if has_substate(state, "add_q_proj")
             else None,
@@ -214,7 +209,7 @@ def sd_joint_attention(
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_worker_grid,
         q_chunk_size=128,
-        k_chunk_size=128,
+        k_chunk_size=512,
         exp_approx_mode=False,  # NOTE: False is more correct
     )
 
@@ -304,11 +299,6 @@ def sd_joint_attention(
         prompt,
     )
 
-    # if parallel_config.sequence_parallel.factor > 1:
-    #     # Slice out the sequence parallel piece that is actually ours
-    #     spatial = sd_linear(spatial, parameters.spatial.sharding_proj, transpose_a=True)
-    #     spatial = ttnn.transpose(spatial, dim1=-2, dim2=-1)
-
     spatial = ttnn.unsqueeze(spatial, 1)
     prompt = ttnn.unsqueeze(prompt, 1)
 
@@ -316,6 +306,7 @@ def sd_joint_attention(
         spatial = ttnn.experimental.all_gather_async(
             spatial,
             dim=3,
+            num_links=parallel_manager.num_links,
             cluster_axis=parallel_manager.dit_parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
@@ -325,6 +316,7 @@ def sd_joint_attention(
         prompt = unpadded_all_gather_async(
             prompt,
             dim=3,
+            num_links=parallel_manager.num_links,
             cluster_axis=parallel_manager.dit_parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,

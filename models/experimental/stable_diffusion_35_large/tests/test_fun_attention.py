@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -22,34 +21,44 @@ TILE_SIZE = 32
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
     (
         "model_name",
         "block_index",
         "batch_size",
         "spatial_sequence_length",
         "prompt_sequence_length",
-        "cfg_factor",
-        "sp_factor",
-        "tp_factor",
-        "rp_factor",
-        "up_factor",
-        "topology",
     ),
     [
         # ("medium", 0, 1, 4096, 333),
         # ("medium", 23, 1, 4096, 333),
-        ("large", 0, 1, 4096, 333, 1, 2, 4, 2, 4, ttnn.Topology.Linear),
+        ("large", 0, 1, 4096, 333),
         # ("large", 23, 1, 4096, 333),
     ],
+)
+@pytest.mark.parametrize(
+    (
+        "mesh_device",
+        "cfg",
+        "sp",
+        "tp",
+        "topology",
+        "num_links",
+    ),
+    [
+        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear, 3],
+    ],
+    ids=[
+        "t3k_cfg2_sp1_tp4",
+        "t3k_cfg2_sp2_tp2",
+        "tg_cfg2_sp4_tp4",
+        "tg_cfg2_sp8_tp2",
+        "tg_cfg2_sp2_tp8",
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("joint_attention", [True])
 @pytest.mark.parametrize(
@@ -64,16 +73,29 @@ def test_attention(
     spatial_sequence_length: int,
     prompt_sequence_length: int,
     joint_attention: bool,
-    cfg_factor: int,
-    sp_factor: int,
-    tp_factor: int,
-    rp_factor: int,
-    up_factor: int,
+    cfg: tuple[int, int],
+    sp: tuple[int, int],
+    tp: tuple[int, int],
     topology: ttnn.Topology,
+    num_links: int,
 ) -> None:
+    cfg_factor, cfg_axis = cfg
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
     parallel_manager = StableDiffusionParallelManager(
-        mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
+        mesh_device,
+        cfg_factor,
+        sp_factor,
+        tp_factor,
+        sp_factor,
+        tp_factor,
+        topology,
+        cfg_axis=cfg_axis,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
     )
+    submesh = parallel_manager.submesh_devices[0]
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
@@ -100,7 +122,7 @@ def test_attention(
         num_heads=num_heads,
         unpadded_num_heads=torch_model.num_heads,
         hidden_dim_padding=hidden_dim_padding,
-        device=mesh_device,
+        device=submesh,
         dtype=ttnn_dtype,
         parallel_config=parallel_manager.dit_parallel_config,
     )
@@ -123,11 +145,13 @@ def test_attention(
             mode="constant",
             value=0,
         )
+    shard_spatial_dims = [None, None]
+    shard_spatial_dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2
     tt_spatial = from_torch_fast_2d(
         spatial_padded_4d,
-        mesh_device=mesh_device,
+        mesh_device=submesh,
         mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2, None],
+        dims=shard_spatial_dims,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
     )
@@ -147,7 +171,7 @@ def test_attention(
             )
         tt_prompt = from_torch_fast_2d(
             prompt_padded_4d,
-            mesh_device=mesh_device,
+            mesh_device=submesh,
             mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
             dims=[None, None],
             layout=ttnn.TILE_LAYOUT,
@@ -160,7 +184,7 @@ def test_attention(
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt)
 
     # Create persistent buffers
-    persistent_buffer_shape = [1, num_heads // up_factor, spatial_padded_4d.shape[2], head_size]
+    persistent_buffer_shape = [1, num_heads // tp_factor, spatial_padded_4d.shape[2], head_size]
     sharded_spatial_shape = list(tt_spatial.padded_shape)
     sharded_spatial_shape[3] //= tp_factor
     sharded_prompt_shape = list(tt_prompt.padded_shape)
@@ -179,22 +203,18 @@ def test_attention(
         cfg_index=0,
     )
 
-    ttnn.synchronize_device(mesh_device)
+    ttnn.synchronize_device(submesh)
 
+    gather_spatial_dims = [None, None]
+    gather_spatial_dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2
+    gather_spatial_dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 3
     tt_spatial_output_torch = ttnn.to_torch(
         tt_spatial_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
-            mesh_shape=tuple(mesh_device.shape),
-            dims=[
-                parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
-            ],
-        ),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(submesh.shape), dims=gather_spatial_dims),
     )
     tt_spatial_output_torch = tt_spatial_output_torch[:, :, 0:spatial_sequence_length, :embedding_dim]
     assert_quality(
-        spatial_output, tt_spatial_output_torch, pcc=0.990, shard_dim=0, num_devices=mesh_device.get_num_devices()
+        spatial_output, tt_spatial_output_torch, pcc=0.990, shard_dim=0, num_devices=submesh.get_num_devices()
     )
 
     if joint_attention:
@@ -202,14 +222,11 @@ def test_attention(
             tt_prompt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
-                mesh_shape=tuple(mesh_device.shape),
-                dims=[
-                    parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                    parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
-                ],
+                mesh_shape=tuple(submesh.shape),
+                dims=gather_spatial_dims,
             ),
         )
         tt_prompt_output_torch = tt_prompt_output_torch[:, :, 0:prompt_sequence_length, :embedding_dim]
         assert_quality(
-            prompt_output, tt_prompt_output_torch, pcc=0.990, shard_dim=0, num_devices=mesh_device.get_num_devices()
+            prompt_output, tt_prompt_output_torch, pcc=0.990, shard_dim=0, num_devices=submesh.get_num_devices()
         )

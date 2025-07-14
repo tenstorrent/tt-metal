@@ -41,10 +41,11 @@ TILE_SIZE = 32
         "sp",
         "tp",
         "topology",
+        "num_links",
     ),
     [
-        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
     ],
     ids=[
         "t3k_cfg1_sp2_tp4",
@@ -65,6 +66,7 @@ def test_patch_embedding(
     sp: tuple[int, int],
     tp: tuple[int, int],
     topology: ttnn.Topology,
+    num_links: int,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -80,6 +82,7 @@ def test_patch_embedding(
         cfg_axis=cfg_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        num_links=num_links,
     )
     submesh = parallel_manager.submesh_devices[0]
     torch_dtype = torch.float32

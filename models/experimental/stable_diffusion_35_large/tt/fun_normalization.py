@@ -156,7 +156,7 @@ def sd_layer_norm(
         multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
         persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, buffer_name),
         memory_config=memory_config,
-        num_links=1,
+        num_links=parallel_manager.num_links,
     )
 
     x = ttnn.layer_norm_post_all_gather(
