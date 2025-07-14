@@ -154,7 +154,9 @@ void MetalContext::initialize(
         // If ERISC application firmware is activated before the launch messages are cleared, it can enter an undefined
         // state by reading a corrupted launch message. Routing firmware will never run in this case, causing UMD issued
         // transactions to hang.
-        clear_launch_messages_on_eth_cores(device_id);
+        if (hal_->get_eth_fw_is_cooperative()) {
+            clear_launch_messages_on_eth_cores(device_id);
+        }
     }
 
     // Populate FD topology across all devices
