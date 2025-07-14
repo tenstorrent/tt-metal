@@ -59,7 +59,8 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
  * same dimension, this call can be omitted. If this function is not called, the packer will continue to use the edge masks set
  * by the latest reduce_init call, which may lead to incorrect packing behavior in subsequent operations.
  *
- * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025.
+ * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
+ * as a part of tt-metal#22904.
  *
  * | Param Type | Name | Description                                      | Type | Valid Range | Required |
  * |------------|------|--------------------------------------------------|------|-------------|----------|

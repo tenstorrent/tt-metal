@@ -37,6 +37,7 @@ void MAIN {
     constexpr uint32_t block_ct_dim = Wt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = Wt;
 
+    compute_kernel_hw_startup(in_cb, untilized_in_cb);
     pack_untilize_init<block_ct_dim, full_ct_dim>(in_cb, untilized_in_cb);
 
     cb_reserve_back(untilized_in_cb, Wt);
@@ -50,7 +51,7 @@ void MAIN {
     reconfig_data_format_srca(in_cb, cache_cb);
     pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        pack_untilize_init_short<block_ct_dim, full_ct_dim>(cache_cb, untilized_cache_cb);
+        pack_untilize_init<block_ct_dim, full_ct_dim>(cache_cb, untilized_cache_cb);
 
         // Untilize a block from the cache
         cb_reserve_back(untilized_cache_cb, Wt);
