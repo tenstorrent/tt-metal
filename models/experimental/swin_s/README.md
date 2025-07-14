@@ -42,7 +42,7 @@ pytest --disable-warnings models/experimental/swin_s/tests/perf/test_e2e_perform
 
 - Use the following command to run the demo for Imagenet-1K:
 ```sh
-pytest --disable-warnings models/demos/swin_s/demo/demo.py::test_run_swin_s_trace_2cqs_inference
+pytest --disable-warnings models/demos/swin_s/demo/demo.py::test_swin_s_demo
 ```
 
 ### Owner: [HariniMohan0102](https://github.com/HariniMohan0102)

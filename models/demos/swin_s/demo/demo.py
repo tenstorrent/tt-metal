@@ -30,7 +30,7 @@ from loguru import logger
         (512, 512),
     ],
 )
-def test_run_swin_s_trace_2cqs_inference(
+def test_swin_s_demo(
     device,
     batch_size,
     act_dtype,

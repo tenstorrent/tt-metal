@@ -100,7 +100,7 @@ class SwinSPerformantRunner:
         n, h, w, c = torch_input_tensor.shape
         tt_inputs_host, input_mem_config = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_swins_trace_2cqs_inference(tt_inputs_host)
-        print(output)
+
         if check_pcc:
             torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
             torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
