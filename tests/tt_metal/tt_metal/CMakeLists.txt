@@ -107,6 +107,9 @@ target_sources(
         BASE_DIRS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
         FILES
+            test_kernels/compute/bcast_w.cpp
+            test_kernels/compute/bcast_h.cpp
+            test_kernels/compute/bcast_hw.cpp
             test_kernels/compute/increment_runtime_arg.cpp
             test_kernels/compute/eltwise_copy_3m.cpp
             test_kernels/dataflow/semaphore_across_core_types.cpp
@@ -114,8 +117,16 @@ target_sources(
             test_kernels/dataflow/unit_tests/command_queue/dispatcher_kernel_size_and_runtime.cpp
             test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp
             test_kernels/dataflow/unit_tests/command_queue/random_program.cpp
+            test_kernels/dataflow/reader_cb_test.cpp
+            test_kernels/dataflow/reader_bcast_w_8bank.cpp
+            test_kernels/dataflow/reader_bcast_h_8bank.cpp
+            test_kernels/dataflow/writer_cb_test.cpp
+            test_kernels/dataflow/writer_unary_8bank.cpp
             test_kernels/dataflow/dram_copy.cpp
             test_kernels/dataflow/reader_unary_push_4.cpp
+            test_kernels/dataflow/reader_bcast_hw_8bank.cpp
+            test_kernels/dataflow/reader_matmul_blocked.cpp
+            test_kernels/compute/matmul.cpp
             test_kernels/misc/add_two_ints.cpp
             test_kernels/misc/brisc_print.cpp
             test_kernels/misc/circular_buffer/cb_init.cpp
