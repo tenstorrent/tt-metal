@@ -113,8 +113,14 @@ struct ParsedTestConfig {
     std::optional<ParametrizationOptionsMap> parametrization_params;
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
+    // add sync sender configs here, each config contains current device and the patterns
+    std::vector<SenderConfig> global_sync_configs;
     std::vector<ParsedSenderConfig> senders;
     std::optional<std::string> bw_calc_func;
+    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
+                                  // cross-chip start-skew effects
+    uint32_t global_sync_val = 0;
     uint32_t seed;
 };
 
@@ -126,8 +132,14 @@ struct TestConfig {
     std::optional<ParametrizationOptionsMap> parametrization_params;
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
+    // add sync sender configs here, each config contains current device and the patterns
+    std::vector<SenderConfig> global_sync_configs;
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
+    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
+                                  // cross-chip start-skew effects
+    uint32_t global_sync_val = 0;
     uint32_t seed;
 };
 

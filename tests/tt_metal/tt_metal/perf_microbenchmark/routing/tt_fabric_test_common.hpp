@@ -14,6 +14,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
@@ -62,7 +63,7 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
     static constexpr uint32_t EW_DIM = 1;
     static constexpr uint32_t NS_DIM = 0;
 
-    static const std::unordered_map<std::pair<Topology, RoutingType>, tt::tt_metal::FabricConfig, pair_hash>
+    static const std::unordered_map<std::pair<Topology, RoutingType>, tt::tt_fabric::FabricConfig, pair_hash>
         topology_to_fabric_config_map;
 
 public:
@@ -88,7 +89,7 @@ public:
             available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
         }
 
-        current_fabric_config_ = tt::tt_metal::FabricConfig::DISABLED;
+        current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
     }
 
     std::vector<MeshCoordinate> get_available_device_coordinates() const { return this->available_device_coordinates_; }
@@ -133,11 +134,11 @@ public:
 
     void close_devices() {
         mesh_device_->close();
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
         mesh_coordinate_to_node_id_.clear();
         node_id_to_mesh_coordinate_.clear();
-        current_fabric_config_ = tt::tt_metal::FabricConfig::DISABLED;
+        current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
         are_devices_open_ = false;
     }
 
@@ -692,6 +693,26 @@ public:
         return std::make_pair(dst_node_forward, dst_node_backward);
     }
 
+    uint32_t get_num_sync_devices() const override {
+        uint32_t num_devices;
+        switch (topology_) {
+            case tt::tt_fabric::Topology::Linear: {
+                num_devices = mesh_shape_[NS_DIM] + mesh_shape_[EW_DIM] - 1;
+                return num_devices;
+            }
+            case tt::tt_fabric::Topology::Ring: {
+                // sync using full ring mcast, ie, mcast on both forward/backward path.
+                num_devices = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1);
+                return num_devices;
+            }
+            case tt::tt_fabric::Topology::Mesh: {
+                num_devices = mesh_shape_[NS_DIM] * mesh_shape_[EW_DIM];
+                return num_devices;
+            }
+            default: TT_THROW("Unsupported topology for get_num_sync_devices: {}", static_cast<int>(topology_));
+        }
+    }
+
     std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
@@ -831,13 +852,60 @@ public:
         return this->get_forwarding_link_indices_in_direction(src_node_id, neighbor_node_id, direction);
     }
 
+    /// Helper to compute per‐direction hops and the global sync value
+    std::pair<std::unordered_map<RoutingDirection, uint32_t>, uint32_t> get_sync_hops_and_val(
+        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const override {
+        std::unordered_map<RoutingDirection, uint32_t> multi_directional_hops;
+        uint32_t global_sync_val = 0;
+
+        switch (topology_) {
+            case tt::tt_fabric::Topology::Ring: {
+                // Get ring neighbors - returns nullopt for non-perimeter devices
+                auto ring_neighbors = this->get_wrap_around_mesh_ring_neighbors(src_device, devices);
+
+                // Check if the result is valid (has value)
+                if (!ring_neighbors.has_value()) {
+                    // Skip this device as it's not on the perimeter and can't participate in ring multicast
+                    log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_device.chip_id);
+                    return {{}, 0};
+                }
+
+                // Extract the valid ring neighbors
+                auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
+
+                multi_directional_hops = this->get_full_or_half_ring_mcast_hops(
+                    src_device, dst_node_forward, dst_node_backward, HighLevelTrafficPattern::FullRingMulticast);
+
+                // minus 2 because full ring pattern traverse each node twice.
+                auto num_sync_devices = this->get_num_sync_devices();
+                global_sync_val =
+                    2 * num_sync_devices - 2;  // minus 2 because in a full ring pattern we dont mcast to self (twice).
+                break;
+            }
+            case tt::tt_fabric::Topology::Linear: {
+                multi_directional_hops = this->get_full_mcast_hops(src_device);
+                global_sync_val = this->get_num_sync_devices() - 1;
+                break;
+            }
+            case tt::tt_fabric::Topology::Mesh: {
+                multi_directional_hops = this->get_full_mcast_hops(src_device);
+                global_sync_val = this->get_num_sync_devices() - 1;
+                TT_THROW("We need mcast support for mesh topology to perform sync");
+                break;
+            }
+            default: TT_THROW("Unsupported topology for line sync: {}", static_cast<int>(topology_));
+        }
+
+        return {std::move(multi_directional_hops), global_sync_val};
+    }
+
 private:
     ControlPlane* control_plane_ptr_;
     Topology topology_;
     RoutingType routing_type_;
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
-    tt::tt_metal::FabricConfig current_fabric_config_;
+    tt::tt_fabric::FabricConfig current_fabric_config_;
     std::vector<MeshCoordinate> available_device_coordinates_;
     std::vector<FabricNodeId> available_node_ids_;
     std::shared_ptr<MeshDevice> mesh_device_;
@@ -846,8 +914,8 @@ private:
     std::shared_ptr<MeshWorkload> mesh_workload_;
     bool are_devices_open_ = false;
 
-    void open_devices_internal(tt::tt_metal::FabricConfig fabric_config) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config);
+    void open_devices_internal(tt::tt_fabric::FabricConfig fabric_config) {
+        tt::tt_fabric::SetFabricConfig(fabric_config);
         mesh_device_ = MeshDevice::create(mesh_shape_);
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
