@@ -13,7 +13,7 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
-  tokenizer_path: "data/tinyllama_tokenizer.json"
+  tokenizer_path: "data/tinyllama-tokenizer.json"
   tokenizer_type: "bpe"
   transformer_config:
     num_heads: 32
@@ -23,7 +23,7 @@ training_config:
     num_blocks: 22
     vocab_size: 32000
     max_sequence_length: 2048
-    runner_type: default
+    runner_type: memory_efficient
     theta: 10000.0
 eval_config:
   repetition_penalty: 1.0
