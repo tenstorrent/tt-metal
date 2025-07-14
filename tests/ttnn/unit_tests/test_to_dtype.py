@@ -41,9 +41,26 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
 @pytest.mark.parametrize("height", [4])
 @pytest.mark.parametrize("width", [4])
 @pytest.mark.parametrize(
-    "ttnn_dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.uint8, ttnn.int32]
+    "ttnn_dtype",
+    [
+        ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        ttnn.bfloat16,
+        ttnn.uint8,
+        ttnn.int32,
+        ttnn.uint32,
+    ],
 )
-@pytest.mark.parametrize("torch_dtype", [torch.float16, torch.float32, torch.int32])
+@pytest.mark.parametrize(
+    "torch_dtype",
+    [
+        torch.float16,
+        torch.float32,
+        torch.int32,
+        torch.uint8,
+    ],
+)
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("convert_with_device", [True, False])
 def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
@@ -94,7 +111,7 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
             pcc=conversion_pcc,
         )
 
-    if torch_dtype in [torch.int32]:
+    if torch_dtype in [torch.int32, torch.uint8]:
         torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
     else:
         # multiply by 10 to prevent float -> int type conversion from creating all-zero tensor
@@ -148,3 +165,71 @@ def test_layout_conversion_precision_stability(device, ttnn_dtype):
     row_major_repr = str(ttnn_row_major_tensor).replace("layout=Layout::ROW_MAJOR", "<layout>")
 
     assert tile_repr == row_major_repr
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype_source",
+    [
+        ttnn.bfloat4_b,
+        ttnn.bfloat8_b,
+        ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.uint8,
+        ttnn.uint16,
+        ttnn.uint32,
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_dtype_target",
+    [
+        ttnn.bfloat4_b,
+        ttnn.bfloat8_b,
+        ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.uint8,
+        ttnn.uint16,
+        ttnn.uint32,
+    ],
+)
+def test_typecast_correlation(device, ttnn_dtype_source, ttnn_dtype_target):
+    ttnn_float_types = [ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.float32, ttnn.bfloat16]
+    ttnn_source_is_float = ttnn_dtype_source in ttnn_float_types
+    ttnn_target_is_float = ttnn_dtype_target in ttnn_float_types
+    if ttnn_source_is_float:
+        ttnn_source_tensor = (
+            ttnn.rand(
+                (32, 32),
+                dtype=ttnn_dtype_source,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            * 10
+        )
+
+    else:
+        torch_dtype_tensor = torch.randint(0, 100, (32, 32), dtype=torch.int32)
+        ttnn_tmp_tensor = ttnn.from_torch(torch_dtype_tensor, dtype=ttnn_dtype_source, layout=ttnn.TILE_LAYOUT)
+        ttnn_source_tensor = ttnn.to_device(ttnn_tmp_tensor, device=device)
+
+    ttnn_target_tensor = ttnn.typecast(ttnn_source_tensor, dtype=ttnn_dtype_target)
+
+    if ttnn_dtype_source == ttnn_dtype_target:
+        conversion_pcc = 1
+
+    elif ttnn_source_is_float != ttnn_target_is_float:
+        conversion_pcc = 0.99
+
+    else:
+        conversion_pcc = 0.9999
+
+    print("")
+    print(ttnn_source_tensor)
+    print(ttnn_target_tensor)
+
+    assert_with_pcc(
+        expected_pytorch_result=ttnn_source_tensor.cpu().to_torch(),
+        actual_pytorch_result=ttnn_target_tensor.cpu().to_torch(),
+        pcc=conversion_pcc,
+    )

@@ -19,6 +19,8 @@
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 
+#include <tracy/Tracy.hpp>
+
 namespace tt::tt_metal::distributed {
 
 void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
@@ -232,6 +234,7 @@ void MeshCommandQueueBase::enqueue_write(
     const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
     // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
     std::vector<ShardDataTransfer> shard_data_transfers;
+    ZoneScoped;
     for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
         auto buf = host_buffer.get_shard(host_buffer_coord);
         if (buf.has_value()) {

@@ -234,7 +234,7 @@ from ttnn.device import (
     init_device_compute_kernel_config,
 )
 
-from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame, tracy_zone
 
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *

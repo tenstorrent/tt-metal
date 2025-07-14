@@ -669,6 +669,7 @@ std::shared_ptr<Buffer> initialize_data_on_device(
 template <typename T>
 std::shared_ptr<Buffer> to_device_buffer(
     const Storage& storage, IDevice* device, const TensorSpec& tensor_spec, ttnn::QueueId cq_id) {
+    ZoneScoped;
     return std::visit(
         tt::stl::overloaded{
             [&device, &tensor_spec, cq_id](const HostStorage& storage) {
@@ -743,6 +744,8 @@ DeviceStorage replicate_to_mesh_buffer(
     auto data_to_write = storage.buffer.view_bytes();
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     const auto input_size_bytes = data_to_write.size();
+    ZoneScopedN("Replicate mesh buffer");
+    ZoneTextF("Writing %d bytes", input_size_bytes);
     TT_FATAL(
         input_size_bytes == expected_packed_buffer_size_bytes,
         "Host data with total size {}B does not match expected size {}B of device buffer!",
@@ -764,6 +767,7 @@ DeviceStorage write_to_mesh_buffer(
     const DistributedHostBuffer& distributed_host_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     ttnn::QueueId cq_id) {
+    ZoneScoped;
     mesh_buffer->device()->mesh_command_queue(*cq_id).enqueue_write(
         mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     std::vector<distributed::MeshCoordinate> coords;
@@ -784,13 +788,16 @@ DeviceStorage to_device_mesh_buffer(
     const TensorSpec& tensor_spec,
     const TensorAttributes& host_tensor_attributes,
     ttnn::QueueId cq_id) {
+    ZoneScoped;
     return std::visit(
         tt::stl::overloaded{
             [&mesh_buffer, &tensor_spec, cq_id](const HostStorage& storage) {
+                ZoneScopedN("Host storage replication");
                 // Replicate data across devices in a mesh.
                 return replicate_to_mesh_buffer(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
             },
             [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const MultiDeviceHostStorage& storage) {
+                ZoneScopedN("Multi device host storage move");
                 // Sharded write from distributed host buffer.
                 TT_FATAL(
                     storage.distributed_buffer().shape() == mesh_buffer->device()->shape(),
@@ -809,6 +816,7 @@ Tensor to_device_mesh_tensor(
     distributed::MeshDevice* mesh_device,
     const MemoryConfig& memory_config,
     ttnn::QueueId cq_id) {
+    ZoneScoped;
     if (tensor.storage_type() == StorageType::DEVICE) {
         return tensor;  // Tensor already on device
     }

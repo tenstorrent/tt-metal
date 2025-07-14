@@ -84,7 +84,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
-    ZoneScopedN("FromBorrowedData");
+    ZoneScoped;
     TT_FATAL(
         !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
             tensor_layout.get_memory_config().nd_shard_spec().has_value(),
@@ -133,6 +133,7 @@ Tensor create_tt_tensor_from_py_data(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
             py_data_ptr, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
@@ -312,6 +313,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
         py_tensor,
@@ -665,7 +667,7 @@ void pytensor_module(py::module& m_tensor) {
         [](const py::function& function, const std::optional<std::string>& function_name) -> py::function {
             return py::cpp_function(
                 std::function([function, function_name](const py::args& args, const py::kwargs& kwargs) {
-                    ZoneScopedN("TT_DNN_FALLBACK_OP");
+                    ZoneScoped;
                     auto [operation, input_tensors] =
                         CMAKE_UNIQUE_NAMESPACE::parse_external_operation(function, args, kwargs, function_name);
                     GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
