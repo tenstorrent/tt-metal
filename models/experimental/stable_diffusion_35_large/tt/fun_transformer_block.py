@@ -234,7 +234,9 @@ def sd_gated_ff_block(
         parameters,
         parallel_manager=parallel_manager,
         cfg_index=cfg_index,
+        is_spatial=is_spatial,
     )
+
     return result
 
 

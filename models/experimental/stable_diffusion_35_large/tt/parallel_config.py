@@ -99,8 +99,10 @@ class StableDiffusionParallelManager:
         cfg_axis=1,
         sp_axis=0,
         tp_axis=1,
+        num_links=1,
     ):
         self.mesh_device = mesh_device
+        self.num_links = num_links
         mesh_shape = tuple(mesh_device.shape)
         cfg_shape = list(mesh_shape)
         cfg_shape[cfg_axis] = cfg_shape[cfg_axis] // cfg_factor
@@ -146,9 +148,10 @@ class StableDiffusionParallelManager:
         self._init_subdevice()
 
         # SD35-specific semaphores
-        semaphore_names = [("ping_pong", 4), ("ring_sdpa", 2), ("rs_from", None), ("rs_to", None)]
+        semaphore_names = [("ping_pong", 4), ("ring_sdpa", 2), ("rs_ping_pong", 3 * 2 * num_links)]
         self._init_semaphores(semaphore_names)
         self.ping_pong_idx = 0
+        self.rs_ping_pong_idx = 0
 
         self.persistent_buffers = [{} for _ in range(self.dit_parallel_config.cfg_parallel.factor)]
 
@@ -211,6 +214,11 @@ class StableDiffusionParallelManager:
         spatial_tensor_gather_buffer_shape = spatial_seq_gather_buffer_shape[:]
         spatial_tensor_gather_buffer_shape[3] *= self.dit_parallel_config.tensor_parallel.factor
 
+        spatial_rs_intermediate_buffer_shape = [2] + spatial_buffer_shape
+        spatial_rs_output_buffer_shape = spatial_shape[:]
+        prompt_rs_intermediate_buffer_shape = [2] + prompt_buffer_shape
+        prompt_rs_output_buffer_shape = prompt_shape[:]
+
         ping_pong_buffers = [
             "spatial_buffer",
             "prompt_buffer",
@@ -218,6 +226,10 @@ class StableDiffusionParallelManager:
             "spatial_tensor_gather_buffer",
             "spatial_layernorm_buffer",
             "prompt_layernorm_buffer",
+            "spatial_rs_feed_forward_intermediate",
+            "spatial_rs_feed_forward_output",
+            "prompt_rs_feed_forward_intermediate",
+            "prompt_rs_feed_forward_output",
         ]
         self._ping_pong_buffer_indices = [
             {buffer_name: 0 for buffer_name in ping_pong_buffers}
@@ -248,6 +260,10 @@ class StableDiffusionParallelManager:
                     spatial_tensor_gather_buffer_shape,
                     spatial_layernorm_buffer_shape,
                     prompt_layernorm_buffer_shape,
+                    spatial_rs_intermediate_buffer_shape,
+                    spatial_rs_output_buffer_shape,
+                    prompt_rs_intermediate_buffer_shape,
+                    prompt_rs_output_buffer_shape,
                 ],
             ):
                 if (
@@ -269,6 +285,12 @@ class StableDiffusionParallelManager:
         cur_idx = self.ping_pong_idx
         self.ping_pong_idx = 2 - self.ping_pong_idx
         return self.cfg_semaphores[cfg_index]["ping_pong"][cur_idx : cur_idx + 2]
+
+    def get_rs_ping_pong_semaphore(self, cfg_index):
+        cur_idx = self.rs_ping_pong_idx
+        n_sems = 3 * self.num_links
+        self.rs_ping_pong_idx = (cur_idx + 1) % 2
+        return self.cfg_semaphores[cfg_index]["rs_ping_pong"][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_ping_pong_buffer(self, cfg_index, buffer_name):
         cur_idx = self._ping_pong_buffer_indices[cfg_index][buffer_name]

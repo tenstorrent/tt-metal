@@ -59,6 +59,7 @@ def sd_feed_forward(
     parameters: TtFeedForwardParameters,
     parallel_manager: StableDiffusionParallelManager,
     cfg_index: int,
+    is_spatial: bool = True,
 ) -> ttnn.Tensor:
     device = x.device()
 
@@ -75,17 +76,28 @@ def sd_feed_forward(
     # ttnn.deallocate(x3)
 
     if parallel_manager.is_tensor_parallel:
-        result = ttnn.experimental.reduce_scatter_async(
+        intermediate_buffer_name = (
+            "spatial_rs_feed_forward_intermediate" if is_spatial else "prompt_rs_feed_forward_intermediate"
+        )
+        output_buffer_name = "spatial_rs_feed_forward_output" if is_spatial else "prompt_rs_feed_forward_output"
+        result = ttnn.experimental.reduce_scatter_minimal_async(
             result,
+            persistent_intermediate_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, intermediate_buffer_name),
+            persistent_output_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, output_buffer_name),
             dim=3,
-            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=device,
-            topology=parallel_manager.dit_parallel_config.topology,
-            from_remote_multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["rs_from"],
-            to_remote_multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["rs_to"],
-            math_op=ttnn.ReduceType.Sum,
+            multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(cfg_index),
             num_links=1,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            topology=parallel_manager.dit_parallel_config.topology,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
+            # mesh_device=device,
+            # from_remote_multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["rs_from"],
+            # to_remote_multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["rs_to"],
+            # math_op=ttnn.ReduceType.Sum,
         )
+        # Reshape to set padding again
+        result_unpadded_shape = list(result.shape)
+        result_unpadded_shape[2] = x.shape[2]
+        result = ttnn.reshape(result, result_unpadded_shape, result.shape)
 
     return result

@@ -161,7 +161,11 @@ def test_attention(
 
     # Create persistent buffers
     persistent_buffer_shape = [1, num_heads // up_factor, spatial_padded_4d.shape[2], head_size]
-    parallel_manager.maybe_init_persistent_buffers(persistent_buffer_shape)
+    sharded_spatial_shape = list(tt_spatial.padded_shape)
+    sharded_spatial_shape[3] //= tp_factor
+    sharded_prompt_shape = list(tt_prompt.padded_shape)
+    sharded_prompt_shape[3] //= tp_factor
+    parallel_manager.maybe_init_persistent_buffers(persistent_buffer_shape, sharded_spatial_shape, sharded_prompt_shape)
 
     # if joint_attention:
     tt_spatial_output, tt_prompt_output = sd_joint_attention(

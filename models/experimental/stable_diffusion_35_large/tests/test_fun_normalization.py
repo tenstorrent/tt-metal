@@ -102,6 +102,16 @@ def test_layer_norm(
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
+    # Unsqueeze shape to 4D
+    buffer_shape = list(tt_input_tensor.padded_shape)
+    buffer_shape = [1] * (4 - len(buffer_shape)) + buffer_shape
+
+    parallel_manager.maybe_init_persistent_buffers(
+        KV_shape=[1, 1, 32, 32],  # dummy
+        spatial_shape=buffer_shape,
+        prompt_shape=buffer_shape,
+    )
+
     tt_output = sd_layer_norm(tt_input_tensor, parameters, parallel_manager, cfg_index=0)
     if not distributed:
         dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 0

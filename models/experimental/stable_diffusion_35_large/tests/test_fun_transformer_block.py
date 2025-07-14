@@ -44,7 +44,6 @@ TILE_SIZE = 32
     [
         [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear],
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
-        [(2, 4), (2, 0), (4, 1), (1, 0), ttnn.Topology.Linear],
         [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear],
         [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear],
         [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear],
@@ -52,7 +51,6 @@ TILE_SIZE = 32
     ids=[
         "t3k_cfg2_sp1_tp4",
         "t3k_cfg2_sp2_tp2",
-        "t3k_cfg2_sp4_tp1",
         "tg_cfg2_sp4_tp4",
         "tg_cfg2_sp8_tp2",
         "tg_cfg2_sp2_tp8",

@@ -131,11 +131,23 @@ def test_feed_forward(
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
+    buffer_shape = list(tt_input_tensor.padded_shape)
+    buffer_shape[3] //= parallel_manager.dit_parallel_config.tensor_parallel.factor
+
+    parallel_manager.maybe_init_persistent_buffers(
+        KV_shape=[1, 1, 32, 32],  # dummy
+        spatial_shape=buffer_shape,
+        prompt_shape=buffer_shape,
+    )
+
+    is_spatial = not shard_sequence
+
     tt_output = sd_feed_forward(
         tt_input_tensor,
         parameters,
         parallel_manager=parallel_manager,
         cfg_index=0,
+        is_spatial=is_spatial,
     )
     dims = [None, None]
     dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2
