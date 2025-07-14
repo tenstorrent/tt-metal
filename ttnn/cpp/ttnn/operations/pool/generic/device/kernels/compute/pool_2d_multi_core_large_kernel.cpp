@@ -37,10 +37,10 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
-    constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 16;
+    constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 17;
     constexpr uint32_t num_faces_in_input_tile = max_rows_for_reduction < 32 ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
-    constexpr uint32_t num_faces_in_last_output_tile = is_partial_tile ? 1 : 2;
+    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
@@ -106,6 +106,8 @@ void MAIN {
             }
             tile_regs_release();
         }
+        reduce_h_fused<1, last_tile_is_partial, max_rows_for_reduction, neginf_srca_maxpool, zero_srca_avgpool>(
+            interm_cb_id, in_one_cb_id, partial_iter_output_tiles - 1, out_cb_id);
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
