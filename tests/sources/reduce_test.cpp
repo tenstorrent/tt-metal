@@ -15,13 +15,8 @@ uint32_t unp_cfg_context          = 0;
 uint32_t pack_sync_tile_dst_ptr   = 0;
 uint32_t math_sync_tile_dst_index = 0;
 
-#ifdef REDUCE_ROW_OPERATION
-const std::uint32_t within_face_16x16_transpose = 1;
-const bool row_pool                             = true;
-#else
-const std::uint32_t within_face_16x16_transpose = 0;
-const bool row_pool                             = false;
-#endif
+constexpr std::uint32_t within_face_16x16_transpose = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) ? 1 : 0;
+constexpr bool row_pool                             = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW);
 
 #ifdef LLK_TRISC_UNPACK
 

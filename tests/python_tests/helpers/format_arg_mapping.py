@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import Enum
+from collections import namedtuple
+from enum import Enum, auto
 
 import torch
 
@@ -20,58 +21,131 @@ format_dict = {
 }
 
 
+class MathOpType(Enum):
+    """Enum for different types of math operations."""
+
+    SFPU_UNARY = auto()
+    SFPU_BINARY = auto()
+    FPU_BINARY = auto()
+    REDUCE = auto()
+
+
+# Operation specification
+OpSpec = namedtuple("OpSpec", ["cpp_enum_value", "operation_type"])
+
+
 class MathOperation(Enum):
     """
     An enumeration class that holds all the math operations supported by the LLKs.
-    Used to avoid hardcoding the operation strings in the test scripts using strings. This avoid typos and future errors.
-    MathOperations(Enum) class instances can be compared via unique values.
-    When you have a set of related constants and you want to leverage the benefits of enumeration (unique members, comparisons, introspection, etc.).
-    It's a good choice for things like state machines, categories, or settings where values should not be changed or duplicated.
+    Each enum value is an OpSpec tuple containing (cpp_enum_value, operation_type).
+
+    Operations are organized by type:
+    - FPU_BINARY: Floating Point Unit binary operations
+    - SFPU_UNARY: Special Function Processing Unit unary operations
+    - SFPU_BINARY: Special Function Processing Unit binary operations
+    - REDUCE: Reduction operations
     """
 
-    Elwadd = "ELTWISE_BINARY_ADD"
-    Elwsub = "ELTWISE_BINARY_SUB"
-    Elwmul = "ELTWISE_BINARY_MUL"
-    Abs = "SFPU_OP_ABS"
-    Sqrt = "SFPU_OP_SQRT"
-    Square = "SFPU_OP_SQUARE"
-    Log = "SFPU_OP_LOG"
-    Sin = "SFPU_OP_SINE"
-    Cos = "SFPU_OP_COSINE"
-    Reciprocal = "SFPU_OP_RECIPROCAL"
-    Celu = "SFPU_OP_CELU"
-    ReduceColumn = "REDUCE_COL_OPERATION"
-    ReduceRow = "REDUCE_ROW_OPERATION"
-    ReduceScalar = "REDUCE_SCALAR_OPERATION"
-    SfpuElwadd = "SFPU_ELWADD"
-    SfpuElwsub = "SFPU_ELWSUB"
-    SfpuElwmul = "SFPU_ELWMUL"
-    SfpuXlogy = "SFPU_OP_XLOGY"
-    SfpuElwRightShift = "SFPU_OP_RSHFT"
-    SfpuElwLeftShift = "SFPU_OP_LSHFT"
-    SfpuElwLogicalRightShift = "SFPU_OP_LOGICAL_RSHFT"
-    Silu = "SFPU_OP_SILU"
-    Gelu = "SFPU_OP_GELU"
-    Neg = "SFPU_OP_NEG"
+    # =============================================================================
+    # FPU BINARY OPERATIONS
+    # =============================================================================
+    Elwadd = OpSpec("ELWADD", MathOpType.FPU_BINARY)
+    Elwmul = OpSpec("ELWMUL", MathOpType.FPU_BINARY)
+    Elwsub = OpSpec("ELWSUB", MathOpType.FPU_BINARY)
+
+    # =============================================================================
+    # SFPU UNARY OPERATIONS
+    # =============================================================================
+    Abs = OpSpec("abs", MathOpType.SFPU_UNARY)
+    Celu = OpSpec("celu", MathOpType.SFPU_UNARY)
+    Cos = OpSpec("cosine", MathOpType.SFPU_UNARY)
+    Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
+    Log = OpSpec("log", MathOpType.SFPU_UNARY)
+    Neg = OpSpec("neg", MathOpType.SFPU_UNARY)
+    Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
+    Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
+    Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
+    Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
+    Square = OpSpec("square", MathOpType.SFPU_UNARY)
+
+    # =============================================================================
+    # SFPU BINARY OPERATIONS
+    # =============================================================================
+    SfpuElwadd = OpSpec("ADD", MathOpType.SFPU_BINARY)
+    SfpuElwLeftShift = OpSpec("LSHFT", MathOpType.SFPU_BINARY)
+    SfpuElwLogicalRightShift = OpSpec("LOGICAL_RSHFT", MathOpType.SFPU_BINARY)
+    SfpuElwmul = OpSpec("MUL", MathOpType.SFPU_BINARY)
+    SfpuElwRightShift = OpSpec("RSHFT", MathOpType.SFPU_BINARY)
+    SfpuElwsub = OpSpec("SUB", MathOpType.SFPU_BINARY)
+    SfpuXlogy = OpSpec("XLOGY", MathOpType.SFPU_BINARY)
+
+    # =============================================================================
+    # REDUCE OPERATIONS
+    # =============================================================================
+    ReduceColumn = OpSpec("REDUCE_COL", MathOpType.REDUCE)
+    ReduceRow = OpSpec("REDUCE_ROW", MathOpType.REDUCE)
+    ReduceScalar = OpSpec("REDUCE_SCALAR", MathOpType.REDUCE)
+
+    # =============================================================================
+    # PROPERTIES AND UTILITY METHODS
+    # =============================================================================
+    @property
+    def cpp_enum_value(self):
+        """Get the C++ enum value for this operation."""
+        return self.value.cpp_enum_value
+
+    @property
+    def operation_type(self):
+        """Get the operation type for this operation."""
+        return self.value.operation_type
+
+    @classmethod
+    def _get_operations_by_type(cls, op_type: MathOpType):
+        """Get all operations of a specific type."""
+        return {op for op in cls if op.operation_type == op_type}
+
+    @classmethod
+    def get_fpu_binary_operations(cls):
+        """Get all FPU binary operations."""
+        return cls._get_operations_by_type(MathOpType.FPU_BINARY)
+
+    @classmethod
+    def get_sfpu_unary_operations(cls):
+        """Get all SFPU unary operations."""
+        return cls._get_operations_by_type(MathOpType.SFPU_UNARY)
+
+    @classmethod
+    def get_sfpu_binary_operations(cls):
+        """Get all SFPU binary operations."""
+        return cls._get_operations_by_type(MathOpType.SFPU_BINARY)
+
+    @classmethod
+    def get_reduce_operations(cls):
+        """Get all reduce operations."""
+        return cls._get_operations_by_type(MathOpType.REDUCE)
+
+
+SFPU_UNARY_OPERATIONS = MathOperation.get_sfpu_unary_operations()
+SFPU_BINARY_OPERATIONS = MathOperation.get_sfpu_binary_operations()
+FPU_BINARY_OPERATIONS = MathOperation.get_fpu_binary_operations()
+REDUCE_OPERATIONS = MathOperation.get_reduce_operations()
 
 
 class ReduceDimension(Enum):
-    Column = "ReduceDim::REDUCE_COL"
-    Row = "ReduceDim::REDUCE_ROW"
-    Scalar = "ReduceDim::REDUCE_SCALAR"
-    No = " "
+    Column = auto()
+    Row = auto()
+    Scalar = auto()
 
 
 class ReducePool(Enum):
-    Max = "PoolType::MAX"
-    Sum = "PoolType::SUM"
-    Average = "PoolType::AVG"
-    No = " "
+    Max = "MAX"
+    Sum = "SUM"
+    Average = "AVG"
 
 
 class DestAccumulation(Enum):
-    Yes = "DEST_ACC"
-    No = ""
+    Yes = "true"
+    No = "false"
 
 
 class ApproximationMode(Enum):
@@ -84,7 +158,6 @@ class MathFidelity(Enum):
     HiFi2 = 2
     HiFi3 = 3
     HiFi4 = 4
-    Invalid = 5
 
 
 class Mailbox(Enum):

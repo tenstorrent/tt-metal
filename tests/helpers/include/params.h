@@ -10,13 +10,8 @@
 // Include auto-generated build configuration
 #include "build.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_binary.h"
-#include "ckernel_sfpu_log.h"
-#include "ckernel_sfpu_sqrt.h"
-#include "ckernel_sfpu_square.h"
+#include "ckernel_sfpu.h"
 #include "data_format_inference.h"
-#include "llk_defs.h"
-#include "llk_sfpu_types.h"
 #include "perf.h"
 #include "tensix_types.h"
 
@@ -32,13 +27,6 @@ constexpr std::underlying_type_t<DataFormat> get_data_format(DataFormat format)
     return static_cast<std::underlying_type_t<DataFormat>>(format);
 }
 } // namespace
-
-constexpr bool dest_acc_en_input =
-#ifdef DEST_ACC
-    true;
-#else
-    false;
-#endif
 
 constexpr bool unpack_to_dest = UNPACKING_TO_DEST;
 
@@ -61,77 +49,4 @@ constexpr auto& formats = formats_array[0];
 #else // Not inferring formats — all formats are pre-defined. Set format configuration directly.
 constexpr bool is_fp32_dest_acc_en = dest_acc_en_input; // dest_acc doesn't require adjustment; configuration is hard-coded
 constexpr FormatConfig formats     = FormatConfig(UNPACK_A_IN, UNPACK_A_OUT, MATH, PACK_IN, PACK_OUT);
-#endif
-
-#ifdef ELTWISE_BINARY_ADD
-constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::ELWADD;
-#endif
-#ifdef ELTWISE_BINARY_SUB
-constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::ELWSUB;
-#endif
-#ifdef ELTWISE_BINARY_MUL
-constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::ELWMUL;
-#endif
-// TO BE IMPLEMENTED IN LLKs
-#ifdef ELTWISE_BINARY_DIV
-constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::ELWDIV;
-#endif
-#ifdef ELTWISE_BINARY_LESS
-constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::ELWLESS;
-#endif
-
-#ifdef SFPU_ELWADD
-constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::ADD;
-#endif
-#ifdef SFPU_ELWSUB
-constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::SUB;
-#endif
-#ifdef SFPU_ELWMUL
-constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::MUL;
-#endif
-#ifdef SFPU_OP_XLOGY
-constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::XLOGY;
-#endif
-#ifdef SFPU_OP_RSHFT
-constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::RSHFT;
-#endif
-#ifdef SFPU_OP_LSHFT
-constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::LSHFT;
-#endif
-#ifdef SFPU_OP_LOGICAL_RSHFT
-constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::LOGICAL_RSHFT;
-#endif
-#ifdef SFPU_OP_NEG
-constexpr auto SFPU_OPERATION = SfpuType::neg;
-#endif
-
-#ifdef SFPU_OP_SQRT
-constexpr auto SFPU_OPERATION = SfpuType::sqrt;
-#endif
-#ifdef SFPU_OP_LOG
-constexpr auto SFPU_OPERATION = SfpuType::log;
-#endif
-#ifdef SFPU_OP_SQUARE
-constexpr auto SFPU_OPERATION = SfpuType::square;
-#endif
-#ifdef SFPU_OP_SINE
-constexpr auto SFPU_OPERATION = SfpuType::sine;
-#endif
-#ifdef SFPU_OP_COSINE
-constexpr auto SFPU_OPERATION = SfpuType::cosine;
-#endif
-#ifdef SFPU_OP_ABS
-constexpr auto SFPU_OPERATION = SfpuType::abs;
-#endif
-#ifdef SFPU_OP_RECIPROCAL
-constexpr auto SFPU_OPERATION = SfpuType::reciprocal;
-#endif
-#ifdef SFPU_OP_CELU
-constexpr auto SFPU_OPERATION = SfpuType::celu;
-#endif
-#ifdef SFPU_OP_SILU
-constexpr auto SFPU_OPERATION = SfpuType::silu;
-#endif
-#ifdef SFPU_OP_GELU
-constexpr auto SFPU_OPERATION = SfpuType::gelu;
 #endif
