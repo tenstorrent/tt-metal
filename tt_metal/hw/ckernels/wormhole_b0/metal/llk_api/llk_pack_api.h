@@ -305,8 +305,8 @@ inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     const std::uint8_t input_id = get_output_id(input_operand);
     const std::uint8_t output_id = get_output_id(pack_output);
-    const bool use_32bit_dest =
-        pack_src_format[input_id] == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32);
+    const uint32_t use_32bit_dest =
+        pack_src_format[input_id] == (uint)DataFormat::Float32 || pack_src_format[input_id] == (uint)DataFormat::Tf32;
     _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim);
 }
 

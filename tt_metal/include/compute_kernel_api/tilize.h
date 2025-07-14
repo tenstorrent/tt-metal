@@ -234,7 +234,7 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 
 ALWI void fast_tilize_init_short(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
-    MATH((llk_math_fast_tilize_init_(icb, full_dim == 1 ? 1 : 2)));
+    MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
     PACK((llk_pack_fast_tilize_init(icb, ocb, full_dim == 1 ? 1 : 2)));
 }
 
@@ -251,7 +251,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
 
-    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_fast_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(ocb)));
 
     fast_tilize_init_short(icb, full_dim, ocb);
@@ -259,7 +259,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
 
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_fast_tilize_uninit<DST_ACCUM_MODE>()));
-    MATH((llk_math_fast_tilize_uninit_<DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_fast_tilize_uninit<DST_ACCUM_MODE>(icb)));
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
 }
 

@@ -58,13 +58,13 @@ inline void llk_math_eltwise_unary_datacopy_init(
  * LLK FAST ELTWISE UNARY DATACOPY
  *************************************************************************/
 
-inline void llk_math_fast_tilize_init_(const std::uint32_t operand, const std::uint32_t unit_dim) {
+inline void llk_math_fast_tilize_init(const std::uint32_t operand, const std::uint32_t unit_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
     _llk_math_fast_tilize_init_(unpack_dst_format[operand_id], unit_dim);
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void llk_math_fast_tilize_uninit_(const std::uint32_t operand) {
+inline void llk_math_fast_tilize_uninit(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(unpack_dst_format[operand_id]);
 }

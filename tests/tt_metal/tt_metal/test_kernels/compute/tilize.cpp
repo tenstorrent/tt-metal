@@ -22,7 +22,7 @@ void MAIN {
     //                                  : per_core_block_tile_cnt % 2 == 0 ? 2
     //                                                                     : 1;
     // constexpr uint32_t block_count = 1;
-    constexpr uint32_t loop_factor = 1024;
+    constexpr uint32_t loop_factor = 1;
 
     uint64_t start = 0;
     uint64_t end = 0;

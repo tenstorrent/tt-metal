@@ -116,6 +116,47 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
     return dst_vec;
 }
 
+std::vector<uint32_t> gold_standard_tilize_fp32(const std::vector<uint32_t>& src_vec, const GoldenConfig& config) {
+    vector<uint32_t> dst_vec;
+
+    // TODO: RT update this one to use variable tile sizes
+    int num_rows = config.num_tiles_r_dim * config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
+    // Due to each element being 32 bits, for bfloat16 thats 2 elements
+    int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1));
+    for (int x = 0; x < num_rows; x += 32) {
+        for (int y = 0; y < num_cols; y += 32) {
+            int start = x * num_cols + y;
+
+            // Top faces
+            for (int j = 0; j < 2; j++) {
+                int start_ = start + 16 * j;
+                for (int k = 0; k < 16; k++) {
+                    for (int i = 0; i < 16; i++) {
+                        int idx = start_ + num_cols * k + i;
+                        dst_vec.push_back(src_vec.at(idx));
+                    }
+                }
+            }
+
+            if (config.num_faces > 2) {
+                // Bottom faces
+                start += 16 * num_cols;
+                for (int j = 0; j < 2; j++) {
+                    int start_ = start + 16 * j;
+                    for (int k = 0; k < 16; k++) {
+                        for (int i = 0; i < 16; i++) {
+                            int idx = start_ + num_cols * k + i;
+                            dst_vec.push_back(src_vec.at(idx));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return dst_vec;
+}
+
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
