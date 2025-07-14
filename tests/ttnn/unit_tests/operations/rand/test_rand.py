@@ -5,6 +5,11 @@
 import pytest
 import ttnn
 import torch
+import math
+
+DEFAULT_SHAPE = (32, 32)
+SHAPES = [tuple([32] * i) for i in range(6)]
+ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
 
 
 def is_ttnn_float_type(tt_dtype) -> bool:
@@ -15,30 +20,83 @@ def is_ttnn_float_type(tt_dtype) -> bool:
             return False
 
 
-DEFAULT_SHAPE = (32, 32)
-SHAPES = [tuple([32] * i) for i in range(6)]
-ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
+def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
+    n = data.numel()
 
+    if n < 1000:
+        print("[Warning] A meaningful analysis requires at least 1000 samples.")
+        if n < 2:
+            print("[Error] Cannot perform test with less than 2 data points.")
+            return False
 
-@pytest.mark.xfail(reason="Integer data types are not yet supported. Float values could be nan")
-@pytest.mark.parametrize("dtype", ALL_TYPES)
-def test_tensor_dtype_and_value_range(device, dtype):
-    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device)
-
-    assert tensor.dtype == dtype
-    assert tuple(tensor.shape) == tuple(DEFAULT_SHAPE)
-
-    if is_ttnn_float_type(dtype):
-        # TODO: Handle
-        # assert (nan - nan) > 0.8 lead to test failure.
-        torch_tensor = ttnn.to_torch(tensor)
-        min_value = torch.min(torch_tensor).item()
-        max_value = torch.max(torch_tensor).item()
-        assert max_value - min_value > 0.8
+    start_value, end_value = value_range
+    if is_discrete:
+        min_val, max_val = start_value, end_value
     else:
-        torch_tensor = ttnn.to_torch(tensor)
-        assert torch.min(torch_tensor).item() == 0
-        assert torch.max(torch_tensor).item() == 1
+        min_val, max_val = torch.aminmax(data)
+        min_val = min_val.item()
+        max_val = max_val.item()
+
+    if min_val == max_val:
+        return False
+
+    # torch ops don't suport integer data types, convert to list
+    data = data.detach().cpu().flatten().tolist()
+
+    # Calculate sample statistics
+    sample_mean = sum(data) / n
+    sample_variance = sum([(x - sample_mean) ** 2 for x in data]) / n
+    sample_std_dev = math.sqrt(sample_variance)
+
+    # Calculate theoretical statistics
+    if is_discrete:
+        theoretical_mean = (start_value + end_value) / 2
+        N = end_value - start_value + 1
+        theoretical_std_dev = math.sqrt((N**2 - 1) / 12)
+    else:
+        theoretical_mean = (min_val + max_val) / 2
+        theoretical_std_dev = (max_val - min_val) / math.sqrt(12)
+
+    mean_diff = abs(sample_mean - theoretical_mean) / theoretical_mean * 100 if theoretical_mean != 0 else 0
+    std_dev_diff = (
+        abs(sample_std_dev - theoretical_std_dev) / theoretical_std_dev * 100 if theoretical_std_dev != 0 else 0
+    )
+
+    treshold_percentage = 4
+    if mean_diff < treshold_percentage and std_dev_diff < treshold_percentage:
+        return True
+
+    return False
+
+
+@pytest.mark.xfail(reason="BFLOAT4_B/UINT8 and `uint32/int32/BFLOAT8_B` for row major layout are not supported.")
+@pytest.mark.parametrize("dtype", ALL_TYPES)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_tensor_dtype_and_value_range(device, dtype, layout):
+    shape = (1024, 1024)
+    if is_ttnn_float_type(dtype):
+        tensor = ttnn.rand(shape, dtype=dtype, device=device, layout=layout)
+        low = 0
+        high = 1
+    elif dtype == ttnn.int32:
+        low = -100
+        high = 100
+        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device, layout=layout)
+    else:
+        low = 0
+        high = 100
+        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device, layout=layout)
+
+    assert tensor.layout == layout
+    assert tensor.dtype == dtype
+    assert tuple(tensor.shape) == tuple(shape)
+
+    torch_tensor = ttnn.to_torch(tensor)
+
+    assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
+    assert check_uniform_distribution(
+        torch_tensor, value_range=(low, high), is_discrete=not is_ttnn_float_type(dtype)
+    ), "The distribution of random values is not uniform!"
 
 
 def test_rand_defaults(device):
@@ -62,15 +120,6 @@ def test_rand_dims(dim, device):
     shape = (dim, dim)
     tensor = ttnn.rand(shape, device=device)
     assert tuple(tensor.shape) == tuple(shape)
-
-
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_rand_with_layout(device, layout):
-    size = DEFAULT_SHAPE
-    tensor = ttnn.rand(size, device=device, layout=layout)
-
-    assert tensor.layout == layout
-    assert tuple(tensor.shape) == tuple(size)
 
 
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
