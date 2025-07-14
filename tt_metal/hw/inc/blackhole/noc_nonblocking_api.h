@@ -56,6 +56,9 @@ const uint32_t NOC_TARG_ADDR_COORDINATE = NOC_TARG_ADDR_HI;
 const uint32_t NOC_RET_ADDR_COORDINATE = NOC_RET_ADDR_HI;
 const uint32_t NOC_COORDINATE_MASK = 0xFFFFFF;
 
+// Mask for the 60th bit of the address in NOC_TARG/RET_ADDR_MID, which is set to enable PCIe transactions
+constexpr uint32_t NOC_PCIE_MASK = 0x1000000F;
+
 extern uint32_t noc_reads_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
