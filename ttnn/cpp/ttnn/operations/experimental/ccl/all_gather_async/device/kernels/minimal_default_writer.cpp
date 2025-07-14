@@ -209,7 +209,6 @@ void kernel_main() {
 
     uint32_t chunk_count = 0;
     uint32_t chunks_per_sync = 32;
-
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         chunk_count = 0;
         while (tiles_read < tiles_to_read) {
@@ -311,7 +310,8 @@ void kernel_main() {
             chunk_count++;
             if (chunk_count % chunks_per_sync == 0) {
                 // 2. unicast output ready semaphore
-                if ((direction == 1 && num_targets_backward_direction) || num_targets_forward_direction) {
+                if ((direction == 1 && num_targets_backward_direction) ||
+                    (direction == 0 && num_targets_forward_direction)) {
                     tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
                 }
             }
@@ -319,7 +319,9 @@ void kernel_main() {
 
         if (chunk_count % chunks_per_sync != 0) {
             // Write the unicast packet
-            if ((direction == 1 && num_targets_backward_direction) || num_targets_forward_direction) {
+            if ((direction == 1 && num_targets_backward_direction) ||
+                (direction == 0 && num_targets_forward_direction)) {
+                pkt_hdr_sem_inc->to_chip_unicast(1);
                 tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
             }
         }
@@ -460,6 +462,7 @@ void kernel_main() {
 
             if (chunk_count % chunks_per_sync != 0) {
                 // 2. unicast output ready semaphore
+                pkt_hdr_sem_inc->to_chip_unicast(1);
                 tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
             }
 
@@ -469,6 +472,7 @@ void kernel_main() {
             row_offset = start_row_offset;
             pages_read_in_row = start_pages_read_in_row;
         }
+
         slice_writes++;
     }
 

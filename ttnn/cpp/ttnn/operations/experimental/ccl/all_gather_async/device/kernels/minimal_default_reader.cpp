@@ -195,7 +195,7 @@ void kernel_main() {
         // In the linear case, if I have any targets to my left, always forward
         // In the ring case, if I have received on the right less than my targets on the left, forward
         if ((topology == Topology::Linear && writes_expected > 0) ||
-            (topology == Topology::Ring && (slices_received + 1 < (writes_expected + 1)))) {
+            (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
             // read the next backward slice out of memory, and put it in CB
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
