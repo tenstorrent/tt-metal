@@ -158,7 +158,8 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
-
+    DPRINT << "in_nbytes_leftover " << in_nbytes_leftover << ENDL();
+    DPRINT << "in_c " << in_c << ENDL();
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
     uint32_t scalar_end = 1;

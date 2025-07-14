@@ -264,8 +264,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const uint32_t in_nbytes_c = in_c / num_shards_c * in_nbytes;  // row of input (channels)
     const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * in_nbytes;  // row of input (channels)
-    const uint32_t in_aligned_nbytes_c =
-        tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
     const uint32_t out_nbytes_c = in_c / num_shards_c * out_nbytes;  // row of output (channels)
 
     constexpr tt::DataFormat indices_df =
@@ -285,6 +283,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // reduction stages, so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles at a time.
     const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool && is_large_kernel ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
+    const uint32_t in_aligned_nbytes_c =
+        is_wide_reduction ? tt::round_up(
+                                (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
+                                tt::constants::TILE_WIDTH) *
+                                in_nbytes
+                          : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
+    // Hardware can do reduction of 8 tiles at a time.
+    // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
+    const bool is_large_kernel = last_tile_is_partial ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2
+                                                      : kernel_size_hw > tt::constants::TILE_HEIGHT;
 
     // TODO: enable 32 sticks per tile for reduction for all cases, we can only support 16 row reductions for
     // partial tiles, and there is currently a bug forcing us to use 16 row reductions for avg pool when there
