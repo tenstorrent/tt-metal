@@ -70,9 +70,9 @@ jobs:
           pip install -U models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/test_embedding_1d.py --timeout 10; fail+=$?;
           pytest models/demos/deepseek_v3/tests/test_expert.py --timeout 5; fail+=$?;
-          pytest models/demos/deepseek_v3/tests/test_mla_1d.py --timeout 30; fail+=$?;
-          pytest models/demos/deepseek_v3/tests/test_mlp_1d.py --timeout 30; fail+=$?;
-          pytest models/demos/deepseek_v3/tests/test_rms_norm.py --timeout 30; fail+=$?;
+          pytest models/demos/deepseek_v3/tests/test_mla_1d.py --timeout 10; fail+=$?;
+          pytest models/demos/deepseek_v3/tests/test_mlp_1d.py --timeout 5; fail+=$?;
+          pytest models/demos/deepseek_v3/tests/test_rms_norm.py --timeout 5; fail+=$?;
 
           end_time=$(date +%s)
           duration=$((end_time - start_time))
