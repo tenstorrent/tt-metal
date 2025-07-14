@@ -390,72 +390,99 @@ struct InterleavedPow2AddrGenFast {
     }
 };
 
-template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedAddrGen<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size can be arbitrary size. Use
-        get_noc_addr(const uint32_t id, InterleavedPow2AddrGen s) for optimized algorithm in which stick size
-        is a power of 2.
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedAddrGen: Check struct for attribute definitions.
-    */
-    return s.get_noc_addr(id, offset, noc);
+// clang-format off
+/**
+ * Generic API for getting the noc address using an address generator object.
+ * This function is used to get the noc address for a given bank unit id and offset.
+ * It checks if the address generator has the get_noc_addr.
+ *
+ * Return value: uint64_t
+ *
+ * | Argument                     | Description                            | Data type | Valid range                    | required |
+ * |------------------------------|----------------------------------------|-----------|--------------------------------|----------|
+ * | id                           | Unique id for the bank unit to be read | uint32_t  | Any uint32_t number            | True     |
+ * | addrgen                      | Address generator object               | AddrGen   | N/A                            | True     |
+ * | offset                       | Custom address offset                  | uint32_t  | 0..1MB                         | False    |
+ * | noc                          | Which NOC to use for the transaction   | uint8_t   | 0 or 1                         | False    |
+ * | AddrGen (template parameter) | Address generator class                | typename  | Any AddrGen class in this file | True     |
+ */
+// clang-format on
+template <typename AddrGen>
+FORCE_INLINE uint64_t
+get_noc_addr(const uint32_t id, const AddrGen& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+    static_assert(has_get_noc_addr<AddrGen>::value, "AddrGen must have get_noc_addr() method");
+    return addrgen.get_noc_addr(id, offset, noc);
 }
 
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> get_noc_addr instead.
+ *
+ * Alternative API for getting the noc address when we are reading using a swizzled layout.
+ * This version assumes bank unit size can be arbitrary size.
+ * It uses the InterleavedAddrGen object to compute the noc address.
+ * InterleavedAddrGen: Check struct for attribute definitions.
+ *
+ */
+// clang-format on
 template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedPow2AddrGen<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size is a power of 2. For arbitrary bank
-        unit size, use get_noc_addr(const uint32_t id, const InterleavedOffset s)
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedPow2AddrGen: Check struct for attribute definitions.
-    */
-
-    return s.get_noc_addr(id, offset, noc);
+FORCE_INLINE uint64_t
+get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+    return addrgen.get_noc_addr(id, offset, noc);
 }
 
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> get_noc_addr instead.
+ *
+ * Alternative API for getting the noc address when we are reading using a swizzled layout.
+ * This version assumes bank unit size is a power of 2.
+ * It uses the InterleavedPow2AddrGen object to compute the noc address.
+ * InterleavedPow2AddrGen: Check struct for attribute definitions.
+ *
+ */
+// clang-format on
+template <bool DRAM>
+FORCE_INLINE uint64_t get_noc_addr(
+    const uint32_t id, const InterleavedPow2AddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+    return addrgen.get_noc_addr(id, offset, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> get_noc_addr instead.
+ *
+ * Alternative API for getting the noc address when we are reading using a swizzled layout.
+ * This version assumes bank unit size can be any arbitrary size less than or equal to NOC_MAX_BURST_SIZE.
+ * It uses the InterleavedAddrGenFast object to compute the noc address.
+ * InterleavedAddrGenFast: Check struct for attribute definitions.
+ *
+ */
+// clang-format on
 template <bool DRAM, uint32_t tile_hw>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size can be arbitrary size. Use
-        get_noc_addr(const uint32_t id, InterleavedPow2AddrGen s) for optimized algorithm in which stick size
-        is a power of 2.
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedAddrGen: Check struct for attribute definitions.
-    */
-    return s.get_noc_addr(id, offset, noc);
+FORCE_INLINE uint64_t get_noc_addr(
+    const uint32_t id,
+    const InterleavedAddrGenFast<DRAM, tile_hw>& addrgen,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    return addrgen.get_noc_addr(id, offset, noc);
 }
 
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> get_noc_addr instead.
+ *
+ * Alternative API for getting the noc address when we are reading using a swizzled layout.
+ * This version assumes bank unit size is a power of 2 and less than or equal to NOC_MAX_BURST_SIZE.
+ * It uses the InterleavedPow2AddrGenFast object to compute the noc address.
+ * InterleavedPow2AddrGenFast: Check struct for attribute definitions.
+ *
+ */
+// clang-format on
 template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedPow2AddrGenFast<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size is a power of 2 and less than or equal to NOC_MAX_BURST_SIZE.
-        For arbitrary bank unit size, use get_noc_addr(const uint32_t id, const InterleavedOffset s)
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedPow2AddrGenFast: Check struct for attribute definitions.
-    */
-
-    return s.get_noc_addr(id, offset, noc);
+FORCE_INLINE uint64_t get_noc_addr(
+    const uint32_t id, const InterleavedPow2AddrGenFast<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+    return addrgen.get_noc_addr(id, offset, noc);
 }
 
 // clang-format off
