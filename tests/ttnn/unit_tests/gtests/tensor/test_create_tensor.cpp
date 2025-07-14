@@ -114,7 +114,7 @@ using CombinationInputParams =
 class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice,
                         public ::testing::WithParamInterface<CombinationInputParams> {};
 
-TEST_P(EmptyTensorTest, DISABLED_Combinations) {
+TEST_P(EmptyTensorTest, Combinations) {
     auto params = GetParam();
     auto shape = std::get<0>(params);
     auto dtype = std::get<1>(params);
