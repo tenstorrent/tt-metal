@@ -163,6 +163,7 @@ void kernel_main() {
     }
 
     uint32_t chunk_count = 0;
+    uint32_t sem_target = 0;
     while (slices_received < slices_expected) {
         // Do i expect more from the backward direction?
         // In the linear case, I expect num_targets_backward_direction slices from the left
@@ -214,9 +215,10 @@ void kernel_main() {
                 while (tiles_read < tiles_to_read) {
                     if (chunk_count % chunks_per_sync == 0) {
                         noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                     }
                     chunk_count++;
+                    sem_target++;
 
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
