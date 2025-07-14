@@ -352,8 +352,8 @@ TEST_P(NDShardingSqueezeRankTests, TestSqueezeRank) {
     EXPECT_EQ(dspec.shard_shape_in_pages(), params.expected_shard_shape_pages);
 
     if (params.tensor_shape_pages.rank() == params.shard_shape_pages.rank()) {
-        auto expected_page_mapping =
-            detail::compute_page_mapping(params.tensor_shape_pages, params.shard_shape_pages, dspec.cores());
+        auto expected_page_mapping = tt::tt_metal::detail::compute_page_mapping(
+            params.tensor_shape_pages, params.shard_shape_pages, dspec.cores());
         EXPECT_EQ(dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
     }
 }
