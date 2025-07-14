@@ -240,7 +240,7 @@ ALWI void fast_tilize_init_short(uint32_t icb, uint32_t full_dim, uint32_t ocb) 
 
 ALWI void fast_tilize_init_short_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
-    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
 
     fast_tilize_init_short(icb, full_dim, ocb);
 }
