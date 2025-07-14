@@ -42,6 +42,8 @@ class IDevice;
 
 namespace {
 
+namespace CMAKE_UNIQUE_NAMESPACE {
+
 void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const ttnn::Shape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
@@ -81,25 +83,26 @@ struct CreateTensorParams {
     ttnn::Shape shape;
 };
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 class CreateTensorTest : public ttnn::TTNNFixtureWithDevice,
-                         public ::testing::WithParamInterface<CreateTensorParams> {};
+                         public ::testing::WithParamInterface<CMAKE_UNIQUE_NAMESPACE::CreateTensorParams> {};
 
 TEST_P(CreateTensorTest, Tile) {
-    CreateTensorParams params = GetParam();
-    run_create_tensor_test(device_, params.shape);
+    CMAKE_UNIQUE_NAMESPACE::CreateTensorParams params = GetParam();
+    CMAKE_UNIQUE_NAMESPACE::run_create_tensor_test(device_, params.shape);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     CreateTensorTestWithShape,
     CreateTensorTest,
     ::testing::Values(
-        CreateTensorParams{.shape = ttnn::Shape({1, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::Shape({2, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::Shape({0, 0, 0, 0})},
-        CreateTensorParams{.shape = ttnn::Shape({0, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::Shape({0})}));
+        CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{.shape = ttnn::Shape({1, 1, 32, 32})},
+        CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{.shape = ttnn::Shape({2, 1, 32, 32})},
+        CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{.shape = ttnn::Shape({0, 0, 0, 0})},
+        CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{.shape = ttnn::Shape({0, 1, 32, 32})},
+        CMAKE_UNIQUE_NAMESPACE::CreateTensorParams{.shape = ttnn::Shape({0})}));
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) {
     os << magic_enum::enum_name(value);

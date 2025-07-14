@@ -214,7 +214,7 @@ TEST(PartitionTest, DimensionOutofRange) {
 TEST(PartitionTest, EmptyInput) {
     std::vector<xt::xarray<int>> input;
     EXPECT_NO_THROW(concat(input, 0));
-    EXPECT_TRUE(xt::allclose(concat(input, 0).expr(), xt::xarray<int>{}));
+    EXPECT_TRUE(concat(input, 0).data().empty());
 }
 
 TEST(PartitionTest, ChunkDoesNotAccessData) {
