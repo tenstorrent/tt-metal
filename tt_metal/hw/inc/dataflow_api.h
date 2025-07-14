@@ -930,7 +930,6 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
  * | id                           | Page id                              | uint32_t  | Any uint32_t number                            | True     |
  * | addrgen                      | Address generator object             | AddrGen   | N/A                                            | True     |
  * | dst_local_l1_addr            | Address in local L1 memory           | uint32_t  | 0..1MB                                         | True     |
- * | size                         | Size of data in bytes                | uint32_t  | 0..NOC_MAX_BURST_SIZE MB                       | False    |
  * | offset                       | Custom address offset                | uint32_t  | 0..1MB                                         | False    |
  * | noc                          | Which NOC to use for the transaction | uint8_t   | 0 or 1                                         | False    |
  * | AddrGen (template parameter) | Address generator class              | typename  | Any AddrGen class in \a dataflow_api_addrgen.h | True     |
@@ -941,7 +940,6 @@ FORCE_INLINE void noc_async_read_page(
     const uint32_t id,
     const AddrGen& addrgen,
     uint32_t dst_local_l1_addr,
-    uint32_t size = 0,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     static_assert(
@@ -954,26 +952,7 @@ FORCE_INLINE void noc_async_read_page(
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
     }
-    noc_async_read_one_packet(addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, size ? size : page_size, noc);
-}
-
-// clang-format off
-/**
- * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
- *
- * Initiates an asynchronous read for a single packet with transaction size and source location determined by the TensorAccessor object.
- * This function is a convenience wrapper around noc_async_read_page for TensorAccessor objects.
- * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
- */
-// clang-format on
-template <typename DSpec>
-FORCE_INLINE void noc_async_read_tile(
-    const uint32_t id,
-    const TensorAccessor<DSpec>& addrgen,
-    uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    noc_async_read_page<TensorAccessor<DSpec>>(id, addrgen, dst_local_l1_addr, addrgen.page_size, offset, noc);
+    noc_async_read_one_packet(addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
 
 // clang-format off
@@ -1064,33 +1043,6 @@ FORCE_INLINE void noc_async_read_page(
 
 // clang-format off
 /**
- * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
- *
- * Initiates an asynchronous read for a single packet with custom transaction size and a source location determined by the InterleavedPow2AddrGenFast object.
- * This function is a convenience wrapper around noc_async_read_page for InterleavedPow2AddrGenFast objects.
- * It allows reading a partial page, which is useful for cases where only a portion of the page needs to be read.
- * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
- *
- * Extra arguments:
- *
- * | Argument          | Description                          | Data type                  | Valid range              | required |
- * |-------------------|--------------------------------------|----------------------------|--------------------------|----------|
- * | size              | Size of data transfer in bytes       | uint32_t                   | 0..NOC_MAX_BURST_SIZE MB | True     |
- */
-// clang-format on
-template <bool DRAM>
-FORCE_INLINE void noc_async_read_partial_page(
-    const uint32_t id,
-    const InterleavedPow2AddrGenFast<DRAM>& addrgen,
-    uint32_t dst_local_l1_addr,
-    const uint32_t size,
-    const uint32_t offset,
-    uint8_t noc = noc_index) {
-    noc_async_read_page<InterleavedPow2AddrGenFast<DRAM>>(id, addrgen, dst_local_l1_addr, size, offset, noc);
-}
-
-// clang-format off
-/**
  * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the AddrGen object.
  * This function is the generic implementation that can be used with any address generator that provides
  * the get_noc_addr method and either a page_size or a log_base_2_of_page_size member variable.
@@ -1130,21 +1082,6 @@ FORCE_INLINE void noc_async_write_page(
         page_size = (1 << addrgen.log_base_2_of_page_size);
     }
     noc_async_write_one_packet(src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
-}
-
-// clang-format off
-/**
- * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
- *
- * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the TensorAccessor object.
- * This function is a convenience wrapper around noc_async_write_page for TensorAccessor objects.
- * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
- */
-// clang-format on
-template <typename DSpec>
-FORCE_INLINE void noc_async_write_tile(
-    const uint32_t id, const TensorAccessor<DSpec>& addrgen, uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
-    noc_async_write_page<TensorAccessor<DSpec>>(id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
 }
 
 // clang-format off
