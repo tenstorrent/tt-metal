@@ -112,7 +112,7 @@ HalCoreInfoType create_active_eth_mem_map() {
                 local_init = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
                 // This is not used for launching DM0. The ETH FW API will be used instead.
                 // Rather, it is used to signal that the active erisc firmware exited properly.
-                fw_launch = MEM_ERISC_LAUNCH_FLAG;
+                fw_launch = MEM_AERISC_LAUNCH_FLAG;
                 fw_launch_value = fw_base;
                 break;
             }
