@@ -1202,6 +1202,20 @@ FORCE_INLINE void noc_async_write_page(
     }
 }
 
+template <typename DSpec>
+FORCE_INLINE void noc_async_read_shard(
+    const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
+    auto shard_volume = s.dspec().shard_volume();
+    noc_async_read(s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_write_shard(
+    const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
+    auto shard_volume = s.dspec().shard_volume();
+    noc_async_write(src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
+}
+
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
 FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
     return (uint32_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;

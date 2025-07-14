@@ -63,6 +63,29 @@ public:
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
     }
 
+    // Shard NOC APIs
+    FORCE_INLINE
+    std::uint64_t get_shard_noc_addr(
+        const uint32_t shard_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        PageMapping page_mapping{
+            .bank_id = shard_id % dspec().num_banks(),
+            .bank_page_offset = shard_id / dspec().num_banks() * dspec().shard_volume(),
+        };
+        return get_noc_addr(page_mapping, offset, noc);
+    }
+
+    template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
+    FORCE_INLINE std::uint64_t get_shard_noc_addr(
+        const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        uint32_t shard_id = 0;
+        for (uint32_t i = 0; i < dspec().rank(); ++i) {
+            // Check that shard_coord is within bounds
+            ASSERT(shard_coord[i] < dspec().shard_shape()[i]);
+            shard_id *= dspec().shard_grid_strides()[i];
+        }
+        return get_shard_noc_addr(shard_id, offset, noc);
+    }
+
     // Helpers
     struct PageMapping {
         size_t bank_id;
@@ -117,6 +140,29 @@ public:
         uint32_t bank_page_offset = bank_shard_id * dspec().shard_volume() + page_offset_within_shard;
 
         return {bank_id, bank_page_offset};
+    }
+
+    // Locality APIs
+    FORCE_INLINE
+    bool is_local_bank(uint32_t x, uint32_t y, uint8_t noc = noc_index) const {
+        return x == my_x[noc] && y == my_y[noc];
+    }
+
+    FORCE_INLINE
+    bool is_local_addr(const uint64_t noc_addr, uint8_t noc = noc_index) const {
+        uint32_t x = NOC_GET_X_FROM_ADDR(noc_addr);
+        uint32_t y = NOC_GET_Y_FROM_ADDR(noc_addr);
+        return is_local_bank(x, y, noc);
+    }
+
+    FORCE_INLINE
+    bool is_local_shard(const uint32_t shard_id, uint8_t noc = noc_index) const {
+        uint32_t bank_id = shard_id % dspec().num_banks();
+
+        const auto& packed_xy_coords = dspec().packed_xy_coords();
+        auto bank_x = (packed_xy_coords[bank_id] >> 8) & 0xFF;
+        auto bank_y = (packed_xy_coords[bank_id]) & 0xFF;
+        return is_local_bank(bank_x, bank_y, noc);
     }
 
 private:
