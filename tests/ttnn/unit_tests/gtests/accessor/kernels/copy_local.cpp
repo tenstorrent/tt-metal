@@ -37,7 +37,12 @@ void kernel_main() {
         ASSERT(tensor_accessor_src.is_local_addr(noc_addr_src));
         ASSERT(tensor_accessor_dst.is_local_addr(noc_addr_dst));
 
-        noc_async_read_shard(shard_id, tensor_accessor_src, noc_addr_dst);
+        // For the purpose of tesing, every second shard is read, and every other is written.
+        if (i % 2 == 0) {
+            noc_async_read_shard(shard_id, tensor_accessor_src, noc_addr_dst);
+        } else {
+            noc_async_write_shard(shard_id, tensor_accessor_dst, noc_addr_src);
+        }
     }
     noc_async_read_barrier();
 }
