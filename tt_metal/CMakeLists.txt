@@ -30,96 +30,26 @@ add_custom_target(
     COMMENT "Generating all FlatBuffer headers"
 )
 
-target_sources(
-    tt_metal
-    PRIVATE
-        tt_metal.cpp
-        graph/graph_tracking.cpp
-        hal.cpp
-        ${API_GENERATED_HEADERS}
-)
-
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE api api/*)
 target_sources(
     tt_metal
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
-        FILES
-            api/tt-metalium/allocator.hpp
-            api/tt-metalium/allocator_types.hpp
-            api/tt-metalium/assert.hpp
-            api/tt-metalium/base_types.hpp
-            api/tt-metalium/bfloat16.hpp
-            api/tt-metalium/bfloat4.hpp
-            api/tt-metalium/bfloat8.hpp
-            api/tt-metalium/blockfloat_common.hpp
-            api/tt-metalium/buffer.hpp
-            api/tt-metalium/buffer_distribution_spec.hpp
-            api/tt-metalium/buffer_page_mapping.hpp
-            api/tt-metalium/buffer_types.hpp
-            api/tt-metalium/circular_buffer.hpp
-            api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/circular_buffer_config.hpp
-            api/tt-metalium/command_queue.hpp
-            api/tt-metalium/command_queue_interface.hpp
-            api/tt-metalium/constants.hpp
-            api/tt-metalium/core_coord.hpp
-            api/tt-metalium/core_descriptor.hpp
-            api/tt-metalium/data_format.hpp
-            api/tt-metalium/data_types.hpp
-            api/tt-metalium/device.hpp
-            api/tt-metalium/device_pool.hpp
-            api/tt-metalium/dispatch_core_common.hpp
-            api/tt-metalium/event.hpp
-            api/tt-metalium/fabric_host_interface.h
-            api/tt-metalium/fabric_edm_packet_header.hpp
-            api/tt-metalium/global_circular_buffer.hpp
-            api/tt-metalium/global_semaphore.hpp
-            api/tt-metalium/graph_tracking.hpp
-            api/tt-metalium/fabric_types.hpp
-            api/tt-metalium/hal.hpp
-            api/tt-metalium/hal_types.hpp
-            api/tt-metalium/hlk_desc.hpp
-            api/tt-metalium/host_api.hpp
-            api/tt-metalium/kernel.hpp
-            api/tt-metalium/kernel_types.hpp
-            api/tt-metalium/lightmetal_binary.hpp
-            api/tt-metalium/math.hpp
-            api/tt-metalium/maybe_remote.hpp
-            api/tt-metalium/memory_reporter.hpp
-            api/tt-metalium/mesh_config.hpp
-            api/tt-metalium/mesh_coord.hpp
-            api/tt-metalium/mesh_device.hpp
-            api/tt-metalium/mesh_device_view.hpp
-            api/tt-metalium/mesh_trace_id.hpp
-            api/tt-metalium/metal_soc_descriptor.h
-            api/tt-metalium/persistent_kernel_cache.hpp
-            api/tt-metalium/profiler_optional_metadata.hpp
-            api/tt-metalium/profiler_types.hpp
-            api/tt-metalium/program.hpp
-            api/tt-metalium/program_cache.hpp
-            api/tt-metalium/program_descriptors.hpp
-            api/tt-metalium/profiler_optional_metadata.hpp
-            api/tt-metalium/profiler_types.hpp
-            api/tt-metalium/runtime_args_data.hpp
-            api/tt-metalium/semaphore.hpp
-            api/tt-metalium/shape.hpp
-            api/tt-metalium/shape2d.hpp
-            api/tt-metalium/shape_base.hpp
-            api/tt-metalium/sub_device.hpp
-            api/tt-metalium/sub_device_types.hpp
-            api/tt-metalium/system_mesh.hpp
-            api/tt-metalium/tile.hpp
-            api/tt-metalium/tilize_utils.hpp
-            api/tt-metalium/tt_align.hpp
-            api/tt-metalium/tt_backend_api_types.hpp
-            api/tt-metalium/tt_metal.hpp
-            api/tt-metalium/util.hpp
-            api/tt-metalium/utils.hpp
-            api/tt-metalium/vector_aligned.hpp
-            api/tt-metalium/work_split.hpp
-            api/tt-metalium/distributed_context.hpp
+        FILES ${api}
+    PRIVATE
+        tt_metal.cpp
+        graph/graph_tracking.cpp
+        hal.cpp
+        ${API_GENERATED_HEADERS}
+)
+set_source_files_properties(
+    api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
+    PROPERTIES
+        SKIP_LINTING
+            ON
 )
 
 # TODO(afuller): this should be self-describing modules.
