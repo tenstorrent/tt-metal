@@ -40,7 +40,7 @@ class IDevice;
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace {
+namespace ttnn_test {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -84,7 +84,9 @@ struct CreateTensorParams {
 };
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
+}  // namespace ttnn_test
+
+using namespace ttnn_test;
 
 class CreateTensorTest : public ttnn::TTNNFixtureWithDevice,
                          public ::testing::WithParamInterface<CMAKE_UNIQUE_NAMESPACE::CreateTensorParams> {};
