@@ -32,7 +32,7 @@ jobs:
            {
             name: "llama3-8b quietbox data-parallel=4 stress",
             arch: blackhole,
-            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4,
+            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 25000,
             owner_id: U03PUAKE719 # Miguel Tairum
            }      ]
     name: ${{ matrix.test-group.name }}
