@@ -142,13 +142,6 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-    }
 
     auto untilize_kernel_id = CreateKernel(
         program,
@@ -338,13 +331,6 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-    }
 
     if (core_range.ranges().size() > 0) {
         auto untilize_kernel_id = CreateKernel(
@@ -1454,10 +1440,6 @@ operation::ProgramWithCallbacks untilize_single_core(
     }
 
     // Untilized writer
-    std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32) {
-        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
-    }
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
@@ -1466,15 +1448,12 @@ operation::ProgramWithCallbacks untilize_single_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
     // Compute file path
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (a.dtype() == DataType::INT32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-    }
 
     // Compute compile-time args
     uint32_t num_blocks = num_columns_of_blocks * num_blocks_per_column_row * num_blocks_across_height;

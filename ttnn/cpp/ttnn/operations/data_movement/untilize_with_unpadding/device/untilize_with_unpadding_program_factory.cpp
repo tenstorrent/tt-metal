@@ -174,12 +174,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-    }
 
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -775,9 +769,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
-        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
-    }
 
     if (core_range.size() > 0) {
         auto tilize_kernel_id = CreateKernel(
@@ -1035,11 +1026,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         // Use copy compute kernel just for a potential data type conversion.
         compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
-    } else if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
     auto untilize_kernel_id = CreateKernel(
