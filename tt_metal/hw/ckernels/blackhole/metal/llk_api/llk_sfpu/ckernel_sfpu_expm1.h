@@ -4,37 +4,31 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "ckernel_sfpu_exp.h"
-
-using namespace sfpi;
+#include "sfpu/ckernel_sfpu_exp.h"
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_expm1() {
+    const bool SCALE_EN = false;             // Expm1 does not use scale.
+    const bool SKIP_POSITIVE_CHECK = false;  // Expm1 does not skip positive check.
+    const uint16_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B;
+
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v = calculate_exponential_body_improved<APPROXIMATION_MODE>(v);
-        dst_reg[0] = v - 1.0f;
-        dst_reg++;
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v = _calculate_exponential_piecewise_<APPROXIMATION_MODE, SCALE_EN, SKIP_POSITIVE_CHECK>(
+            v, exp_base_scale_factor);
+        sfpi::dst_reg[0] = v - 1.0f;
+        sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
 void expm1_init() {
-    if constexpr (APPROXIMATION_MODE) {
-        vConstFloatPrgm0 = 1.442695f;  // ln2_recip
-        vConstFloatPrgm1 = s2vFloat16b(p_exp::C23_73);
-        vConstFloatPrgm2 = s2vFloat16b(p_exp::ADJ_EXP);
-    } else {
-        vConstFloatPrgm0 = 1.442695f;  // ln2_recip
-        vConstFloatPrgm1 = 2.0f;
-        vConstFloatPrgm2 = 0.863281f;
-    }
+    const uint32_t EXP_BASE_SCALE_FACTOR = 0x3F800000;
+    _init_exponential_<APPROXIMATION_MODE, false /*fast_mode*/, EXP_BASE_SCALE_FACTOR>();
 }
 
 }  // namespace sfpu
