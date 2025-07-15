@@ -51,9 +51,11 @@ run_perf_models_other() {
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8s_world/tests -m $test_marker
 
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/mobilenetv2/tests -m $test_marker
+	# comment out mob-v2 and ufld_v2 for NOW until we fix HF, weight and data loading issues in the CIs
 
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/tests -m $test_marker
+        #env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/mobilenetv2/tests -m $test_marker
+
+        #env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/tests -m $test_marker
 
         # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8x/tests -m $test_marker
 
