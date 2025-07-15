@@ -371,7 +371,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // In compute, need to find a proper way to get num_faces for sfpu functions
     const bool use_half_tile =
         (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b and
-         device->arch() == tt::ARCH::WORMHOLE_B0);
+         device->arch() == tt::ARCH::WORMHOLE_B0 and not tilize_q);
 
     if (use_half_tile) {
         q_tile = half_tile;
