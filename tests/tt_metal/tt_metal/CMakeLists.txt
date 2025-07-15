@@ -124,6 +124,9 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
+
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels test_kernels/*)
 target_sources(
     metalium_test_files
     PUBLIC
@@ -131,80 +134,7 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
-        FILES
-            test_kernels/compute/bcast_h.cpp
-            test_kernels/compute/bcast_hw.cpp
-            test_kernels/compute/bcast_w.cpp
-            test_kernels/compute/bmm.cpp
-            test_kernels/compute/eltwise_copy.cpp
-            test_kernels/compute/eltwise_copy_3m.cpp
-            test_kernels/compute/increment_runtime_arg.cpp
-            test_kernels/compute/matmul.cpp
-            test_kernels/compute/matmul_large_block_zm.cpp
-            test_kernels/compute/untilA_elwbin_3m.cpp
-            test_kernels/dataflow/dram_copy.cpp
-            test_kernels/dataflow/dram_copy_sticks.cpp
-            test_kernels/dataflow/generic_binary_reader_blocked.cpp
-            test_kernels/dataflow/reader_bcast_h_8bank.cpp
-            test_kernels/dataflow/reader_bcast_hw_8bank.cpp
-            test_kernels/dataflow/reader_bcast_w_8bank.cpp
-            test_kernels/dataflow/reader_binary.cpp
-            test_kernels/dataflow/reader_bmm_8bank.cpp
-            test_kernels/dataflow/reader_cb_test.cpp
-            test_kernels/dataflow/reader_dual_8bank.cpp
-            test_kernels/dataflow/reader_matmul_blocked.cpp
-            test_kernels/dataflow/reader_matmul_small_block.cpp
-            test_kernels/dataflow/reader_unary_push_4.cpp
-            test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp
-            test_kernels/dataflow/reader_unary_8bank.cpp
-            test_kernels/dataflow/semaphore_across_core_types.cpp
-            test_kernels/dataflow/transpose_hc_8bank.cpp
-            test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp
-            test_kernels/dataflow/unit_tests/command_queue/dispatcher_kernel_size_and_runtime.cpp
-            test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp
-            test_kernels/dataflow/unit_tests/command_queue/random_program.cpp
-            test_kernels/dataflow/writer_bmm_8bank.cpp
-            test_kernels/dataflow/writer_cb_test.cpp
-            test_kernels/dataflow/writer_unary_8bank.cpp
-            test_kernels/dataflow/writer_unary_stick_layout_8bank.cpp
-            test_kernels/dataflow/writer_unswizzle.cpp
-            test_kernels/misc/add_two_ints.cpp
-            test_kernels/misc/brisc_print.cpp
-            test_kernels/misc/circular_buffer/cb_init.cpp
-            test_kernels/misc/circular_buffer/cb_non_blocking_master_test_kernel.cpp
-            test_kernels/misc/circular_buffer/cb_non_blocking_subordinate_test_kernel.cpp
-            test_kernels/misc/dprint_raise_wait_brisc.cpp
-            test_kernels/misc/dprint_raise_wait_ncrisc.cpp
-            test_kernels/misc/erisc_print.cpp
-            test_kernels/misc/full_grid_eltwise_device_reuse.cpp
-            test_kernels/misc/global_circular_buffer/validate_receiver_config.cpp
-            test_kernels/misc/global_circular_buffer/validate_sender_config.cpp
-            test_kernels/misc/increment_runtime_arg.cpp
-            test_kernels/misc/local_mem.cpp
-            test_kernels/misc/ncrisc_print.cpp
-            test_kernels/misc/ping_legal_l1s.cpp
-            test_kernels/misc/print_buffering.cpp
-            test_kernels/misc/print_hang.cpp
-            test_kernels/misc/print_one_int.cpp
-            test_kernels/misc/print_simple.cpp
-            test_kernels/misc/print_tile_brisc.cpp
-            test_kernels/misc/print_tile_ncrisc.cpp
-            test_kernels/misc/print_tile_trisc.cpp
-            test_kernels/misc/print_with_wait.cpp
-            test_kernels/misc/runtime_args_kernel.cpp
-            test_kernels/misc/sub_device/add_common_and_unique_rta.cpp
-            test_kernels/misc/sub_device/incrementer.cpp
-            test_kernels/misc/sub_device/persistent_remote_waiter.cpp
-            test_kernels/misc/sub_device/persistent_waiter.cpp
-            test_kernels/misc/sub_device/sync_and_datacopy.cpp
-            test_kernels/misc/sub_device/sync_and_increment.cpp
-            test_kernels/misc/sub_device/syncer.cpp
-            test_kernels/misc/trisc_print.cpp
-            test_kernels/misc/watcher_asserts.cpp
-            test_kernels/misc/watcher_pause.cpp
-            test_kernels/misc/watcher_ringbuf.cpp
-            test_kernels/misc/watcher_waypoints.cpp
-            test_kernels/misc/read_my_coordinates.cpp
+        FILES ${kernels}
 )
 
 install(
