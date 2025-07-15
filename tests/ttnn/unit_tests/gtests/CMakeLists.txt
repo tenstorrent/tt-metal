@@ -87,7 +87,6 @@ target_link_libraries(
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
-        TTNN::Test::Basic::Tensor
         TTNN::Test::Slow
 )
 
