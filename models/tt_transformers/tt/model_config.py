@@ -569,7 +569,9 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150":
+        if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
+            self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"
+        ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
 
@@ -788,7 +790,7 @@ class ModelArgs:
                 m=num_rows(seq_len),
                 k=k_dim,
                 n=n_dim,
-                grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+                grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
@@ -1664,6 +1666,9 @@ class ModelArgs:
         )  # TODO: Needed for TG hang workaround
 
         if in0_block_w is None:
+            assert (
+                k % (self.tile_size * grid_size[1]) == 0
+            ), f"Input width must be divisible by tile size times grid size"
             in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
