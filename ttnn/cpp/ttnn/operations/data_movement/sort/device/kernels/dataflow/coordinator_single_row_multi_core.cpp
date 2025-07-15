@@ -4,8 +4,6 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
 #include "sort_dataflow_common.hpp"
 
 #include <cstdint>

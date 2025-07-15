@@ -4,9 +4,6 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-#include "debug/pause.h"
-
 #include <cstdint>
 
 using sem_ptr_t = volatile tt_l1_ptr uint32_t*;

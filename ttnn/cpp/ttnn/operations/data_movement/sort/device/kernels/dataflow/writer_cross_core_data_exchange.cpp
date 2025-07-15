@@ -4,9 +4,6 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-#include "debug/pause.h"
-
 #include "cross_core_data_exchange_common.hpp"
 #include "sort_dataflow_common.hpp"
 

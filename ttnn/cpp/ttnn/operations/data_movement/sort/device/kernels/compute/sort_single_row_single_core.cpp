@@ -11,8 +11,6 @@
 
 #include "sort_common.hpp"
 
-#include "debug/dprint.h"
-
 namespace NAMESPACE {
 /*
 This sorting algorithm is based on Bitonic Merge Sort and operates on input data arranged in tiles.

@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gather_common.hpp"
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include <tt-metalium/constants.hpp>
 
 #include <cstdint>
