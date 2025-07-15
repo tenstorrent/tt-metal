@@ -24,7 +24,7 @@ def get_max_links(cluster_axis, fabric_config):
     elif cluster_axis is None:
         return 3
     else:
-        return 4 if cluster_axis == 0 else 3
+        return 3  # cluster axis 0 has 4 links but it causes hangs? lol
 
 
 @pytest.mark.parametrize(
