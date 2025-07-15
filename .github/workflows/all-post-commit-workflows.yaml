@@ -8,9 +8,9 @@ on:
         default: Release
         type: string
       version:
-          required: false
-          default: "22.04"
-          type: string
+        required: false
+        default: "22.04"
+        type: string
   workflow_dispatch:
     inputs:
       build-type:
