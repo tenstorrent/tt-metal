@@ -42,7 +42,7 @@ jobs:
 
       - uses: anthropics/claude-code-action@beta
         with:
-          anthropic_api_key: ${{ secrets.AAK }}
+          anthropic_api_key: ${{ secrets.AY_KEY }}
           github_token: ${{ secrets.AI_GH_TOKEN }}
           trigger_phrase: "@tt-ai"
           allowed_tools: "Bash(./build_metal.sh --debug)"
