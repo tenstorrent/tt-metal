@@ -3,9 +3,18 @@
 set -eo pipefail
 
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-MAJOR=${VERSION%.*}
 ARCH=`uname -m`
+
+# VERSION_ID is optional in os-release. Use BUILD_ID as fallback
+RAW_BUILD_ID=`grep '^VERSION_ID=' /etc/os-release`
+RAW_VERSION=`grep '^BUILD_ID=' /etc/os-release`
+if [[ -z "$RAW_VERSION" ]]; then
+    VERSION=`echo "$RAW_BUILD_ID" | awk -F= '{print $2}' | tr -d '"'`
+elif [[ -z "$RAW_BUILD_ID" ]]; then
+    VERSION=`echo "$RAW_VERSION" | awk -F= '{print $2}' | tr -d '"'`
+else
+    VERSION="unknown-version"
+fi
 
 # Function to display help
 show_help() {
