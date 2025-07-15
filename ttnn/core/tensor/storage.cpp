@@ -19,7 +19,7 @@ Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() != nullptr) {
         return this->mesh_buffer->get_reference_buffer();
     }
-    TT_THROW("Buffer is not allocated");
+    TT_THROW("Mesh buffer is not allocated");
 }
 
 std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const {
@@ -28,10 +28,7 @@ std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const 
 }
 
 bool DeviceStorage::is_allocated() const {
-    if (this->mesh_buffer.get() != nullptr) {
-        return this->mesh_buffer->is_allocated();
-    }
-    TT_THROW("Mesh buffer is not allocated");
+    return this->mesh_buffer.get() != nullptr && this->mesh_buffer->is_allocated();
 }
 
 distributed::MeshDevice* DeviceStorage::get_device() const {
