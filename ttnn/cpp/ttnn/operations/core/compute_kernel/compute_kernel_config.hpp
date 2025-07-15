@@ -28,7 +28,7 @@ struct WormholeComputeKernelConfig {
     bool packer_l1_acc = false;
     bool dst_full_sync_en = false;
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
-        ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0;
+        ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
 };
 
 using BlackholeComputeKernelConfig = WormholeComputeKernelConfig;
@@ -44,7 +44,7 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     bool default_l1_acc = false,
     bool default_dst_full_sync_en = false,
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level =
-        ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0);
+        ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);

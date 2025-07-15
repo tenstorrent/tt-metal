@@ -14,7 +14,14 @@ namespace operations {
 
 namespace compute_throttle_utils {
 
-enum class ThrottleLevel : uint32_t { LEVEL_0 = 0, LEVEL_1 = 1, LEVEL_2 = 2, LEVEL_3 = 3, LEVEL_4 = 4, LEVEL_5 = 5 };
+enum class ThrottleLevel : uint32_t {
+    NO_THROTTLE = 0,
+    LEVEL_1 = 1,
+    LEVEL_2 = 2,
+    LEVEL_3 = 3,
+    LEVEL_4 = 4,
+    LEVEL_5 = 5
+};
 
 void add_stagger_defines_if_needed(tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines);
 void add_dram_skip_defines_if_needed(tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines);
@@ -34,10 +41,10 @@ bool should_sync_after_in1_dram(tt::ARCH arch);
  * Level 5: throttle to 33% of max
  */
 void throttle_mm_perf(
-    const tt::ARCH arch,
-    const int num_cores,
+    tt::ARCH arch,
+    int num_cores,
     std::map<std::string, std::string>& mm_kernel_defines,
-    const ThrottleLevel throttle_level = ThrottleLevel::LEVEL_0);
+    ThrottleLevel throttle_level = ThrottleLevel::NO_THROTTLE);
 
 }  // namespace compute_throttle_utils
 

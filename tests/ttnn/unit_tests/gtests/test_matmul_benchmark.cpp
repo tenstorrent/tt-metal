@@ -279,7 +279,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/true,
         /*default_dst_full_sync_en=*/false,
-        /*default_throttle_level=*/ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0);
+        /*default_throttle_level=*/ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
     const ttnn::MemoryConfig out_mem_config =
         out_sharded ? ttnn::MemoryConfig{ttnn::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}

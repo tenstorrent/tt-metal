@@ -23,7 +23,6 @@ void py_module_types(py::module& module) {
         Enum for controlling compute throttling.
 
         Higher levels insert NOP instructions to reduce compute throughput:
-        - LEVEL_0: No throttling (100% performance)
         - LEVEL_1: Throttle to 73% of max performance
         - LEVEL_2: Throttle to 67% of max performance
         - LEVEL_3: Throttle to 50% of max performance
@@ -32,7 +31,7 @@ void py_module_types(py::module& module) {
 
         Used to prevent di/dt (power supply current) issues on large core counts.
     )doc")
-        .value("LEVEL_0", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0)
+        .value("NO_THROTTLE", ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
         .value("LEVEL_1", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_1)
         .value("LEVEL_2", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_2)
         .value("LEVEL_3", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_3)
@@ -61,7 +60,7 @@ void py_module_types(py::module& module) {
             py::arg("fp32_dest_acc_en") = false,
             py::arg("packer_l1_acc") = false,
             py::arg("dst_full_sync_en") = false,
-            py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0)
+            py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
         .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
         .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
@@ -82,7 +81,7 @@ void py_module(py::module& module) {
         py::arg("fp32_dest_acc_en") = false,
         py::arg("packer_l1_acc") = false,
         py::arg("dst_full_sync_en") = false,
-        py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0);
+        py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
     module.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, py::arg("tensor"));
 
     module.def(

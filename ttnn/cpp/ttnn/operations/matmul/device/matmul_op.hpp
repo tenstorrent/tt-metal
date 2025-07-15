@@ -12,7 +12,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn {
 

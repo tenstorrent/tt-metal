@@ -139,13 +139,13 @@ MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& c
 ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (not compute_kernel_config.has_value()) {
-        return ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0;
+        return ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
     }
     return std::visit(
         [](auto&& compute_kernel_config) -> ttnn::operations::compute_throttle_utils::ThrottleLevel {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                return ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_0;
+                return ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
                 return compute_kernel_config.throttle_level;
             } else {

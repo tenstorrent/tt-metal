@@ -188,6 +188,7 @@ from ttnn.types import (
     CoreRange,
     Shape,
     Tensor,
+    ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
@@ -329,7 +330,6 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
-    MatmulThrottleLevel,
 )
 
 from ttnn.operations.normalization import (
