@@ -318,7 +318,16 @@ std::vector<T>& get_test_data() {
 
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+
+    // Use appropriate value range based on whether type is signed or unsigned
+    std::uniform_real_distribution<float> dist;
+    if constexpr (std::is_unsigned_v<T>) {
+        // For unsigned types, use only positive values
+        dist = std::uniform_real_distribution<float>(0.0f, 100.0f);
+    } else {
+        // For signed types, use the original range
+        dist = std::uniform_real_distribution<float>(-100.0f, 100.0f);
+    }
 
     size_t n_elements = MAX_BATCH * MAX_ROWS * MAX_COLS;
     data.resize(n_elements);
