@@ -149,7 +149,6 @@ class TtResnetBlock2D(nn.Module):
 
         # DEVICE CODE: GroupNorm
         else:
-            input_tensor = ttnn.reshape(input_tensor, (B, 1, H * W, C))
             hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states = ttnn.group_norm(
                 hidden_states,
@@ -166,9 +165,6 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.silu(hidden_states)
 
-        if self.conv1_slice_config is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
         [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,
@@ -194,13 +190,8 @@ class TtResnetBlock2D(nn.Module):
         )
         C = self.conv1_params["output_channels"]
 
-        if self.conv1_slice_config is not None:
-            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-
         # DEVICE CODE: GroupNorm
         if not self.gn_fallback:
-            hidden_states = ttnn.reshape(hidden_states, (B, 1, H * W, C))
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states = ttnn.group_norm(
                 hidden_states,
@@ -240,9 +231,6 @@ class TtResnetBlock2D(nn.Module):
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
 
-        if self.conv2_slice_config is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
         [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
@@ -267,9 +255,6 @@ class TtResnetBlock2D(nn.Module):
             dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
-
-        if self.conv2_slice_config is not None:
-            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
 
         if self.tt_conv3_weights is not None:
             if input_tensor.shape[3] >= 1920:
