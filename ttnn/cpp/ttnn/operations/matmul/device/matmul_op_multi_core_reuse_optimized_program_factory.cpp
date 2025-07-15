@@ -632,7 +632,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_bmm_multi_core_reuse(
     const Tensor& a,
     const Tensor& b,
     const Tensor& sparsity,
-    uint32_t num_batches,
+    uint32_t nnz,
     Tensor& output,
     CoreCoord compute_with_storage_grid_size,
     tt::tt_metal::DataType output_dtype,
@@ -867,7 +867,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_bmm_multi_core_reuse(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        num_batches,             // batch
+        nnz,                     // batch
         out_block_tiles,
 
         /*untilize_out=*/false};
