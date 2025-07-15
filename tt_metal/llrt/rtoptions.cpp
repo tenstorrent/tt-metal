@@ -233,6 +233,10 @@ RunTimeOptions::RunTimeOptions() {
             this->disable_dma_ops = true;
         }
     }
+
+    if (getenv("TT_METAL_FORCE_REINIT")) {
+        force_context_reinit = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
