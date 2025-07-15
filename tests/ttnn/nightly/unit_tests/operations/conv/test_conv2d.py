@@ -2866,8 +2866,8 @@ def test_split_reader_regression(
     shard_layout,
     config_override,
 ):
-    # if device.core_grid.y != 8 and is_wormhole_b0():
-    #     pytest.skip("Needs 8x8 grid for wormhole_b0")
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     run_conv(
         device,
