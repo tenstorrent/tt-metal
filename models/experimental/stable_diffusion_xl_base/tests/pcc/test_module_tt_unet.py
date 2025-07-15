@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import gc
 from loguru import logger
 import torch
@@ -79,14 +78,13 @@ def run_unet_model(
     is_ci_env,
     iterations=1,
 ):
-    if is_ci_env:
-        os.environ["HF_HOME"] = SDXL_CI_WEIGHTS_PATH
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         subfolder="unet",
         local_files_only=is_ci_env,
+        cache_dir=SDXL_CI_WEIGHTS_PATH if is_ci_env else None,
     )
     unet.eval()
     state_dict = unet.state_dict()
