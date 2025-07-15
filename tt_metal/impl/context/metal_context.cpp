@@ -136,7 +136,7 @@ void MetalContext::initialize(
             clear_dram_state(device_id);
         }
         int ai_clk = cluster_->get_device_aiclk(device_id);
-        log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
+        log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
         generate_device_bank_to_noc_tables(device_id);
 
         // Create build env for this device, and build FW if it's not built already
