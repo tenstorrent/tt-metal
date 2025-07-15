@@ -70,6 +70,14 @@ python models/tt_transformers/scripts/repack_weights_70b.py <path_to_checkpoint_
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
 
+**⚠️ Warning**
+>
+> For Llama3 models, weights downloaded from the `huggingface-cli` via
+>```
+>huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
+>```
+> will be in the same format as a direct download from Meta (i.e. as `consolidated.xx.pth` files). Hence, you will still need to repack your weights and export `LLAMA_DIR` as before. This is contrary to if you downloaded your weights directly from `huggingface`, as those weights will be downloaded as sharded `.safetensors` files.
+
 #### Option 2: download weights from HuggingFace
 
 If you wish to download the weights from [HuggingFace](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B) ensure your model directory has the following structure:
