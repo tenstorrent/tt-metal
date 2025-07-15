@@ -410,7 +410,6 @@ Reduction
    ttnn.argmax
    ttnn.prod
    ttnn.topk
-   ttnn.experimental.sort
    ttnn.cumsum
 
 Data Movement
@@ -436,7 +435,8 @@ Data Movement
    ttnn.untilize
    ttnn.untilize_with_unpadding
    ttnn.indexed_fill
-   ttnn.experimental.gather
+   ttnn.gather
+   ttnn.sort
 
 Normalization
 =============
