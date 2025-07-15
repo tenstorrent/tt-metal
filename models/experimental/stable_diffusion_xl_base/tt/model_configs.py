@@ -295,6 +295,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         self.conv_configs["ABH_128_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
@@ -306,6 +307,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         self.conv_configs["ABH_512_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
@@ -317,6 +319,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         self.conv_configs["DEFAULT_DRAM"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
@@ -328,6 +331,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         self.conv_configs["ABH_256_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
