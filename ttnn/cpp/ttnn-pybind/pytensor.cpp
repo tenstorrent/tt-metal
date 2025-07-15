@@ -4,6 +4,7 @@
 
 #include "pytensor.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -21,7 +22,9 @@
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 
+#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/common/queue_id.hpp"
@@ -1623,6 +1626,29 @@ void pytensor_module(py::module& m_tensor) {
                 .. code-block:: python
 
                     reshaped_tensor = tt_tensor.reshape((4, -1, 32))
+            )doc")
+        .def(
+            "to_list",
+            [](Tensor& self) {
+                using namespace tt::tt_metal::tensor_impl;
+                return dispatch(self.dtype(), [&]<typename T>() -> py::list {
+                    auto logical_shape = self.logical_shape();
+                    std::vector<uint32_t> shape{logical_shape.cbegin(), logical_shape.cend()};
+
+                    if constexpr (
+                        std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> || std::is_same_v<T, bfloat16>) {
+                        return py::array(shape, self.to_vector<float>().data()).attr("tolist")();
+                    } else {
+                        return py::array(shape, self.to_vector<T>().data()).attr("tolist")();
+                    }
+                });
+            },
+            R"doc(
+                Return TT tensor values as python list
+
+                .. code-block:: python
+
+                    py_list = tt_tensor.to_list()
             )doc")
         .def_property(
             "tensor_id",
