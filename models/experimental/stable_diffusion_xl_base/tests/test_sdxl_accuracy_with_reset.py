@@ -8,11 +8,18 @@ import statistics
 import json
 from PIL import Image
 
+import ttnn
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import OUT_ROOT, RESULTS_FILE_NAME
+
+from conftest import is_6u, is_galaxy
+from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
+
+IS_RING_6U_LOCAL = os.environ.get("RING_6U", "0") == "1"
+NUM_DEVICES_LOCAL = ttnn.GetNumAvailableDevices()
 
 NEW_JSON_FILE_NAME = "sdxl_test_results_with_reset.json"
 READ_JSON_FILE_NAME = RESULTS_FILE_NAME
@@ -31,38 +38,53 @@ GRAPH_OUT_FOLDER = "plots"
 )
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
-@pytest.mark.parametrize("reset_bool", [True])  # Optional reset
-@pytest.mark.parametrize("reset_period", [200])  # reser device every N prompts, should be at least 2
+@pytest.mark.skipif(is_6u() or IS_RING_6U_LOCAL, reason="skip when 6u, as it does not support reset")
 def test_accuracy_with_reset(
-    vae_on_device, captions_path, coco_statistics_path, evaluation_range, reset_bool, reset_period
+    vae_on_device,
+    captions_path,
+    coco_statistics_path,
+    evaluation_range,
+    reset_config,
 ):
     start_from, num_prompts = evaluation_range
-    vae_str = "device_vae" if vae_on_device else "host_vae"
+    prompts = sdxl_get_prompts(captions_path, start_from, num_prompts)  # also asserts evaluation_range
 
+    reset_bool, reset_period = reset_config
     if reset_bool:
         assert reset_period >= 2, "reset_period should be at least 2, so FID can be calculated"
+    else:
+        reset_period = num_prompts
+
+    vae_str = "device_vae" if vae_on_device else "host_vae"
+
+    logger.info(
+        f"Running test_accuracy_with_reset with vae_on_device={vae_on_device}, reset_bool={reset_bool}, reset_period={reset_period}"
+    )
+    logger.info(f"start_from: {start_from}, num_prompts: {num_prompts}")
 
     total_denoising_time, total_vae_time = 0.0, 0.0
     min_inference_time, max_inference_time = float("inf"), float("-inf")
 
+    need_yaml_bool = not is_galaxy() and NUM_DEVICES_LOCAL > 1
+    logger.info(f"num_devices: {NUM_DEVICES_LOCAL}, need_yaml_bool: {need_yaml_bool}")
+
     for current_start in range(start_from, start_from + num_prompts, reset_period):
         current_num_prompts = min(reset_period, start_from + num_prompts - current_start)
 
-        subprocess.run(
-            [
-                "env",
-                "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml",  # Required in CI; has no effect in local environments
-                "pytest",
-                "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py",
-                "--start-from",
-                str(current_start),
-                "--num-prompts",
-                str(current_num_prompts),
-                "-k",
-                vae_str,
-            ],
-            check=True,
-        )
+        prefix = (
+            ["env", "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml"] if need_yaml_bool else []
+        )  # required in CI
+        command = prefix + [
+            "pytest",
+            "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py",
+            "--start-from",
+            str(current_start),
+            "--num-prompts",
+            str(current_num_prompts),
+            "-k",
+            vae_str,
+        ]
+        subprocess.run(command, check=True)
 
         json_file_path = f"{OUT_ROOT}/{READ_JSON_FILE_NAME}"
         with open(json_file_path, "r") as f:
@@ -76,7 +98,6 @@ def test_accuracy_with_reset(
         if reset_bool and current_start + reset_period < start_from + num_prompts:
             subprocess.run(["tt-smi", "-r"], check=True)
 
-    prompts = sdxl_get_prompts(captions_path, start_from, num_prompts)
     images = sdxl_collect_images(start_from, num_prompts)
 
     clip = CLIPEncoder()
@@ -116,7 +137,7 @@ def test_accuracy_with_reset(
         },
         "benchmarks_summary": [
             {
-                "device": "N150",
+                "device": get_device_name(),
                 "model": "sdxl",
                 "average_denoising_time": average_denoising_time,
                 "average_vae_time": average_vae_time,
