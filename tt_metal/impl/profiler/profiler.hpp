@@ -335,6 +335,8 @@ public:
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
+    void dumpRoutingInfo();
+
     // Push device results to tracy
     void pushTracyDeviceResults();
 

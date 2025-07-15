@@ -13,6 +13,7 @@
 #include <utility>
 #include <nlohmann/json.hpp>
 
+#include "fabric_types.hpp"
 #include "tt_cluster.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
@@ -106,6 +107,8 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
             {"shape", std::vector(mesh_shape.cbegin(), mesh_shape.cend())},
         });
     }
+
+    topology_json["cluster_type"] = magic_enum::enum_name(cluster.get_cluster_type());
 
     topology_json["fabric_config"] = magic_enum::enum_name(tt::tt_metal::MetalContext::instance().get_fabric_config());
     if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
