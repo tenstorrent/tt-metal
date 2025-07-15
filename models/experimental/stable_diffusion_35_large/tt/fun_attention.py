@@ -271,7 +271,7 @@ def sd_joint_attention(
             compute_kernel_config=compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ring_sdpa"],
-            num_links=1,
+            num_links=parallel_manager.num_links,
             cluster_axis=parallel_manager.dit_parallel_config.ring_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
