@@ -22,7 +22,7 @@ TILE_SIZE = 32
 
 @pytest.mark.parametrize(
     (
-        "model_name",
+        "model_version",
         "block_index",
         "batch_size",
         "spatial_sequence_length",
@@ -64,7 +64,7 @@ TILE_SIZE = 32
 def test_transformer_block(
     *,
     mesh_device: ttnn.MeshDevice,
-    model_name,
+    model_version: str,
     block_index: int,
     batch_size: int,
     spatial_sequence_length: int,
@@ -74,6 +74,7 @@ def test_transformer_block(
     tp: int,
     topology: ttnn.Topology,
     num_links: int,
+    model_location_generator,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -95,13 +96,16 @@ def test_transformer_block(
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
+    model_name = model_location_generator(
+        f"stabilityai/stable-diffusion-3.5-{model_version}", model_subdir="StableDiffusion_35_Large"
+    )
+
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}",
+        model_name,
         subfolder="transformer",
         torch_dtype=torch_dtype,
-        # local_files_only=True,
     )
-    embedding_dim = 1536 if model_name == "medium" else 2432
+    embedding_dim = 1536 if model_version == "medium" else 2432
 
     torch_model: TransformerBlock = parent_torch_model.transformer_blocks[block_index]
     torch_model.eval()

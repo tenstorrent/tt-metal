@@ -23,7 +23,7 @@ TILE_SIZE = 32
 
 @pytest.mark.parametrize(
     (
-        "model_name",
+        "model_version",
         "batch_size",
         "in_channels",
         "height",
@@ -57,7 +57,7 @@ TILE_SIZE = 32
 def test_patch_embedding(
     *,
     mesh_device: ttnn.MeshDevice,
-    model_name,
+    model_version,
     batch_size: int,
     in_channels: int,
     height: int,
@@ -67,6 +67,7 @@ def test_patch_embedding(
     tp: tuple[int, int],
     topology: ttnn.Topology,
     num_links: int,
+    model_location_generator,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -88,10 +89,14 @@ def test_patch_embedding(
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
-    parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
+    model_name = model_location_generator(
+        f"stabilityai/stable-diffusion-3.5-{model_version}", model_subdir="StableDiffusion_35_Large"
     )
-    embedding_dim = 1536 if model_name == "medium" else 2432
+
+    parent_torch_model = SD3Transformer2DModel.from_pretrained(
+        model_name, subfolder="transformer", torch_dtype=torch_dtype
+    )
+    embedding_dim = 1536 if model_version == "medium" else 2432
 
     torch_model: PatchEmbed = parent_torch_model.pos_embed
     torch_model.eval()
