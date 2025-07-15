@@ -66,10 +66,12 @@ float_ops = [
     MathOperation.Silu,
     MathOperation.Gelu,
     MathOperation.Neg,
+    MathOperation.Fill,
 ]
 
 int_ops = [
     MathOperation.Neg,
+    MathOperation.Fill,
 ]
 
 float_params = generate_params(

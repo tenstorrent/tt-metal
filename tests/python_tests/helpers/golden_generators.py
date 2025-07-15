@@ -356,6 +356,7 @@ class UnarySFPUGolden:
             MathOperation.Silu: self._silu,
             MathOperation.Gelu: self._gelu,
             MathOperation.Neg: self._neg,
+            MathOperation.Fill: self._fill,
         }
         self.data_format = None
 
@@ -439,6 +440,14 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.gelu(input_tensor).item()
+
+    def _fill(self, x):
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return input_tensor.fill_(5).item()
 
 
 @register_golden
