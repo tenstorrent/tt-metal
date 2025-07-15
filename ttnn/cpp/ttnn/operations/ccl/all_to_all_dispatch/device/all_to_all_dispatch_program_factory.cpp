@@ -279,6 +279,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     std::vector<CoreCoord> sender_cores;
     // select
+    sender_cores.reserve(num_links);
     for (uint32_t i = 0; i < num_links; i++) {
         sender_cores.push_back(subdevice_cores.at(i));
     }
