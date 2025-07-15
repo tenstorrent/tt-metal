@@ -3066,6 +3066,18 @@ def test_conv2d_model_fruit(
     input_dtype,
     input_layout,
 ):
+
+    if (
+        device.core_grid.y < 8
+        and is_wormhole_b0()
+        and batch == 1
+        and input_channels == 64
+        and output_channels == 128
+        and input_height == 1024
+        and input_width == 128
+    ):
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = act_block_w_div
