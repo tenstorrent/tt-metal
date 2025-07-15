@@ -70,13 +70,8 @@ class TT_CCL:
         self.rs_semaphores_idx = (self.rs_semaphores_idx + 1) % 2
         return self.rs_semaphore_handles[current_idx]
 
-    def create_persistent_buffer(self, shape, mem_config, dtype, distributed=False):
-        if distributed:
-            shape[3] *= self.mesh_device.get_num_devices()
-            cluster_shape = list(self.mesh_device.shape)
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 3), mesh_shape=cluster_shape)
-        else:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+    def create_persistent_buffer(self, shape, mem_config, dtype):
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
         return ttnn.from_torch(
             torch.zeros(shape),
             device=self.mesh_device,
