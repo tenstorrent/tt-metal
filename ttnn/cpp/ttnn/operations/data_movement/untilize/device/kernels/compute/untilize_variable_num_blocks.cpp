@@ -34,6 +34,7 @@ void MAIN {
     constexpr uint32_t num_blocks_per_col = compute_num_blocks(per_core_block_tile_cnt, max_bct);
     constexpr uint32_t block_ct_dim = per_core_block_tile_cnt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
+    compute_kernel_hw_startup(src_cb_id, out_cb_id);
     pack_untilize_init<block_ct_dim, full_ct_dim>(src_cb_id, out_cb_id);
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
