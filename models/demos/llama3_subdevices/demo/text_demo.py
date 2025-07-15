@@ -693,7 +693,7 @@ def test_demo_text(
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-                logger.info(f"Compile Iteration {iteration}: {1000*decode_iteration_time:.4f}ms")
+                logger.info(f"Iteration {iteration} (compile): {1000*decode_iteration_time:.4f}ms")
             # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
             teacher_forcing = (
                 pcc_check and max_encoded_prompt_len + iteration + 1 < len(ref_tokens) and num_layers == 80
@@ -724,12 +724,6 @@ def test_demo_text(
                     logger.info(
                         f"Top-5 Correctness:{torch.any(tt_top5_tokens == ref_top5_tokens).item(),} Accuracy: {top_5_acc}"
                     )
-                # Always print perf after every iteration
-                tokens_per_second_per_user = 1 / decode_iteration_time
-
-                logger.info(
-                    f"Iteration {iteration}: {1000*decode_iteration_time:.4f}ms @ {tokens_per_second_per_user:.2f} tok/s/user ({batch_size*tokens_per_second_per_user:.2f} tok/s throughput)"
-                )
 
                 # Save output token to print out later
                 if not pcc_check:
@@ -760,6 +754,12 @@ def test_demo_text(
                 # The e2e decode inference accounts for device execution + host post-processing time
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                # Always print perf after every iteration
+                tokens_per_second_per_user = 1 / decode_iteration_time
+
+                logger.info(
+                    f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
+                )
 
             current_pos += 1
             iteration += 1
