@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, num_tiles_per_core, b);
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, num_tiles_per_core, c);
 
-    // Create the kernels
+    // Create the kernel
     auto compute = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_sharding/kernels/add_sharding.cpp",
@@ -209,12 +209,11 @@ int main(int argc, char** argv) {
     EnqueueWriteBuffer(cq, a, a_data, false);
     EnqueueWriteBuffer(cq, b, b_data, false);
 
+    // Setup arguments and run the program.
     SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
-
-    // Enqueue the program
     EnqueueProgram(cq, program, true);
 
-    std::cout << "Kernel execution finished" << std::endl;
+    fmt::print("Kernel execution finished. Reading results...\n");
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
