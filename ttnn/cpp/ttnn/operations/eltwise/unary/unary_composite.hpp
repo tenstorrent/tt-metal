@@ -217,9 +217,6 @@ constexpr auto geglu = ttnn::register_operation<
 constexpr auto swiglu = ttnn::register_operation<
     "ttnn::swiglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>();
-constexpr auto hardshrink = ttnn::register_operation<
-    "ttnn::hardshrink",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::HARDSHRINK>>();
 constexpr auto logical_not_ = ttnn::register_operation<
     "ttnn::logical_not_",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
