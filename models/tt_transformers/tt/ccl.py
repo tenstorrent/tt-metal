@@ -197,6 +197,7 @@ class TT_CCL:
 def tt_all_reduce(
     input_tensor,
     mesh_device,
+    tt_ccl,
     cluster_axis=0,
     dim=0,
     num_reduce_scatter_links=1,
@@ -224,13 +225,23 @@ def tt_all_reduce(
             input_tensor_sharded = input_tensor
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
-        reduced = ttnn.reduce_scatter(
+        rs_intermediate_memory_config = ttnn.L1_MEMORY_CONFIG
+        rs_output_memory_config = memory_config
+        rs_persistent_buffer_keys = tt_ccl.create_rs_persistent_buffer_keys(
+            input_tensor.shape, input_tensor.dtype, rs_intermediate_memory_config, rs_output_memory_config, dim
+        )
+        rs_persistent_buffers = tt_ccl.get_rs_persistent_buffers(rs_persistent_buffer_keys)
+        reduced = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
+            persistent_intermediate_buffer=rs_persistent_buffers[0],
+            persistent_output_buffer=rs_persistent_buffers[1],
             dim=dim,
-            math_op=ttnn.ReduceType.Sum,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
             num_links=num_reduce_scatter_links,
+            intermediate_memory_config=rs_intermediate_memory_config,
+            memory_config=rs_output_memory_config,
             topology=topology,
-            memory_config=memory_config,
+            subdevice_id=tt_ccl.worker_sub_device_id,
         )
         input_tensor.deallocate(True)
         return reduced
@@ -247,14 +258,25 @@ def tt_all_reduce(
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
     if not use_composite:
-        gathered_tensor = ttnn.all_gather(
-            input_tensor,
+        ag_memory_config = ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config
+        ag_peristent_buffer_key = tt_ccl.create_ag_persistent_buffer_key(
+            input_tensor.shape,
+            input_tensor.dtype,
+            ag_memory_config,
             dim,
+            cluster_axis,
+        )
+        gathered_tensor = ttnn.experimental.all_gather_async(
+            input_tensor,
+            persistent_output_buffer=tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+            dim=dim,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=num_all_gather_links,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             topology=topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+            memory_config=ag_memory_config,
+            subdevice_id=tt_ccl.worker_sub_device_id,
         )
 
         if sharded:
@@ -267,28 +289,53 @@ def tt_all_reduce(
             compute_kernel_config=None,
             memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
         )
-        gathered_tensor.deallocate(True)
+
+        if not tt_ccl.is_using_preallocated_persistent_buffers():
+            gathered_tensor.deallocate(True)
     else:
         input_mem_cfg = input_tensor.memory_config()
-        reduced_tensor = ttnn.reduce_scatter(
+
+        rs_intermediate_memory_config = ttnn.L1_MEMORY_CONFIG
+        rs_output_memory_config = ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config
+        rs_persistent_buffer_keys = tt_ccl.create_rs_persistent_buffer_keys(
+            input_tensor.shape,
+            input_tensor.dtype,
+            rs_intermediate_memory_config,
+            rs_output_memory_config,
+            dim,
+            cluster_axis,
+        )
+        rs_persistent_buffers = tt_ccl.get_rs_persistent_buffers(rs_persistent_buffer_keys)
+        reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
+            persistent_intermediate_buffer=rs_persistent_buffers[0],
+            persistent_output_buffer=rs_persistent_buffers[1],
             dim=dim,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
             num_links=num_reduce_scatter_links,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
-            math_op=ttnn.ReduceType.Sum,
+            intermediate_memory_config=rs_intermediate_memory_config,
+            memory_config=rs_output_memory_config,
             topology=topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+            subdevice_id=tt_ccl.worker_sub_device_id,
         )
 
-        reduced_tensor = ttnn.all_gather(
+        ag_memory_config = input_mem_cfg
+        ag_peristent_buffer_key = tt_ccl.create_ag_persistent_buffer_key(
+            reduced_tensor.shape, reduced_tensor.dtype, ag_memory_config, dim, cluster_axis
+        )
+        reduced_tensor = ttnn.experimental.all_gather_async(
             reduced_tensor,
-            dim,
+            persistent_output_buffer=tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+            dim=dim,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=num_all_gather_links,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             topology=topology,
-            memory_config=input_mem_cfg,
+            memory_config=ag_memory_config,
+            subdevice_id=tt_ccl.worker_sub_device_id,
         )
 
     # Reshape the reduced tensor to the original shape
@@ -300,6 +347,7 @@ def tt_all_reduce(
 def tt_all_gather(
     input_tensor,
     mesh_device,
+    tt_ccl,
     cluster_axis,
     dim,
     num_links=2,
@@ -322,29 +370,42 @@ def tt_all_gather(
         if sharded and memory_config is not None:
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config, dtype)  # to sharded
 
+    ag_memory_config = memory_config
     if cluster_axis is None:
-        gathered = ttnn.all_gather(
+        ag_peristent_buffer_key = tt_ccl.create_ag_persistent_buffer_key(
+            input_tensor.shape, input_tensor.dtype, ag_memory_config, dim
+        )
+        gathered = ttnn.experimental.all_gather_async(
             input_tensor,
-            dim,
+            persistent_output_buffer=tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+            dim=dim,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=num_links,
             topology=topology,
-            memory_config=memory_config,
+            memory_config=ag_memory_config,
+            subdevice_id=tt_ccl.worker_sub_device_id,
         )
     else:
-        gathered = ttnn.all_gather(
+        ag_peristent_buffer_key = tt_ccl.create_ag_persistent_buffer_key(
+            input_tensor.shape, input_tensor.dtype, ag_memory_config, dim, cluster_axis
+        )
+        gathered = ttnn.experimental.all_gather_async(
             input_tensor,
-            dim,
+            persistent_output_buffer=tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+            dim=dim,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=num_links,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             topology=topology,
-            memory_config=memory_config,
+            memory_config=ag_memory_config,
+            subdevice_id=tt_ccl.worker_sub_device_id,
         )
     input_tensor.deallocate(True)
     return gathered
 
 
-def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_config):
+def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, tt_ccl, compute_kernel_config):
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
     padded_shape = (1, 1, inp.shape[-2], 32)
@@ -352,6 +413,7 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_conf
     tt_stats_gathered = tt_all_gather(
         tt_stats,
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         dim=3,
         cluster_axis=1,
         num_links=1,
@@ -365,14 +427,15 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_conf
         inp, tt_stats_gathered, epsilon=epsilon, weight=gamma, compute_kernel_config=compute_kernel_config
     )
 
-    tt_stats_gathered.deallocate(True)
+    if not tt_ccl.is_using_preallocated_persistent_buffers():
+        tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)
 
     return tt_out
 
 
 def tt_sharded_distributed_rmsnorm(
-    inp, epsilon, gamma, mesh_device, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
+    inp, epsilon, gamma, mesh_device, tt_ccl, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
 ):
     inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
@@ -380,14 +443,23 @@ def tt_sharded_distributed_rmsnorm(
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
 
     # All gather stats
-    tt_stats = ttnn.all_gather(
+    ag_memory_config = ln_sharded_stats_memcfg
+    dim = 3
+    cluster_axis = 1
+    ag_peristent_buffer_key = tt_ccl.create_ag_persistent_buffer_key(
+        tt_stats.shape, tt_stats.dtype, ag_memory_config, dim, cluster_axis
+    )
+    tt_stats = ttnn.experimental.all_gather_async(
         tt_stats,
-        3,
+        persistent_output_buffer=tt_ccl.get_ag_persistent_output_buffer(ag_peristent_buffer_key),
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
         num_links=1,
-        cluster_axis=1,
+        cluster_axis=cluster_axis,
         mesh_device=mesh_device,
-        memory_config=ln_sharded_stats_memcfg,
         topology=ttnn.Topology.Linear,
+        memory_config=ag_memory_config,
+        subdevice_id=tt_ccl.worker_sub_device_id,
     )
 
     # Run distributed rmsnorm part 2
@@ -398,6 +470,7 @@ def tt_sharded_distributed_rmsnorm(
         program_config=ln_sharded_progcfg,
         stats=tt_stats,
     )
-    tt_stats.deallocate(True)
+    if not tt_ccl.is_using_preallocated_persistent_buffers():
+        tt_stats.deallocate(True)
 
     return tt_out
