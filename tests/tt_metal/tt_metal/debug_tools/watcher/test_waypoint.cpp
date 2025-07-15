@@ -37,9 +37,6 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 void RunTest(WatcherFixture* fixture, IDevice* device) {
-    // https://github.com/tenstorrent/tt-metal/issues/23306
-    device->disable_and_clear_program_cache();
-
     // Set up program
     Program program = Program();
 
