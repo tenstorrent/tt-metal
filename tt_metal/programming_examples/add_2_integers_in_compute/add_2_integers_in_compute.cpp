@@ -8,6 +8,11 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/distributed.hpp>
+<<<<<<< HEAD
+=======
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/kernel.hpp>
+>>>>>>> 60841437aa (add in compute fix)
 
 using namespace tt;
 using namespace tt::tt_metal;
