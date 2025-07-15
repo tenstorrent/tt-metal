@@ -232,55 +232,55 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 #endif
 }
 
-ALWI void fast_tilize_init_short(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+#ifdef ARCH_BLACKHOLE
+    // Blackhole fallback
+    tilize_init(icb, full_dim, ocb);
+    return;
+#endif
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
     PACK((llk_pack_fast_tilize_init(icb, ocb, full_dim == 1 ? 1 : 2)));
 }
 
-ALWI void fast_tilize_init_short_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
     MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
 
-    fast_tilize_init_short(icb, full_dim, ocb);
-}
-
-ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    UNPACK((llk_unpack_fast_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
-
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
-
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>(ocb)));
-    PACK((llk_pack_fast_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(ocb)));
-
-    fast_tilize_init_short(icb, full_dim, ocb);
+    fast_tilize_init(icb, full_dim, ocb);
 }
 
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
+#ifdef ARCH_BLACKHOLE
+    // Blackhole fallback
+    tilize_uninit(icb, ocb);
+    return;
+#endif
     UNPACK((llk_unpack_fast_tilize_uninit<DST_ACCUM_MODE>()));
     MATH((llk_math_fast_tilize_uninit<DST_ACCUM_MODE>(icb)));
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
 }
 
 ALWI void fast_tilize_block(
-    uint32_t icb,
-    uint32_t block_dim,
-    uint32_t full_dim,
-    uint32_t ocb,
-    uint32_t input_tile_index = 0,
-    uint32_t output_tile_index = 0) {
+    uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+#ifdef ARCH_BLACKHOLE
+    // Blackhole fallback
+    tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
+    return;
+#endif
+    uint32_t full_dim = block;
+
     // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
     // i.e. input_tile_index % full_dim == 0
     input_tile_index = input_tile_index % full_dim + (input_tile_index / full_dim) * full_dim * TILE_R_DIM;
 
     uint32_t packed_tiles = 0;
-    uint32_t remaining_tiles = block_dim;
+    uint32_t remaining_tiles = block;
     uint32_t dest_size = DST_ACCUM_MODE ? 4 : 8;
     uint32_t unit_dim = full_dim == 1 ? 1 : 2;
     uint32_t num_units = dest_size / unit_dim;
 
-    while (packed_tiles < block_dim) {
+    while (packed_tiles < block) {
         uint32_t read_tile_index = input_tile_index + packed_tiles;
         uint32_t write_tile_index = output_tile_index + packed_tiles;
 

@@ -27,8 +27,6 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
 
 std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec, const GoldenConfig& config);
 
-std::vector<uint32_t> gold_standard_tilize_fp32(const std::vector<uint32_t>& src_vec, const GoldenConfig& config);
-
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized

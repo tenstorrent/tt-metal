@@ -43,7 +43,7 @@ public:
 };
 
 inline std::ostream& operator<<(std::ostream& os, const float32& val) {
-    os << val.to_float();
+    os << val.to_packed();
     return os;
 }
 }  // namespace tt::test_utils::df
