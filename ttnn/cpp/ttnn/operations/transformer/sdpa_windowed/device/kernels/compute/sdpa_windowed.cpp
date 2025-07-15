@@ -2,8 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// #include <cstdint>
+
+// #define REDUCE_OP (PoolType::MAX)
+// #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
+
 #include "compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
+#include "compute_common.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -60,8 +66,6 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    // riscv_wait(1000000000);
-
     mm_init(cb_q_in, cb_k_in, cb_out);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
@@ -116,8 +120,93 @@ void MAIN {
                      * Apply attention_mask: the same as use_provided_mask of SDPA:
                      * QK += MASK
                      */
+                    // uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
+                    // volatile tt_l1_ptr uint8_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(mask_write_ptr);
+                    // constexpr uint32_t tile_bytes = 576;  // bfp4_b tile
+                    // for (uint32_t i = 0; i < tile_bytes; ++i) {
+                    //     DPRINT << HEX() << ptr[i] << " ";
+                    // }
+                    // DPRINT << ENDL();
                     reconfig_data_format(cb_qk_im, cb_mask_in);
-                    add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                    // Manually inlining: add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                    add_tiles_init(cb_qk_im, cb_mask_in);
+                    cb_wait_front(cb_qk_im, qk_chunk_tiles);
+                    cb_wait_front(cb_mask_in, qk_chunk_tiles);
+                    for (uint32_t i = 0; i < qk_chunk_tiles; i++) {
+                        DPRINT_UNPACK({
+                            // [INFO] print out the mask tiles in its data format
+                            for (uint8_t iii = 0; iii < 32; ++iii) {
+                                DPRINT << TileSlice(
+                                              cb_mask_in,
+                                              i,
+                                              SliceRange{
+                                                  .h0 = iii,
+                                                  .h1 = (uint8_t)(iii + 1),
+                                                  .hs = 1,
+                                                  .w0 = 0,
+                                                  .w1 = 32,
+                                                  .ws = 1},
+                                              true,
+                                              true)
+                                       << ENDL();
+                            }
+                            // // [INFO] print out the raw bytes`
+                            // uint32_t mask_read_ptr = CB_RD_PTR(cb_mask_in);
+                            // volatile tt_l1_ptr uint32_t* ptr =
+                            //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_read_ptr);
+                            // constexpr uint32_t tile_num_words = 576 / 4;
+                            // for (uint32_t j = 0; j < tile_num_words; ++j) {
+                            //     DPRINT << HEX() << ptr[j] << " ";
+                            // }
+                            // DPRINT << ENDL();
+                        });
+                        // DPRINT_UNPACK({
+                        //     // [INFO] print out the mask tiles in its data format
+                        //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                        //         DPRINT << TileSlice(
+                        //                       cb_qk_im,
+                        //                       i,
+                        //                       SliceRange{
+                        //                           .h0 = iii,
+                        //                           .h1 = (uint8_t)(iii + 1),
+                        //                           .hs = 1,
+                        //                           .w0 = 0,
+                        //                           .w1 = 32,
+                        //                           .ws = 1},
+                        //                       true,
+                        //                       true)
+                        //                << ENDL();
+                        //     }
+                        // });
+
+                        acquire_dst();
+                        add_tiles(cb_qk_im, cb_mask_in, i, i, 0);
+                        pack_tile(0, cb_qk_im);
+                        release_dst();
+
+                        // DPRINT_PACK({
+                        //     // [INFO] print out the mask tiles in its data format
+                        //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                        //         DPRINT << TileSlice(
+                        //                       cb_qk_im,
+                        //                       i,
+                        //                       SliceRange{
+                        //                           .h0 = iii,
+                        //                           .h1 = (uint8_t)(iii + 1),
+                        //                           .hs = 1,
+                        //                           .w0 = 0,
+                        //                           .w1 = 32,
+                        //                           .ws = 1},
+                        //                       true,
+                        //                       true)
+                        //                << ENDL();
+                        //     }
+                        // });
+                    }
+                    cb_pop_front(cb_mask_in, qk_chunk_tiles);
+                    cb_pop_front(cb_qk_im, qk_chunk_tiles);
+                    cb_reserve_back(cb_qk_im, qk_chunk_tiles);
+                    cb_push_back(cb_qk_im, qk_chunk_tiles);
 
                     /**
                      * reduce_c can perform both reduce_max and eltwise max with previous result.
@@ -183,7 +272,7 @@ void MAIN {
                          * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                          * reduction, containing the sum of tiles in dim=-1 of QK.
                          */
-                        mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        mul_block_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                         /* cb_cur_sum += cb_prev_sum */
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
@@ -218,5 +307,6 @@ void MAIN {
             }
         }
     }
+    // DPRINT << "  [END sdpa_windowed] " << ENDL();
 }
 }  // namespace NAMESPACE

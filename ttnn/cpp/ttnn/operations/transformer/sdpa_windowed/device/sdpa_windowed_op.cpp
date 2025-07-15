@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_windowed_op.hpp"
-#include <enchantum/enchantum.hpp>
+#include <sys/types.h>
 
 #include "sdpa_windowed_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/constants.hpp>
-#include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;
 
@@ -25,12 +24,19 @@ void WindowedScaledDotProductAttention::validate(const std::vector<Tensor>& inpu
     TT_FATAL(cu_window_seqlens_shape.rank() == 1, "cu_window_seqlens must be a 1D tensor");
     TT_FATAL(cu_window_seqlens_shape[0] >= 2, "cu_window_seqlens must have at least 2 elements");
     TT_FATAL(
-        cu_window_seqlens_shape[0] <= cu_window_seqlens_nelements,
-        "cu_window_seqlens must have less than {} elements",
-        cu_window_seqlens_nelements);
+        cu_window_seqlens_shape[0] <= cu_window_seqlens_npages * cu_window_seqlens_page_size,
+        "cu_window_seqlens must have less than 1024 elements");
+    // First element must be 0
     TT_FATAL(
         cu_window_seqlens.dtype() == DataType::UINT32 || cu_window_seqlens.dtype() == DataType::INT32,
         "cu_window_seqlens must be uint32 or int32");
+    if (cu_window_seqlens.dtype() == DataType::UINT32) {
+        const auto cu_window_seqlens_host = cu_window_seqlens.cpu().to_vector<uint32_t>();
+        TT_FATAL(cu_window_seqlens_host.at(0) == 0, "First element of cu_window_seqlens must be 0");
+    } else {
+        const auto cu_window_seqlens_host = cu_window_seqlens.cpu().to_vector<int32_t>();
+        TT_FATAL(cu_window_seqlens_host.at(0) == 0, "First element of cu_window_seqlens must be 0");
+    }
 
     // Check storage and dtype
     for (size_t i = 0; i < 4; ++i) {
@@ -186,7 +192,7 @@ operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_perfo
                     ? output_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-        log_warning(tt::LogOp, "Windowed SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
+        log_warning(tt::LogOp, "Windowed SDPA perf model does not support tt::arch '{}'", magic_enum::enum_name(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);
     }
 

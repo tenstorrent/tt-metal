@@ -5,8 +5,8 @@
 #include "dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
-#include "accessor/tensor_accessor.h"
+#include "dataflow_common.hpp"
+#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -34,15 +34,14 @@ void kernel_main() {
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
-    // Set up tensor accessor args after the fixed parameters (0-9)
-    constexpr uint32_t base_cta_idx = 10;
-    constexpr auto out_args = TensorAccessorArgs<base_cta_idx>();
+    constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr DataFormat data_format = get_dataformat(cb_out);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
+    const InterleavedAddrGenFast<is_dram> out_writer = {
+        .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = data_format};
 
     const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
 
@@ -76,8 +75,7 @@ void kernel_main() {
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
                 for (uint32_t row = 0; row < out_row_tile_count; ++row) {
                     for (uint32_t col = 0; col < DHt; ++col) {
-                        uint64_t dst_noc_addr = out_writer.get_noc_addr(out_tile_id);
-                        noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
+                        noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
                         ++out_tile_id;
                         l1_read_addr += tile_bytes;
 
@@ -92,4 +90,5 @@ void kernel_main() {
             }
         }
     }
+    // DPRINT << "  [END writer_windowed] " << ENDL();
 }

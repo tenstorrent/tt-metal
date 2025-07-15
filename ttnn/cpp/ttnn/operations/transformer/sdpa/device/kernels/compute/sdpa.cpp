@@ -10,6 +10,9 @@
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
 
+#include "debug/dprint.h"
+#include "debug/dprint_tile.h"
+
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -161,7 +164,85 @@ void MAIN {
                     } else if constexpr (use_provided_mask) {
                         /* QK += MASK */
                         reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                        // Manually inlining: add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                        add_tiles_init(cb_qk_im, cb_mask_in);
+                        cb_wait_front(cb_qk_im, qk_chunk_tiles);
+                        cb_wait_front(cb_mask_in, qk_chunk_tiles);
+                        for (uint32_t i = 0; i < qk_chunk_tiles; i++) {
+                            DPRINT_UNPACK({
+                                // [INFO] print out the mask tiles in its data format
+                                for (uint8_t iii = 0; iii < 32; ++iii) {
+                                    DPRINT << TileSlice(
+                                                  cb_mask_in,
+                                                  i,
+                                                  SliceRange{
+                                                      .h0 = iii,
+                                                      .h1 = (uint8_t)(iii + 1),
+                                                      .hs = 1,
+                                                      .w0 = 0,
+                                                      .w1 = 32,
+                                                      .ws = 1},
+                                                  true,
+                                                  true)
+                                           << ENDL();
+                                }
+                                // // [INFO] print out the raw bytes
+                                // uint32_t mask_read_ptr = CB_RD_PTR(cb_mask_in);
+                                // volatile tt_l1_ptr uint32_t* ptr =
+                                //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_read_ptr);
+                                // constexpr uint32_t tile_num_words = 576 / 4;
+                                // for (uint32_t j = 0; j < tile_num_words; ++j) {
+                                //     DPRINT << HEX() << ptr[j] << " ";
+                                // }
+                                // DPRINT << ENDL();
+                            });
+                            // DPRINT_UNPACK({
+                            //     // [INFO] print out the mask tiles in its data format
+                            //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                            //         DPRINT << TileSlice(
+                            //                       cb_qk_im,
+                            //                       i,
+                            //                       SliceRange{
+                            //                           .h0 = iii,
+                            //                           .h1 = (uint8_t)(iii + 1),
+                            //                           .hs = 1,
+                            //                           .w0 = 0,
+                            //                           .w1 = 32,
+                            //                           .ws = 1},
+                            //                       true,
+                            //                       true)
+                            //                << ENDL();
+                            //     }
+                            // });
+
+                            acquire_dst();
+                            add_tiles(cb_qk_im, cb_mask_in, i, i, 0);
+                            pack_tile(0, cb_qk_im);
+                            release_dst();
+
+                            // DPRINT_PACK({
+                            //     // [INFO] print out the mask tiles in its data format
+                            //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                            //         DPRINT << TileSlice(
+                            //                       cb_qk_im,
+                            //                       i,
+                            //                       SliceRange{
+                            //                           .h0 = iii,
+                            //                           .h1 = (uint8_t)(iii + 1),
+                            //                           .hs = 1,
+                            //                           .w0 = 0,
+                            //                           .w1 = 32,
+                            //                           .ws = 1},
+                            //                       true,
+                            //                       true)
+                            //                << ENDL();
+                            //     }
+                            // });
+                        }
+                        cb_pop_front(cb_mask_in, qk_chunk_tiles);
+                        cb_pop_front(cb_qk_im, qk_chunk_tiles);
+                        cb_reserve_back(cb_qk_im, qk_chunk_tiles);
+                        cb_push_back(cb_qk_im, qk_chunk_tiles);
                     } else if constexpr (use_padded_mask) {
                         // only uses mask on the last K chunk if it exists at all
                         if (k_chunk == k_num_chunks - 1) {

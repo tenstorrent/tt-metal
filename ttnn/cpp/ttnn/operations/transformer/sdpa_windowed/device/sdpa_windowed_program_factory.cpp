@@ -13,7 +13,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
@@ -27,8 +26,10 @@ namespace ttnn::operations::transformer::detail {
 // read: Because the cu_window_seqlens tensor is small, we naively load the whole tensor into a circular buffer on each
 // core and then use the window indexes to compute tiles of attn_masks.
 // compute and write: mostly the same as the multi-core implementation of SDPA.
-// [INFO] a natural thought for potentially faster implementation is to only compute the SDPA within each windown as
-// defined by cu_window_seqlens; this should be driven by performance analysis results of whole ML model
+// todo)) we can also try to copy the cu_window_seqlens tensor into L1 from the host --> is this faster? Ask @Niguel
+// about tests/tt_metal/tt_metal/test_kernels/dataflow/flatten.cpp todo)) a natural thought for potentially faster
+// implementation is to only compute the SDPA within each windown as defined by cu_window_seqlens; this should be driven
+// by performance analysis results of whole ML model
 operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
@@ -97,7 +98,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
 
     Program program = CreateProgram();
 
-    auto* device = input_tensor_q.device();
+    IDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -266,7 +267,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     union {
         float f;
         uint32_t u;
-    } scale_union{};
+    } scale_union;
     scale_union.f = scale.value_or(1.0f);
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -280,12 +281,9 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
+        cu_window_seqlens_npages,
         num_cores,
     };
-    TensorAccessorArgs(*q_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*k_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*v_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*cu_window_seqlens_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -299,7 +297,6 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         packed_identity_scalar,
         num_cores,
     };
-    TensorAccessorArgs(*out0_buffer).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         Skt,
@@ -322,7 +319,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         scale_union.u,
     };
 
-    std::map<std::string, std::string> defines;
+    std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
@@ -361,7 +358,6 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat cu_window_seqlens_df = tt::tt_metal::datatype_to_dataformat_converter(cu_window_seqlens.dtype());
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -375,132 +371,100 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
     uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
-    uint32_t cu_window_seqlens_tile_size = tt::tt_metal::detail::TileSize(cu_window_seqlens_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
     log_debug(tt::LogOp, "v_data_format: {}", v_df);
-    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
     log_debug(tt::LogOp, "out_data_format: {}", out_df);
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
     // Q input
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-            .set_page_size(tt::CBIndex::c_0, q_tile_size));
+    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
+                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
+    CreateCircularBuffer(program, core_grid, c_in0_config);
 
     // K input
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-            .set_page_size(tt::CBIndex::c_1, k_tile_size));
+    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
+                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
+    CreateCircularBuffer(program, core_grid, c_in1_config);
 
     // V input
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-            .set_page_size(tt::CBIndex::c_2, v_tile_size));
+    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
+                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
+    CreateCircularBuffer(program, core_grid, c_in2_config);
 
     // cu_window_seqlens input
     // [INFO] cu_window_seqlens is a small 1D tensor, so we can set the page size to the size of all the tiles
-    uint32_t cu_window_seqlens_page_size = cu_window_seqlens_tile_size;
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(cu_window_seqlens_page_size, {{tt::CBIndex::c_3, cu_window_seqlens_df}})
-            .set_page_size(tt::CBIndex::c_3, cu_window_seqlens_page_size));
+    auto c_in3_config =
+        CircularBufferConfig(
+            cu_window_seqlens_npages * cu_window_seqlens_page_size, {{tt::CBIndex::c_3, cu_window_seqlens_df}})
+            .set_page_size(tt::CBIndex::c_3, cu_window_seqlens_page_size);
+    CreateCircularBuffer(program, core_grid, c_in3_config);
 
     // cb_mask_in
+    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
     uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
-    uint32_t mask_ntiles = qk_ntiles_per_chunk * 2;  // double buffer
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(mask_ntiles * mask_tile_size, {{tt::CBIndex::c_4, mask_df}})
-            .set_page_size(tt::CBIndex::c_4, mask_tile_size));
+    uint32_t mask_ntiles = qk_ntiles_per_chunk * k_num_chunks;
+    auto c_in4_config = CircularBufferConfig(mask_ntiles * mask_tile_size, {{tt::CBIndex::c_4, mask_df}})
+                            .set_page_size(tt::CBIndex::c_4, mask_tile_size);
+    CreateCircularBuffer(program, core_grid, c_in4_config);
 
     // identity scalar input
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-            .set_page_size(tt::CBIndex::c_5, scalar_tile_size));
+    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
+    CreateCircularBuffer(program, core_grid, c_in5_config);
 
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
-            .set_page_size(tt::CBIndex::c_7, scalar_tile_size));
+    auto c_in7_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_7, scalar_tile_size);
+    CreateCircularBuffer(program, core_grid, c_in7_config);
 
     // Intermediate buffers
     // cb_qk_im
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(qk_ntiles_per_chunk * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-            .set_page_size(tt::CBIndex::c_24, im_tile_size));
+    auto c_intermed0_config = CircularBufferConfig(qk_ntiles_per_chunk * im_tile_size, {{tt::CBIndex::c_24, im_df}})
+                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
+    CreateCircularBuffer(program, core_grid, c_intermed0_config);
 
     // cb_out_im
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-            .set_page_size(tt::CBIndex::c_25, im_tile_size));
+    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
+                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
+    CreateCircularBuffer(program, core_grid, c_intermed1_config);
 
     // cb_out_accumulate_im
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-            .set_page_size(tt::CBIndex::c_26, im_tile_size));
+    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
+                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
+    CreateCircularBuffer(program, core_grid, c_intermed2_config);
 
     // cb_cur_max
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-            .set_page_size(tt::CBIndex::c_27, stats_tile_size));
+    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
+    CreateCircularBuffer(program, core_grid, c_intermed3_config);
 
     // cb_prev_max
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-            .set_page_size(tt::CBIndex::c_28, stats_tile_size));
+    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
+    CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
     // cb_cur_sum
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-            .set_page_size(tt::CBIndex::c_29, stats_tile_size));
+    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
+    CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
     // cb_prev_sum
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-            .set_page_size(tt::CBIndex::c_30, stats_tile_size));
+    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
+    CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
     // cb_exp_max_diff
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-            .set_page_size(tt::CBIndex::c_31, stats_tile_size));
+    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
+    CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
     // Output
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-            .set_page_size(tt::CBIndex::c_16, out_tile_size));
+    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
+                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
+    CreateCircularBuffer(program, core_grid, c_out0_config);
 
     // Get buffer addresses
     uint32_t q_addr = q_buffer->address();
