@@ -297,12 +297,12 @@ def test_reduce_scatter_async(
     )
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, num_links, layout, rs_input_dtype",
+    "num_devices, layout, rs_input_dtype",
     [
-        (8, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -368,14 +368,15 @@ def test_reduce_scatter_async(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async_sharded_to_sharded(
     t3k_mesh_device,
-    num_devices,
     num_links,
+    num_devices,
     rs_input_dtype,
     layout,
     rs_input_shape,
@@ -439,12 +440,12 @@ def test_reduce_scatter_async_sharded_to_sharded(
     )
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, num_links, layout, rs_input_dtype",
+    "num_devices, layout, rs_input_dtype",
     [
-        (8, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -491,14 +492,15 @@ def test_reduce_scatter_async_sharded_to_sharded(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async_interleaved_to_sharded(
     t3k_mesh_device,
-    num_devices,
     num_links,
+    num_devices,
     rs_input_dtype,
     layout,
     rs_input_shape,
@@ -552,12 +554,12 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     )
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, num_links, layout, rs_input_dtype",
+    "num_devices, layout, rs_input_dtype",
     [
-        (8, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -598,14 +600,15 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async_sharded_to_interleaved(
     t3k_mesh_device,
-    num_devices,
     num_links,
+    num_devices,
     rs_input_dtype,
     layout,
     rs_input_shape,
