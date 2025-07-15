@@ -211,20 +211,20 @@ void train_test() {
 }
 
 bool should_run_tests() {
-    const char *env_var = std::getenv("ENABLE_CI_ONLY_TT_TRAIN_TESTS");
-    return env_var ? true : ENABLE_CI_ONLY_TT_TRAIN_TESTS;
+    const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
+    return env_var ? true : ENABLE_NIGHTLY_TT_TRAIN_TESTS;
 }
 
 /*
-This tests are supposed to run only in CI.
-Change the value of ENABLE_CI_ONLY_TT_TRAIN_TESTS to true to run them.
+These tests are meant for nightly CI runs.
+Change the value of ENABLE_NIGHTLY_TT_TRAIN_TESTS to true to run them.
 If one of these tests fails, it means one (or more) of the following:
 - program cache size changed (new ops added/removed silently)
 - time per step changed (performance regression)
 - loss values changed (regression in ops accuracy)
 */
 
-TEST_F(NanoLlamaTest, Default) {
+TEST_F(NanoLlamaTest, NIGHTLY_Default) {
     if (should_run_tests()) {
         train_test();
     }

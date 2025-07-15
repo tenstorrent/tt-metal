@@ -42,6 +42,22 @@ on:
 jobs:
   ttnn-conv-tests:
     if: ${{ inputs.run_conv_tests }}
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: ttnn nightly conv tests
+            cmd: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
+            owner: U052J2QDDKQ # Pavle Josipovic
+          - name: ttnn nightly matmul tests
+            cmd: pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
+            owner: U06Q7ESTFEV # Borys Bradel
+          - name: ttnn nightly pool tests
+            cmd: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
+            owner: U052J2QDDKQ # Pavle Josipovic
+          - name: tt-train nightly tests
+            cmd: ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
