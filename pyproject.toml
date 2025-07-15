@@ -50,7 +50,6 @@ line-length = 120
 [tool.setuptools_scm]
 
 [tool.cibuildwheel]
-build = "cp*-manylinux_x86_64*"
 skip = "*-musllinux_*"
 build-verbosity = 2
 before-build = "rm -rf build/ build_Release/ .cpmcache/ || true"
