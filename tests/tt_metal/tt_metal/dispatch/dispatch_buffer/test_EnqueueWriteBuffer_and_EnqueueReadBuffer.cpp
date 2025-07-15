@@ -300,7 +300,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
 
 template <bool blocking>
 bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
-    IDevice* device, CommandQueue& cq, const BufferStressTestConfig& config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshCommandQueue& cq, const BufferStressTestConfig& config) {
     srand(config.seed);
     bool pass = true;
     uint32_t num_pages_left = config.num_pages_total;
@@ -324,9 +324,18 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             buftype = BufferType::L1;
         }
 
-        std::shared_ptr<Buffer> buf;
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = config.page_size,
+            .buffer_type = buftype,
+            .bottom_up = false
+        };
+        const distributed::ReplicatedBufferConfig buffer_config {
+            .size = buf_size
+        };
+
+        std::shared_ptr<distributed::MeshBuffer> buf;
         try {
-            buf = Buffer::create(device, buf_size, config.page_size, buftype);
+            buf = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
         } catch (...) {
             Finish(cq);
             size_t i = 0;
@@ -336,18 +345,19 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             srcs.clear();
             dsts.clear();
             buffers.clear();
-            buf = Buffer::create(device, buf_size, config.page_size, buftype);
+            buf = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
         }
-        EnqueueWriteBuffer(cq, *buf, src, false);
+        auto coord = distributed::MeshCoordinate(0, 0);
+        distributed::WriteShard(cq, buf, src, coord);
         vector<uint32_t> dst;
         if constexpr (blocking) {
-            EnqueueReadBuffer(cq, *buf, dst, true);
+            distributed::ReadShard(cq, dst, buf, coord);
             EXPECT_EQ(src, dst);
         } else {
             srcs.push_back(std::move(src));
             dsts.push_back(dst);
             buffers.push_back(std::move(buf));  // Ensures that buffer not destroyed when moved out of scope
-            EnqueueReadBuffer(cq, *buffers[buffers.size() - 1], dsts[dsts.size() - 1], false);
+            distributed::ReadShard(cq, dsts[dsts.size() - 1], buffers[buffers.size() - 1], coord);
         }
     }
 
