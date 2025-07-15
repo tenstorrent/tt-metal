@@ -974,8 +974,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         static_cast<uint32_t>(attributes.stable),
         log2Wt};
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/"
-        "sort_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
