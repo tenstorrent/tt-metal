@@ -28,7 +28,6 @@ std::random_device rd;  // Non-deterministic seed source
 std::mt19937 global_rng(rd());
 
 struct WorkerMemMap {
-    uint32_t packet_header_address;
     uint32_t source_l1_buffer_address;
     uint32_t packet_payload_size_bytes;
     uint32_t test_results_address;
@@ -38,20 +37,17 @@ struct WorkerMemMap {
 
 // Utility function reused across tests to get address params
 WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device) {
-    constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
 
     uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    uint32_t packet_header_address = base_addr;
-    uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
+    uint32_t source_l1_buffer_address = base_addr;
     uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
     uint32_t target_address = source_l1_buffer_address;
 
     uint32_t packet_payload_size_bytes = 2048;
 
     return {
-        packet_header_address,
         source_l1_buffer_address,
         packet_payload_size_bytes,
         test_results_address,
@@ -154,7 +150,6 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
             .defines = {}});
 
     std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
@@ -359,7 +354,6 @@ void run_mcast_sender_step(
             .defines = {}});
 
     std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
