@@ -578,8 +578,18 @@ const std::optional<BufferDistributionSpec>& Buffer::buffer_distribution_spec() 
     return this->buffer_distribution_spec_;
 }
 
-bool ShardSpec::operator==(const ShardSpec&) const = default;
-bool ShardSpec::operator!=(const ShardSpec&) const = default;
+bool ShardSpec::operator==(const ShardSpec& other) const {
+    if (this->grid != other.grid || this->orientation != other.orientation) {
+        return false;
+    }
+    auto this_shape = this->mode == ShardMode::LOGICAL ? this->physical_shard_shape : this->shape;
+    auto other_shape = other.mode == ShardMode::LOGICAL ? other.physical_shard_shape : other.shape;
+    if (this_shape != other_shape) {
+        return false;
+    }
+    return true;
+}
+bool ShardSpec::operator!=(const ShardSpec& other) const { return !(*this == other); }
 
 std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
     auto height_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
