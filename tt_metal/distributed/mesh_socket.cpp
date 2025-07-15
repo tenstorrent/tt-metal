@@ -70,18 +70,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         config_buffer_ = create_socket_config_buffer(device, config, socket_endpoint_type_);
         data_buffer_ = create_socket_data_buffer(device, config);
     }
-    fmt::println(
-        "Synchronizing socket on rank {} with sender rank {} and receiver rank {}.",
-        *context->rank(),
-        *config.sender_rank,
-        *config.receiver_rank);
     this->connect_with_peer(context);
-
-    fmt::println(
-        "Socket on rank {} with sender rank {} and receiver rank {} is ready.",
-        *context->rank(),
-        *config.sender_rank,
-        *config.receiver_rank);
 }
 
 void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext> context) {
@@ -92,11 +81,6 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
     //  - Receiver Endpoint receives the peer's descriptor first, then sends its own descriptor.
     // Asymmetry ensures that the blocking send/recv do not deadlock.
     std::string socket_type_str = socket_endpoint_type_ == SocketEndpoint::SENDER ? "Sender" : "Receiver";
-    fmt::println(
-        "INSIDE CONNECT WITH PEER:::: {} SOCKET SENDER RANK {} RECEIVER RANK {}",
-        socket_type_str,
-        local_endpoint_desc.config.sender_rank,
-        local_endpoint_desc.config.receiver_rank);
     if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
         forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
         remote_endpoint_desc =
@@ -108,11 +92,8 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
         forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
         fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
     }
-    fmt::println("BEFORE WRITE SOCKET CONFIGS");
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
-    fmt::println("BEFORE POINT TO POINT BARRIER");
     point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
-    fmt::println("AFTER POINT TO POINT BARRIER");
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
