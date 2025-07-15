@@ -29,7 +29,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
         sfpi::vInt man = exman8(in);
         // shift the mantissa by (23-exponent) to the right
         sfpi::vInt shift = exp - 23;  // 23 is number of mantissa in float32
-        man = shft(sfpi::reinterpret<sfpi::vUInt>(man), shift);
+        man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));
 
         result = man;
     }
