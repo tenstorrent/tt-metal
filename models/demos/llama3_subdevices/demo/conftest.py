@@ -24,3 +24,10 @@ def pytest_addoption(parser):
     parser.addoption(
         "--disable_pf_perf_mode", action="store_true", default=False, help="Enable performance mode for prefetcher"
     )
+    parser.addoption(
+        "--print_outputs",
+        action="store",
+        default=False,
+        type=bool,
+        help="Whether to print token output every decode iteration",
+    )

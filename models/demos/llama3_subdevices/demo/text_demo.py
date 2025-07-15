@@ -165,7 +165,7 @@ def create_tt_model(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, num_layers, run_on_6U",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, num_layers, run_on_6U, print_outputs",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -182,6 +182,7 @@ def create_tt_model(
             False,  # pcc_check
             80,  # num layers
             True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -198,6 +199,7 @@ def create_tt_model(
             False,  # pcc_check
             80,  # num layers
             True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # Repeat-5 Batch-1 run (Throughput) - 1 user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -214,6 +216,7 @@ def create_tt_model(
             False,  # pcc_check
             80,  # num layers
             True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # Long-context run - multiple users, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -230,6 +233,7 @@ def create_tt_model(
             False,  # pcc_check
             80,  # num layers
             True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -246,6 +250,7 @@ def create_tt_model(
             False,  # pcc_check
             80,  # num layers
             False,  # run on 6U
+            False,  # print_outputs
         ),
         (  # CI Run for PCC check for 1 Layer: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
@@ -262,6 +267,7 @@ def create_tt_model(
             True,  # pcc_check
             1,  # num layers
             True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
@@ -278,6 +284,7 @@ def create_tt_model(
             True,  # pcc_check
             80,  # num layers
             True,  # run on 6U
+            False,  # print_outputs
         ),
     ],
     ids=[
@@ -342,6 +349,7 @@ def test_demo_text(
     request,
     galaxy_type,
     run_on_6U,
+    print_outputs,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -349,6 +357,27 @@ def test_demo_text(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Llama TG only supports batch-32")
+
+    # Override parameters from command line if they are provided
+    input_prompts = request.config.getoption("--input_prompts") or input_prompts
+    if request.config.getoption("--instruct") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        instruct = request.config.getoption("--instruct")
+    repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
+    max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
+    batch_size = request.config.getoption("--batch_size") or batch_size
+    max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
+    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    page_params = request.config.getoption("--page_params") or page_params
+    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    if request.config.getoption("--stop_at_eos") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        stop_at_eos = request.config.getoption("--stop_at_eos")
+    print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True  # repeat_batches > 1
@@ -377,25 +406,6 @@ def test_demo_text(
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
-    # Override parameters from command line if they are provided
-    # input_prompts = request.config.getoption("--input_prompts") or input_prompts
-    # if request.config.getoption("--instruct") in [
-    #     0,
-    #     1,
-    # ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
-    #     instruct = request.config.getoption("--instruct")
-    # repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
-    # max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
-    # batch_size = request.config.getoption("--batch_size") or batch_size
-    # max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
-    # paged_attention = request.config.getoption("--paged_attention") or paged_attention
-    # page_params = request.config.getoption("--page_params") or page_params
-    # sampling_params = request.config.getoption("--sampling_params") or sampling_params
-    # if request.config.getoption("--stop_at_eos") in [
-    #     0,
-    #     1,
-    # ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
-    #     stop_at_eos = request.config.getoption("--stop_at_eos")
     stop_at_eos = False
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -645,7 +655,7 @@ def test_demo_text(
         except Exception as e:
             logger.error(f"Error switching to decode mode: {str(e)}")
             model.tt_ccl.close()
-        logger.info(f"Starting decode loop...")
+        logger.info(f"Starting decode loop from positions: {decoding_pos}")
 
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
@@ -683,10 +693,7 @@ def test_demo_text(
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            # else:
-            #     profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-            #     decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-
+                logger.info(f"Iteration {iteration} (compile): {1000*decode_iteration_time:.4f}ms")
             # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
             teacher_forcing = (
                 pcc_check and max_encoded_prompt_len + iteration + 1 < len(ref_tokens) and num_layers == 80
@@ -694,8 +701,7 @@ def test_demo_text(
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0))
                 tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
@@ -718,12 +724,6 @@ def test_demo_text(
                     logger.info(
                         f"Top-5 Correctness:{torch.any(tt_top5_tokens == ref_top5_tokens).item(),} Accuracy: {top_5_acc}"
                     )
-                # Always print perf after every iteration
-                tokens_per_second_per_user = 1 / decode_iteration_time
-
-                logger.info(
-                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-                )
 
                 # Save output token to print out later
                 if not pcc_check:
@@ -743,13 +743,23 @@ def test_demo_text(
                                     users_decoding = False
 
                 # Print out generated outputs for each user at the end of every iteration
-                if not is_ci_env and not pcc_check:
+                if print_outputs and not is_ci_env and not pcc_check:
                     for user in range(batch_size):
                         text = "".join(tokenizer.decode(all_outputs[user]))
                         if len(text) > 100:
                             text = "..." + text[-97:]
                         text = text.replace("\n", " ")
                         logger.info("[User {}] {}".format(user, text))
+
+                # The e2e decode inference accounts for device execution + host post-processing time
+                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                # Always print perf after every iteration
+                tokens_per_second_per_user = 1 / decode_iteration_time
+
+                logger.info(
+                    f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
+                )
 
             current_pos += 1
             iteration += 1
