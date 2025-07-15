@@ -85,8 +85,8 @@ on:
         description: "Name of the published build artifact"
         value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
       wheel-artifact-name:
-        description: "Name of the published wheel artifact (default Python 3.12)"
-        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name_312 }}
+        description: "Name of the published wheel artifact (default Python 3.10)"
+        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name_310 }}
       wheel-artifact-name-310:
         description: "Name of the published wheel artifact (Python 3.10)"
         value: ${{ jobs.build-wheel.outputs.wheel_artifact_name_310 }}
