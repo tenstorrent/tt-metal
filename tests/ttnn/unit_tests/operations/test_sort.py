@@ -183,7 +183,7 @@ def test_sort_program_cache(shape, dim, descending, device):
     test_iterations = 3
     for _ in range(test_iterations):
         # Run the sort operation multiple times to fill the program cache
-        ttnn_sort_values, ttnn_sort_indices = ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending)
+        ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
         ttnn_sort_values_torch = ttnn.to_torch(ttnn_sort_values)
 
         assert torch_sort_values.shape == ttnn_sort_values.shape

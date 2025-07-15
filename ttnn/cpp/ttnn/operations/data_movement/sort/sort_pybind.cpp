@@ -8,7 +8,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 
-namespace ttnn::operations::data_movement::detail::detail {
+namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_sort_operation(py::module& module) {
@@ -87,4 +87,4 @@ void bind_sort_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::data_movement::detail::detail
+}  // namespace ttnn::operations::data_movement::detail
