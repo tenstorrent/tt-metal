@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 
 #define MEM_SYSENG_ETH_MSG_STATUS_MASK 0xFFFF0000
@@ -12,6 +14,7 @@
 #define MEM_SYSENG_ETH_MSG_RELEASE_CORE 0x0002
 #define MEM_SYSENG_ETH_MAILBOX_ADDR 0x7D000
 #define MEM_SYSENG_ETH_MAILBOX_NUM_ARGS 3
+#define MEM_SYSENG_ETH_STATUS 0x7CC00
 #define MEM_SYSENG_ETH_HEARTBEAT 0x7CC70
 #define MEM_SYSENG_ETH_RETRAIN_COUNT 0x7CE00
 #define MEM_SYSENG_ETH_API_TABLE 0x7CF00
@@ -41,6 +44,19 @@ struct all_eth_mailbox_t {
     eth_mailbox_t mailbox[4];  // 0-16 - 4 mailbox entries, 0 - Host, 1 - RSIC1, 2 - CMFW, 3 - Other
 };
 
+enum class port_status_t : uint32_t {
+    UNKNOWN,
+    UP,
+    DOWN,
+    UNUSED,
+};
+
+struct eth_status_t {
+    uint32_t postcode;
+    port_status_t port_status;
+    uint32_t spare[64];
+};
+
 struct eth_live_status_t {
     uint32_t retrain_count;  // 0
     uint32_t rx_link_up;     // 1 - MAC/PCS RX Link Up
@@ -67,3 +83,5 @@ struct eth_live_status_t {
 
     uint32_t spare2[64 - 40];  // 40-63
 };
+
+inline bool is_port_up() { return ((eth_status_t*)(MEM_SYSENG_ETH_STATUS))->port_status == port_status_t::UP; }
