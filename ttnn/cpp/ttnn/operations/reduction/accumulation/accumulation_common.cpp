@@ -80,6 +80,10 @@ Tensor postprocess_output_tensor(
     return processed_tensor;
 }
 
+void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_tensor) {
+    TT_FATAL(input_tensor.logical_shape() == output_tensor.logical_shape(), "");
+}
+
 Tensor accumulation_invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -90,16 +94,26 @@ Tensor accumulation_invoke(
     const std::optional<MemoryConfig>& memory_config,
     AccumulationOp op) {
     const auto& input_shape = input_tensor.logical_shape();
-    const int32_t input_rank = input_shape.rank();
-
+    const int32_t& input_rank = input_shape.rank();
     const auto& input_dtype = input_tensor.dtype();
 
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
         return input_tensor;
     }
 
+    TT_FATAL(
+        ((dim >= -static_cast<decltype(dim)>(input_shape.rank())) &&
+         (dim < static_cast<decltype(dim)>(input_shape.rank()))),
+        "The requested accumulation axis is {}, while the input thensor has rank {}.",
+        dim,
+        input_tensor.padded_shape().rank());
+
     // Normalize negative dim
     const int32_t cum_axis = (dim < 0) ? (dim + input_rank) : dim;
+
+    if (optional_out.has_value()) {
+        validate_output_tensor(input_tensor, *optional_out);
+    }
 
     Tensor wip_tensor = input_tensor;
     ttnn::SmallVector<int64_t> permutation;

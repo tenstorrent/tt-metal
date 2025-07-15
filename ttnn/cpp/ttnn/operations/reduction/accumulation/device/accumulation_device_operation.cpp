@@ -16,29 +16,22 @@ AccumulationDeviceOperation::program_factory_t AccumulationDeviceOperation::sele
 void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor{tensor_args.input_tensor};
+    const auto& input_shape{input_tensor.logical_shape()};
     auto& optional_out{tensor_args.opt_output};
     auto out_memory_config{optional_out.has_value() ? optional_out->memory_config() : attributes.output_memory_config};
     const auto& input_dtype{attributes.dtype};
     const auto& dim = attributes.dim;
 
     if (optional_out.has_value()) {
-        const auto computed_output_shape{compute_output_specs(attributes, tensor_args).logical_shape()};
-        const auto preallocated_output_shape = optional_out.value().logical_shape();
+        const auto& preallocated_output_shape = optional_out.value().logical_shape();
         TT_FATAL(
-            computed_output_shape == preallocated_output_shape,
+            input_shape == preallocated_output_shape,
             "The shapes of the input and the preallocated tensors are not equal.\n"
             "Input tensor's shape: {}\n"
             "Preallocated tensor's shape: {}",
-            computed_output_shape,
+            input_shape,
             preallocated_output_shape);
     }
-
-    TT_FATAL(
-        ((dim >= -static_cast<decltype(dim)>(input_tensor.padded_shape().rank())) &&
-         (dim < static_cast<decltype(dim)>(input_tensor.padded_shape().rank()))),
-        "The requested accumulation axis is {}, while the input thensor has rank {}.",
-        dim,
-        input_tensor.padded_shape().rank());
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
@@ -129,7 +122,7 @@ AccumulationDeviceOperation::invocation_result_t AccumulationDeviceOperation::in
     AccumulationOp op) {
     return {
         operation_attributes_t{
-            dim,
+            (dim < 0) ? (dim + input_tensor.logical_shape().rank()) : dim,
             dtype.has_value() ? dtype.value()
                               : (optional_out.has_value() ? optional_out->dtype() : input_tensor.dtype()),
             memory_config.has_value()

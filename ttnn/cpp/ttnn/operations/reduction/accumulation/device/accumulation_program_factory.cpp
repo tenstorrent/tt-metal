@@ -86,9 +86,8 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
 
     const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
-    const DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     std::map<std::string, std::string> defines_kernel_args = {};
-    if (is_integer_format(out_data_format)) {
+    if (is_integer_format(dst_cb_data_format)) {
         // Used to switch to add_tile_int32() instead of add_tiles()
         defines_kernel_args["CUMSUM_USE_INT32"] = "1";
     }

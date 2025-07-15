@@ -57,7 +57,6 @@ def test_cumprod_normal(dim, shape, dtypes, device):
 
             # assert metadata
             assert ttnn_input_tensor.shape == ttnn_result_tensor.shape
-            assert ttnn_input_tensor.dtype == ttnn_result_tensor.dtype
             assert torch_input_tensor.shape == ttnn_input_tensor.shape
             assert torch_result_tensor.shape == ttnn_input_tensor.shape
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
@@ -102,7 +101,7 @@ def test_cumprod_backward(dim, shape, dtypes, device):
         torch_output.backward(torch_output_grad)
 
         tt_input_grad_cpu = ttnn.to_torch(
-            ttnn.cumsum(tt_output_grad, dim, dtype=ttnn_dtype, reverse_order=True, input_grad=tt_input_grad)
+            ttnn.cumsum(tt_output_grad, dim, dtype=ttnn_dtype, reverse_order=True, out=tt_input_grad)
         )
 
         assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
@@ -150,13 +149,11 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             assert ttnn_input_tensor.shape == ttnn_result_tensor.shape
             assert ttnn_preallocated_tensor.shape == ttnn_result_tensor.shape
             assert ttnn_preallocated_tensor.dtype == ttnn_result_tensor.dtype
-            assert ttnn_input_tensor.dtype == ttnn_result_tensor.dtype
             assert torch_input_tensor.shape == ttnn_input_tensor.shape
             assert torch_result_tensor.shape == ttnn_input_tensor.shape
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
             # assert values with pcc
-            comp_allclose_and_pcc()
             assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
             assert_with_pcc(ttnn.to_torch(ttnn_preallocated_tensor), torch_preallocated_tensor, 0.98)
     else:
@@ -212,26 +209,6 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             torch.bfloat16,
             ttnn.bfloat16,
-            ttnn.float32,
-            ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.Layout.TILE,
-        ),  # input_dtype vs output_dtype
-        (
-            3,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            torch.bfloat16,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.L1_MEMORY_CONFIG,
-            ttnn.Layout.TILE,
-        ),  # unsupported memory config
-        (
-            3,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            torch.bfloat16,
-            ttnn.bfloat16,
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.ROW_MAJOR,
@@ -256,4 +233,4 @@ def test_cumprod_failing_cases(
     )
     ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
     with pytest.raises(RuntimeError):
-        ttnn.cumprod(ttnn_input_tensor, dim=dim, out=ttnn_preallocated_tensor)
+        ttnn.cumprod(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)
