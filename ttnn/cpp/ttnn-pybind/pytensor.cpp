@@ -1631,7 +1631,7 @@ void pytensor_module(py::module& m_tensor) {
             [](Tensor& self) {
                 using namespace tt::tt_metal::tensor_impl;
                 return dispatch(self.dtype(), [&]<typename T>() -> py::list {
-                    auto logical_shape = self.logical_shape();
+                    const auto& logical_shape = self.logical_shape();
                     std::vector<uint32_t> shape{logical_shape.cbegin(), logical_shape.cend()};
 
                     if constexpr (
