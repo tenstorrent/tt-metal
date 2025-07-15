@@ -12,7 +12,6 @@ target_link_libraries(
         TT::Metalium::Test::Device::Smoke
         TT::Metalium::Test::Dispatch::Smoke
         TT::Metalium::Test::STL::Smoke
-        TT::Metalium::Test::STL::Smoke
 )
 
 install(TARGETS tt-metalium-validation-smoke RUNTIME COMPONENT metalium-validation)
