@@ -22,6 +22,8 @@ void kernel_main() {
 
     // padding args
     const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
+    // sparsity args
+    const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -54,6 +56,9 @@ void kernel_main() {
     constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
     constexpr uint32_t batchA = get_compile_time_arg_val(20);
     constexpr uint32_t batchB = get_compile_time_arg_val(21);
+    // sparsity args
+    constexpr uint32_t sparsity_is_dram = get_compile_time_arg_val(22);
+    constexpr uint32_t sparsity_log2_of_pagesize = get_compile_time_arg_val(23);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
@@ -63,6 +68,11 @@ void kernel_main() {
     constexpr const uint32_t in0_tile_hw = get_tile_hw(cb_id_in0);
     const InterleavedAddrGenFast<in0_is_dram, in0_tile_hw> s0 = {
         .bank_base_address = in0_tensor_addr, .page_size = in0_single_tile_size_bytes, .data_format = in0_data_format};
+
+    constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
+    uint32_t l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
+    const InterleavedPow2AddrGenFast<sparsity_is_dram> s_sparsity = {
+        .bank_base_address = sparsity_addr, .log_base_2_of_page_size = sparsity_log2_of_pagesize};
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
@@ -85,6 +95,13 @@ void kernel_main() {
 
     for (uint32_t bA = 0; bA < batchA; ++bA) {
         for (uint32_t bB = 0; bB < batchB; ++bB) {
+            noc_async_read_page(bA * batchB + bB, s_sparsity, l1_write_addr_sparsity);
+            noc_async_read_barrier();
+
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_sparsity) == 0) {
+                continue;
+            }
+
             uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {

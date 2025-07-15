@@ -9,7 +9,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "mod_div_lib.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "debug/dprint.h"
 
 namespace NAMESPACE {
 
@@ -289,6 +288,5 @@ void MAIN {
             }
         }
     }
-    DPRINT << "Sparse BMM done" << ENDL();
 }
 }  // namespace NAMESPACE
