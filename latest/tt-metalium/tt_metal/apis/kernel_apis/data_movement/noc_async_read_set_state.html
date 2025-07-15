@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>noc_async_read &mdash; TT-Metalium  documentation</title>
+  <title>noc_async_read_set_state &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_read.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_read_set_state.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="noc_async_read_set_state" href="noc_async_read_set_state.html" />
-    <link rel="prev" title="Data Movement APIs" href="data_movement.html" /> 
+    <link rel="next" title="noc_async_read_with_state" href="noc_async_read_with_state.html" />
+    <link rel="prev" title="noc_async_read" href="noc_async_read.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -62,8 +62,8 @@
 <li class="toctree-l2"><a class="reference internal" href="../../host_apis.html">Host APIs</a></li>
 <li class="toctree-l2 current"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a><ul class="current">
 <li class="toctree-l3 current"><a class="reference internal" href="data_movement.html">Data Movement APIs</a><ul class="current">
-<li class="toctree-l4 current"><a class="current reference internal" href="#">noc_async_read</a></li>
-<li class="toctree-l4"><a class="reference internal" href="noc_async_read_set_state.html">noc_async_read_set_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read.html">noc_async_read</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">noc_async_read_set_state</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_with_state.html">noc_async_read_with_state</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_one_packet_set_state.html">noc_async_read_one_packet_set_state</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_one_packet_with_state.html">noc_async_read_one_packet_with_state</a></li>
@@ -118,9 +118,9 @@
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
           <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
           <li class="breadcrumb-item"><a href="data_movement.html">Data Movement APIs</a></li>
-      <li class="breadcrumb-item active">noc_async_read</li>
+      <li class="breadcrumb-item active">noc_async_read_set_state</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/noc_async_read.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/noc_async_read_set_state.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -128,15 +128,15 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="noc-async-read">
-<h1>noc_async_read<a class="headerlink" href="#noc-async-read" title="Permalink to this heading"></a>
+  <section id="noc-async-read-set-state">
+<h1>noc_async_read_set_state<a class="headerlink" href="#noc-async-read-set-state" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_8uint32_tE14noc_async_readv8uint64_t8uint32_t8uint32_t7uint8_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">max_page_size</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">NOC_MAX_BURST_SIZE</span></span><span class="w"> </span><span class="o"><span class="pre">+</span></span><span class="w"> </span><span class="m"><span class="pre">1</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1a8002c37fe55fa46ee7475ef652f97229"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_read</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_noc_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">dst_local_l1_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">size</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_8uint32_tE14noc_async_readv8uint64_t8uint32_t8uint32_t7uint8_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv424noc_async_read_set_state8uint64_t7uint8_t">
+<span class="target" id="dataflow__api_8h_1ad938ef5a04c62de0ad6a39662042d4c6"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_read_set_state</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_noc_addr</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv424noc_async_read_set_state8uint64_t7uint8_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Initiates an asynchronous read from a specified source node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using <em>get_noc_addr</em> function). The destination is in L1 memory on the Tensix core executing this function call. Also, see <em>noc_async_read_barrier</em>.</p>
+<p>Sets the stateful registers for an asynchronous read from a specified source node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using <em>get_noc_addr</em> function). This function is used to set up the state for <em>noc_async_read_with_state</em>, which will issue the actual read request. <em>noc_async_read</em> can be used instead if the state preservation is not needed. Also, see <em>noc_async_read_barrier</em>.</p>
 <p>The source node can be either a DRAM bank, a Tensix core or a PCIe controller.</p>
 <p>Return value: None</p>
 <p></p>
@@ -159,31 +159,10 @@
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>dst_local_l1_addr   </p></td>
-<td><p>Address in local L1 memory   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>0..1MB   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-even">
-<td><p>size   </p></td>
-<td><p>Size of data transfer in bytes   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>0..1MB   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-odd">
 <td><p>noc   </p></td>
 <td><p>Which NOC to use for the transaction   </p></td>
 <td><p>uint8_t   </p></td>
 <td><p>0 or 1   </p></td>
-<td><p>False    </p></td>
-</tr>
-<tr class="row-even">
-<td><p>max_page_size (template argument)   </p></td>
-<td><p>Maximum size of a single transaction in bytes   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>Any uint32_t number   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>
@@ -199,8 +178,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="data_movement.html" class="btn btn-neutral float-left" title="Data Movement APIs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="noc_async_read_set_state.html" class="btn btn-neutral float-right" title="noc_async_read_set_state" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="noc_async_read.html" class="btn btn-neutral float-left" title="noc_async_read" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="noc_async_read_with_state.html" class="btn btn-neutral float-right" title="noc_async_read_with_state" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

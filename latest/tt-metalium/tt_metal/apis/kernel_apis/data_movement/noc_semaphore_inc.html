@@ -63,10 +63,16 @@
 <li class="toctree-l2 current"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a><ul class="current">
 <li class="toctree-l3 current"><a class="reference internal" href="data_movement.html">Data Movement APIs</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read.html">noc_async_read</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_set_state.html">noc_async_read_set_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_with_state.html">noc_async_read_with_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_one_packet_set_state.html">noc_async_read_one_packet_set_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_one_packet_with_state.html">noc_async_read_one_packet_with_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_tile_dram_sharded_set_state.html">noc_async_read_tile_dram_sharded_set_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_tile_dram_sharded_with_state.html">noc_async_read_tile_dram_sharded_with_state</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_write.html">noc_async_write</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_multicast.html">noc_async_write_multicast</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_barrier.html">noc_async_read_barrier</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_write_barrier.html">noc_async_write_barrier</a></li>
-<li class="toctree-l4"><a class="reference internal" href="noc_async_write_multicast.html">noc_async_write_multicast</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set_multicast.html">noc_semaphore_set_multicast</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set.html">noc_semaphore_set</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_wait.html">noc_semaphore_wait</a></li>
@@ -167,7 +173,7 @@
 </tr>
 <tr class="row-odd">
 <td><p>vc   </p></td>
-<td><p>Which NOC to use for the transaction   </p></td>
+<td><p>Which VC to use for the transaction   </p></td>
 <td><p>uint8_t   </p></td>
 <td><p>0-3 (Unicast VCs)   </p></td>
 <td><p>False    </p></td>
