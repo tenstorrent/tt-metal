@@ -117,26 +117,13 @@ class TtLlamaMLP(LightweightModule):
         if mode == "prefill":
             return self.forward_prefill(x, mode)
 
-        pc_1 = self.model_config["FF1_3_TG_RING_PROGCFG"]
+        pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
-        pc_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
 
-        w1_out = ttnn.linear(
+        w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
             x,
             self.w1,
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_1,
-            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-        )
-        w1_out_reduced, w3_out = self.tt_ccl.matmul_line_reduce_scatter(
-            x,
             self.w3,
-            w1_out,
             cluster_axis=1,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
@@ -144,7 +131,7 @@ class TtLlamaMLP(LightweightModule):
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
-            program_config=pc_3,
+            program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
