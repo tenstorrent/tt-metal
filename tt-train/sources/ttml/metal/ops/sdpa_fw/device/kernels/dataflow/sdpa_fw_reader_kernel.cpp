@@ -17,7 +17,7 @@ void read_coloumn_tiles() {
 }
 
 void kernel_main() {
-    uint32_t runtime_args_counter = 0U;
+    uint32_t runtime_args_counter = 0;
     uint32_t query_address = get_arg_val<uint32_t>(runtime_args_counter++);        // query buffer address
     uint32_t key_address = get_arg_val<uint32_t>(runtime_args_counter++);          // key buffer address
     uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);        // value buffer address
@@ -41,6 +41,12 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(2);  // S / TILE_W
     constexpr uint32_t packed_scaler = get_compile_time_arg_val(3);
 
+    const uint32_t kv_chunks_number = Ht;
+    const uint32_t q_chunk_size = Wt;
+    const uint32_t k_chunk_size = Wt;
+    const uint32_t v_chunk_size = Wt;
+    const uint32_t kv_chunks_size = Wt;
+
     constexpr uint32_t onetile = 1U;
 
     const uint32_t tile_bytes = get_tile_size(cb_query);
@@ -55,8 +61,8 @@ void kernel_main() {
     const InterleavedAddrGenFast</* is_dram */ true> value_address_generator = {
         .bank_base_address = value_address, .page_size = tile_bytes, .data_format = data_format};
 
-    const InterleavedAddrGenFast</* is_dram */ true> mask_address_generator = {
-        .bank_base_address = mask_address, .page_size = tile_bytes, .data_format = data_format};
+    // const InterleavedAddrGenFast</* is_dram */ true> mask_address_generator = {
+    //     .bank_base_address = mask_address, .page_size = tile_bytes, .data_format = data_format};
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
@@ -65,32 +71,41 @@ void kernel_main() {
     generate_tile_with_bfloat16_value(
         cb_reduction_scaler, one);  // generate tile with bfloat16 value 1.0 for reduction scaler
 
+    // while we process one q_chunk (row of Q), we stream all K and V chunks (rows of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        uint32_t idx = (start_row + i) * Wt;
+        uint32_t idx = (start_row + i) * q_chunk_size;
 
+        // TODO[improve]: change offset calculation to support reading rows from different batches
         uint32_t key_page_offset = ((start_row + i) / Ht) * Wt * Ht;
 
-        cb_reserve_back(cb_query, Wt);
+        cb_reserve_back(cb_query, q_chunk_size);  // 12 head
         uint32_t query_l1_write_addr = get_write_ptr(cb_query);
-        for (uint32_t col = 0; col < Wt; ++col) {
+        for (uint32_t col = 0; col < q_chunk_size; ++col) {
             noc_async_read_tile(idx + col, query_address_generator, query_l1_write_addr);
             query_l1_write_addr += tile_bytes;
         }
         noc_async_read_barrier();
-        cb_push_back(cb_query, Wt);
+        cb_push_back(cb_query, q_chunk_size);
 
-        for (uint32_t h = 0; h < Ht; ++h) {             // read all
-            uint32_t k_idx = key_page_offset + h * Wt;  // add row offset in case I need to read second batch
+        // stream K and V by rows while processing Q row
+        for (uint32_t h = 0; h < kv_chunks_number; ++h) {  // read all
+            uint32_t k_idx =
+                key_page_offset + h * kv_chunks_size;  // add row offset in case I need to read second batch
             // read key row block_size tiles
             // we read key by rows to compute matmul Q by K^T
-            cb_reserve_back(cb_key, Wt);
+            cb_reserve_back(cb_key, kv_chunks_size);
+            cb_reserve_back(cb_value, kv_chunks_size);
             uint32_t key_l1_writer_addr = get_write_ptr(cb_key);
-            for (uint32_t w = 0; w < Wt; ++w) {
+            uint32_t value_l1_writer_addr = get_write_ptr(cb_value);
+            for (uint32_t w = 0; w < kv_chunks_size; ++w) {  // reading row of K and V
                 noc_async_read_tile(k_idx + w, key_address_generator, key_l1_writer_addr);
+                noc_async_read_tile(k_idx + w, value_address_generator, value_l1_writer_addr);
                 key_l1_writer_addr += tile_bytes;
+                value_l1_writer_addr += tile_bytes;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_key, Wt);
+            cb_push_back(cb_key, kv_chunks_size);
+            cb_push_back(cb_value, kv_chunks_size);
         }
     }
 }

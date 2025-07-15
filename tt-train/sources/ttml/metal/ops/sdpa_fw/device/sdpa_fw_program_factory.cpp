@@ -181,6 +181,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto& value = tensor_args.value;
     const auto& attn_mask = tensor_args.mask;
     /*
+    Shape note:
     Q: B x H_q x S x E
     K: B x H_k x S x E
     V: B x H_v x S x E
@@ -210,6 +211,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t Ht_ = St / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
     uint32_t NC = Bt * Ht;
     uint32_t total_rows_to_process = NC * Ht_;
+
+    // TODO[improve]: add memory usage estimation and compare it against available memory. Based on this check,
+    // determine the appropriate chunk size for Q, K, and V tensors
+    // for now we assume that we can fit at least one row of Q, K, V in memory
+    // maybe I should process chunks by subblokcs of rows instead of full rows
+    // since we read K and V row-wise in this SDPA kernel, the sequence length directly defines how many chunks we’ll
+    // process for each
+    const uint32_t kv_chunks_number = Ht_;
+    const uint32_t q_chunk_size = Wt;
+    const uint32_t k_chunk_size = Wt;
+    const uint32_t v_chunk_size = Wt;
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(Et));  // calculate scale factor
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(scale);
@@ -415,13 +427,13 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_fw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
-    auto& group_1_runtime_args = GetRuntimeArgs(program, sdpa_fw_group_1_kernel);
-    // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
-    auto& group_2_runtime_args =
-        core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, sdpa_fw_group_2_kernel);
+    // auto& group_1_runtime_args = GetRuntimeArgs(program, sdpa_fw_group_1_kernel);
+    // // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
+    // auto& group_2_runtime_args =
+    //     core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, sdpa_fw_group_2_kernel);
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % num_cores_y, i / num_cores_y};
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update input buffers for the reader kernel
         {

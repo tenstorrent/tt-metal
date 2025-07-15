@@ -24,6 +24,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
+    const auto& mask = tensor_args.mask;
 
     // as I understand I should use TT_FATAL here instead of throwing exceptions
     // check rank(rank must be 4)
@@ -76,9 +77,18 @@ tensor_return_value_t SDPAForwardDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
-tt::stl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t&, const tensor_args_t&) {
-    // TODO: implement hash computation
+ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // TODO[change]: calculation of hash could be changed due to sdpa implementation
+    // query shape should  difine the shape of other inputs and outputs
+    // we assume that query, key and value have the same shape, and we validate it in validate function
+    const auto& query_tensor = tensor_args.query;
+    const auto& query_logical_shape = query_tensor.logical_shape();
+    auto program_factory = select_program_factory(args, tensor_args);
+    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SDPAForwardDeviceOperation>(
+        args, program_factory.index(), query_tensor.dtype(), query_logical_shape);
+
+    return hash;
 }
 
 std::tuple<SDPAForwardDeviceOperation::operation_attributes_t, SDPAForwardDeviceOperation::tensor_args_t>

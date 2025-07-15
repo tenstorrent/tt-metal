@@ -141,19 +141,20 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Batch) {
     xt::xarray<float> query_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> key_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> value_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
+    xt::xarray<float> mask_tensor = xt::ones<float>({B, H, S, S});
 
     // xt::xarray<float> query_tensor = xt::zeros<float>({B, H, S, d});
     // xt::xarray<float> key_tensor = xt::zeros<float>({B, H, S, d});
 
     // Fill Q with values row - wise : Q[b][h][i][j] = i * d + j
-    // for (size_t b = 0; b < B; ++b) {
-    //     for (size_t i = 0; i < S; ++i) {
-    //         for (size_t j = 0; j < d; ++j) {
-    //             query_tensor(b, 0, i, j) = static_cast<float>(1U);
-    //             key_tensor(b, 0, i, j) = static_cast<float>(1U);  // same as Q for simplicity
-    //         }
-    //     }
-    // }
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t i = 0; i < S; ++i) {
+            for (size_t j = 0; j < d; ++j) {
+                query_tensor(b, 0, i, j) = static_cast<float>(1U);
+                key_tensor(b, 0, i, j) = static_cast<float>(1U);  // same as Q for simplicity
+            }
+        }
+    }
 
     // Fill Q with random values, fill K = K^t
     assert(S == d);  // to make sure K can be transposed easily
@@ -173,43 +174,49 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Batch) {
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
     auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
+    auto attn_mask = core::from_xtensor(mask_tensor, &autograd::ctx().get_device());
 
     auto device_ids = mesh_devices->get_device_ids();
+    // mesh_devices->disable_and_clear_program_cache();
 
     const size_t test_count = 100U;
     using Clock = std::chrono::high_resolution_clock;
 
-    auto temp_res = ttml::metal::sdpa_fw(query, key, value, std::nullopt, dropout_prob, false);
-    auto baseline_temp_res = ttnn_fixed::matmul(query, key, false, true);
+    // auto temp_res = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, false);
+    // auto baseline_temp_res = ttnn_fixed::matmul(query, key, false, true);
 
-    auto op_start = Clock::now();
-    for (size_t i = 0; i < test_count; ++i) {
-        temp_res = ttml::metal::sdpa_fw(query, key, value, std::nullopt, dropout_prob, false);
-        // for (const auto& device_id : device_ids) {
-        //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
-        // }
-    }
-    xt::xarray<float> temp_res_xtensor = core::to_xtensor(temp_res[0].value());
-    auto op_end = Clock::now();
+    // for (const auto& device_id : device_ids) {
+    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
+    // }
 
-    auto ttnn_matmul_start = Clock::now();
-    for (size_t i = 0; i < test_count; ++i) {
-        baseline_temp_res = ttnn_fixed::matmul(query, key, false, true);
-        xt::xarray<float> baseline_temp_res_xtensor = core::to_xtensor(baseline_temp_res);
-        // for (const auto& device_id : device_ids) {
-        //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
-        // }
-    }
-    xt::xarray<float> baseline_temp_res_xtensor = core::to_xtensor(baseline_temp_res);
-    auto ttnn_matmul_end = Clock::now();
+    // auto op_start = Clock::now();
+    // for (size_t i = 0; i < test_count; ++i) {
+    //     temp_res = ttml::metal::sdpa_fw(query, key, value, std::nullopt, dropout_prob, false);
+    // }
+    // for (const auto& device_id : device_ids) {
+    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
+    // }
+    // // xt::xarray<float> temp_res_xtensor = core::to_xtensor(temp_res[0].value());
+    // auto op_end = Clock::now();
 
-    std::chrono::duration<float, std::milli> duration = op_end - op_start;
-    std::chrono::duration<float, std::milli> ttnn_duration = ttnn_matmul_end - ttnn_matmul_start;
+    // auto ttnn_matmul_start = Clock::now();
+    // for (size_t i = 0; i < test_count; ++i) {
+    //     baseline_temp_res = ttnn_fixed::matmul(query, key, false, true);
+    //     // xt::xarray<float> baseline_temp_res_xtensor = core::to_xtensor(baseline_temp_res);
+    // }
+    // for (const auto& device_id : device_ids) {
+    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
+    // }
+    // // xt::xarray<float> baseline_temp_res_xtensor = core::to_xtensor(baseline_temp_res);
+    // auto ttnn_matmul_end = Clock::now();
 
-    std::cout << "Our MatMul: " << duration.count() << " ms\n";
-    std::cout << "Reference : " << ttnn_duration.count() << " ms\n";
+    // std::chrono::duration<float, std::milli> duration = op_end - op_start;
+    // std::chrono::duration<float, std::milli> ttnn_duration = ttnn_matmul_end - ttnn_matmul_start;
 
-    auto result = ttml::metal::sdpa_fw(query, key, value, std::nullopt, dropout_prob, false);
+    // std::cout << "Our MatMul: " << duration.count() << " ms\n";
+    // std::cout << "Reference : " << ttnn_duration.count() << " ms\n";
+
+    auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, false);
     auto matmul_result = ttnn_fixed::matmul(query, key, false, true);
 
     xt::xarray<float> expected_result = matmul_qk(query_tensor, key_tensor);
