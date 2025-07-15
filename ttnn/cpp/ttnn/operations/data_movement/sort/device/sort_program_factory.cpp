@@ -11,7 +11,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace ttnn::operations::experimental::reduction::sort::program {
+namespace ttnn::operations::data_movement::sort::program {
 
 // Single row - single core
 SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingleRowSingleCore::create(
@@ -1025,4 +1025,4 @@ void SortProgramFactorySingleRowMultiCore::override_runtime_arguments(
         }  // core loop
     }  // core_range loop
 }
-}  // namespace ttnn::operations::experimental::reduction::sort::program
+}  // namespace ttnn::operations::data_movement::sort::program

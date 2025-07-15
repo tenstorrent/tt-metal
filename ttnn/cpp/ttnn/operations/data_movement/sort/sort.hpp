@@ -8,7 +8,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::experimental::reduction::sort {
+namespace ttnn::operations::data_movement {
 
 struct ExecuteSort {
     static std::vector<Tensor> invoke(
@@ -21,11 +21,10 @@ struct ExecuteSort {
         std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors = std::nullopt);
 };
 
-}  // namespace ttnn::operations::experimental::reduction::sort
+}  // namespace ttnn::operations::data_movement
 
-namespace ttnn::experimental {
+namespace ttnn {
 
-constexpr auto sort = ttnn::
-    register_operation<"ttnn::experimental::sort", ttnn::operations::experimental::reduction::sort::ExecuteSort>();
+constexpr auto sort = ttnn::register_operation<"ttnn::sort", ttnn::operations::data_movement::ExecuteSort>();
 
-}  // namespace ttnn::experimental
+}  // namespace ttnn

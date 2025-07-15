@@ -45,7 +45,6 @@
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/scatter/scatter_pybind.hpp"
 #include "ttnn/operations/experimental/scatter/tosa_scatter_pybind.hpp"
-#include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
@@ -106,8 +105,6 @@ void py_module(py::module& module) {
 
     scatter::detail::bind_scatter_operation(module);
     tosa_scatter::detail::bind_tosa_scatter_operation(module);
-
-    reduction::sort::detail::bind_reduction_sort_operation(module);
 
     gather::detail::bind_gather_operation(module);
 

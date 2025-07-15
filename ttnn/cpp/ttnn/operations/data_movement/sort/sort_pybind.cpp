@@ -8,10 +8,10 @@
 
 #include "ttnn-pybind/decorators.hpp"
 
-namespace ttnn::operations::experimental::reduction::sort::detail {
+namespace ttnn::operations::data_movement::detail::detail {
 namespace py = pybind11;
 
-void bind_reduction_sort_operation(py::module& module) {
+void bind_sort_operation(py::module& module) {
     auto doc =
         R"doc(
             Sorts the elements of the input tensor along the specified dimension in ascending order by default.
@@ -50,21 +50,21 @@ void bind_reduction_sort_operation(py::module& module) {
                 input_tensor_ttnn = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
                 # Sort the tensor in ascending order
-                sorted_tensor, indices = ttnn.experimental.sort(input_tensor_ttnn)
+                sorted_tensor, indices = ttnn.sort(input_tensor_ttnn)
 
                 # Sort the tensor in descending order
-                sorted_tensor_desc, indices_desc = ttnn.experimental.sort(input_tensor_tnn, descending=True)
+                sorted_tensor_desc, indices_desc = ttnn.sort(input_tensor_tnn, descending=True)
 
                 # Sort along a specific dimension
                 input_tensor_2d = torch.Tensor([[3, 1, 2], [6, 5, 4]])
                 input_tensor_2d_ttnn = ttnn.from_torch(input_tensor_2d, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-                sorted_tensor_dim, indices_dim = ttnn.experimental.sort(input_tensor_2d_ttnn, dim=1)
+                sorted_tensor_dim, indices_dim = ttnn.sort(input_tensor_2d_ttnn, dim=1)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::sort);
+    using OperationType = decltype(ttnn::sort);
     bind_registered_operation(
         module,
-        ttnn::experimental::sort,
+        ttnn::sort,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -87,4 +87,4 @@ void bind_reduction_sort_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::reduction::sort::detail
+}  // namespace ttnn::operations::data_movement::detail::detail

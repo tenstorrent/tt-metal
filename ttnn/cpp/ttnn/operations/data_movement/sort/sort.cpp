@@ -5,7 +5,6 @@
 #include "sort.hpp"
 #include "device/sort_device_operation.hpp"
 
-#include "ttnn/run_operation.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
@@ -16,7 +15,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
-namespace ttnn::operations::experimental::reduction::sort {
+namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -222,4 +221,4 @@ std::vector<Tensor> ExecuteSort::invoke(
     return post_transform_output_tensors;
 }
 
-}  // namespace ttnn::operations::experimental::reduction::sort
+}  // namespace ttnn::operations::data_movement

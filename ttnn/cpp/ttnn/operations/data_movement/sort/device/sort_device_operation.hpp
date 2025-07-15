@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <optional>
 
-namespace ttnn::operations::experimental::reduction::sort {
+namespace ttnn::operations::data_movement::sort {
 
 struct SortDeviceOperation {
     using operation_attributes_t = sort::operation_attributes_t;
@@ -41,9 +41,9 @@ struct SortDeviceOperation {
         const std::vector<std::optional<Tensor>>& output_tensors);
 };
 
-}  // namespace ttnn::operations::experimental::reduction::sort
+}  // namespace ttnn::operations::data_movement::sort
 
 namespace ttnn::prim {
-constexpr auto sort = ttnn::
-    register_operation<"ttnn::prim::sort", ttnn::operations::experimental::reduction::sort::SortDeviceOperation>();
+constexpr auto sort =
+    ttnn::register_operation<"ttnn::prim::sort", ttnn::operations::data_movement::sort::SortDeviceOperation>();
 }  // namespace ttnn::prim

@@ -14,7 +14,7 @@
 
 #include <cstdint>
 
-namespace ttnn::operations::experimental::reduction::sort::program {
+namespace ttnn::operations::data_movement::sort::program {
 using namespace tt::tt_metal;
 // Single row - single core
 struct SortProgramFactorySingleRowSingleCore {
@@ -84,4 +84,4 @@ struct SortProgramFactorySingleRowMultiCore {
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
-}  // namespace ttnn::operations::experimental::reduction::sort::program
+}  // namespace ttnn::operations::data_movement::sort::program

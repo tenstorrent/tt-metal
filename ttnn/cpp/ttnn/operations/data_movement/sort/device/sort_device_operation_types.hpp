@@ -7,7 +7,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::reduction::sort {
+namespace ttnn::operations::data_movement::sort {
 
 struct operation_attributes_t {
     const int8_t dim;
@@ -24,4 +24,4 @@ struct tensor_args_t {
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 using tensor_return_value_t = std::vector<Tensor>;
 
-}  // namespace ttnn::operations::experimental::reduction::sort
+}  // namespace ttnn::operations::data_movement::sort

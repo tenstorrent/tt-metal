@@ -6,7 +6,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::reduction::sort {
+namespace ttnn::operations::data_movement::sort {
 
 constexpr uint32_t WT_THRESHOLD = 64;
 
@@ -26,23 +26,23 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     const auto index_dtype = output_specs[1].data_type();
 
     const uint32_t total_number_of_tiles_for_hybrid_approach =
-        total_number_of_cores * sort::program::SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
+        total_number_of_cores * program::SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
                                     total_number_of_cores,
                                     Wt,
                                     input_dtype,
                                     index_dtype,
-                                    sort::program::SortProgramFactoryCrossCoreDataExchange::
+                                    program::SortProgramFactoryCrossCoreDataExchange::
                                         CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
 
     if (Wt <= WT_THRESHOLD) {
         // Single-core implementation
-        return sort::program::SortProgramFactorySingleRowSingleCore{};
+        return program::SortProgramFactorySingleRowSingleCore{};
     } else if (Wt <= total_number_of_tiles_for_hybrid_approach) {
         // Hybrid implementation
-        return sort::program::SortProgramFactoryCrossCoreDataExchange{};
+        return program::SortProgramFactoryCrossCoreDataExchange{};
     }
     // DRAM implementation
-    return sort::program::SortProgramFactorySingleRowMultiCore{};
+    return program::SortProgramFactorySingleRowMultiCore{};
 }
 
 void SortDeviceOperation::validate_on_program_cache_hit(
@@ -172,4 +172,4 @@ std::tuple<SortDeviceOperation::operation_attributes_t, SortDeviceOperation::ten
         tensor_args_t{input_tensor, output_tensors}};
 }
 
-}  // namespace ttnn::operations::experimental::reduction::sort
+}  // namespace ttnn::operations::data_movement::sort

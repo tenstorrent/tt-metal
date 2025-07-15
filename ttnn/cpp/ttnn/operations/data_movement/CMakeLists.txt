@@ -129,6 +129,9 @@ target_sources(
         untilize_with_unpadding/device/untilize_with_unpadding_program_factory.cpp
         untilize_with_unpadding/untilize_with_unpadding.cpp
         view/view.cpp
+        sort/sort.cpp
+        sort/device/sort_device_operation.cpp
+        sort/device/sort_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})

@@ -35,7 +35,7 @@ def test_sort_standard(shape, dim, descending, device):
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
-    ttnn_sort_values, ttnn_sort_indices = ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indices.shape == ttnn_sort_indices.shape
@@ -77,7 +77,7 @@ def test_sort_prealocated_output(shape, dim, descending, device):
 
     ttnn_sort_values = ttnn.zeros_like(ttnn_input)
     ttnn_sort_indices = ttnn.zeros_like(ttnn_input)
-    ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
+    ttnn.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indices.shape == ttnn_sort_indices.shape
@@ -109,7 +109,7 @@ def test_sort_long_tensor(shape, dim, descending, device):
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
-    ttnn_sort_values, ttnn_sort_indices = ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indices.shape == ttnn_sort_indices.shape
@@ -147,7 +147,7 @@ def test_sort_l1_memory_tensor(shape, dim, descending, device):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     )
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
-    ttnn_sort_values, ttnn_sort_indices = ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indices.shape == ttnn_sort_indices.shape
@@ -223,7 +223,7 @@ def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dt
 
     ttnn_sort_values = ttnn.zeros_like(ttnn_input, dtype=ttnn_value_dtype)
     ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn_index_dtype)
-    ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
+    ttnn.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indices.shape == ttnn_sort_indices.shape
@@ -271,7 +271,7 @@ def test_sort_indices(shape, dim, descending, device):
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
-    ttnn_sort_values, ttnn_sort_indices = ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indices.shape == ttnn_sort_indices.shape
@@ -304,4 +304,4 @@ def test_sort_raise_datatype_error(shape, dim, descending, input_dtype, prealoca
     ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
 
     with pytest.raises(Exception):
-        ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
+        ttnn.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
