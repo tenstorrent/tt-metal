@@ -1431,6 +1431,40 @@ std::vector<Tensor> matmul_batched_weights(
         queue_id);
 }
 
+ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+    const auto& input_shape_a = input_tensor_a.logical_shape();
+    const auto& input_shape_b = input_tensor_b.logical_shape();
+
+    const auto a_rank = input_shape_a.rank();
+    const auto b_rank = input_shape_b.rank();
+
+    // Decide the rank of the output shape based on batch dimensions in input tensors
+    // Find batched dimensions in both. Add batched dimensions from both to output rank and then add 2
+    // Batched dimensions are all dimensions except the last two
+    uint32_t a_batched_dims = (a_rank > 2) ? (a_rank - 2) : 0;
+    uint32_t b_batched_dims = (b_rank > 2) ? (b_rank - 2) : 0;
+    uint32_t output_rank = a_batched_dims + b_batched_dims + 2;
+
+    // Initialize output shape with zeros based on the output rank
+    ttnn::Shape output_shape(std::vector<uint32_t>(output_rank, 0));
+
+    // First pick the M and N dimensions from the input tensors
+    output_shape[-2] = input_shape_a[-2];
+    output_shape[-1] = input_shape_b[-1];
+
+    // Add batched dims from input B to output shape
+    for (uint32_t i = 0; i < b_batched_dims; ++i) {
+        output_shape[-3 - i] = input_shape_b[-3 - i];
+    }
+
+    // Add batched dims from input A to output shape
+    for (uint32_t i = 0; i < a_batched_dims; ++i) {
+        output_shape[-3 - b_batched_dims - i] = input_shape_a[-3 - i];
+    }
+
+    return output_shape;
+}
+
 SparseMatmul create_sparse_matmul_struct(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1445,7 +1479,7 @@ SparseMatmul create_sparse_matmul_struct(
         parameters.compute_kernel_config,
         /*untilize_out=*/false,
         parameters.user_core_coord,
-        parameters.user_fused_activation,
+        /*user_fused_activation=*/std::nullopt,
         /*user_run_batched=*/false,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
@@ -1456,13 +1490,12 @@ SparseMatmul create_sparse_matmul_struct(
     auto matmul_struct =
         create_matmul_struct(input_tensor_a, input_tensor_b, matmul_parameters, {optional_output_tensors.at(0)});
     return SparseMatmul{
-        parameters.num_batches,
+        parameters.nnz,
         matmul_struct.program_config,
         matmul_struct.output_mem_config,
         matmul_struct.output_dtype,
         matmul_struct.compute_kernel_config,
         matmul_struct.user_core_coord,
-        matmul_struct.user_fused_activation,
         matmul_struct.output_tile,
         matmul_struct.global_cb,
         matmul_struct.sub_device_id};
@@ -2627,7 +2660,7 @@ std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
         this->compute_kernel_config,
         /*untilize_out=*/false,
         this->user_core_coord,
-        this->user_fused_activation,
+        /*user_fused_activation=*/std::nullopt,
         /*user_run_batched=*/false,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
@@ -2700,7 +2733,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
         this->compute_kernel_config,
         /*untilize_out=*/false,
         this->user_core_coord,
-        this->user_fused_activation,
+        /*user_fused_activation=*/std::nullopt,
         /*user_run_batched=*/false,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
@@ -2724,7 +2757,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
                     input_tensor_a,
                     input_tensor_b,
                     sparsity,
-                    this->num_batches,
+                    this->nnz,
                     output_tensor,
                     program_config.compute_with_storage_grid_size,
                     this->output_dtype.value(),
@@ -2736,6 +2769,35 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
                     program_config.per_core_N);
 
                 return create_homogenous_mesh_workload(sparse_bmm_program, tensor_coords);
+            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                std::vector<Tensor> input_tensors_b;
+                input_tensors_b.push_back(input_tensors.at(1));
+                auto sparse_mcast_mm_program = matmul_multi_core_reuse_mcast_1d_optimized(
+                    input_tensor_a,
+                    input_tensors_b,
+                    /*bias=*/std::nullopt,
+                    output_tensors,
+                    /*broadcast_batch=*/true,
+                    program_config.compute_with_storage_grid_size,
+                    this->compute_kernel_config.value(),
+                    program_config.in0_block_w,
+                    program_config.out_subblock_h,
+                    program_config.out_subblock_w,
+                    program_config.out_block_h,
+                    program_config.out_block_w,
+                    program_config.per_core_M,
+                    program_config.per_core_N,
+                    program_config.fuse_batch,
+                    program_config.fused_activation,
+                    program_config.mcast_in0,
+                    program_config.gather_in0,
+                    program_config.hop_cores,
+                    /*untilize_out=*/false,
+                    this->global_cb,
+                    program_config.num_global_cb_receivers,
+                    this->sub_device_id);
+
+                return create_homogenous_mesh_workload(sparse_mcast_mm_program, tensor_coords);
             } else {
                 TT_THROW("Unsupported program config {}", chosen_program_config);
             }

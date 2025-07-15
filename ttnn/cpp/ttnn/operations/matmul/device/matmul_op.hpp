@@ -54,6 +54,18 @@ using ttnn::operations::unary::UnaryWithParam;
  */
 ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
 
+/**
+ * @brief Computes the output shape of a sparse matmul operation given two input tensors.
+ *
+ * The output shape for a sparse matmul is the same as for a dense matmul, but allows for
+ * batching on both input tensors.
+ * The final output shape as batched dimensions from input B first (inner), then input A (outer).
+ * @param input_tensor_a First input tensor
+ * @param input_tensor_b Second input tensor
+ * @return Shape of the resulting tensor after sparse matmul
+ */
+ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
+
 /*
  * GENERAL MATMUL AND BMM
  */
@@ -261,13 +273,12 @@ Matmul create_matmul_struct(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
 struct SparseMatmul {
-    uint32_t num_batches;
+    uint32_t nnz;
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     const std::optional<DataType> output_dtype = std::nullopt;
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     const std::optional<const CoreCoord> user_core_coord = std::nullopt;
-    const std::optional<UnaryWithParam> user_fused_activation = std::nullopt;
     const std::optional<const tt::tt_metal::Tile> output_tile;
     const std::optional<const GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
