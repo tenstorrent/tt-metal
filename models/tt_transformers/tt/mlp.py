@@ -13,12 +13,22 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 class MLP(LightweightModule):
     def __init__(
-        self, mesh_device, args, state_dict, weight_cache_path, layer_num, dtype, model_config, state_dict_prefix=None
+        self,
+        mesh_device,
+        tt_ccl,
+        args,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        dtype,
+        model_config,
+        state_dict_prefix=None,
     ):
         super().__init__()
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.args = args
         self.dim = args.dim
         self.model_config = model_config
@@ -130,7 +140,8 @@ class MLP(LightweightModule):
             program_config=pc_3,
             memory_config=memory_config,
         )
-        ttnn.deallocate(x)
+        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
+            ttnn.deallocate(x)
 
         if TG:
             # if mode == "decode" and self.dim!=8192:
@@ -138,30 +149,71 @@ class MLP(LightweightModule):
             #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             if self.dim == 8192 or mode == "prefill":
                 input_mem_cfg = w1_out.memory_config()
-                w1_out = ttnn.reduce_scatter(
-                    w1_out,
-                    dim=3,
-                    math_op=ttnn.ReduceType.Sum,
-                    num_links=self.args.num_reduce_scatter_links,
-                    cluster_axis=1,
-                    mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,
-                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
+
+                dim = 3
+                cluster_axis = 1
+                rs_intermediate_memory_config = ttnn.L1_MEMORY_CONFIG
+                rs_output_memory_config = (
+                    self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None
                 )
-                w3_out = ttnn.reduce_scatter(
-                    w3_out,
-                    dim=3,
-                    math_op=ttnn.ReduceType.Sum,
-                    num_links=1,
-                    cluster_axis=1,
+                rs_persistent_buffer_keys = self.tt_ccl.create_rs_persistent_buffer_keys(
+                    w1_out.shape,
+                    w1_out.dtype,
+                    rs_intermediate_memory_config,
+                    rs_output_memory_config,
+                    dim,
+                    cluster_axis,
+                )
+                rs_persistent_buffers = self.tt_ccl.get_rs_persistent_buffers(rs_persistent_buffer_keys)
+                w1_out = ttnn.experimental.reduce_scatter_minimal_async(
+                    w1_out,
+                    persistent_intermediate_buffer=rs_persistent_buffers[0],
+                    persistent_output_buffer=rs_persistent_buffers[1],
+                    dim=dim,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+                    num_links=self.args.num_reduce_scatter_links,
+                    cluster_axis=cluster_axis,
                     mesh_device=self.mesh_device,
+                    intermediate_memory_config=rs_intermediate_memory_config,
+                    memory_config=rs_output_memory_config,
                     topology=ttnn.Topology.Linear,
-                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
+                    subdevice_id=self.tt_ccl.worker_sub_device_id,
+                )
+
+                dim = 3
+                cluster_axis = 1
+                rs_intermediate_memory_config = ttnn.L1_MEMORY_CONFIG
+                rs_output_memory_config = (
+                    self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None
+                )
+                rs_persistent_buffer_keys = self.tt_ccl.create_rs_persistent_buffer_keys(
+                    w3_out.shape,
+                    w3_out.dtype,
+                    rs_intermediate_memory_config,
+                    rs_output_memory_config,
+                    dim,
+                    cluster_axis,
+                )
+                rs_persistent_buffers = self.tt_ccl.get_rs_persistent_buffers(rs_persistent_buffer_keys)
+                w3_out = ttnn.experimental.reduce_scatter_minimal_async(
+                    w3_out,
+                    persistent_intermediate_buffer=rs_persistent_buffers[0],
+                    persistent_output_buffer=rs_persistent_buffers[1],
+                    dim=dim,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+                    num_links=1,
+                    cluster_axis=cluster_axis,
+                    mesh_device=self.mesh_device,
+                    intermediate_memory_config=rs_intermediate_memory_config,
+                    memory_config=rs_output_memory_config,
+                    topology=ttnn.Topology.Linear,
+                    subdevice_id=self.tt_ccl.worker_sub_device_id,
                 )
             else:
                 w1_out = tt_all_reduce(
                     w1_out,
                     self.mesh_device,
+                    self.tt_ccl,
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
@@ -171,6 +223,7 @@ class MLP(LightweightModule):
                 w3_out = tt_all_reduce(
                     w3_out,
                     self.mesh_device,
+                    self.tt_ccl,
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
@@ -190,19 +243,30 @@ class MLP(LightweightModule):
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
-        ttnn.deallocate(w3_out)
-        ttnn.deallocate(w1_out)
+        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == "prefill"):
-            w2_in = ttnn.all_gather(
+            ag_memory_config = input_mem_cfg
+            dim = 3
+            cluster_axis = 1
+            ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
+                w2_in.shape, w2_in.dtype, ag_memory_config, dim, cluster_axis
+            )
+            w2_in = ttnn.experimental.all_gather_async(
                 w2_in,
-                3,
+                persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+                dim=dim,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=2,
-                cluster_axis=1,
+                cluster_axis=cluster_axis,
                 mesh_device=self.mesh_device,
                 topology=ttnn.Topology.Linear,
-                memory_config=input_mem_cfg,
+                memory_config=ag_memory_config,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
             )
+
             if mode == "decode":
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
@@ -218,12 +282,16 @@ class MLP(LightweightModule):
             memory_config=memory_config,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
-        ttnn.deallocate(w2_in)
+        if not self.tt_ccl.is_using_preallocated_persistent_buffers() or not (
+            TG and (self.dim == 8192 or mode == "prefill")
+        ):
+            ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
+            self.tt_ccl,
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
