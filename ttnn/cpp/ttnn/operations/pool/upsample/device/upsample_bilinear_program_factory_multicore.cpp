@@ -302,6 +302,9 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     reader_rt_args[3] = scale_factor_w;
     reader_rt_args[4] = in_w;
     reader_rt_args[5] = out_w;
+    reader_rt_args[6] =
+        0;  // denotes the row position in the batch that corresponds to the first row of the input shard of the
+            // corresponding core first row of the input shard corresponds to the second row (index 1) in the halo shard
     reader_rt_args[7] = in_h;
 
     uint32_t num_rows_per_core = div_up(batch_size * in_h, ncores_nhw);

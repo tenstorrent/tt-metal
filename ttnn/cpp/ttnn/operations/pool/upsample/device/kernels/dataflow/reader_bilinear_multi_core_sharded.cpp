@@ -55,7 +55,7 @@ void kernel_main() {
     // assuming shard begins with a new row. TODO: generalize?
     float scale_h_inv = uint32_to_float(scale_h_inv_comp);
     float scale_w_inv = uint32_to_float(scale_w_inv_comp);
-    float x, y, x_index, y_index, dx, dy;
+    float x, x_index, y_index, dx, dy;
     y_index = uint32_to_float(y_index_comp);
     float x_index_compute = uint32_to_float(x_index_compute_comp);
 
@@ -74,29 +74,41 @@ void kernel_main() {
         uint32_t y1 = int(y_index);
         uint32_t y2 = y1 + 1;
 
-        // After haloing, the last row from the last core (or a padding row)
+        // After haloing, the last row from the previous core (or a padding row)
         // Gets inserted into as the first (index 0) row for the current core
         // So the start_input_row_in_image_id corresponds to the row with index 1
         // for the current core
-        // In no circumstance should the padding rows have weights greater than 0.5
 
-        int32_t in_image_index_y1 = int32_t(y1) - 1 + start_input_row_in_image_id - accumulated_offset;
-        int32_t in_image_index_y2 = int32_t(y2) - 1 + start_input_row_in_image_id - accumulated_offset;
+        int32_t in_batch_index_y1 = int32_t(y1) - 1 + start_input_row_in_image_id - accumulated_offset;
+        int32_t in_batch_index_y2 = int32_t(y2) - 1 + start_input_row_in_image_id - accumulated_offset;
 
         dy = y_index - y1;
 
-        if (in_image_index_y1 == -1) {
+        // In no circumstance should the padding rows have weights greater than 0.5
+
+        if (in_batch_index_y1 == -1) {
+            // This would mean that in_batch_index_y1 (the "upper" row) corresponds to a padding row (specifically the
+            // top padding row) Reduce the padding row's weight to 0 and put full weight on the row below it
             dy = 1;
         }
 
-        if (in_image_index_y2 == int(in_h)) {  // change later to not check with modulus
-            if (dy > 0.5) {
+        if (in_batch_index_y2 == int(in_h)) {  // change later to not check with modulus
+            // This would would mean that in_batch_index_y2 (the "lower row") corresponds to a padding row(specifically
+            // the bottom padding row)
+            if (dy > 0.5) {  // Due to math behind bilinear upsampling, dy could never be exactly 0.5, so this check
+                             // should be numerically safe
+                // In this case, a padding row has weight higher than 0.5.
+                // This means we have to skip the next 2 rows (lower padding of current image and upper padding of
+                // previous image) The iteration that enters this case outputs the first row of a new image
                 y1 += 2;
                 y2 += 2;
                 y_index += 2;
                 dy = 1;
                 accumulated_offset += 2 + in_h;
             } else {
+                // In this case, a padding row has weight lower than 0.5
+                // We should do no skipping, but just set weight to 0 for this row
+                // The iteration that enters this case outputs the final few rows of the image
                 dy = 0;
             }
         }
