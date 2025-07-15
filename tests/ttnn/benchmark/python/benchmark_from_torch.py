@@ -69,7 +69,7 @@ import inspect
 def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
-    smaller = 2
+    smaller = 8
     print("start test")
     with ttnn.tracy_zone(
         f"test_benchmark_from_torch[ttnn_dtype={ttnn_dtype}-torch_dtype={torch_dtype}-ttnn_layout={ttnn_layout}-use_device={use_device}]"
@@ -96,7 +96,7 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
                         moved = ttnn.to_device(ttnn_tensor, device=device)
 
         with ttnn.tracy_zone("benchmark run"):
-            benchmark.pedantic(from_torch, iterations=5, rounds=1, warmup_rounds=1)
+            benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
 
 
 @pytest.mark.parametrize("use_device", [True, False])

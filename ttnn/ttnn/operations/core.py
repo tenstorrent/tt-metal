@@ -308,40 +308,109 @@ def from_torch(
     # See the linked issue below -- once it is fixed, the branches that
     # explicitly handle this case could be turned off.
     HANDLE_FLOAT32_BUG_23405 = True
-
     # print(f"{inspect.currentframe().f_lineno} >> from_torch::input: tensor dtype:{tensor.dtype} target dtype:{dtype} layout:{layout} device:{device}")
 
-    # Check conditions for early host-side conversion
+    torch_tilizable_data_types = [torch.float32, torch.int32, torch.bfloat16]
+    torch_missing_data_types = [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.uint32]
+
+    # The data has been converted on host and no device-side type cast is necessary
     host_type_conversion = False
+    # Construct tensor with a specific data type or infer it from passed torch tensor
+    construct_with_dtype = None
+    # Which layout to use to construct host tensor
+    host_construct_layout = None
+
+    # Single decision point - determine all conversion parameters at once
     if not device and dtype in ttnn_fallback_type_mapping:
+        # Strategy: No Device Fallback
         # No device, conversion must be performed on the host
+        # print(f"{inspect.currentframe().f_lineno} >> Strategy: No Device Fallback")
         with ttnn.tracy_zone("host-side conversion w/o device"):
             tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
         # print(f"{inspect.currentframe().f_lineno} >> from_torch::tensor.to no device:\n{tensor} {tensor.dtype} {tensor.shape}")
+
         host_type_conversion = True
+        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
+        if dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b]:
+            host_construct_layout = ttnn.TILE_LAYOUT
+        else:
+            host_construct_layout = layout
 
     elif tensor.dtype in ttnn_unsupported_type_mapping:
+        # Strategy: Unsupported Type
         # ttnn tensor cannot hold the original host data without losses --
         # need to perform the conversion while on host.
+        # print(f"{inspect.currentframe().f_lineno} >> Strategy: Unsupported Type")
         with ttnn.tracy_zone("host-side type mapping, type unsupported"):
             if dtype in ttnn_fallback_type_mapping:
                 tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
             else:
                 tensor = tensor.to(ttnn_unsupported_type_mapping[tensor.dtype])
-
         # print(f"{inspect.currentframe().f_lineno} >> from_torch::tensor.to unsupported origin:\n{tensor} {tensor.dtype} {tensor.shape}")
+
         host_type_conversion = True
+        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
+        if dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b]:
+            host_construct_layout = ttnn.TILE_LAYOUT
+        elif tensor.dtype not in torch_tilizable_data_types:
+            host_construct_layout = layout
+        elif device:
+            host_construct_layout = ttnn.ROW_MAJOR_LAYOUT
+        else:
+            host_construct_layout = layout
 
     elif tensor.dtype in [torch.uint8] and dtype and dtype != ttnn.uint8:
+        # Strategy: Uint8 Special
+        # print(f"{inspect.currentframe().f_lineno} >> Strategy: Uint8 Special")
         # print(f"{inspect.currentframe().f_lineno} >> tensor.dtype in [torch.uint8] and dtype and dtype != ttnn.uint8")
-        tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+        with ttnn.tracy_zone("host-side mapping, uint edge case"):
+            tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+
+        host_type_conversion = False
+        construct_with_dtype = None
+        if HANDLE_FLOAT32_BUG_23405 and tensor.dtype in [torch.float32]:
+            if dtype and dtype != ttnn.float32:
+                ttnn.tracy_message("HANDLE_FLOAT32_BUG_23405: Target type is not float, need to tile for typecast")
+                host_construct_layout = ttnn.TILE_LAYOUT
+            else:
+                host_construct_layout = layout
+        elif tensor.dtype not in torch_tilizable_data_types:
+            host_construct_layout = ttnn.TILE_LAYOUT
+        else:
+            host_construct_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    elif HANDLE_FLOAT32_BUG_23405 and tensor.dtype in [torch.float32] and dtype and dtype != ttnn.float32:
+        # Original data is stored in float32 and requires type casting
+        # print(f"{inspect.currentframe().f_lineno} >> HANDLE_FLOAT32_BUG_23405 and tensor.dtype in [torch.float32] and dtype and dtype != ttnn.float32")
+        with ttnn.tracy_zone("host-side conversion float32 bug edge case handling"):
+            tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
+        host_type_conversion = True
+        host_construct_layout = layout
+        # if tensor.dtype in torch_tilizable_data_types and layout == ttnn.TILE_LAYOUT:
+        # print(f"{inspect.currentframe().f_lineno} >> tensor.dtype in torch_tilizable_data_types")
+
+        # else:
+        #     host_construct_layout = layout
 
     elif layout == ttnn.ROW_MAJOR_LAYOUT and tensor.dtype in [torch.float32, torch.int32] and dtype == ttnn.uint8:
-        # print(f"{inspect.currentframe().f_lineno} >> from_torch::layout == ttnn.ROW_MAJOR_LAYOUT and tensor.dtype in [torch.float32, torch.int32] and dtype == ttnn.uint8")
+        # Strategy: Row Major Uint8 Edge
         # `to_layout` turns the whole tensor into zeroes when converting float32/int32 to uint8 in row-major layout
+        # print(f"{inspect.currentframe().f_lineno} >> Strategy: Row Major Uint8 Edge")
+        # print(f"{inspect.currentframe().f_lineno} >> from_torch::layout == ttnn.ROW_MAJOR_LAYOUT and tensor.dtype in [torch.float32, torch.int32] and dtype == ttnn.uint8")
         with ttnn.tracy_zone("host-side mapping, uint8 edge case"):
             tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+
         host_type_conversion = True
+        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
+        if dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b]:
+            host_construct_layout = ttnn.TILE_LAYOUT
+        elif tensor.dtype not in torch_tilizable_data_types:
+            host_construct_layout = layout
+        elif device:
+            host_construct_layout = ttnn.ROW_MAJOR_LAYOUT
+        else:
+            host_construct_layout = layout
 
     elif (
         dtype == None
@@ -350,11 +419,32 @@ def from_torch(
         or (dtype == ttnn.int32 and tensor.dtype == torch.int32)
         or (dtype == ttnn.uint8 and tensor.dtype == torch.uint8)
     ):
+        # Strategy: No Conversion Needed
         # No target type specified, will copy the tensor from source data w/o typecast.
+        # print(f"{inspect.currentframe().f_lineno} >> Strategy: No Conversion Needed")
         # print(f"{inspect.currentframe().f_lineno} >> from_torch::dtype == None or (dtype == ttnn.float32 and tensor.dtype == ttnn.float32)")
+
         host_type_conversion = True
+        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
+        if dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b]:
+            # print(f"{inspect.currentframe().f_lineno} >> >> dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b]")
+            host_construct_layout = ttnn.TILE_LAYOUT
+        elif tensor.dtype not in torch_tilizable_data_types:
+            # print(f"{inspect.currentframe().f_lineno} >> >> not host_data_can_be_tilized")
+            host_construct_layout = layout
+        elif HANDLE_FLOAT32_BUG_23405 and tensor.dtype == torch.float32:
+            ttnn.tracy_message("HANDLE_FLOAT32_BUG_23405: Layout conversion requested")
+            # print(f"{inspect.currentframe().f_lineno} >> >> HANDLE_FLOAT32_BUG_23405 and tensor.dtype == torch.float32")
+            host_construct_layout = layout
+        elif device:
+            # print(f"{inspect.currentframe().f_lineno} >> >> device")
+            host_construct_layout = ttnn.ROW_MAJOR_LAYOUT
+        else:
+            # print(f"{inspect.currentframe().f_lineno} >> >> else")
+            host_construct_layout = layout
 
     elif HANDLE_FLOAT32_BUG_23405 and layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.float32:
+        # Strategy: Float32 Bug Workaround
         # https://github.com/tenstorrent/tt-metal/issues/23405
         # This condition handles the tensor conversion case where
         # - input device exists
@@ -362,87 +452,60 @@ def from_torch(
         # - the final layout should be a row-major
         #
         # Due to the bug linked above this case should also be performed on device, to avoid precision loss
+        # print(f"{inspect.currentframe().f_lineno} >> Strategy: Float32 Bug Workaround")
         # print(f"{inspect.currentframe().f_lineno} >> from_torch::layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.float32")
         with ttnn.tracy_zone("host-side mapping float32 bug"):
             tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
 
         host_type_conversion = True
-
-    if host_type_conversion and dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.uint32]:
-        # print(f"{inspect.currentframe().f_lineno} >> from_torch::host_type_conversion and (dtype == ttnn.bfloat4_b or dtype == ttnn.bfloat8_b)")
-        construct_with_dtype = dtype
-
-    else:
-        construct_with_dtype = None
-
-    host_data_can_be_tilized = tensor.dtype in [torch.float32, torch.int32, torch.bfloat16]
-
-    # Get layout for the initial tensor -- if possible, initial tensor should be in row-major
-    # layout to avoid tiling operations on the host.
-    host_construct_layout = None
-    if host_type_conversion:
+        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
         if dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b]:
-            # print(f"{inspect.currentframe().f_lineno} >> host_type_conversion && dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b]")
             host_construct_layout = ttnn.TILE_LAYOUT
-
-        elif not host_data_can_be_tilized:
-            # print(f"{inspect.currentframe().f_lineno} >> host_type_conversion && not host_data_can_be_tilized")
+        elif tensor.dtype not in torch_tilizable_data_types:
+            host_construct_layout = layout
+        elif device:
+            host_construct_layout = ttnn.ROW_MAJOR_LAYOUT
+        else:
             host_construct_layout = layout
 
-        elif device:
-            # print(f"{inspect.currentframe().f_lineno} >> host_type_conversion && device")
-            # The type has already been converted on host, only need to convert layout on device
+    else:
+        # Strategy: Device Conversion
+        # Type conversion will be performed on device
+        # print(f"{inspect.currentframe().f_lineno} >> Strategy: Device Conversion")
+
+        host_type_conversion = False
+        construct_with_dtype = None
+        if HANDLE_FLOAT32_BUG_23405 and tensor.dtype in [torch.float32]:
+            if dtype and dtype != ttnn.float32:
+                host_construct_layout = ttnn.TILE_LAYOUT
+            else:
+                host_construct_layout = layout
+        elif tensor.dtype not in torch_tilizable_data_types:
+            host_construct_layout = ttnn.TILE_LAYOUT
+        else:
             host_construct_layout = ttnn.ROW_MAJOR_LAYOUT
 
-        else:
-            # print(f"{inspect.currentframe().f_lineno} >> host_type_conversion && else")
-            host_construct_layout = layout
-
-    elif HANDLE_FLOAT32_BUG_23405 and tensor.dtype in [torch.float32]:
-        # print(f"{inspect.currentframe().f_lineno} >> float32")
-        # see float32 bug description above
-        if dtype and dtype != ttnn.float32:
-            # typecast is needed, should construct initial tensor with tile layout
-            host_construct_layout = ttnn.TILE_LAYOUT
-
-        else:
-            host_construct_layout = layout
-
-    elif not host_data_can_be_tilized:
-        # print(f"{inspect.currentframe().f_lineno} >> tensor.dtype not in [torch.float32, torch.int32, torch.bfloat16]")
-        # Input tensor data cannot be tiled on the device
-        host_construct_layout = ttnn.TILE_LAYOUT
-
-    else:
-        # print(f"{inspect.currentframe().f_lineno} >> else")
-        host_construct_layout = ttnn.ROW_MAJOR_LAYOUT
-
-    # print(f"{inspect.currentframe().f_lineno} >> from_torch::tensor:\n{tensor} {tensor.dtype} {tensor.shape}")
-    # print(f"{inspect.currentframe().f_lineno} >> construct_with_dtype = {construct_with_dtype} host_construct_layout = {host_construct_layout} host_type_conversion = {host_type_conversion}")
-
-    import inspect
-
-    ttnn.start_tracy_zone("core.py", "tensor constructor", inspect.currentframe().f_lineno)
-
-    result = ttnn.Tensor(
-        tensor=tensor,
-        data_type=construct_with_dtype,
-        device=device,
-        layout=host_construct_layout,
-        mem_config=memory_config,
-        tile=tile,
-        cq_id=cq_id,
-        pad_value=pad_value,
-        mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
-    )
-
-    ttnn.stop_tracy_zone()
+    with ttnn.tracy_zone("tensor constructor"):
+        result = ttnn.Tensor(
+            tensor=tensor,
+            data_type=construct_with_dtype,
+            device=device,
+            layout=host_construct_layout,
+            mem_config=memory_config,
+            tile=tile,
+            cq_id=cq_id,
+            pad_value=pad_value,
+            mesh_mapper=mesh_mapper.unwrap()
+            if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper)
+            else mesh_mapper,
+        )
 
     # print(f"{inspect.currentframe().f_lineno} >> from_torch::result:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
 
     if host_type_conversion:
         if device and layout != result.layout:
-            result = ttnn.to_layout(result, layout)
+            with ttnn.tracy_zone("to_layout conversion"):
+                result = ttnn.to_layout(result, layout)
 
     else:
         if dtype and dtype != result.dtype:
