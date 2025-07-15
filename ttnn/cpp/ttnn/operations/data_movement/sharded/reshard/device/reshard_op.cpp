@@ -76,8 +76,8 @@ void ReshardDeviceOperation::validate_with_output_tensors(
         auto out_distribution_spec = output_tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec();
         auto input_distribution_spec = input_tensor.buffer()->buffer_distribution_spec();
 
-        auto n_logical_input_pages = input_distribution_spec->get_tensor_shape_in_pages().volume();
-        auto n_logical_output_pages = out_distribution_spec->get_tensor_shape_in_pages().volume();
+        auto n_logical_input_pages = input_distribution_spec->tensor_shape_in_pages().volume();
+        auto n_logical_output_pages = out_distribution_spec->tensor_shape_in_pages().volume();
 
         auto input_page_size = input_tensor.tensor_spec().compute_page_size_bytes();
         auto output_page_size = output_tensor_spec.compute_page_size_bytes();

@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_generic_naive(const Tensor&
         auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
 
         uint32_t start_page = 0;
-        uint32_t num_dev_pages = input.buffer()->buffer_distribution_spec()->get_tensor_shape_in_pages().volume();
+        uint32_t num_dev_pages = input.buffer()->buffer_distribution_spec()->tensor_shape_in_pages().volume();
         uint32_t n_pages_per_core = num_dev_pages / cores.size();
         uint32_t remainder = num_dev_pages % cores.size();
 
