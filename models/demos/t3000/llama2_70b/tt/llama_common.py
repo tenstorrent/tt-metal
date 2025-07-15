@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 from typing import Tuple
 
-import numpy as np
 import torch
 from loguru import logger
 
@@ -354,72 +353,9 @@ def get_atol_rtol_pcc(golden, calculated):
 
     # Calculate PCC
     def get_pcc(golden, calculated):
-        # Both tensors are nan
-        if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
-            logger.warning("Both tensors are 'nan'")
-            return 1.0
+        import ttnn
 
-        # One tensor is all nan, the other is not
-        if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
-            logger.error("One tensor is all nan, the other is not.")
-            return 0.0
-
-        # One tensor is all zero, the other is not
-        if torch.any(golden.bool()) != torch.any(calculated.bool()):
-            logger.warning("One tensor is all zero")
-            return 0.0
-
-        # if torch.any(torch.isinf(golden)) or torch.any(torch.isinf(calculated)):
-        #    raise RuntimeError(f"Tensor overflow to infinity: \n{golden}\n{calculated}")
-
-        # if torch.any(torch.isneginf(golden)) or torch.any(torch.isneginf(calculated)):
-        #    raise RuntimeError(f"Tensor overflow to negative infinity: \n{golden}\n{calculated}")
-
-        else:
-            # For now, mask all infs and nans so that we check the rest... TODO
-            golden = golden.clone()
-            golden[
-                torch.logical_or(
-                    torch.isnan(golden),
-                    torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-                )
-            ] = 0
-            calculated = calculated.clone()
-            calculated[
-                torch.logical_or(
-                    torch.isnan(calculated),
-                    torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-                )
-            ] = 0
-
-            if torch.equal(golden, calculated):
-                return 1.0
-
-            if golden.dtype == torch.bfloat16:
-                golden = golden.type(torch.float32)
-                calculated = calculated.type(torch.float32)
-
-            # Single element case
-            if golden.numel() == 1:
-                return float(torch.equal(golden, calculated))
-
-            # one tensor is constant
-            if torch.max(golden) == torch.min(golden) or torch.max(calculated) == torch.min(calculated):
-                return float(torch.equal(golden, calculated))
-
-            cal_pcc = np.ma.corrcoef(
-                np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-                np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
-            )
-            # Remove correlation coefficient with self (typically always 1.0)
-            mask = np.ones(cal_pcc.shape, dtype=bool)
-            np.fill_diagonal(mask, 0)
-            cal_pcc = np.min(cal_pcc[mask])
-
-            if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-                return 1.0
-
-            return cal_pcc
+        return ttnn.pearson_correlation_coefficient(golden, calculated)
 
     cal_pcc = get_pcc(golden, calculated)
 
