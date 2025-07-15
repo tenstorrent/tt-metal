@@ -54,17 +54,6 @@ using ttnn::operations::unary::UnaryWithParam;
  */
 ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
 
-/**
- * @brief Computes the output shape of a sparse matmul operation given two input tensors.
- *
- * The output shape for a sparse matmul is the same as for a dense matmul, but allows for
- * batching on both input tensors.
- * @param input_tensor_a First input tensor
- * @param input_tensor_b Second input tensor
- * @return Shape of the resulting tensor after sparse matmul
- */
-ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
-
 /*
  * GENERAL MATMUL AND BMM
  */
@@ -166,29 +155,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_bmm_multi_core_reuse(
     uint32_t out_subblock_w,
     uint32_t per_core_M,
     uint32_t per_core_N);
-tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mcast_1d_optimized(
-    const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
-    const Tensor& sparsity,
-    uint32_t nnz,
-    const Tensor& output_tensor,
-    CoreCoord compute_with_storage_grid_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t out_block_h,
-    uint32_t out_block_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    const std::optional<UnaryWithParam>& fused_activation,
-    bool mcast_in0,
-    bool gather_in0,
-    const CoreRangeSet& hop_cores,
-    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    uint32_t num_global_cb_receivers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 // TODO: Uplift this to support fused activation and bias
 // TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
@@ -295,12 +261,13 @@ Matmul create_matmul_struct(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
 struct SparseMatmul {
-    uint32_t nnz;
+    uint32_t num_batches;
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     const std::optional<DataType> output_dtype = std::nullopt;
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     const std::optional<const CoreCoord> user_core_coord = std::nullopt;
+    const std::optional<UnaryWithParam> user_fused_activation = std::nullopt;
     const std::optional<const tt::tt_metal::Tile> output_tile;
     const std::optional<const GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
