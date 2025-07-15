@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -74,13 +73,12 @@ static Tensor create_config_tensor(
     }
 
     std::vector<StickInterval> logical_core_to_stick_map;
-    std::vector<uint16_t> dst_core_end_idx_map;
+    std::vector<uint16_t> dst_core_end_idx_map;  // used for padding the config vector per reader
 
-    bool force_new_interval = false;
-    bool is_new_dst_core_reader = false;
-    bool is_new_src_core_reader = false;
+    bool reader_sticks_reached = false;
+    bool insert_new_interval = false;
     uint32_t last_ind = 0;
-    uint32_t elems_per_core_reader = 0;
+    uint32_t elems_per_core_reader = 0;  // represents number of intervals per reader (NCRISC/BRISC)
     uint32_t elem_num = 0;
     // Create map of core and respective offsets in input
     for (uint32_t b = 0; b < batch_size; ++b) {
@@ -94,39 +92,35 @@ static Tensor create_config_tensor(
                         stick_offset = 0;
                         core_idx++;
                     }
-                    is_new_dst_core_reader = stick_cnt == output_nsticks_per_core_reader;
-                    is_new_src_core_reader = stick_offset == 0;
+                    reader_sticks_reached = stick_cnt == output_nsticks_per_core_reader;
+                    insert_new_interval = insert_new_interval || stick_offset == 0 || reader_sticks_reached;
 
-                    if (is_new_src_core_reader || is_new_dst_core_reader || force_new_interval) {
-                        if (is_new_dst_core_reader) {
-                            dst_core_end_idx_map.push_back(logical_core_to_stick_map.size());  // didn't -1, < later
-                            if (output_nsticks_per_core > 1) {
-                                output_nsticks_per_core_reader =
-                                    output_nsticks_per_core - output_nsticks_per_core_reader;
-                            }
-                            stick_cnt = 0;
-                            elem_num = logical_core_to_stick_map.size() - last_ind;
-                            elems_per_core_reader = elem_num > elems_per_core_reader ? elem_num : elems_per_core_reader;
-                            last_ind = logical_core_to_stick_map.size();
-                        }
-                        if (force_new_interval) {
-                            force_new_interval = false;
-                        }
-                        if (is_height_sharded) {
-                            logical_core_to_stick_map.push_back(
-                                StickInterval(logical_cores[core_idx].x, logical_cores[core_idx].y, stick_offset));
-                        } else {
-                            logical_core_to_stick_map.push_back(
-                                StickInterval(0, nhw_start_core + core_idx, stick_offset));
-                        }
-                    } else {
+                    if (!insert_new_interval) {
                         logical_core_to_stick_map.back().offset_end++;
+                        continue;
+                    }
+                    if (reader_sticks_reached) {
+                        dst_core_end_idx_map.push_back(logical_core_to_stick_map.size());
+                        if (output_nsticks_per_core > 1) {
+                            output_nsticks_per_core_reader = output_nsticks_per_core - output_nsticks_per_core_reader;
+                        }
+                        stick_cnt = 0;
+                        elem_num = logical_core_to_stick_map.size() - last_ind;
+                        elems_per_core_reader = elem_num > elems_per_core_reader ? elem_num : elems_per_core_reader;
+                        last_ind = logical_core_to_stick_map.size();
+                    }
+                    insert_new_interval = false;
+                    if (is_height_sharded) {
+                        logical_core_to_stick_map.push_back(
+                            StickInterval(logical_cores[core_idx].x, logical_cores[core_idx].y, stick_offset));
+                    } else {
+                        logical_core_to_stick_map.push_back(StickInterval(0, nhw_start_core + core_idx, stick_offset));
                     }
                 }
                 if (j < scale_factor_h - 1) {
                     stick_offset = stick_offset_start;
                     core_idx = core_idx_start;
-                    force_new_interval = true;  // insert new entry in next loop
+                    insert_new_interval = true;  // insert new entry in next loop
                 }
             }
         }
@@ -321,7 +315,9 @@ operation::ProgramWithCallbacks upsample_multi_core(
         input_nsticks_per_core,
         scale_factor_h,
         scale_factor_w,
-        (uint32_t)config_tensor.logical_shape()[-1] / 4};
+        // number of intervals in config tensor per core, 4 is number of bfloat16 elements per entry
+        (uint32_t)config_tensor.logical_shape()[-1] / 4,
+    };
     std::string writer_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
     auto writer_kernel =
