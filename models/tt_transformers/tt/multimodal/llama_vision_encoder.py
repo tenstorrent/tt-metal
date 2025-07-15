@@ -178,7 +178,7 @@ class TtLlamaVisionEncoder(LightweightModule):
             gated=True,
         )
 
-    def forward(self, images, ar):
+    def forward(self, images, ar, max_actual_num_chunks):
         assert isinstance(
             images, torch.Tensor
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
@@ -200,7 +200,7 @@ class TtLlamaVisionEncoder(LightweightModule):
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))
 
         # tile embeddings
-        x = self.pre_tile_pos_embed(x, ar)
+        x = self.pre_tile_pos_embed(x, ar, max_actual_num_chunks)
         x = ttnn.reshape(x, (1, bsz * num_concurrent_media * num_chunks, ntok, dim))
 
         # apply cls token
@@ -217,12 +217,13 @@ class TtLlamaVisionEncoder(LightweightModule):
         npad, attn_mask = 0, None
 
         # NOTE: We need to do this padding because it creates a funky attention mask
+        x = x[:, :max_actual_num_chunks, :, :]
         x, npad = pad_seq_one_tile(x, self.mesh_device)
 
         fake_x = torch.zeros(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
-        attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
+        attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, max_actual_num_chunks, 1)
         # Mask stripes for the extra padding required on TT hardware
-        attn_mask = mask_tile_padding(attn_mask, ntok, npad, num_chunks)
+        attn_mask = mask_tile_padding(attn_mask, ntok, npad, max_actual_num_chunks)
         attn_mask = ttnn.from_torch(
             attn_mask,
             dtype=ttnn.bfloat16,
@@ -236,19 +237,23 @@ class TtLlamaVisionEncoder(LightweightModule):
         x, int_x = self.transformer(x, return_intermediate=self.return_intermediate, mask=attn_mask)
 
         x = self.ln_post(x)
-        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim))
-        x = self.post_tile_pos_embed(x, ar)
-        x = ttnn.reshape(x, (1, bsz * num_concurrent_media, num_chunks * (ntok + npad), dim))
+        x = ttnn.reshape(x, (bsz * num_concurrent_media, max_actual_num_chunks, ntok + npad, dim))
+        x = self.post_tile_pos_embed(x, ar, max_actual_num_chunks)
+        x = ttnn.reshape(x, (1, bsz * num_concurrent_media, max_actual_num_chunks * (ntok + npad), dim))
         x = self.global_transformer(x, mask=attn_mask)
-        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim))
-        x = ttnn.slice(x, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim))
+        x = ttnn.reshape(x, (bsz * num_concurrent_media, max_actual_num_chunks, ntok + npad, dim))
+        x = ttnn.slice(x, (0, 0, 0, 0), (bsz * num_concurrent_media, max_actual_num_chunks, ntok, dim))
 
         # adding back intermediate layer outputs
         # NOTE: We cannot do 5-dim tensors. It should be find to send back 4-dim as long as calling code knows.
         # NOTE: I can't correctly stack and reshape int_x because of ttnn page size limitations.
         # NOTE: this means I will have to modify calling code to know that int_x is not shuffled
-        int_x = [ttnn.reshape(ix, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim)) for ix in int_x]
-        int_x = [ttnn.slice(ix, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim)) for ix in int_x]
+        int_x = [
+            ttnn.reshape(ix, (bsz * num_concurrent_media, max_actual_num_chunks, ntok + npad, dim)) for ix in int_x
+        ]
+        int_x = [
+            ttnn.slice(ix, (0, 0, 0, 0), (bsz * num_concurrent_media, max_actual_num_chunks, ntok, dim)) for ix in int_x
+        ]
         x = ttnn.concat(
             [
                 x,
