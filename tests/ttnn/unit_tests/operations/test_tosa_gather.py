@@ -34,12 +34,9 @@ def test_tosa_gather_general(N, K, C, W, device):
     torch_gather = torch.gather(input, dim=1, index=torch_index.unsqueeze(-1).expand(-1, -1, C))
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    # For now index is converted to bfloat16 for compatibility with ttnn.expand and ttnn.transpose,
-    # once ttnn.transpose supports uint32 this will be changed to uint32
-    # See issue: https://github.com/tenstorrent/tt-metal/issues/18057
-    ttnn_index = ttnn.from_torch(index, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
 
-    ttnn_gather = ttnn.experimental.tosa_gather(ttnn_input, ttnn_index)
+    ttnn_gather = ttnn.tosa_gather(ttnn_input, ttnn_index)
 
     assert ttnn_gather.shape == torch_gather.shape
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))

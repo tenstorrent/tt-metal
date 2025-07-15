@@ -44,6 +44,8 @@
 #include "ttnn/operations/data_movement/untilize/untilize_pybind.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding_pybind.hpp"
 #include "ttnn/operations/data_movement/sort/sort_pybind.hpp"
+#include "ttnn/operations/data_movement/gather/gather_pybind.hpp"
+#include "ttnn/operations/data_movement/gather/tosa/gather_tosa_pybind.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -86,5 +88,7 @@ void py_module(py::module& module) {
     py_bind_unsqueeze(module);
     py_bind_roll(module);
     detail::bind_sort_operation(module);
+    detail::bind_gather_operation(module);
+    detail::bind_gather_tosa_operation(module);
 }
 }  // namespace ttnn::operations::data_movement

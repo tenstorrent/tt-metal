@@ -11,16 +11,15 @@
 
 #include <optional>
 
-namespace ttnn::operations::experimental::gather {
+namespace ttnn::operations::data_movement::gather {
 
 struct GatherDeviceOperation {
     using operation_attributes_t = gather::operation_attributes_t;
     using tensor_args_t = gather::tensor_args_t;
     using spec_return_value_t = gather::spec_return_value_t;
     using tensor_return_value_t = gather::tensor_return_value_t;
-    using program_factory_t = std::variant<
-        gather::program::GatherProgramFactorySingleRowSingleCore,
-        gather::program::GatherProgramFactorySingleRowMultiCore>;
+    using program_factory_t =
+        std::variant<program::GatherProgramFactorySingleRowSingleCore, program::GatherProgramFactorySingleRowMultiCore>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -39,11 +38,11 @@ struct GatherDeviceOperation {
         const std::optional<Tensor>& output_tensors);
 };
 
-}  // namespace ttnn::operations::experimental::gather
+}  // namespace ttnn::operations::data_movement::gather
 
 namespace ttnn::prim {
 
 constexpr auto gather =
-    ttnn::register_operation<"ttnn::prim::gather", ttnn::operations::experimental::gather::GatherDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::gather", ttnn::operations::data_movement::gather::GatherDeviceOperation>();
 
 }  // namespace ttnn::prim

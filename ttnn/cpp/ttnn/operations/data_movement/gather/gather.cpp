@@ -15,7 +15,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
-namespace ttnn::operations::experimental::gather {
+namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -154,4 +154,4 @@ Tensor ExecuteGather::invoke(
         input_index_tensor, gather_tensor, dim, input_index_tensor_is_dim_last_idx, original_index_tensor_lshape);
 }
 
-}  // namespace ttnn::operations::experimental::gather
+}  // namespace ttnn::operations::data_movement

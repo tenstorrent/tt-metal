@@ -132,6 +132,10 @@ target_sources(
         sort/sort.cpp
         sort/device/sort_device_operation.cpp
         sort/device/sort_program_factory.cpp
+        gather/gather.cpp
+        gather/device/gather_device_operation.cpp
+        gather/device/gather_program_factory.cpp
+        gather/tosa/gather_tosa.cpp
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})
