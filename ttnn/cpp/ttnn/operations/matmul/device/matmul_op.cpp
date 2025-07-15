@@ -2625,6 +2625,75 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
 void SparseMatmul::validate(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     // TODO: Implement
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+
+    const auto& ashape = input_tensor_a.padded_shape();
+    const auto& bshape = input_tensor_b.padded_shape();
+    auto in0_tile = input_tensor_a.tensor_spec().tile();
+    auto in1_tile = input_tensor_b.tensor_spec().tile();
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
+    auto output_tile = this->output_tile.value();
+    auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
+    auto output_layout = Layout::TILE;
+
+    TT_FATAL(
+        ashape[-1] == bshape[-2],
+        "Dimension K (A.shape[-1] {}) and B.shape[-2] ({}) must match for A and B",
+        ashape[-1],
+        bshape[-2]);
+    TT_FATAL(
+        ashape[-2] % in0_tile_shape[0] == 0,
+        "ashape[-2] (A's rows: {}) must be divisible by in0_tile_shape[0] (A's tile height: {}) for tilization. "
+        "ashape: {}, in0_tile_shape: {}",
+        ashape[-2],
+        in0_tile_shape[0],
+        ashape,
+        in0_tile_shape);
+    TT_FATAL(
+        ashape[-1] % in0_tile_shape[1] == 0,
+        "ashape[-1] (A's cols: {}) must be divisible by in0_tile_shape[1] (A's tile width: {}) for tilization. ashape: "
+        "{}, in0_tile_shape: {}",
+        ashape[-1],
+        in0_tile_shape[1],
+        ashape,
+        in0_tile_shape);
+    TT_FATAL(
+        bshape[-2] % in1_tile_shape[0] == 0,
+        "bshape[-2] (B's rows: {}) must be divisible by in1_tile_shape[0] (B's tile height: {}) for tilization. "
+        "bshape: {}, in1_tile_shape: {}",
+        bshape[-2],
+        in1_tile_shape[0],
+        bshape,
+        in1_tile_shape);
+    TT_FATAL(
+        bshape[-1] % in1_tile_shape[1] == 0,
+        "bshape[-1] (B's cols: {}) must be divisible by in1_tile_shape[1] (B's tile width: {}) for tilization. bshape: "
+        "{}, in1_tile_shape: {}",
+        bshape[-1],
+        in1_tile_shape[1],
+        bshape,
+        in1_tile_shape);
+    TT_FATAL(this->nnz > 0, "nnz must be greater than 0");
+
+    // Check that nnz is less than or equal to the length of all batch dimensions
+    uint32_t batch_length = 1;
+    if (ashape.rank() > 2) {
+        for (int i = 0; i < ashape.rank() - 2; ++i) {
+            batch_length *= ashape[i];
+        }
+    }
+    if (bshape.rank() > 2) {
+        for (int i = 0; i < bshape.rank() - 2; ++i) {
+            batch_length *= bshape[i];
+        }
+    }
+    TT_FATAL(
+        this->nnz <= batch_length,
+        "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
+        this->nnz,
+        batch_length);
 }
 
 std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
@@ -2770,14 +2839,12 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
 
                 return create_homogenous_mesh_workload(sparse_bmm_program, tensor_coords);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                std::vector<Tensor> input_tensors_b;
-                input_tensors_b.push_back(input_tensors.at(1));
-                auto sparse_mcast_mm_program = matmul_multi_core_reuse_mcast_1d_optimized(
+                auto sparse_mcast_mm_program = sparse_matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
-                    input_tensors_b,
-                    /*bias=*/std::nullopt,
-                    output_tensors,
-                    /*broadcast_batch=*/true,
+                    input_tensor_b,
+                    sparsity,
+                    this->nnz,
+                    output_tensor,
                     program_config.compute_with_storage_grid_size,
                     this->compute_kernel_config.value(),
                     program_config.in0_block_w,
@@ -2787,12 +2854,8 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
                     program_config.out_block_w,
                     program_config.per_core_M,
                     program_config.per_core_N,
-                    program_config.fuse_batch,
-                    program_config.fused_activation,
                     program_config.mcast_in0,
                     program_config.gather_in0,
-                    program_config.hop_cores,
-                    /*untilize_out=*/false,
                     this->global_cb,
                     program_config.num_global_cb_receivers,
                     this->sub_device_id);

@@ -2859,6 +2859,629 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
+tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mcast_1d_optimized(
+    const Tensor& a,
+    const Tensor& b,
+    const Tensor& sparsity,
+    uint32_t nnz,
+    Tensor& output_tensor,
+    CoreCoord compute_with_storage_grid_size,
+    DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool mcast_in0,
+    bool gather_in0,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t num_global_cb_receivers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    tt_metal::Program program{}; /* Create a program */
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
+    auto in0_tile = a.tensor_spec().tile();
+    auto in1_tile = b.tensor_spec().tile();
+    // cannot use the output tensor tile directly as that might be changed by user override
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
+    auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
+
+    // CB dataformats
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+
+    tt_metal::IDevice* device = a.device();
+
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
+
+    tt_metal::Buffer* in0_buffer = a.buffer();
+    tt_metal::Buffer* in1_buffer = b.buffer();
+    tt_metal::Buffer* out_buffer = output_tensor.buffer();
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Matmul Parameters Setup
+    ////////////////////////////////////////////////////////////////////////////
+    // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
+    // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
+    uint32_t B_A = get_batch_size(ashape);
+    uint32_t B_B = get_batch_size(bshape);
+    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
+    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
+    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
+
+    TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
+
+    // This should allocate a DRAM buffer on the device
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores = num_cores_x * num_cores_y;
+
+    // Calculate number of blocks along x and y; tensor dims are padded up to 512
+    uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
+    uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
+    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
+
+    TT_FATAL(
+        num_blocks_total <= num_cores,
+        "Number of blocks exceeds number of cores: {} blocks > {} cores",
+        num_blocks_total,
+        num_cores);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Application Setup
+    ////////////////////////////////////////////////////////////////////////////
+    // Only support mcast_in0 for now
+    TT_FATAL(mcast_in0, "Only mcast_in0 is supported for sparse matmul");
+
+    using tt::tt_metal::num_cores_to_corerangeset;
+
+    uint32_t num_blocks = Kt / in0_block_w;
+    // Only enable packer l1 accumulation when there are spills, otherwise
+    // unnecessary overhead for reconfigs are added
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+
+    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
+    tt::DataFormat interm0_data_format = packer_l1_acc_en
+                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+
+    uint32_t in0_block_h = out_block_h;
+    uint32_t in1_block_w = out_block_w;
+    uint32_t in0_num_blocks_y = per_core_M / out_block_h;
+    uint32_t in1_num_blocks_x = per_core_N / out_block_w;
+    uint32_t out_num_blocks_x = in1_num_blocks_x;
+    uint32_t out_num_blocks_y = in0_num_blocks_y;
+
+    uint32_t in0_block_tiles = in0_block_h * in0_block_w;
+    uint32_t in0_CB_tiles = in0_block_tiles;
+    if (B_A * B_B * num_blocks > 1) {
+        in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
+    }
+    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+
+    uint32_t in1_block_tiles = out_block_w * in0_block_w;
+    uint32_t in1_CB_tiles = in1_block_tiles;
+    if (B_A * B_B * num_blocks > 1) {
+        in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
+    }
+
+    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+
+    uint32_t out_block_tiles = out_block_h * out_block_w;
+    uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
+    uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
+    uint32_t interm0_CB_tiles = out_block_tiles;  // No double buffer
+    uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
+
+    CoreCoord start_core = {0, 0};
+    uint32_t start_core_x = start_core.x;
+    uint32_t start_core_y = start_core.y;
+    uint32_t num_cores_c = compute_with_storage_grid_size.x;
+
+    uint32_t num_cores_with_work = num_blocks_total;
+
+    uint32_t in0_sender_num_cores = 1;
+
+    constexpr bool row_major = true;
+    CoreRangeSet all_cores =
+        num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
+
+    CoreRangeSet in0_mcast_sender_cores =
+        num_cores_to_corerangeset(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+    CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
+
+    CoreRangeSet all_cores_with_work =
+        num_cores_to_corerangeset(num_cores_with_work, compute_with_storage_grid_size, row_major);
+    CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
+    uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
+    uint32_t in0_mcast_receiver_num_dests = std::min(
+        in0_mcast_receiver_num_cores,
+        num_cores);  // should always be number of cores in receiver grid up to number of active cores
+
+    CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid;
+    CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
+    CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
+    CoreRangeSet in0_mcast_receivers;
+    std::vector<uint32_t> in0_mcast_noc_x;
+    std::vector<uint32_t> in0_mcast_noc_y;
+
+    in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
+    if (in0_mcast_receiver_num_cores > 1) {
+        auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
+                                       ? CoreCoord{start_core.x + 1, start_core.y}
+                                       : CoreCoord{start_core.x, start_core.y + 1};
+        in0_mcast_receivers =
+            num_cores_to_corerangeset(receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+    }
+
+    // Mcast args
+    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
+    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
+    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
+    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+
+    uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
+    uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
+
+    std::vector<uint32_t> in0_sender_compile_time_args;
+    in0_sender_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t)in0_is_dram,
+
+        // in0 tensor args
+        (std::uint32_t)1,                 // in0_tensor_stride_w
+        (std::uint32_t)Kt,                // in0_tensor_stride_h
+        (std::uint32_t)in0_block_w,       // in0_tensor_next_block_stride
+        (std::uint32_t)Kt * in0_block_h,  // in0_tensor_next_h_dim_block_stride
+        // in0 block args
+        (std::uint32_t)in0_block_w,          // in0_block_w
+        (std::uint32_t)in0_block_h,          // in0_block_h
+        (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
+        (std::uint32_t)in0_last_ktile_w,
+        (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
+        (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
+        (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
+        // in0/in1 common args
+        (std::uint32_t)num_blocks,        // num_blocks
+        (std::uint32_t)out_num_blocks_x,  // num_blocks_x
+        (std::uint32_t)out_num_blocks_y,  // num_blocks_y
+        // in0 mcast args
+        (std::uint32_t)in0_mcast_sender_semaphore_id,
+        (std::uint32_t)in0_mcast_receiver_semaphore_id,
+        (std::uint32_t)num_cores - 1,                     // in0_mcast_num_dests
+        (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
+        // batch args
+        (std::uint32_t)Mt * Kt,  // MtKt
+        (std::uint32_t)B_A,      // batchA
+        (std::uint32_t)B_B,      // batchB
+    };
+
+    std::vector<uint32_t> in1_sender_writer_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t)in1_is_dram,
+        (std::uint32_t)out_is_dram,
+
+        // READER
+        // in1 tensor args
+        (std::uint32_t)1,                 // in1_tensor_stride_w
+        (std::uint32_t)Nt,                // in1_tensor_stride_h
+        (std::uint32_t)in0_block_w * Nt,  // in1_tensor_next_block_stride
+        (std::uint32_t)in1_block_w,       // in1_tensor_next_w_dim_block_stride
+        // in1 block args
+        (std::uint32_t)in1_block_w,                // in1_block_w
+        (std::uint32_t)in0_block_w,                // in1_block_h
+        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
+        // in0/in1 common args
+        (std::uint32_t)num_blocks,        // num_blocks
+        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
+        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+        // in1 mcast args
+        (std::uint32_t)0,
+        (std::uint32_t)0,
+        (std::uint32_t)0,  // in1_mcast_num_dests
+        (std::uint32_t)0,  // in1_mcast_num_cores
+        // batch args
+        (std::uint32_t)Kt * Nt,  // KtNt
+        (std::uint32_t)B_A,      // batchA
+        (std::uint32_t)B_B,      // batchB
+
+        // WRITER
+        // out tensor args
+        (std::uint32_t)1,                    // out_tensor_stride_w
+        (std::uint32_t)Nt,                   // out_tensor_stride_h
+        (std::uint32_t)out_subblock_w,       // out_tensor_next_subblock_stride_w
+        (std::uint32_t)out_subblock_h * Nt,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,          // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * Nt,     // out_tensor_next_h_dim_block_stride
+        // out subblock args
+        (std::uint32_t)out_subblock_w,                     // out_subblock_w
+        (std::uint32_t)out_subblock_h,                     // out_subblock_h
+        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+        // batch args
+        (std::uint32_t)Mt * Nt  // MtNt
+    };
+
+    std::vector<uint32_t> in0_receiver_compile_time_args = {
+        // in0 block args
+        (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
+        // in0/in1 common args
+        (std::uint32_t)num_blocks,        // num_blocks
+        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
+        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+        // in0 mcast args
+        (std::uint32_t)in0_mcast_sender_semaphore_id,
+        (std::uint32_t)in0_mcast_receiver_semaphore_id,
+        // batch args
+        (std::uint32_t)nnz,  // batch_nnz
+    };
+
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+
+    if (packer_l1_acc_en) {
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
+    }
+    if (fp32_dest_acc_en) {
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+
+    mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+
+    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+
+    auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_sparse_bmm_tile_layout_in0_sender_padding.cpp",
+        in0_mcast_sender_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = in0_noc,
+            .compile_args = in0_sender_compile_time_args,
+            .defines = mm_kernel_in0_sender_writer_defines});
+
+    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
+    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
+
+    tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
+    if (in0_mcast_receivers.num_cores() > 0) {
+        mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_sparse_bmm_tile_layout_in0_receiver.cpp",
+            in0_mcast_receivers,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+                .compile_args = in0_receiver_compile_time_args});
+    }
+
+    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_sparse_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        all_cores_with_work,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = in1_noc,
+            .compile_args = in1_sender_writer_compile_time_args,
+            .defines = mm_kernel_in1_sender_writer_defines});
+
+    // Compute kernel compile time args
+    uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
+
+    uint32_t in1_num_subblocks = (out_block_w / out_subblock_w);
+    uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+
+    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+
+    std::vector<uint32_t> compute_kernel_args = {
+        in0_block_w,             // in0_block_w
+        in0_num_subblocks,       // in0_num_subblocks
+        in0_block_num_tiles,     // in0_block_num_tiles
+        in0_subblock_num_tiles,  // in0_subblock_num_tiles
+
+        in1_num_subblocks,    // in1_num_subblocks
+        in1_block_num_tiles,  // in1_block_num_tiles
+        in1_per_core_w,       // in1_per_core_w
+
+        num_blocks,        // num_blocks
+        out_num_blocks_x,  // out_num_blocks_x
+        out_num_blocks_y,  // out_num_blocks_y
+
+        out_subblock_h,          // out_subblock_h
+        out_subblock_w,          // out_subblock_w
+        out_subblock_num_tiles,  // out_subblock_num_tiles
+        nnz,                     // batch_nnz
+        out_block_tiles,         // out_block_num_tiles
+
+        false  // untilize_out
+    };
+
+    // Create compute kernel
+    // bool fp32_dest_acc_en = false;
+    // Gelu currently has better accuracy when run in approx mode
+    // bool math_approx_mode = false;
+    auto mm_kernel = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/sparse_bmm_large_block_zm_fused_bias_activation.cpp",
+        all_cores_with_work,
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_kernel_args,
+            .defines = mm_kernel_defines});
+
+    // Create circular buffers
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    tt_metal::CircularBufferConfig src0_cb_config =
+        tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    log_debug(
+        LogOp,
+        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+        src0_cb_index,
+        in0_single_tile_size,
+        in0_CB_size / in0_single_tile_size,
+        in0_CB_size);
+
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt_metal::CircularBufferConfig src1_cb_config =
+        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
+
+    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    log_debug(
+        LogOp,
+        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+        src1_cb_index,
+        in1_single_tile_size,
+        in1_CB_size / in1_single_tile_size,
+        in1_CB_size);
+
+    uint32_t src2_cb_index = tt::CBIndex::c_2;
+    tt::tt_metal::CBHandle cb_src2 = 0;
+
+    uint32_t output_cb_index = tt::CBIndex::c_4;
+    uint32_t interm0_cb_index = tt::CBIndex::c_5;
+    tt_metal::CircularBufferConfig interm0_cb_config =
+        tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
+    tt_metal::CircularBufferConfig output_cb_config =
+        tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
+
+    if (interm0_data_format != output_data_format) {
+        // output
+        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
+            {output_cb_index, output_data_format},
+        };
+        output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile);
+        // interm0
+        std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
+            {interm0_cb_index, interm0_data_format},
+        };
+        interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
+                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index, output_tile);
+
+        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        log_debug(
+            LogOp,
+            "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+            interm0_cb_index,
+            interm0_single_tile_size,
+            interm0_CB_size / interm0_single_tile_size,
+            interm0_CB_size);
+    } else {
+        // share buffer
+        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
+            {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
+        output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile)
+                               .set_tile_dims(interm0_cb_index, output_tile);
+    }
+
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    log_debug(
+        LogOp,
+        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+        output_cb_index,
+        output_single_tile_size,
+        out_CB_size / output_single_tile_size,
+        out_CB_size);
+
+    // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
+    uint32_t last_per_core_N = Nt % per_core_N == 0 ? per_core_N : Nt % per_core_N;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_out_num_blocks_w = (last_per_core_N - 1) / out_block_w + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
+    uint32_t last_subblock_of_last_block_w =
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
+    CoreCoord start_core_noc = top_left_core_physical;
+    CoreCoord end_core_noc = bottom_right_core_physical;
+    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        std::swap(start_core_noc, end_core_noc);
+    }
+
+    const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& core = cores[i];
+        uint32_t output_idx_x = i % num_blocks_x;
+        uint32_t output_idx_y = i / num_blocks_x;
+
+        // in0 sender and in1 sender
+        if (core == start_core) {
+            std::vector<uint32_t> mm_in0_sender_args = {
+                // in0 tensor args
+                (std::uint32_t)in0_buffer->address(),
+                (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
+                // in0 mcast args
+                (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
+                (std::uint32_t)start_core_noc.y,  // in0_mcast_dest_noc_start_y
+                (std::uint32_t)end_core_noc.x,    // in0_mcast_dest_noc_end_x
+                (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
+
+                // padding args
+                (std::uint32_t)out_block_h  // last_block_h
+            };
+
+            tt_metal::SetRuntimeArgs(
+                program,
+                mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
+                core,
+                mm_in0_sender_args);  // RISCV_0_default
+        }
+        // in0 receiver and in 1 sender
+        else {
+            std::vector<uint32_t> mm_in0_receiver_args = {
+                // in0 mcast args
+                (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
+                (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
+            };
+            tt_metal::SetRuntimeArgs(
+                program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);  // RISCV_1_default
+        }
+        if (i < num_cores_with_work) {
+            std::vector<uint32_t> mm_in1_sender_writer_args = {
+                // READER
+                // in1 tensor args
+                (std::uint32_t)in1_buffer->address(),
+                (std::uint32_t)per_core_N * output_idx_x,  // in1_tensor_start_tile_id
+                // in1 mcast args
+                (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
+                (std::uint32_t)0,  // in1_mcast_dest_noc_start_y
+                (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
+                (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
+
+                // WRITER
+                // out tensor args
+                (std::uint32_t)out_buffer->address(),
+                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * Nt  // out_tensor_start_tile_id
+            };
+
+            if (output_idx_x == num_blocks_x - 1) {
+                // padding args (READER)
+                mm_in1_sender_writer_args.push_back(last_out_block_w);
+
+                // padding args (WRITER)
+                mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
+                mm_in1_sender_writer_args.push_back(out_subblock_h);
+                mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);  // out_num_nonzero_subblocks_w
+                mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
+                mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
+                mm_in1_sender_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
+                mm_in1_sender_writer_args.push_back(last_block_padded_block_tiles_w_skip);
+            } else {
+                // padding args (READER)
+                mm_in1_sender_writer_args.push_back(out_block_w);
+
+                // padding args (WRITER)
+                mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
+                mm_in1_sender_writer_args.push_back(out_subblock_h);
+                mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);  // out_num_nonzero_subblocks_w
+                mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
+                mm_in1_sender_writer_args.push_back(out_subblock_w);
+                mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(0);
+            }
+
+            mm_in1_sender_writer_args.push_back(0);
+            mm_in1_sender_writer_args.push_back(0);
+
+            if (output_idx_x == num_blocks_x - 1) {
+                mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
+            } else {
+                mm_in1_sender_writer_args.push_back(out_num_blocks_x);
+            }
+
+            tt_metal::SetRuntimeArgs(
+                program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
+        }
+    }
+
+    auto shared_vars = ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t{
+        {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
+        {cb_src1, cb_src2, cb_output},
+        false,
+        start_core,
+        cores,
+        num_cores_with_work,
+        ttnn::operations::matmul::Matmul1DType::MCAST_IN0};
+
+    auto override_runtime_arguments_callback =
+        [shared_vars](
+            const void* operation,
+            tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+            auto src_buffer_a = input_tensors.at(0).buffer();
+            auto src_buffer_b = input_tensors.at(1).buffer();
+
+            auto dst_buffer = output_tensors.at(0).buffer();
+
+            // Manually unroll sender core
+            // in0 sender
+            auto& reader_sender_runtime_args =
+                GetRuntimeArgs(program, shared_vars.kernels.at(0), shared_vars.start_core);
+            reader_sender_runtime_args[0] = src_buffer_a->address();
+
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.kernels.at(1));
+
+            for (uint32_t i = 0; i < shared_vars.num_cores_with_work; ++i) {
+                const auto& core = shared_vars.cores[i];
+
+                auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+
+                // in1 sender
+                writer_runtime_args[0] = src_buffer_b->address();
+                writer_runtime_args[6] = dst_buffer->address();
+            }
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+}
+
 }  // namespace matmul
 
 }  // namespace operations
