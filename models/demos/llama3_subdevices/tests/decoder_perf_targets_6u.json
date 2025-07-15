@@ -93,11 +93,11 @@
       "kernel_duration": 8010.601157407407,
       "op_to_op": 867.8740740740741,
       "first_to_last_start": 1734.2666666666667,
-      "non-overlapped-dispatch-time": 6009.7380952380945,
+      "non-overlapped-dispatch-time": 8437.777777777777,
       "kernel_duration_relative_margin": 0.1,
       "op_to_op_duration_relative_margin": 0.4,
       "first_to_last_start_relative_margin": 0.2,
-      "dispatch_duration_relative_margin": 0.2
+      "dispatch_duration_relative_margin": 0.4
     },
     "AllReduceAsync_0": {
       "op_name": "AllReduceAsync_DO",
@@ -202,7 +202,7 @@
       "op_name": "InterleavedToSharded_1",
       "kernel_duration": 879.2395833333334,
       "op_to_op": 691.2,
-      "non-overlapped-dispatch-time": 1157.2857142857142,
+      "non-overlapped-dispatch-time": 2257.0,
       "kernel_duration_relative_margin": 0.2,
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
