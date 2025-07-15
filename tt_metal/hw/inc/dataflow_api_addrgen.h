@@ -236,9 +236,8 @@ std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
 template <bool DRAM>
 struct InterleavedAddrGen {
     uint32_t bank_base_address;  // Base address for the whole tensor.
-    const uint32_t page_size;    // Num bytes in page.
-    const uint32_t aligned_page_size =
-        align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<DRAM>());
+    uint32_t page_size;          // Num bytes in page.
+    uint32_t aligned_page_size = align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<DRAM>());
 
     FORCE_INLINE
     uint32_t get_addr(

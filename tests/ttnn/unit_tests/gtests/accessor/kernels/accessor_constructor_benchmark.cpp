@@ -13,8 +13,8 @@ void kernel_main() {
     for (size_t i = 0; i < loop_count; ++i) {
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
-            auto args = make_tensor_accessor_args<base_idx_cta, base_idx_crta>();
-            volatile auto tensor_accessor = make_tensor_accessor_from_args(args, 0, 1024);
+            auto args = TensorAccessorArgs<base_idx_cta, base_idx_crta>();
+            volatile auto tensor_accessor = TensorAccessor(args, 0, 1024);
             (void)tensor_accessor;
         }
     }
