@@ -158,11 +158,7 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
             return shard_spec.physical_shard_shape.has_value() ? Alignment(shard_spec.physical_shard_shape.value())
                                                                : Alignment({shard_spec.shape[1]});
         }
-        // TODO: Investigate why we need guard against HEIGHT_SHARDED and merge logic with LOGICAL sharding
-        if (shard_spec.mode == ShardMode::PHYSICAL &&
-            memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-            return Alignment({shard_spec.shape[1]});
-        }
+        return Alignment({shard_spec.shape[1]});
     } else if (memory_config.nd_shard_spec().has_value()) {
         const auto& nd_shard_spec = *memory_config.nd_shard_spec();
         return Alignment({nd_shard_spec.shard_shape[-1]});

@@ -126,10 +126,6 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config) :
-    TensorLayout(dtype, page_config, memory_config, {}) {}
-
-// Private
 TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
