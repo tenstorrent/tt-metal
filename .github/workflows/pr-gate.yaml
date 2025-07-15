@@ -195,9 +195,9 @@ jobs:
     - name: Install clang-tidy
       run: |
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-17 python3.11 python3.11-venv python3.11-dev
-        sudo ln -s $(which clang-tidy-17) /usr/local/bin/clang-tidy
-        pip install pyyaml # Needed for clang-tidy-diff-17.py
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 python3.11 python3.11-venv python3.11-dev
+        sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
+        pip install pyyaml # Needed for clang-tidy-diff-20.py
     - name: Prepare compile_commands.json
       run: |
         cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
@@ -228,7 +228,7 @@ jobs:
 
         # Analyze the relevant diffs of the relevant files
         git diff "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" -- $(cat common_files.txt) > filtered_changes.diff
-        clang-tidy-diff-17.py -p1 -path build  -export-fixes clang-tidy-result/fixes.yml -j$(nproc) < filtered_changes.diff
+        clang-tidy-diff-20.py -p1 -path build  -export-fixes clang-tidy-result/fixes.yml -j$(nproc) < filtered_changes.diff
 
         # TODO: Find a way to fail THIS step if there's some USEFUL issues detected.
         #       For now disable it b/c it fails if it finds things in non-user code and/or NOLINT's.
