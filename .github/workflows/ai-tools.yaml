@@ -9,10 +9,6 @@ on:
     types: [opened, assigned]
   pull_request_review:
     types: [submitted]
-  push:
-    branches:
-      - ayerofieiev-tt-patch-2
-
 
 jobs:
   call-ai-assistant:
