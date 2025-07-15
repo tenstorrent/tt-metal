@@ -8,17 +8,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "mod_div_lib.h"
-
-#ifdef FUSE_BIAS
-#include "compute_kernel_api/bcast.h"
-#endif
-
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-
-// Please update
-// tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
-// when making any changes to this file.
-// Have to keep a copy because cannot import ttnn into tests/tt_metal.
 
 namespace NAMESPACE {
 
@@ -118,12 +108,7 @@ void MAIN {
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
-#ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
-    constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
-#else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
-#endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -145,27 +130,12 @@ void MAIN {
                 bool enable_reload = false;
                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
-#ifdef PACK_RELU
-                // for each batch we start with relu disabled so that intermediate results are not relu'd
-                if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-                }
-#endif
-
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-                    }
-#endif
-
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
@@ -217,7 +187,7 @@ void MAIN {
 
                             if (last_out) {
 // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
-#if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
+#if defined SFPU_OP_INIT_ACTIVATION
                                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                                     SFPU_OP_FUNC_ACTIVATION
                                 }
@@ -232,15 +202,7 @@ void MAIN {
 #endif
 
 #ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
-                                } else {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
-#else
                                 PACK((llk_pack_reconfig_l1_acc(0)));
-#endif
 #endif
 
                                 uint32_t start_dst_index = 0;
@@ -282,16 +244,6 @@ void MAIN {
                     }
 
 #ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
-                    if (block < num_blocks_inner_dim - 1) {
-                        // Wait for l1 accumulation to populate interm buffer,
-                        // then pop to update fifo rd pointer
-                        cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
-                        cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
-                    }
-                    // never reload when with bias, bias uses interm buffer
-                    enable_reload = false;
-#else
                     // Last iteration does spill and reload to output buffer
                     if (block < num_blocks_inner_dim - 2) {
                         cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
@@ -300,7 +252,6 @@ void MAIN {
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
                     }  // reload when last iteration
-#endif
 #else
                     if constexpr (spill) {
                         enable_reload = true;
@@ -311,71 +262,7 @@ void MAIN {
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
                 }
 
-#ifdef FUSE_BIAS
-#ifdef PACK_RELU
-                // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-#endif
-#if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                PACK((pack_reconfig_data_format(out_cb_id)));
-#endif
-#ifdef PACKER_L1_ACC
-                PACK((llk_pack_reconfig_l1_acc(0)));
-#endif
-
-                reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
-                // reconfigure unpacker df for src B
-                cb_wait_front(bias_cb_id, in1_block_w);
-                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                    int in1_index_subblock_offset = 0;
-                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                        // Redundant wait since we know data was just pushed
-                        cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
-                        tile_regs_acquire();
-                        for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                            uint32_t bcast_tile_idx = in1_index_subblock_offset;
-                            for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
-                                bcast_tile_idx++;
-                            }
-                        }
-// if there's no SFPU fusion, we commit the regs so packer can start packing
-#ifndef SFPU_OP_INIT_ACTIVATION
-                        tile_regs_commit();
-#endif
-
-                        cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
-
-// sfpu activation
-#ifdef SFPU_OP_INIT_ACTIVATION
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            SFPU_OP_FUNC_ACTIVATION
-                        }
-                        tile_regs_commit();
-#endif
-
-                        // Pack out to output buffer
-                        cb_reserve_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, untilize_mode_out_cb_id);
-                        }
-                        tile_regs_release();
-                        cb_push_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
-
-                        in1_index_subblock_offset += out_subblock_w;
-                    }
-                }
-                if constexpr (num_blocks_w_dim > 1) {
-                    cb_pop_front(bias_cb_id, in1_block_w);
-                }
-#endif  // FUSE_BIAS
                 if constexpr (untilize_out) {
-#ifdef PACK_RELU
-                    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-#endif  // PACK_RELU
-#ifndef FUSE_BIAS
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                     PACK((pack_reconfig_data_format(out_cb_id)));
@@ -383,7 +270,6 @@ void MAIN {
 #ifdef PACKER_L1_ACC
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-#endif  // FUSE_BIAS
                     pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
                     copy_tile_to_dst_init_short(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -393,13 +279,8 @@ void MAIN {
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
-#ifdef FUSE_BIAS
-                    // reconfigure unpacker df for src A and src B
-                    reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
-#else
                     // reconfigure unpacker df for src A
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-#endif
                     // reconfigure init for matmul
                     mm_block_init_short(
                         in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
