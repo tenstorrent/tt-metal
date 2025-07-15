@@ -2905,6 +2905,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
+    tt_metal::Buffer* sparsity_buffer = sparsity.buffer();
     tt_metal::Buffer* out_buffer = output_tensor.buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -3037,6 +3038,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool sparsity_is_dram = sparsity_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
@@ -3074,6 +3076,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)B_A,      // batchA
         (std::uint32_t)B_B,      // batchB
+        // sparsity args
+        (std::uint32_t)sparsity_is_dram,
+        (std::uint32_t)2,  // log2 of page size (4 bytes)
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -3118,7 +3123,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)Mt * Nt  // MtNt
+        (std::uint32_t)Mt * Nt,  // MtNt
+        // sparsity args
+        (std::uint32_t)sparsity_is_dram,
+        (std::uint32_t)2,  // log2 of page size (4 bytes)
     };
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
@@ -3279,6 +3287,13 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
 
+    uint32_t sparsity_cb_index = tt::CBIndex::c_6;
+    uint32_t sparsity_cb_size = 32;  // We only need 4 bytes to read one float, rounded up to 32 bytes
+    tt_metal::CircularBufferConfig sparsity_cb_config =
+        tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index, tt::DataFormat::Float32}})
+            .set_page_size(sparsity_cb_index, sparsity_cb_size);
+    auto cb_sparsity = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config);
+
     if (interm0_data_format != output_data_format) {
         // output
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
@@ -3360,7 +3375,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
 
                 // padding args
-                (std::uint32_t)out_block_h  // last_block_h
+                (std::uint32_t)out_block_h,  // last_block_h
+                // sparsity args
+                (std::uint32_t)sparsity_buffer->address()  // sparsity_addr
             };
 
             tt_metal::SetRuntimeArgs(
@@ -3434,6 +3451,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 mm_in1_sender_writer_args.push_back(out_num_blocks_x);
             }
 
+            // sparsity args
+            mm_in1_sender_writer_args.push_back(sparsity_buffer->address());
+
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
@@ -3457,7 +3477,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
-
+            auto sparsity_buffer = input_tensors.at(2).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
 
             // Manually unroll sender core
@@ -3465,6 +3485,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
             auto& reader_sender_runtime_args =
                 GetRuntimeArgs(program, shared_vars.kernels.at(0), shared_vars.start_core);
             reader_sender_runtime_args[0] = src_buffer_a->address();
+            reader_sender_runtime_args[7] = sparsity_buffer->address();
 
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.kernels.at(1));
 
@@ -3476,10 +3497,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 // in1 sender
                 writer_runtime_args[0] = src_buffer_b->address();
                 writer_runtime_args[6] = dst_buffer->address();
+                writer_runtime_args[20] = sparsity_buffer->address();
             }
         };
 
-    log_warning(LogOp, "Sparse BMM Program created");
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
