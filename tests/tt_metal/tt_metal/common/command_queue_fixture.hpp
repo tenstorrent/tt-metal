@@ -256,11 +256,9 @@ class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixt
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
-class DISABLED_CommandQueueMultiDeviceOnFabricFixture
-    : public CommandQueueMultiDeviceFixture,
-      public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
+class CommandQueueMultiDeviceOnFabricFixture : public CommandQueueMultiDeviceFixture,
+                                               public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
 private:
-    bool original_fd_fabric_en_ = false;
     inline static ARCH arch_ = tt::ARCH::Invalid;
     inline static bool is_galaxy_ = false;
 
@@ -274,9 +272,6 @@ protected:
     static void TearDownTestSuite() {}
 
     void SetUp() override {
-        original_fd_fabric_en_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric();
-        // Enable Fabric Dispatch
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_fabric::SetFabricConfig(GetParam(), tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         CommandQueueMultiDeviceFixture::SetUp();
@@ -292,7 +287,6 @@ protected:
         }
         CommandQueueMultiDeviceFixture::TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(original_fd_fabric_en_);
     }
 };
 

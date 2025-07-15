@@ -14,16 +14,13 @@
 
 #include "assert.hpp"
 #include "dispatch/command_queue_common.hpp"
-#include "demux.hpp"
 #include "device.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
-#include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "hal_types.hpp"
-#include "mux.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "rtoptions.hpp"
@@ -121,17 +118,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.my_downstream_cb_sem_id = 0;  // Unused
 
         static_config_.split_dispatch_page_preamble_size = 0;
-        // TODO: why is this hard-coded to 1 CQ on Galaxy?
-        if (MetalContext::instance().rtoptions().get_fd_fabric()) {
-            static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
-        } else {
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-                static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(1);
-            } else {
-                static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
-            }
-        }
-
+        static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
         static_config_.packed_write_max_unicast_sub_cmds =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
         static_config_.dispatch_s_sync_sem_base_addr = 0;       // Unused
@@ -160,17 +147,10 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.completion_queue_base_addr = 0;
         static_config_.completion_queue_size = 0;
 
-        if (MetalContext::instance().rtoptions().get_fd_fabric()) {
-            static_config_.split_dispatch_page_preamble_size = 0;
-            static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
-            static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
-                *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
-        } else {
-            static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
-            static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
-            static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
-                *program_, logical_core_, my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs()), GetCoreType());
-        }
+        static_config_.split_dispatch_page_preamble_size = 0;
+        static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
+        static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
+            *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
 
         static_config_.packed_write_max_unicast_sub_cmds =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
@@ -199,7 +179,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         TT_FATAL(false, "DispatchKernel must be one of (or both) H and D variants");
     }
 
-    if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+    if (!is_hd()) {
         create_edm_connection_sems(edm_connection_attributes_);
         static_config_.is_2d_fabric =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology() ==
@@ -253,20 +233,12 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.downstream_cb_sem_id = UNUSED_SEM_ID;           // Unused
         dependent_config_.num_hops = 0;
     } else if (static_config_.is_h_variant.value()) {
-        // Upstream, expect DEMUX
-        // Or direct connection to DISPATCH_D if using fabric
+        // Upstream, expect connection to DISPATCH_D
 
         // May be overwritten below
         dependent_config_.num_hops = 0;
         TT_ASSERT(upstream_kernels_.size() == 1);
-        if (auto demux_kernel = dynamic_cast<DemuxKernel*>(upstream_kernels_[0])) {
-            dependent_config_.upstream_logical_core = demux_kernel->GetLogicalCore();
-            int demux_idx =
-                demux_kernel->GetDownstreamPort(this);  // Need to know which port this kernel connects to upstream
-            dependent_config_.upstream_dispatch_cb_sem_id =
-                demux_kernel->GetStaticConfig().output_depacketize_local_sem_id[demux_idx].value();
-            dependent_config_.upstream_sync_sem = 0;  // Unused
-        } else if (auto dispatch_d = dynamic_cast<DispatchKernel*>(upstream_kernels_[0])) {
+        if (auto dispatch_d = dynamic_cast<DispatchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = dispatch_d->GetLogicalCore();
             dependent_config_.upstream_dispatch_cb_sem_id =
                 dispatch_d->GetStaticConfig().my_downstream_cb_sem_id.value();
@@ -343,7 +315,6 @@ void DispatchKernel::GenerateDependentConfigs() {
         // + A Dispatch_s if enabled
 
         bool found_dispatch_s = false;
-        bool found_mux = false;
         bool found_dispatch_h = false;
         bool found_relay_mux = false;  // fabric mux
         for (auto ds_kernel : downstream_kernels_) {
@@ -351,21 +322,6 @@ void DispatchKernel::GenerateDependentConfigs() {
                 TT_ASSERT(!found_dispatch_s, "DISPATCH_D has multiple downstream DISPATCH_S kernels.");
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
                 found_dispatch_s = true;
-            } else if (auto mux_kernel = dynamic_cast<MuxKernel*>(ds_kernel)) {
-                TT_ASSERT(!found_mux, "DISPATCH_D has multiple downstream MUX_D kernels.");
-                dependent_config_.downstream_logical_core = mux_kernel->GetLogicalCore();
-                // Some configs depend on which port this kernel connects to on the downstream kernel
-                int dispatch_d_idx =
-                    mux_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
-                dependent_config_.downstream_cb_size = mux_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
-                // MUX queue id is "dependent_config_.downstream_cb_size.value()"
-                // The address for that queue starts at "rx_queue_start_addr_words + i*rx_queue_size_words" (based on
-                // kernel code)
-                dependent_config_.downstream_cb_base =
-                    (mux_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
-                    dispatch_d_idx * dependent_config_.downstream_cb_size.value();
-                dependent_config_.downstream_cb_sem_id = dispatch_d_idx;
-                found_mux = true;
             } else if (auto dispatch_h_kernel = dynamic_cast<DispatchKernel*>(ds_kernel)) {
                 TT_ASSERT(!found_dispatch_h, "DISPATCH_D has multiple downstream DISPATCH_H kernels.");
                 dependent_config_.downstream_logical_core = dispatch_h_kernel->GetLogicalCore();
@@ -393,9 +349,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         TT_FATAL(
             !MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() || found_dispatch_s,
             "dispatch_d is missing dispatch_s downstream");
-        TT_FATAL(
-            found_mux || found_dispatch_h,
-            "Path not implemented for dispatch_d. Either a mux or dispatch_h in downstream is required");
+        TT_FATAL(found_dispatch_h, "Path not implemented for dispatch_d. dispatch_h in downstream is required");
 
         if (!found_dispatch_s) {
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
@@ -522,7 +476,7 @@ void DispatchKernel::CreateKernel() {
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
-    if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+    if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {
             defines["FABRIC_2D"] = "1";
