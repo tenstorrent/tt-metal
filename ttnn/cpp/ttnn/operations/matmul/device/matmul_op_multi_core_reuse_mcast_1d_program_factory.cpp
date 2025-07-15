@@ -3479,6 +3479,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
             }
         };
 
+    log_warning(LogOp, "Sparse BMM Program created");
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
