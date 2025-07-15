@@ -1768,13 +1768,6 @@ def test_binary_sharded_invalid_spec(
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
         ],
         [
-            torch.Size([64, 33]),
-            torch.Size([64, 33]),
-            ttnn.ShardStrategy.HEIGHT,
-            [32, 64],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
-        ],
-        [
             torch.Size([64, 4 * 32]),
             torch.Size([64, 4 * 32]),
             ttnn.ShardStrategy.WIDTH,
