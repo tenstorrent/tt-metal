@@ -297,9 +297,6 @@ TEST_F(CommandQueueSingleCardFixture, IdleEthTestInvalidReadWriteAddressL1) {
             GTEST_SKIP() << "No idle ethernet cores found";
         }
 
-        // https://github.com/tenstorrent/tt-metal/issues/23296
-        device->disable_and_clear_program_cache();
-
         std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
         const CoreCoord eth_core = *idle_ethernet_cores.begin();
         const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
