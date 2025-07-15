@@ -153,7 +153,7 @@ void kernel_main() {
             cb_reserve_back(cb_q_in, q_chunk_tiles);
             q_write_ptr = get_write_ptr(cb_q_in);
         }
-        if constexpr (use_half_tile and not tilize_q) {
+        if constexpr (use_half_tile) {
             // q_addr represents 32x32 tiles; read them as 16x32 tiles
             // TODO: Properly setup q input as tiny tiles and remove special handling for tiny tiles
             for (uint8_t tile = 0; tile < q_chunk_tiles; tile++) {

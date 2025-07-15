@@ -371,7 +371,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // In compute, need to find a proper way to get num_faces for sfpu functions
     const bool use_half_tile =
         (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b and
-         device->arch() == tt::ARCH::WORMHOLE_B0 and not tilize_q);
+         device->arch() == tt::ARCH::WORMHOLE_B0);
+
     if (use_half_tile) {
         q_tile = half_tile;
         mask_tile = half_tile;
@@ -658,6 +659,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
     const uint32_t q_chunk_size_bytes =
         q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
+
     std::vector<uint32_t> reader_compile_time_args_common = {
         B,
         PNHt,
