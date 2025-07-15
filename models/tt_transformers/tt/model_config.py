@@ -33,6 +33,26 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
+# Import the new Pydantic configuration system
+try:
+    from .model_configs import (
+        parse_model_config_from_dict,
+        StandardModelConfig,
+        ModelArchitecture
+    )
+    PYDANTIC_CONFIG_AVAILABLE = True
+except ImportError:
+    try:
+        from model_configs import (
+            parse_model_config_from_dict,
+            StandardModelConfig,
+            ModelArchitecture
+        )
+        PYDANTIC_CONFIG_AVAILABLE = True
+    except ImportError:
+        PYDANTIC_CONFIG_AVAILABLE = False
+        logger.warning("Pydantic model configuration system not available. Falling back to legacy configuration parsing.")
+
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
@@ -1381,6 +1401,121 @@ class ModelArgs:
         self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
 
     def _set_params_from_dict(self, config, is_hf=False):
+        """Set model parameters from configuration dictionary using standardized Pydantic models when available."""
+        
+        # Use the new Pydantic configuration system if available
+        if PYDANTIC_CONFIG_AVAILABLE:
+            try:
+                # Parse the raw config using the new standardized system
+                standard_config = parse_model_config_from_dict(config)
+                self._set_params_from_standard_config(standard_config, config, is_hf)
+                return
+            except Exception as e:
+                logger.warning(f"Failed to parse config with Pydantic models: {e}")
+                logger.warning("Falling back to legacy configuration parsing")
+        
+        # Fallback to legacy configuration parsing
+        self._set_params_from_dict_legacy(config, is_hf)
+
+    def _set_params_from_standard_config(self, standard_config: "StandardModelConfig", raw_config: dict, is_hf: bool):
+        """Set model parameters using the standardized Pydantic configuration."""
+        
+        # Core model dimensions
+        self.dim = standard_config.dim
+        self.n_heads = standard_config.n_heads
+        self.n_kv_heads = standard_config.n_kv_heads
+        self.n_layers = standard_config.n_layers
+        self.full_model_n_layers = self.n_layers
+        self.norm_eps = standard_config.norm_eps
+        self.vocab_size = standard_config.vocab_size
+        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+        self.head_dim = standard_config.head_dim
+        self.max_context_len = standard_config.max_position_embeddings
+
+        # MLP dimensions
+        self.hidden_dim = standard_config.intermediate_size
+        self.ffn_dim_multiplier = standard_config.ffn_dim_multiplier
+        self.multiple_of = standard_config.multiple_of
+
+        # Extract model name from config if available
+        if "_name_or_path" in raw_config:
+            if is_hf:
+                normalized_path = os.path.normpath(raw_config["_name_or_path"])
+                # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
+                if "snapshots" in normalized_path:
+                    full_model_name = normalized_path.split(os.path.sep)[-3]
+                    self.model_name = full_model_name.split("--")[-1]
+                else:
+                    self.model_name = os.path.basename(normalized_path)
+            else:
+                self.model_name = os.path.basename(raw_config["_name_or_path"])
+            logger.info(f"Model name from config: {self.model_name}")
+
+        # Model-specific validations
+        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+            raise AssertionError(
+                "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+            )
+
+        # Handle MLP padding
+        self.unpadded_hidden_dim = self.hidden_dim
+        if self.num_devices:
+            # Default padding cores for each model, 0 if not set here
+            default_padded_cores = {
+                "Qwen2.5-72B": 32,
+                "Qwen2.5-7B": 16,
+                "QwQ-32B": 16,
+            }.get(self.base_model_name, 0)
+
+            # Override MLP padding cores from env var
+            mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
+
+            # Only pad if MLP_PADDED_CORES is non-zero
+            if mlp_padded_cores > 0:
+                padded_hidden_dim = nearest_multiple(
+                    self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices
+                )
+                if padded_hidden_dim != self.hidden_dim:
+                    logger.info(
+                        f"PAD_MLP_CORES={mlp_padded_cores}, padding hidden dim from {self.hidden_dim} to {padded_hidden_dim}"
+                    )
+                    self.hidden_dim = padded_hidden_dim
+
+        # RoPE params
+        self.rope_theta = standard_config.rope_theta
+        
+        # Handle RoPE scaling
+        if standard_config.rope_scaling:
+            self.rope_scaling_factor = standard_config.rope_scaling.factor
+            self.orig_context_len = standard_config.rope_scaling.original_max_position_embeddings
+        else:
+            self.rope_scaling_factor = None
+            self.orig_context_len = None
+
+        # Vision params (from raw config since not standardized yet)
+        self.vision_chunk_size = raw_config.get("vision_chunk_size", -1)
+        self.vision_max_num_chunks = raw_config.get("vision_max_num_chunks", 4)
+        self.vision_num_cross_attention_layers = raw_config.get("vision_num_cross_attention_layers", -1)
+
+        # Vision constants
+        self.vision_dim = 1280
+        self.vision_mlp_ratio = 4
+        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
+        self.vision_act_layer = ttnn.UnaryOpType.GELU
+        self.vision_dropout = 0.0
+        self.vision_attn_n_heads = 16
+        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+        self.vision_n_layers = 32
+        self.vision_n_global_layers = 8
+        self.vision_max_num_tiles = 4
+        self.vision_patch_size = 14
+        self.vision_in_channels = 3
+
+        self.state_dict_text_prefix = self._get_text_prefix()
+        self._set_model_specific_params()
+
+    def _set_params_from_dict_legacy(self, config, is_hf=False):
+        """Legacy configuration parsing method (fallback)."""
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
 
@@ -2488,13 +2623,12 @@ class DecodersPrecision:
     def _precision_factory(cls, num_decoders, model_name, optimization_level):
         # use respective configuration for each optimization level
         decoder_config_filename = None
-        match optimization_level:
-            case ModelOptimizations.accuracy:
-                decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
-            case ModelOptimizations.performance:
-                decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
-            case _:
-                raise ValueError(f"optimization_level ({optimization_level}) not implemented")
+        if optimization_level == ModelOptimizations.accuracy:
+            decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
+        elif optimization_level == ModelOptimizations.performance:
+            decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
+        else:
+            raise ValueError(f"optimization_level ({optimization_level}) not implemented")
 
         # check if decoder config exists, if it exists load it else use optimization_level
         model_params_dir = Path(__file__).parent.parent

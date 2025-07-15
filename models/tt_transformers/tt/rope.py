@@ -3,17 +3,187 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from torch import nn
 
 import ttnn
+import math
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import gather_cos_sin, get_rot_transformation_mat, precompute_freqs
 from models.utility_functions import nearest_32
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 
+class DeepseekV3RotaryEmbedding(nn.Module):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+        super().__init__()
+
+        self.dim = dim
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        # Build here to make `torch.jit.trace` work.
+        self._set_cos_sin_cache(
+            seq_len=max_position_embeddings,
+            device=self.inv_freq.device,
+            dtype=torch.get_default_dtype(),
+        )
+        self.max_seq_len_cached = None
+
+    def _set_cos_sin_cache(self, seq_len, device, dtype):
+        self.max_seq_len_cached = seq_len
+        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
+
+        freqs = torch.outer(t, self.inv_freq.to(t.device))
+        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+
+    def forward(self, x, seq_len=None):
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        if self.max_seq_len_cached is None or seq_len > self.max_seq_len_cached:
+            self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+
+        return (
+            self.cos_cached[:seq_len].to(dtype=x.dtype),
+            self.sin_cached[:seq_len].to(dtype=x.dtype),
+        )
+
+
+
+# Inverse dim formula to find dim based on number of rotations
+def yarn_find_correction_dim(num_rotations, dim, base=10000, max_position_embeddings=2048):
+    return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
+
+
+# Find dim range bounds based on rotations
+def yarn_find_correction_range(low_rot, high_rot, dim, base=10000, max_position_embeddings=2048):
+    low = math.floor(yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
+    high = math.ceil(yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
+    return max(low, 0), min(high, dim - 1)  # Clamp values just in case
+
+
+def yarn_get_mscale(scale=1, mscale=1):
+    if scale <= 1:
+        return 1.0
+    return 0.1 * mscale * math.log(scale) + 1.0
+
+
+def yarn_linear_ramp_mask(min, max, dim):
+    if min == max:
+        max += 0.001  # Prevent singularity
+
+    linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
+    ramp_func = torch.clamp(linear_func, 0, 1)
+    return ramp_func
+
+
+class DeepseekV3YarnRotaryEmbedding(DeepseekV3RotaryEmbedding):
+    def __init__(
+        self,
+        dim,
+        max_position_embeddings=2048,
+        base=10000,
+        device=None,
+        scaling_factor=1.0,
+        original_max_position_embeddings=4096,
+        beta_fast=32,
+        beta_slow=1,
+        mscale=1,
+        mscale_all_dim=0,
+    ):
+        self.scaling_factor = scaling_factor
+        self.original_max_position_embeddings = original_max_position_embeddings
+        self.beta_fast = beta_fast
+        self.beta_slow = beta_slow
+        self.mscale = mscale
+        self.mscale_all_dim = mscale_all_dim
+        super().__init__(dim, max_position_embeddings, base, device)
+
+    def _set_cos_sin_cache(self, seq_len, device, dtype):
+        self.max_seq_len_cached = seq_len
+        dim = self.dim
+
+        freq_extra = 1.0 / (self.base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
+        freq_inter = 1.0 / (
+            self.scaling_factor * self.base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim)
+        )
+
+        low, high = yarn_find_correction_range(
+            self.beta_fast,
+            self.beta_slow,
+            dim,
+            self.base,
+            self.original_max_position_embeddings,
+        )
+        inv_freq_mask = 1.0 - yarn_linear_ramp_mask(low, high, dim // 2).to(device=device, dtype=torch.float32)
+        inv_freq = freq_inter * (1 - inv_freq_mask) + freq_extra * inv_freq_mask
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        t = torch.arange(seq_len, device=device, dtype=torch.float32)
+
+        freqs = torch.outer(t, inv_freq)
+
+        _mscale = float(
+            yarn_get_mscale(self.scaling_factor, self.mscale)
+            / yarn_get_mscale(self.scaling_factor, self.mscale_all_dim)
+        )
+
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", (emb.cos() * _mscale).to(dtype), persistent=False)
+        self.register_buffer("sin_cached", (emb.sin() * _mscale).to(dtype), persistent=False)
 
 def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, position_ids):
     cos, sin = precompute_freqs(dhead, end, theta, scale_factor, orig_context_len)
     return gather_cos_sin(position_ids, cos, sin)
+
+def compute_gather_cos_sin_yarn(hf_config):
+    """Function to get the cos and sin matrices for rotary positional embeddings.
+
+    Args:
+        hf_config: HuggingFace configuration object containing model parameters.
+    Returns:
+        cos: Cosine matrix for rotary embeddings.
+        sin: Sine matrix for rotary embeddings.
+    This function uses the DeepseekV3YarnRotaryEmbedding class to generate the matrices
+    based on the provided HuggingFace configuration.
+
+    HuggingFace returns cos/sin matrices in the format of [max_seq_len, dim], where dim is [t1, .., td//2, t1, .., td//2].
+    This is because HF is the format of [r, r, ..., i, i, ...] which requires cos/sin to be [t1, t2, ..., td//2, t1, t2, ..., td//2].
+    However, the Meta-style frequencies are in the format of [r, i, r, i, ...], so the cos/sin need to be [t1, t1, ..., td//2, td//2].
+
+    """
+    args = {
+        "dim": hf_config.qk_rope_head_dim,
+        "max_position_embeddings": hf_config.max_seq_len,
+        "base": hf_config.rope_theta * 1.0,
+        "device": "cpu",
+        "scaling_factor": hf_config.rope_scaling["factor"],
+        "original_max_position_embeddings": hf_config.rope_scaling["original_max_position_embeddings"],
+        "beta_fast": hf_config.rope_scaling["beta_fast"],
+        "beta_slow": hf_config.rope_scaling["beta_slow"],
+        "mscale": hf_config.rope_scaling["mscale"],
+        "mscale_all_dim": hf_config.rope_scaling["mscale_all_dim"],
+    }
+
+    reference_rope = DeepseekV3YarnRotaryEmbedding(**args)
+
+    # [max_seq_len, dim], where dim is [t1, .., td//2, t1, .., td//2]
+    cos = reference_rope.cos_cached
+    sin = reference_rope.sin_cached
+
+    # Undo the HF permute
+    cos = cos[:, : cos.shape[1] // 2]
+    cos = torch.stack((cos, cos), dim=-1).flatten(-2)
+
+    sin = sin[:, : sin.shape[1] // 2]
+    sin = torch.stack((sin, sin), dim=-1).flatten(-2)
+
+    cos = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, dim]
+    sin = sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, dim]
+
+    return cos, sin
 
 
 class RotarySetup(LightweightModule):
