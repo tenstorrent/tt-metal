@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_common.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::reduction::accumulation::common {
 
@@ -14,18 +15,8 @@ Tensor preprocess_input_tensor(
     std::optional<DataType>& dtype) {
     Tensor processed_tensor = input_tensor;
     const auto& input_dtype = input_tensor.dtype();
-    if (dtype.has_value() && (input_dtype != dtype.value())) {
-        // auto converted_tensor = ttnn::to_dtype(input_tensor, DataType::BFLOAT16);
-        // adjusted_input_tensor = converted_tensor;
-
-        // Ideally, we would use `ttnn::to_dtype()` directly on input_tensor (DeviceStorage)
-        // However, as of writing `ttnn::to_dtype()` does not support this.
-        // The (provisional) workaround is to move the tensor to CPU, do the type conversion
-        // and bring it back to the device.
-        processed_tensor = processed_tensor.cpu();
-        processed_tensor = ttnn::to_dtype(processed_tensor, dtype.value());
-
-        processed_tensor = processed_tensor.to_device(input_tensor.device(), input_tensor.memory_config());
+    if (dtype.has_value() && (input_dtype != *dtype)) {
+        processed_tensor = ttnn::typecast(input_tensor, input_dtype, *dtype);
     }
     const auto& input_shape = processed_tensor.logical_shape();
     const auto& input_rank = input_shape.rank();
@@ -81,7 +72,11 @@ Tensor postprocess_output_tensor(
 }
 
 void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_tensor) {
-    TT_FATAL(input_tensor.logical_shape() == output_tensor.logical_shape(), "");
+    TT_FATAL(
+        input_tensor.logical_shape() == output_tensor.logical_shape(),
+        "Shape mismatch: input tensor shape {} does not match output tensor shape {}.",
+        input_tensor.logical_shape(),
+        output_tensor.logical_shape());
 }
 
 Tensor accumulation_invoke(
@@ -104,7 +99,7 @@ Tensor accumulation_invoke(
     TT_FATAL(
         ((dim >= -static_cast<decltype(dim)>(input_shape.rank())) &&
          (dim < static_cast<decltype(dim)>(input_shape.rank()))),
-        "The requested accumulation axis is {}, while the input thensor has rank {}.",
+        "The requested accumulation axis is {}, while the input tensor has rank {}.",
         dim,
         input_tensor.padded_shape().rank());
 

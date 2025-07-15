@@ -97,20 +97,19 @@ def test_cumprod_backward(dim, shape, dtypes, device):
 
         (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(shape, shape, device)
 
-        torch_output = torch.cumsum(torch_input_tensor, dim)
+        torch_output = torch.cumprod(torch_input_tensor, dim)
         torch_output.backward(torch_output_grad)
 
         tt_input_grad_cpu = ttnn.to_torch(
-            ttnn.cumsum(tt_output_grad, dim, dtype=ttnn_dtype, reverse_order=True, out=tt_input_grad)
+            ttnn.cumprod(tt_output_grad, dim, dtype=ttnn_dtype, reverse_order=True, out=tt_input_grad)
         )
 
         assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
 
         # test for equivalance
         rtol = atol = 0.1
-        passing, _ = comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
+        assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-        assert passing
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 

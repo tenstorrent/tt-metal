@@ -22,7 +22,6 @@ void kernel_main() {
     const uint32_t flip = get_arg_val<uint32_t>(7);
 
     const uint32_t ublock_size_bytes = get_tile_size(cb_out);
-    const uint32_t input_sram_addr = get_read_ptr(cb_out);
 
     const auto& input_dataformat = get_dataformat(cb_out);
     const auto& output_data_format = get_dataformat(cb_out);

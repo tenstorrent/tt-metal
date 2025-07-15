@@ -30,7 +30,7 @@ void bind_reduction_cumprod_operation(py::module& module) {
         Keyword Args:
             dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be casted to `dtype` before processing.
             reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
-            output (ttnn.Tensor, optional): preallocated output. If specified, `output` must have same shape as `input`, and must be on the same device.
+            out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
 
         Returns:
             ttnn.Tensor: the output tensor.

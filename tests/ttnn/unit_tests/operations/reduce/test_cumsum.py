@@ -262,3 +262,79 @@ def test_cumsum_backward(size, dim, dtypes, device):
     # test for equivalance
     rtol = atol = 0.1
     assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize(
+    "dim, input_shape, output_shape, torch_dtype, input_dtype, output_dtype, memory_config, layout",
+    [
+        (
+            -10,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.TILE,
+        ),  # input_rank vs dim
+        (
+            10,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.TILE,
+        ),  # input_rank vs dim
+        (
+            3,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.TILE,
+        ),  # input_shape vs output_shape
+        (
+            3,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.TILE,
+        ),  # input_shape vs output_shape
+        (
+            3,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.ROW_MAJOR,
+        ),  # unsupported layout
+    ],
+)
+def test_cumsum_failing_cases(
+    dim,
+    input_shape,
+    output_shape,
+    torch_dtype,
+    input_dtype,
+    output_dtype,
+    memory_config,
+    layout,
+    device,
+):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
+    with pytest.raises(RuntimeError):
+        ttnn.cumsum(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)

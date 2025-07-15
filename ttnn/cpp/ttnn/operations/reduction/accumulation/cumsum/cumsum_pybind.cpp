@@ -32,7 +32,7 @@ void bind_reduction_cumsum_operation(py::module& module) {
         Keyword Args:
             dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be casted to `dtype` before processing.
             reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
-            output (ttnn.Tensor, optional): preallocated output. If specified, `output` must have same shape as `input`, and must be on the same device.
+            out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -92,8 +92,9 @@ void bind_reduction_cumsum_operation(py::module& module) {
                std::optional<DataType>& dtype,
                const bool& reverse_order,
                std::optional<Tensor> preallocated_tensor,
+               const std::optional<MemoryConfig>& memory_config,
                QueueId queue_id) {
-                return self(queue_id, input_tensor, dim, dtype, reverse_order, preallocated_tensor);
+                return self(queue_id, input_tensor, dim, dtype, reverse_order, preallocated_tensor, memory_config);
             },
             py::arg("input").noconvert(),
             py::arg("dim"),
@@ -101,6 +102,7 @@ void bind_reduction_cumsum_operation(py::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("reverse_order") = false,
             py::arg("out") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 
