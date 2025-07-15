@@ -164,7 +164,7 @@ Program create_simple_datamovement_program(
 
     // Handle Runtime Args
     const std::vector<uint32_t> runtime_args = {
-        l1_buffer.address(), input.address(), input_bank_id, output.address(), output_bank_id, l1_buffer.size()};
+        l1_buffer.address(), input.address(), output.address(), input.num_pages()};
 
     // Very minimal testing/usage of other SetRuntimeArgs API that TTNN uses for ops here, j
     // just to see it go through the light-metal capture + replay flow.
@@ -295,12 +295,13 @@ TEST_F(LightMetalBasicTest, CreateBufferAndDeallocate) {
 }
 
 void SingleRISCDataMovement_test(tt::tt_metal::IDevice* device, bool rt_arg_per_core_vec) {
-    uint32_t size_bytes = 64;  // 16 elements.
+    uint32_t size_bytes = 32 * 32 * 2;
+    uint32_t page_size = 32 * 32 * 2;
 
     // For extra coverage, use Buffer::create (now support for light metal capture/replay)
-    auto input = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
-    auto output = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
-    auto l1_buffer = Buffer::create(device, size_bytes, size_bytes, BufferType::L1);
+    auto input = Buffer::create(device, size_bytes, page_size, BufferType::DRAM);
+    auto output = Buffer::create(device, size_bytes, page_size, BufferType::DRAM);
+    auto l1_buffer = Buffer::create(device, size_bytes, page_size, BufferType::L1);
 
     log_debug(
         tt::LogTest,
