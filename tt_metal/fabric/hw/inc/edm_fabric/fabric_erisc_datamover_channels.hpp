@@ -255,21 +255,8 @@ struct EdmChannelWorkerInterface {
         invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address;
-        if constexpr (MY_ETH_CHANNEL == USE_DYNAMIC_CREDIT_ADDR) {
-            // EDM-EDM, Worker(IDLE_ETH)-EDM and legacy Worker(TENSIX)-EDM connections
-            worker_semaphore_address = get_noc_addr(
-                (uint32_t)worker_info.worker_xy.x,
-                (uint32_t)worker_info.worker_xy.y,
-                worker_info.worker_semaphore_address);
-        } else {
-            // Worker(TENSIX)-EDM connection
-            worker_semaphore_address = get_noc_addr(
-                (uint32_t)worker_info.worker_xy.x,
-                (uint32_t)worker_info.worker_xy.y,
-                MEM_TENSIX_FABRIC_CONNECTIONS_BASE + offsetof(tensix_fabric_connections_l1_info_t, connections) +
-                    MY_ETH_CHANNEL * sizeof(fabric_connection_info_t) +
-                    offsetof(fabric_connection_info_t, worker_flow_control_semaphore));
-        }
+        worker_semaphore_address = get_noc_addr(
+            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
     }
 
