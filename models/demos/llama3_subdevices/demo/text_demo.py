@@ -693,7 +693,7 @@ def test_demo_text(
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-
+                logger.info(f"Compile Iteration {iteration}: {1000*decode_iteration_time:.4f}ms")
             # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
             teacher_forcing = (
                 pcc_check and max_encoded_prompt_len + iteration + 1 < len(ref_tokens) and num_layers == 80
