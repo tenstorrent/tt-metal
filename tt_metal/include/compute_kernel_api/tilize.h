@@ -236,11 +236,11 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
     tilize_init(icb, full_dim, ocb);
-    return;
-#endif
+#else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
     PACK((llk_pack_fast_tilize_init(icb, ocb, full_dim == 1 ? 1 : 2)));
+#endif
 }
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
@@ -254,11 +254,11 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
     tilize_uninit(icb, ocb);
-    return;
-#endif
+#else
     UNPACK((llk_unpack_fast_tilize_uninit<DST_ACCUM_MODE>()));
     MATH((llk_math_fast_tilize_uninit<DST_ACCUM_MODE>(icb)));
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
+#endif
 }
 
 ALWI void fast_tilize_block(
@@ -266,8 +266,7 @@ ALWI void fast_tilize_block(
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
     tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
-    return;
-#endif
+#else
     uint32_t full_dim = block;
 
     // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
@@ -335,6 +334,7 @@ ALWI void fast_tilize_block(
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
+#endif
 }
 
 }  // namespace ckernel
