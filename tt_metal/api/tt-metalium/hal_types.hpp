@@ -46,6 +46,7 @@ enum class HalL1MemAddrType : uint8_t {
     UNCORR_CW,  // Link status - Uncorrected Codewords count
     FABRIC_ROUTER_CONFIG,
     ETH_FW_MAILBOX,
+    ETH_FW_LIVE_LINK_STATUS,
     ETH_LINK_REMOTE_INFO,
     INTERMESH_ETH_LINK_CONFIG,
     INTERMESH_ETH_LINK_STATUS,

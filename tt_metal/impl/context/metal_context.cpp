@@ -1110,7 +1110,6 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     // Download to worker cores
     log_debug(tt::LogMetal, "Initializing worker cores");
     std::unordered_set<CoreCoord> not_done_cores;
-    std::unordered_set<CoreCoord> not_done_logical_cores;
 
     const auto& storage_only_cores = tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config_);
     auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
@@ -1134,7 +1133,6 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
                         get_programmable_core_type(worker_core, device_id), HalL1MemAddrType::CORE_INFO));
                 initialize_firmware(device_id, HalProgrammableCoreType::TENSIX, worker_core, &launch_msg, &go_msg);
                 not_done_cores.insert(worker_core);
-                not_done_logical_cores.insert(logical_core);
             }
         }
     }
@@ -1172,7 +1170,6 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         if (!hal_->get_eth_fw_is_cooperative()) {
             active_eth_cores.insert(virtual_core);
             not_done_cores.insert(virtual_core);
-            not_done_logical_cores.insert(eth_core);
         }
     }
 
@@ -1189,7 +1186,6 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, &launch_msg, &go_msg);
         not_done_cores.insert(virtual_core);
-        not_done_logical_cores.insert(eth_core);
     }
 
     // Barrier between L1 writes above and deassert below
@@ -1211,7 +1207,6 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     try {
         llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error& e) {
-        log_error(LogDevice, "Not done logical cores: {}", fmt::join(not_done_logical_cores, ", "));
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
     log_debug(LogDevice, "Firmware init complete");

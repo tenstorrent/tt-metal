@@ -23,6 +23,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "hal_types.hpp"
@@ -435,6 +436,21 @@ uint32_t get_retrain_count(chip_id_t device_id, const CoreCoord& virtual_core) {
 }
 
 }  // namespace internal_
+
+tt_metal::EthLiveLinkStatus get_eth_live_link_status(chip_id_t device_id, const CoreCoord& virtual_core) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
+    const auto live_link_status_l1_copy_dst = hal.get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS);
+    const auto live_link_status_l1_copy_size = hal.get_dev_size(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS);
+    std::vector<uint32_t> data =
+        read_hex_vec_from_core(device_id, virtual_core, live_link_status_l1_copy_dst, live_link_status_l1_copy_size);
+    return hal.convert_bytes_to_eth_live_link_status(data);
+}
 
 }  // namespace llrt
 

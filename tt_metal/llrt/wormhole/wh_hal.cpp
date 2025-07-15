@@ -193,6 +193,12 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_1),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
+
+    this->eth_live_link_status_func_ = [](std::span<uint32_t> bytes) -> EthLiveLinkStatus {
+        // Not supported on wormhole
+        TT_THROW("Live link status is not supported on wormhole");
+        return {.retrain_count = 0, .rx_link_up = 0};
+    };
 }
 
 }  // namespace tt_metal

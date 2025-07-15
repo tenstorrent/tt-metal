@@ -81,7 +81,7 @@ bool eth_direct_sender_receiver_kernels(
     const CoreCoord& eth_receiver_core,
     uint32_t num_bytes_per_send = 16) {
     bool pass = true;
-    log_debug(
+    log_info(
         tt::LogTest,
         "Sending {} bytes from device {} eth core {} addr {} to device {} eth core {} addr {}",
         byte_size,

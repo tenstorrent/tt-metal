@@ -123,6 +123,10 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
 // Read the retrain count from the ethernet firmware mailbox, if supported
 uint32_t get_retrain_count(chip_id_t device_id, const CoreCoord& virtual_core);
 
+// Get the link status of the ethernet core, if supported. This function will not work while the firmware is running
+// because it needs the base firmware to service the mailbox.
+tt_metal::EthLiveLinkStatus get_link_status(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
+
 }  // namespace internal_
 
 }  // namespace llrt

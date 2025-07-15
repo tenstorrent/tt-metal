@@ -9,6 +9,7 @@
 // level APIs
 //
 
+#include <span>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
@@ -79,6 +80,12 @@ enum class FWMailboxMsg : uint8_t {
     RETRAIN_COUNT,
     // Number of mailbox message types
     COUNT,
+};
+
+// Ethernet live link status
+struct EthLiveLinkStatus {
+    uint32_t retrain_count;
+    uint32_t rx_link_up;
 };
 
 class Hal;
@@ -155,6 +162,7 @@ public:
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
     using EthFwArgAddrFunc = std::function<uint32_t(uint32_t)>;
     using DeviceFeatureListFunc = std::function<bool(DeviceFeature)>;
+    using EthLiveLinkStatusFunc = std::function<EthLiveLinkStatus(std::span<uint32_t>)>;
 
 private:
     tt::ARCH arch_;
@@ -208,6 +216,7 @@ private:
     NOCAddrFunc noc_local_addr_func_;
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
     DeviceFeatureListFunc device_features_func_;
+    EthLiveLinkStatusFunc eth_live_link_status_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -320,6 +329,10 @@ public:
 
     const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
     const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
+
+    EthLiveLinkStatus convert_bytes_to_eth_live_link_status(std::span<uint32_t> bytes) const {
+        return eth_live_link_status_func_(bytes);
+    }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }

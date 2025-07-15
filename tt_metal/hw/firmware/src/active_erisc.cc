@@ -22,6 +22,7 @@
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "dev_mem_map.h"
+#include "eth_fw_api.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -78,11 +79,19 @@ inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
     }
 }
 
+inline void service_base_fw() {
+    reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+    reinterpret_cast<void (*)(uint32_t)>(
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(
+        MEM_AERISC_LIVE_LINK_STATUS_BASE);
+}
+
 inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
     // Also check enable_fw_flag[0] if we need to exit immediately
     while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE && enable_fw_flag[0]) {
         invalidate_l1_cache();
+        service_base_fw();
     }
     WAYPOINT("SED");
 }
@@ -176,6 +185,8 @@ void Application() {
                 // Notify dispatcher that this has been done
                 internal_::notify_dispatch_core_done(dispatch_addr);
             }
+
+            service_base_fw();
         }
         WAYPOINT("GD");
 

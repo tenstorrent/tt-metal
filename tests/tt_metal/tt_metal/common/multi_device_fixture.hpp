@@ -22,7 +22,12 @@
 namespace tt::tt_metal {
 
 class TwoDeviceFixture : public DispatchFixture {
+private:
+    inline static int number_of_available_devices_ = 0;
+
 protected:
+    static void SetUpTestSuite() { number_of_available_devices_ = tt::tt_metal::GetNumAvailableDevices(); }
+
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
         if (slow_dispatch) {
@@ -30,8 +35,7 @@ protected:
             GTEST_SKIP();
         }
 
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices != 2) {
+        if (number_of_available_devices_ != 2) {
             GTEST_SKIP() << "TwoDeviceFixture can only be run on machines with two devices";
         }
 
@@ -40,21 +44,27 @@ protected:
 };
 
 class N300DeviceFixture : public DispatchFixture {
+private:
+    inline static bool is_n300_cluster_ = false;
+    inline static ARCH arch_internal_ = ARCH::Invalid;
+
 protected:
+    static void SetUpTestSuite() {
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
+        arch_internal_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        is_n300_cluster_ = num_devices == 2 && num_pci_devices == 1 && arch_internal_ == tt::ARCH::WORMHOLE_B0;
+    }
+
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+        this->arch_ = arch_internal_;
+        if (!is_n300_cluster_) {
+            GTEST_SKIP() << "This suite can only be run on N300";
+        }
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
-        }
-
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        if (this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
-            DispatchFixture::SetUp();
-        } else {
-            GTEST_SKIP() << "This suite can only be run on N300";
         }
     }
 };

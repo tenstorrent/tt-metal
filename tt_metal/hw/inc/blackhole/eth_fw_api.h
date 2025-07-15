@@ -14,6 +14,7 @@
 #define MEM_SYSENG_ETH_MAILBOX_NUM_ARGS 3
 #define MEM_SYSENG_ETH_HEARTBEAT 0x7CC70
 #define MEM_SYSENG_ETH_RETRAIN_COUNT 0x7CE00
+#define MEM_SYSENG_ETH_API_TABLE 0x7CF00
 
 enum eth_mailbox_e : uint32_t {
     MAILBOX_HOST,
@@ -38,4 +39,31 @@ struct eth_mailbox_t {
 
 struct all_eth_mailbox_t {
     eth_mailbox_t mailbox[4];  // 0-16 - 4 mailbox entries, 0 - Host, 1 - RSIC1, 2 - CMFW, 3 - Other
+};
+
+struct eth_live_status_t {
+    uint32_t retrain_count;  // 0
+    uint32_t rx_link_up;     // 1 - MAC/PCS RX Link Up
+
+    uint32_t spare[8 - 2];  // 2-7
+
+    // Snapshot registers
+    uint64_t frames_txd;          // 8,9 - Cumulative TX Packets Transmitted count
+    uint64_t frames_txd_ok;       // 10,11 - Cumulative TX Packets Transmitted OK count
+    uint64_t frames_txd_badfcs;   // 12,13 - Cumulative TX Packets Transmitted with BAD FCS count
+    uint64_t bytes_txd;           // 14,15 - Cumulative TX Bytes Transmitted count
+    uint64_t bytes_txd_ok;        // 16,17 - Cumulative TX Bytes Transmitted OK count
+    uint64_t bytes_txd_badfcs;    // 18,19 - Cumulative TX Bytes Transmitted with BAD FCS count
+    uint64_t frames_rxd;          // 20,21 - Cumulative Packets Received count
+    uint64_t frames_rxd_ok;       // 22,23 - Cumulative Packets Received OK count
+    uint64_t frames_rxd_badfcs;   // 24,25 - Cumulative Packets Received with BAD FCS count
+    uint64_t frames_rxd_dropped;  // 26,27 - Cumulative Dropped Packets Received count
+    uint64_t bytes_rxd;           // 28,29 - Cumulative Bytes received count
+    uint64_t bytes_rxd_ok;        // 30,31 - Cumulative Bytes received OK count
+    uint64_t bytes_rxd_badfcs;    // 32,33 - Cumulative Bytes received with BAD FCS count
+    uint64_t bytes_rxd_dropped;   // 34,35 - Cumulative Bytes received and dropped count
+    uint64_t corr_cw;             // 36,37 - Cumulative Corrected Codeword count
+    uint64_t uncorr_cw;           // 38,39 - Cumulative Uncorrected Codeword count
+
+    uint32_t spare2[64 - 40];  // 40-63
 };

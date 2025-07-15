@@ -202,6 +202,11 @@ void Hal::initialize_bh() {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
+
+    this->eth_live_link_status_func_ = [](std::span<uint32_t> bytes) -> EthLiveLinkStatus {
+        eth_live_status_t* bh_status = reinterpret_cast<eth_live_status_t*>(bytes.data());
+        return {.retrain_count = bh_status->retrain_count, .rx_link_up = bh_status->rx_link_up};
+    };
 }
 
 }  // namespace tt_metal
