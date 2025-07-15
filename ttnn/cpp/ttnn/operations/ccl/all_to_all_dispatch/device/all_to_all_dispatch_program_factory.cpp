@@ -439,8 +439,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tokens_per_core_start = reader_runtime_args[7];
         for (auto& neighbor : neighbors) {
             auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
-            log_info(
-                tt::LogAlways,
+            log_debug(
+                tt::LogOp,
                 "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
                 "token indices from {} to {}",
                 mesh_coordinate[0],
