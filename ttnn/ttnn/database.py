@@ -293,7 +293,9 @@ def insert_stack_trace(report_path, operation_id, stack_trace):
 
     formatted_stack_trace = "\n".join(stack_trace[:-2][::-1])
 
-    cursor.execute(f"INSERT INTO stack_traces VALUES ({operation_id}, '{formatted_stack_trace}')")
+    # let sqlite handle formatting strings with mixed quotes
+    statement = "INSERT INTO stack_traces (operation_id, stack_trace) VALUES (?, ?)"
+    cursor.execute(statement, (operation_id, formatted_stack_trace))
     sqlite_connection.commit()
 
 
