@@ -19,12 +19,7 @@ from tracy import signpost
 
 
 def get_max_links(cluster_axis, fabric_config):
-    if fabric_config == ttnn.FabricConfig.FABRIC_2D:
-        return 3
-    elif cluster_axis is None:
-        return 3
-    else:
-        return 3  # cluster axis 0 has 4 links but it causes hangs? lol
+    return 3
 
 
 @pytest.mark.parametrize(
