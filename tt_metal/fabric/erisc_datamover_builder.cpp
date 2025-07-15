@@ -188,6 +188,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
+    // Disabled
+    // TODO(Sean) to re-enable this with a follow up PR
+    this->num_riscv_cores =
+        1;  // tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+        this->risc_configs.emplace_back(risc_id);
+    }
 
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;
