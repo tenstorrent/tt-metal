@@ -90,11 +90,11 @@ static void eth_direct_send_multi_txq_rxq(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
-    std::jthread t1;
-    std::jthread t2;
+    std::thread t1;
+    std::thread t2;
     if (fixture->IsSlowDispatch()) {
-        t1 = std::jthread([&]() { fixture->RunProgram(sender_device, sender_program); });
-        t2 = std::jthread([&]() { fixture->RunProgram(receiver_device, receiver_program); });
+        t1 = std::thread([&]() { fixture->RunProgram(sender_device, sender_program); });
+        t2 = std::thread([&]() { fixture->RunProgram(receiver_device, receiver_program); });
     } else {
         fixture->RunProgram(sender_device, sender_program, true);
         fixture->RunProgram(receiver_device, receiver_program, true);
@@ -102,6 +102,11 @@ static void eth_direct_send_multi_txq_rxq(
 
     fixture->FinishCommands(sender_device);
     fixture->FinishCommands(receiver_device);
+
+    if (fixture->IsSlowDispatch()) {
+        t1.join();
+        t2.join();
+    }
 }
 
 }  // namespace unit_tests::erisc::direct_send

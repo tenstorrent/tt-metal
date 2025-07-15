@@ -30,96 +30,26 @@ add_custom_target(
     COMMENT "Generating all FlatBuffer headers"
 )
 
-target_sources(
-    tt_metal
-    PRIVATE
-        tt_metal.cpp
-        graph/graph_tracking.cpp
-        hal.cpp
-        ${API_GENERATED_HEADERS}
-)
-
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE api api/*)
 target_sources(
     tt_metal
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
-        FILES
-            api/tt-metalium/allocator.hpp
-            api/tt-metalium/allocator_types.hpp
-            api/tt-metalium/assert.hpp
-            api/tt-metalium/base_types.hpp
-            api/tt-metalium/bfloat16.hpp
-            api/tt-metalium/bfloat4.hpp
-            api/tt-metalium/bfloat8.hpp
-            api/tt-metalium/blockfloat_common.hpp
-            api/tt-metalium/buffer.hpp
-            api/tt-metalium/buffer_distribution_spec.hpp
-            api/tt-metalium/buffer_page_mapping.hpp
-            api/tt-metalium/buffer_types.hpp
-            api/tt-metalium/circular_buffer.hpp
-            api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/circular_buffer_config.hpp
-            api/tt-metalium/command_queue.hpp
-            api/tt-metalium/command_queue_interface.hpp
-            api/tt-metalium/constants.hpp
-            api/tt-metalium/core_coord.hpp
-            api/tt-metalium/core_descriptor.hpp
-            api/tt-metalium/data_format.hpp
-            api/tt-metalium/data_types.hpp
-            api/tt-metalium/device.hpp
-            api/tt-metalium/device_pool.hpp
-            api/tt-metalium/dispatch_core_common.hpp
-            api/tt-metalium/event.hpp
-            api/tt-metalium/fabric_host_interface.h
-            api/tt-metalium/fabric_edm_packet_header.hpp
-            api/tt-metalium/global_circular_buffer.hpp
-            api/tt-metalium/global_semaphore.hpp
-            api/tt-metalium/graph_tracking.hpp
-            api/tt-metalium/fabric_types.hpp
-            api/tt-metalium/hal.hpp
-            api/tt-metalium/hal_types.hpp
-            api/tt-metalium/hlk_desc.hpp
-            api/tt-metalium/host_api.hpp
-            api/tt-metalium/kernel.hpp
-            api/tt-metalium/kernel_types.hpp
-            api/tt-metalium/lightmetal_binary.hpp
-            api/tt-metalium/math.hpp
-            api/tt-metalium/maybe_remote.hpp
-            api/tt-metalium/memory_reporter.hpp
-            api/tt-metalium/mesh_config.hpp
-            api/tt-metalium/mesh_coord.hpp
-            api/tt-metalium/mesh_device.hpp
-            api/tt-metalium/mesh_device_view.hpp
-            api/tt-metalium/mesh_trace_id.hpp
-            api/tt-metalium/metal_soc_descriptor.h
-            api/tt-metalium/persistent_kernel_cache.hpp
-            api/tt-metalium/profiler_optional_metadata.hpp
-            api/tt-metalium/profiler_types.hpp
-            api/tt-metalium/program.hpp
-            api/tt-metalium/program_cache.hpp
-            api/tt-metalium/program_descriptors.hpp
-            api/tt-metalium/profiler_optional_metadata.hpp
-            api/tt-metalium/profiler_types.hpp
-            api/tt-metalium/runtime_args_data.hpp
-            api/tt-metalium/semaphore.hpp
-            api/tt-metalium/shape.hpp
-            api/tt-metalium/shape2d.hpp
-            api/tt-metalium/shape_base.hpp
-            api/tt-metalium/sub_device.hpp
-            api/tt-metalium/sub_device_types.hpp
-            api/tt-metalium/system_mesh.hpp
-            api/tt-metalium/tile.hpp
-            api/tt-metalium/tilize_utils.hpp
-            api/tt-metalium/tt_align.hpp
-            api/tt-metalium/tt_backend_api_types.hpp
-            api/tt-metalium/tt_metal.hpp
-            api/tt-metalium/util.hpp
-            api/tt-metalium/utils.hpp
-            api/tt-metalium/vector_aligned.hpp
-            api/tt-metalium/work_split.hpp
-            api/tt-metalium/distributed_context.hpp
+        FILES ${api}
+    PRIVATE
+        tt_metal.cpp
+        graph/graph_tracking.cpp
+        hal.cpp
+        ${API_GENERATED_HEADERS}
+)
+set_source_files_properties(
+    api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
+    PROPERTIES
+        SKIP_LINTING
+            ON
 )
 
 # TODO(afuller): this should be self-describing modules.
@@ -180,77 +110,35 @@ target_sources(
             impl/dispatch/kernels/packet_queue.hpp
             impl/dispatch/kernels/packet_queue_ctrl.hpp
             include/compute_kernel_api.h
-            include/compute_kernel_api/add_int_sfpu.h
             include/compute_kernel_api/bcast.h
-            include/compute_kernel_api/binary_bitwise_sfpu.h
-            include/compute_kernel_api/binary_max_min.h
-            include/compute_kernel_api/binary_shift.h
             include/compute_kernel_api/blank.h
             include/compute_kernel_api/cb_api.h
             include/compute_kernel_api/common.h
             include/compute_kernel_api/common_globals.h
             include/compute_kernel_api/compute_kernel_hw_startup.h
-            include/compute_kernel_api/copy_dest_values.h
-            include/compute_kernel_api/cumsum.h
             include/compute_kernel_api/eltwise_binary.h
-            include/compute_kernel_api/eltwise_binary_sfpu.h
-            include/compute_kernel_api/eltwise_unary/binop_with_scalar.h
-            include/compute_kernel_api/eltwise_unary/bitwise_and.h
-            include/compute_kernel_api/eltwise_unary/bitwise_not.h
-            include/compute_kernel_api/eltwise_unary/bitwise_or.h
-            include/compute_kernel_api/eltwise_unary/bitwise_xor.h
             include/compute_kernel_api/eltwise_unary/comp.h
-            include/compute_kernel_api/eltwise_unary/dropout.h
             include/compute_kernel_api/eltwise_unary/eltwise_unary.h
-            include/compute_kernel_api/eltwise_unary/elu.h
-            include/compute_kernel_api/eltwise_unary/erf_erfc.h
-            include/compute_kernel_api/eltwise_unary/erfinv.h
             include/compute_kernel_api/eltwise_unary/exp.h
-            include/compute_kernel_api/eltwise_unary/fill.h
-            include/compute_kernel_api/eltwise_unary/fmod.h
-            include/compute_kernel_api/eltwise_unary/gelu.h
-            include/compute_kernel_api/eltwise_unary/i0.h
-            include/compute_kernel_api/eltwise_unary/i1.h
-            include/compute_kernel_api/eltwise_unary/identity.h
-            include/compute_kernel_api/eltwise_unary/isinf_isnan.h
-            include/compute_kernel_api/eltwise_unary/left_shift.h
-            include/compute_kernel_api/eltwise_unary/log1p.h
-            include/compute_kernel_api/eltwise_unary/logical_not_noti.h
             include/compute_kernel_api/eltwise_unary/negative.h
-            include/compute_kernel_api/eltwise_unary/prelu.h
-            include/compute_kernel_api/eltwise_unary/rand.h
             include/compute_kernel_api/eltwise_unary/recip.h
             include/compute_kernel_api/eltwise_unary/relu.h
-            include/compute_kernel_api/eltwise_unary/remainder.h
-            include/compute_kernel_api/eltwise_unary/reverseops.h
-            include/compute_kernel_api/eltwise_unary/right_shift.h
-            include/compute_kernel_api/eltwise_unary/rounding.h
-            include/compute_kernel_api/eltwise_unary/sfpu_int_sum.h
             include/compute_kernel_api/eltwise_unary/sfpu_split_includes.h
-            include/compute_kernel_api/eltwise_unary/softplus.h
             include/compute_kernel_api/eltwise_unary/sqrt.h
-            include/compute_kernel_api/eltwise_unary/trigonometry.h
-            include/compute_kernel_api/eltwise_unary/typecast.h
-            include/compute_kernel_api/gcd.h
-            include/compute_kernel_api/layernorm.h
-            include/compute_kernel_api/lcm.h
             include/compute_kernel_api/mask.h
             include/compute_kernel_api/matmul.h
-            include/compute_kernel_api/mul_int_sfpu.h
             include/compute_kernel_api/pack.h
             include/compute_kernel_api/pack_untilize.h
-            include/compute_kernel_api/quantization.h
             include/compute_kernel_api/reconfig_data_format.h
             include/compute_kernel_api/reduce.h
             include/compute_kernel_api/reg_api.h
-            include/compute_kernel_api/reshuffle.h
             include/compute_kernel_api/softmax.h
-            include/compute_kernel_api/sub_int_sfpu.h
             include/compute_kernel_api/tile_move_copy.h
             include/compute_kernel_api/tilize.h
             include/compute_kernel_api/transpose_wh.h
-            include/compute_kernel_api/transpose_wh_dest.h
             include/compute_kernel_api/untilize.h
+            include/compute_kernel_api/eltwise_binary.h
+            include/compute_kernel_api/tile_move_copy.h
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
@@ -286,6 +174,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cumsum.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_dropout.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_exp.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_fill.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_gelu.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_hardtanh.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_is_fp16_zero.h
@@ -368,6 +257,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cumsum.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_dropout.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_exp.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_fill.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_hardtanh.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_is_fp16_zero.h
