@@ -278,7 +278,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         num_links);
 
     uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
-    uint32_t num_cores = std::min(num_links, tokens_per_device / tokens_per_core);
+    uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
         subdevice_cores.at(0), num_cores, subdevice_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
@@ -441,13 +441,16 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
             log_info(
                 tt::LogAlways,
-                "Connection between ({}, {}) and ({}, {}) at core {} will choose link_id: {}",
+                "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
+                "tokens from {} to {}",
                 mesh_coordinate[0],
                 mesh_coordinate[1],
                 neighbor_coordinate[0],
                 neighbor_coordinate[1],
                 sender_cores.at(i),
-                link_id);
+                link_id,
+                reader_runtime_args[6],
+                reader_runtime_args[7]);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_physical_device_id),
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(neighbor->id()),
