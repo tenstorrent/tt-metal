@@ -402,7 +402,6 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.argmax.html">ttnn.argmax</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.prod.html">ttnn.prod</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.topk.html">ttnn.topk</a></li>
-<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.sort.html">ttnn.experimental.sort</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.cumsum.html">ttnn.cumsum</a></li>
 </ul>
 </li>
@@ -422,7 +421,8 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.untilize.html">ttnn.untilize</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.untilize_with_unpadding.html">ttnn.untilize_with_unpadding</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.indexed_fill.html">ttnn.indexed_fill</a></li>
-<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.gather.html">ttnn.experimental.gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.gather.html">ttnn.gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.sort.html">ttnn.sort</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#normalization">Normalization</a><ul>
@@ -1936,10 +1936,6 @@
 <td><p>ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -&gt; Tuple[ttnn.Tensor, ttnn.Tensor]</p></td>
 </tr>
 <tr class="row-odd">
-<td><p><a class="reference internal" href="api/ttnn.experimental.sort.html#ttnn.experimental.sort" title="ttnn.experimental.sort"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.sort</span></code></a></p></td>
-<td><p>Sorts the elements of the input tensor along the specified dimension in ascending order by default.</p></td>
-</tr>
-<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.cumsum.html#ttnn.cumsum" title="ttnn.cumsum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.cumsum</span></code></a></p></td>
 <td><p>Returns cumulative sum of <cite>input</cite> along dimension <cite>dim</cite> For a given <cite>input</cite> of size N, the <cite>output</cite> will also contain N elements and be such that: This function is fundamentally identical to <cite>torch.cumsum()</cite></p></td>
 </tr>
@@ -2021,8 +2017,12 @@
 <td><p>Replaces batch of input in input_b denoted by batch_ids into input_a.</p></td>
 </tr>
 <tr class="row-even">
-<td><p><a class="reference internal" href="api/ttnn.experimental.gather.html#ttnn.experimental.gather" title="ttnn.experimental.gather"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.gather</span></code></a></p></td>
+<td><p><a class="reference internal" href="api/ttnn.gather.html#ttnn.gather" title="ttnn.gather"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.gather</span></code></a></p></td>
 <td><p>The <cite>gather</cite> operation extracts values from the input tensor based on indices provided in the index tensor along a specified dimension.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.sort.html#ttnn.sort" title="ttnn.sort"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sort</span></code></a></p></td>
+<td><p>Sorts the elements of the input tensor along the specified dimension in ascending order by default.</p></td>
 </tr>
 </tbody>
 </table>

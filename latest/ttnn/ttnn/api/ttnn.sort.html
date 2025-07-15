@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.experimental.sort &mdash; TT-NN  documentation</title>
+  <title>ttnn.sort &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.experimental.sort.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.sort.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.cumsum" href="ttnn.cumsum.html" />
-    <link rel="prev" title="ttnn.topk" href="ttnn.topk.html" /> 
+    <link rel="next" title="ttnn.group_norm" href="ttnn.group_norm.html" />
+    <link rel="prev" title="ttnn.gather" href="ttnn.gather.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -68,22 +68,27 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="../api.html#reduction">Reduction</a><ul class="current">
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cumprod.html">ttnn.cumprod</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.max.html">ttnn.max</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.mean.html">ttnn.mean</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.min.html">ttnn.min</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.std.html">ttnn.std</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sum.html">ttnn.sum</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.var.html">ttnn.var</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.argmax.html">ttnn.argmax</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.prod.html">ttnn.prod</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.experimental.sort</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cumsum.html">ttnn.cumsum</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#data-movement">Data Movement</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.concat.html">ttnn.concat</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.nonzero.html">ttnn.nonzero</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.pad.html">ttnn.pad</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.permute.html">ttnn.permute</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.reshape.html">ttnn.reshape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.repeat.html">ttnn.repeat</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.repeat_interleave.html">ttnn.repeat_interleave</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.slice.html">ttnn.slice</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.tilize.html">ttnn.tilize</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.tilize_with_val_padding.html">ttnn.tilize_with_val_padding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.fill_rm.html">ttnn.fill_rm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.fill_ones_rm.html">ttnn.fill_ones_rm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.untilize.html">ttnn.untilize</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.untilize_with_unpadding.html">ttnn.untilize_with_unpadding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.indexed_fill.html">ttnn.indexed_fill</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.gather.html">ttnn.gather</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.sort</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
@@ -128,9 +133,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.experimental.sort</li>
+      <li class="breadcrumb-item active">ttnn.sort</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.experimental.sort.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.sort.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -138,12 +143,12 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-experimental-sort">
-<h1>ttnn.experimental.sort<a class="headerlink" href="#ttnn-experimental-sort" title="Permalink to this heading"></a>
+  <section id="ttnn-sort">
+<h1>ttnn.sort<a class="headerlink" href="#ttnn-sort" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
-<dt class="sig sig-object py" id="ttnn.experimental.sort">
-<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">sort</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.experimental.sort',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.experimental.sort_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.experimental.sort" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.sort">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sort</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.sort',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.data_movement.sort_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.sort" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Sorts the elements of the input tensor along the specified dimension in ascending order by default.
@@ -191,15 +196,15 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 <span class="n">input_tensor_ttnn</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
 <span class="c1"># Sort the tensor in ascending order</span>
-<span class="n">sorted_tensor</span><span class="p">,</span> <span class="n">indices</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_ttnn</span><span class="p">)</span>
+<span class="n">sorted_tensor</span><span class="p">,</span> <span class="n">indices</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_ttnn</span><span class="p">)</span>
 
 <span class="c1"># Sort the tensor in descending order</span>
-<span class="n">sorted_tensor_desc</span><span class="p">,</span> <span class="n">indices_desc</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_tnn</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">sorted_tensor_desc</span><span class="p">,</span> <span class="n">indices_desc</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_tnn</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
 <span class="c1"># Sort along a specific dimension</span>
 <span class="n">input_tensor_2d</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">([[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">6</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">4</span><span class="p">]])</span>
 <span class="n">input_tensor_2d_ttnn</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">input_tensor_2d</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="n">sorted_tensor_dim</span><span class="p">,</span> <span class="n">indices_dim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_2d_ttnn</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">sorted_tensor_dim</span><span class="p">,</span> <span class="n">indices_dim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">input_tensor_2d_ttnn</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
 </dd>
@@ -212,8 +217,8 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.topk.html" class="btn btn-neutral float-left" title="ttnn.topk" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.cumsum.html" class="btn btn-neutral float-right" title="ttnn.cumsum" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.gather.html" class="btn btn-neutral float-left" title="ttnn.gather" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.group_norm.html" class="btn btn-neutral float-right" title="ttnn.group_norm" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
