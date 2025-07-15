@@ -3186,6 +3186,10 @@ def test_conv2d_sdxl(
     w_db,
 ):
 
+    # Skip all on N300
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = act_block_w_div
@@ -3311,6 +3315,9 @@ def test_conv2d_vae_sdxl(
     act_block_h_override
 ):
 
+    # Skip all on N300
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
     # Skip specific test case for Blackhole devices
     if is_blackhole() and (batch, input_channels, output_channels, input_height, input_width, weights_dtype) == (1, 4, 4, 128, 128, ttnn.bfloat8_b):
         pytest.skip("Skipping this test case for Blackhole devices due to PCC issue, tracked in ISSUE-24463")
@@ -3451,6 +3458,9 @@ def test_conv_sharded_non_tile(device):
     shard_width = 32
     input_shape = (batch, input_channels, input_height, input_width)
     weights_shape = (output_channels, input_channels, filter, filter)
+
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     torch.manual_seed(0)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
