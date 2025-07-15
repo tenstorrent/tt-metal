@@ -157,9 +157,10 @@ setup_ttnn_test_target(unit_tests_ttnn_accessor)
 
 # unit_tests_ttnn_tensor
 
-add_executable(unit_tests_ttnn_tensor)
+add_library(unit_tests_ttnn_tensor_lib OBJECT)
+add_library(TTNN::Test::Basic::Tensor ALIAS unit_tests_ttnn_tensor_lib)
 target_sources(
-    unit_tests_ttnn_tensor
+    unit_tests_ttnn_tensor_lib
     PRIVATE
         tensor/common_tensor_test_utils.cpp
         tensor/test_create_tensor.cpp
@@ -176,8 +177,11 @@ target_sources(
         tensor/test_xtensor_adapter.cpp
         tensor/test_xtensor_conversion.cpp
 )
-setup_ttnn_test_target(unit_tests_ttnn_tensor)
-target_link_libraries(unit_tests_ttnn_tensor PRIVATE xtensor)
+setup_ttnn_test_target(unit_tests_ttnn_tensor_lib)
+target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE xtensor)
+
+add_executable(unit_tests_ttnn_tensor)
+target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
 
 # test_ccl_multi_cq_multi_device
 
