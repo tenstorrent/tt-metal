@@ -9,7 +9,7 @@ void kernel_main() {
     // Fetch the data from on-device memory and debug print.
     // Make sure to export TT_METAL_DPRINT_CORES=0,0 before runtime.
 
-    // Copy float from device DRAM into Core 0,0's L1
+    // Copy float from device DRAM into the core's SRAM
     uint32_t dram_addr = get_arg_val<uint32_t>(0);
     uint64_t noc_addr = get_noc_addr(1, 0, dram_addr);
     constexpr uint32_t cb_id = tt::CBIndex::c_0;  // index=0
@@ -19,6 +19,7 @@ void kernel_main() {
     noc_async_read(noc_addr, l1_addr, size);
     noc_async_read_barrier();
 
+    // Read floating point value from SRAM and print it
     float* data = (float*)l1_addr;
     DPRINT << "Master, I have retrieved the value stored on Device 0 DRAM. Here we go.  It is: " << F32(*data)
            << ENDL();
