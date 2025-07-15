@@ -666,6 +666,10 @@ void InitDeviceProfiler(IDevice* device) {
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
             MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
         setControlBuffer(device, control_buffer);
+
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
+            profiler.dumpRoutingInfo();
+        }
     }
 #endif
 }
