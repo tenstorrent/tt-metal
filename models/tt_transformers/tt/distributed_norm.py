@@ -8,9 +8,10 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, TG=False):
+    def __init__(self, norm, args, tt_ccl, TG=False):
         self.norm = norm
         self.args = args
+        self.tt_ccl = tt_ccl
 
         if TG:
             core_grid_ln = (
@@ -53,6 +54,7 @@ class DistributedNorm(LightweightModule):
                     epsilon=self.norm.eps,
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
+                    tt_ccl=self.tt_ccl,
                     ln_sharded_input_memcfg=self.gather_in_mem_cfg,
                     ln_sharded_progcfg=self.ln_prg_cfg,
                     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
@@ -63,6 +65,7 @@ class DistributedNorm(LightweightModule):
                     epsilon=self.norm.eps,
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
+                    tt_ccl=self.tt_ccl,
                     compute_kernel_config=self.ln_cfg,
                 )
 
@@ -70,7 +73,21 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-            x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
+            ag_memory_config = input_mem_cfg
+            dim = 3
+            ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
+                x.shape, x.dtype, ag_memory_config, dim
+            )
+            x = ttnn.experimental.all_gather_async(
+                x,
+                persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+                dim=dim,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=self.args.ccl_topology(),
+                memory_config=ag_memory_config,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+            )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
@@ -78,6 +95,20 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):
-            x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology())
+            ag_memory_config = x.memory_config()
+            dim = 3
+            ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
+                x.shape, x.dtype, ag_memory_config, dim
+            )
+            x = ttnn.experimental.all_gather_async(
+                x,
+                persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+                dim=dim,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=self.args.ccl_topology(),
+                memory_config=ag_memory_config,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+            )
 
         return x
