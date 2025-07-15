@@ -160,8 +160,8 @@ conv_test_cases = [
         "output_channels": 1280,
         "weights_dtype": ttnn.bfloat8_b,
         "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        "deallocate_activation": True,
-        "reallocate_halo_output": True,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
         "act_block_h_override": 64,
@@ -176,8 +176,8 @@ conv_test_cases = [
         "output_channels": 1280,
         "weights_dtype": ttnn.bfloat8_b,
         "shard_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        "deallocate_activation": True,
-        "reallocate_halo_output": True,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
         "act_block_h_override": 512,
@@ -192,8 +192,8 @@ conv_test_cases = [
         "output_channels": 1280,
         "weights_dtype": ttnn.bfloat8_b,
         "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        "deallocate_activation": True,
-        "reallocate_halo_output": True,
+        "deallocate_activation": False,
+        "reallocate_halo_output": False,
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 32,
@@ -350,7 +350,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     in1_dtype = weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
         weights_dtype=weights_dtype,
         shard_layout=test_config["shard_layout"],
         deallocate_activation=test_config["deallocate_activation"],
@@ -362,8 +361,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=test_config["act_block_h_override"],
-        preprocess_weights_on_device=False,
-        always_preprocess_weights=False,
     )
 
     slice_type = test_config["slice_type"]

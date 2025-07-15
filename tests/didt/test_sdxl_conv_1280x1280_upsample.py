@@ -212,10 +212,9 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
 
     shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
-        deallocate_activation=True,
+        deallocate_activation=False,
         reallocate_halo_output=False,
         enable_act_double_buffer=False,
         enable_weights_double_buffer=True,
@@ -224,8 +223,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=64,
-        preprocess_weights_on_device=False,
-        always_preprocess_weights=False,
     )
 
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
