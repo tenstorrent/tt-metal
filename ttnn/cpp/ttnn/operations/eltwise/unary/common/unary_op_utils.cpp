@@ -355,6 +355,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
             break;
+        case UnaryOpType::HARDSHRINK: op_init_and_name = {}; break;
+
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     return op_init_and_name;
@@ -656,11 +658,18 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
     defines[get_macro_definition(op_type)] = "1";
 }
 
-std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root) {
+std::string get_compute_kernel_path(
+    UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
         case UnaryOpType::TANHSHRINK: return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
         case UnaryOpType::IDENTITY: return fmt::format("{}/{}", compute_root, "eltwise_identity_kernel.cpp");
+        case UnaryOpType::HARDSHRINK:
+            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+                return fmt::format("{}/{}", compute_root, "hardshrink_kernel_sfpu.cpp");
+            } else {
+                return fmt::format("{}/{}", compute_root, "hardshrink_kernel.cpp");
+            }
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }
