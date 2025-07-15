@@ -13,10 +13,13 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <cstdint>
 #include <vector>
 #include <memory>
 #include <iostream>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 // Optional: For verbose host-side tile verification prints.
 #include <optional>
@@ -35,14 +38,22 @@ using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 
-std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool sram) {
+std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     const uint32_t page_tiles = sram ? n_tiles : 1;
-    return CreateBuffer({.device = device, .size = tile_size * n_tiles, .page_size = page_tiles * tile_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)});
+    const distributed::DeviceLocalBufferConfig device_local_config{
+        .page_size = page_tiles * tile_size,
+        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM),
+        .bottom_up = false};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * n_tiles};
+    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
 }
 
 CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
+    // distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    // auto& program = mesh_device->mesh_workload().get_programs().at(device_range);
     return CreateCircularBuffer(program, core, CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_size));
 }
 
@@ -146,12 +157,20 @@ int main(int argc, char **argv) {
 
     ////////// DEVICE SETUP //////////
     int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
-    CommandQueue& cq = device->command_queue();
+    // const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    auto device = mesh_device->get_devices()[0];
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     ////////// PROGRAM BLOCK //////////
     {
+        distributed::MeshWorkload workload;
         Program program = CreateProgram();
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
 
         ////////// TENSIX CORE SETUP //////////
         // Define logical sender core and receiver core range (for kernel creation on the host).
@@ -159,11 +178,10 @@ int main(int argc, char **argv) {
         CoreCoord sender_core_logical = {0, 0};
         CoreRange receiver_cores_logical = CoreRange({1, 0}, {3, 0});
         // Convert logical coordinates to physical coordinates (necessary for multicasting).
-        CoreCoord sender_core_physical = device->worker_core_from_logical_core(sender_core_logical);
+        CoreCoord sender_core_physical = mesh_device->worker_core_from_logical_core(sender_core_logical);
         CoreRange receiver_cores_physical = CoreRange(
-            device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
-            device->worker_core_from_logical_core(receiver_cores_logical.end_coord)
-        );
+            mesh_device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
+            mesh_device->worker_core_from_logical_core(receiver_cores_logical.end_coord));
         // Define physical sender core and receiver core range (for runtime arguments on the device).
         CoreCoord sender_core = sender_core_physical;
         CoreCoord receiver_core_start = receiver_cores_physical.start_coord;
@@ -173,16 +191,16 @@ int main(int argc, char **argv) {
         size_t num_dests = receiver_cores_logical.size();
 
         ////////// SEMAPHORE SETUP //////////
-        uint32_t sender = CreateSemaphore(program, all_cores_logical, 0);
-        uint32_t receiver = CreateSemaphore(program, all_cores_logical, 0);
+        uint32_t sender = CreateSemaphore(program_, all_cores_logical, 0);
+        uint32_t receiver = CreateSemaphore(program_, all_cores_logical, 0);
 
         ////////// DRAM & SRAM BUFFERS SETUP //////////
         constexpr uint32_t num_tiles = 1;
         uint32_t dram_bank_id = 0;
         auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
         auto output_dram_buffer = MakeBufferBFP16(device, num_dests * num_tiles, false);
-        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
-        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+        MakeCircularBufferBFP16(program_, all_cores_logical, tt::CBIndex::c_0, num_tiles);
+        MakeCircularBufferBFP16(program_, all_cores_logical, tt::CBIndex::c_16, num_tiles);
 
         ////////// DATA MOVEMENT CONFIG SETUP //////////
         DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
@@ -195,30 +213,27 @@ int main(int argc, char **argv) {
 
         ////////// COORDINATOR KERNEL SETUP //////////
         KernelHandle coordinator_kernel_id = CreateKernel(
-            program,
+            program_,
             "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
             sender_core_logical,
-            DataMovementConfigIn
-        );
+            DataMovementConfigIn);
 
         ////////// DATAFLOW KERNELS SETUP //////////
         KernelHandle inbound_kernel_id = CreateKernel(
-            program,
+            program_,
             "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
             receiver_cores_logical,
-            DataMovementConfigIn
-        );
+            DataMovementConfigIn);
         KernelHandle outbound_kernel_id = CreateKernel(
-            program,
+            program_,
             "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/outbound_kernel.cpp",
             receiver_cores_logical,
-            DataMovementConfigOut
-        );
+            DataMovementConfigOut);
 
         ////////// COMPUTE KERNEL SETUP //////////
         vector<uint32_t> compute_kernel_args = {};
         CreateKernel(
-            program,
+            program_,
             "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
             receiver_cores_logical,
             ComputeConfig{
@@ -229,13 +244,13 @@ int main(int argc, char **argv) {
 
         ////////// IDENTITY MATRIX TILE SETUP //////////
         std::vector<bfloat16> identity_tile = create_identity_matrix(TILE_WIDTH, TILE_HEIGHT, TILE_WIDTH);
-        EnqueueWriteBuffer(cq, src0_dram_buffer, identity_tile.data(), false);
+        EnqueueWriteMeshBuffer(cq, src0_dram_buffer, identity_tile);
 
         ////////// RUNTIME ARGS SETUP //////////
         // Args for the sender core to multicast tile.
         // They must have access to coordinates of all receiver cores, to execute multicast operation.
         SetRuntimeArgs(
-            program,
+            program_,
             coordinator_kernel_id,
             sender_core_logical,
             {(uint32_t)(receiver_core_start.x),
@@ -250,17 +265,17 @@ int main(int argc, char **argv) {
              num_dests});
         // Args for the receiver cores to receive tile.
         // They must have access to coordinates of the sender core, to listen for multicast operation.
-        SetRuntimeArgs(program, inbound_kernel_id, receiver_cores_logical, {
-            (uint32_t)(sender_core.x),
-            (uint32_t)(sender_core.y),
-            sender, receiver
-        });
+        SetRuntimeArgs(
+            program_,
+            inbound_kernel_id,
+            receiver_cores_logical,
+            {(uint32_t)(sender_core.x), (uint32_t)(sender_core.y), sender, receiver});
 
         // Args for the receiver cores to send tile back to DRAM.
         int tile_index = 0;
         for (const CoreCoord& core : receiver_cores_logical) {
             SetRuntimeArgs(
-                program, outbound_kernel_id, core, {output_dram_buffer->address(), static_cast<uint32_t>(tile_index)});
+                program_, outbound_kernel_id, core, {output_dram_buffer->address(), static_cast<uint32_t>(tile_index)});
             tile_index++;
         }
 
@@ -272,7 +287,7 @@ int main(int argc, char **argv) {
             sender_core_logical.x,
             sender_core_logical.y,
             device_id);
-        EnqueueProgram(cq, program, false);
+        EnqueueMeshWorkload(cq, workload, false);
         fmt::print("Waiting until program finishes\n");
         Finish(cq);
         fmt::print(
@@ -287,14 +302,12 @@ int main(int argc, char **argv) {
 
         ////////// TILE MULTICAST VERIFICATION //////////
         std::vector<bfloat16> received_tiles(num_dests * TILE_HW);
-        EnqueueReadBuffer(
-            cq, output_dram_buffer, received_tiles.data(), true);  // read all multicast-received tiles to host.
+        EnqueueReadMeshBuffer(cq, received_tiles, output_dram_buffer);  // read all multicast-received tiles to host.
         bool verbose_verify =
             false;  // if enabled, the original and all multicast-received tiles are printed in full (32x32).
         verify_tiles(identity_tile, received_tiles, num_dests, verbose_verify);
     }
 
-    CloseDevice(device);
-
+    mesh_device.reset();
     return 0;
 }
