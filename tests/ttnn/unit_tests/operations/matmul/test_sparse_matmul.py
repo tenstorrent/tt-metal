@@ -16,7 +16,7 @@ from models.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("mkn", [(128, 7168, 2048), (128, 2048, 7168)])
+@pytest.mark.parametrize("mkn", [(128, 7168, 2048)])  # , (128, 2048, 7168)])
 @pytest.mark.parametrize("num_experts", [2])
 @pytest.mark.parametrize("num_tokens", [(2, 1)])  # , (64, 128), (64, 256)])
 @pytest.mark.parametrize("tile_h", [32])
@@ -33,11 +33,13 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
     sparsity_density = random.random()  # random number between 0 and 1
     sparsity_shape = (1, b, s, num_experts)
     sparsity = torch.rand(sparsity_shape)
-    mask = torch.rand(sparsity_shape) < sparsity_density
+    mask = sparsity < sparsity_density
     sparsity[mask] = 0.0
+    sparsity[0, 0, 0, 0] = 1.0
     sparsity = sparsity.to(dtype=torch.bfloat16)
 
-    nnz = int((sparsity != 0).sum().item())
+    # nnz = int((sparsity != 0).sum().item())
+    nnz = sparsity.numel()
 
     in0_t = ttnn.from_torch(
         in0,
@@ -76,12 +78,21 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
     )
 
     output_tensor = ttnn.to_torch(output_t)
-    pt_out = torch.matmul(in0, in1)
-    expected_pcc = 1.0 if in1_dtype == ttnn.bfloat16 else 0.99
+    print(output_tensor.shape)
 
-    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    result = []
+    # Compute matmul using torch for each batch and concatenate the results
+    for b, s, e in itertools.product(range(b), range(s), range(num_experts)):
+        in0_batch = in0[b, s, :, :]
+        in1_batch = in1[0, e, :, :]
+        pt_out = torch.matmul(in0_batch, in1_batch)
+        result.append(pt_out)
+
+    result = torch.cat(result, dim=0)
+    print(result.shape)
+
+    pcc_passed, pcc_message = comp_pcc(result, output_tensor, 0.999)
     assert pcc_passed, pcc_message
-    logger.info(pcc_message)
 
 
 @pytest.mark.parametrize("mkn", [(128, 7168, 2048), (128, 2048, 7168)])

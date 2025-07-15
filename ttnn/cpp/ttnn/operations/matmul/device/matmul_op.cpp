@@ -2712,77 +2712,18 @@ std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    // Use the compute_matmul_output_shape function to get the output shape
-    const auto output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
+    const auto output_shape = compute_sparse_matmul_output_shape(input_tensor_a, input_tensor_b);
 
-    auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
-    auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
-    auto output_tile = this->output_tile.value();
-    auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
-    auto output_layout = Layout::TILE;
+    const auto output_dtype = this->output_dtype.has_value() ? this->output_dtype.value() : input_tensor_a.dtype();
 
-    auto matmul_parameters = Matmul{
-        this->program_config,
-        /*bcast_batch=*/std::nullopt,
-        this->output_mem_config,
-        this->output_dtype,
-        this->compute_kernel_config,
-        /*untilize_out=*/false,
-        this->user_core_coord,
-        /*user_fused_activation=*/std::nullopt,
-        /*user_run_batched=*/false,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        this->output_tile,
-        this->global_cb,
-        this->sub_device_id};
-
-    if (this->output_mem_config.is_sharded()) {
-        MatmulProgramConfig chosen_program_config =
-            get_program_config(input_tensor_a, input_tensor_b, /*bias_single_tile_size=*/0, &matmul_parameters);
-        return std::visit(
-            [&](const auto& program_config) -> std::vector<TensorSpec> {
-                using ProgramConfigType = std::decay_t<decltype(program_config)>;
-                if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
-                    uint32_t M =
-                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
-                    uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
-                    uint32_t per_core_M = program_config.per_core_M;
-                    uint32_t per_core_N = program_config.per_core_N;
-
-                    TT_FATAL(
-                        per_core_N % tile_width_ratio == 0,
-                        "per_core_N must be divisible by override output tile width");
-
-                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
-                    uint32_t num_cores = num_blocks_x * num_blocks_y;
-                    ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
-                    if (input_tensor_a.is_sharded()) {
-                        shard_orientation = input_tensor_a.shard_spec().value().orientation;
-                    } else if (input_tensor_b.is_sharded()) {
-                        shard_orientation = input_tensor_b.shard_spec().value().orientation;
-                    }
-
-                    CoreRangeSet all_cores = num_cores_to_corerangeset(
-                        num_cores,
-                        program_config.compute_with_storage_grid_size,
-                        shard_orientation == ShardOrientation::ROW_MAJOR);
-                    ShardSpec shard_spec = ShardSpec{
-                        all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, shard_orientation};
-                    auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
-                    return {TensorSpec(
-                        output_shape,
-                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
-                } else {
-                    TT_THROW("Unsupported program config {} when output tensor is sharded", chosen_program_config);
-                }
-            },
-            chosen_program_config);
-    }
+    auto in0_tile = input_tensor_a.tensor_spec().tile();
+    auto in1_tile = input_tensor_b.tensor_spec().tile();
+    tt::tt_metal::Tile output_tile = this->output_tile.has_value()
+                                         ? this->output_tile.value()
+                                         : get_output_tile(this->output_mem_config, in0_tile, in1_tile, std::nullopt);
 
     return {TensorSpec(
-        output_shape, TensorLayout(output_dtype.value(), PageConfig(Layout::TILE, output_tile), output_mem_config))};
+        output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE, output_tile), this->output_mem_config))};
 }
 
 std::vector<Tensor> SparseMatmul::create_output_tensors(
