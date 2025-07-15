@@ -12,7 +12,11 @@ from typing import List
 
 import plotly.graph_objects as go
 
-from helpers.device import run_elf_files, wait_for_tensix_operations_finished
+from helpers.device import (
+    reset_mailboxes,
+    run_elf_files,
+    wait_for_tensix_operations_finished,
+)
 from helpers.profiler import Profiler
 from helpers.test_config import ProfilerBuild, build_test
 
@@ -137,6 +141,7 @@ def perf_benchmark(test_config, run_types: list[PerfRunType], run_count=8):
         for _ in range(run_count):
             run_elf_files(test_config["testname"])
             wait_for_tensix_operations_finished()
+            reset_mailboxes()
 
             profiler_data = Profiler.get_data(test_config["testname"])
             perf_data = process_profiler_data(profiler_data)

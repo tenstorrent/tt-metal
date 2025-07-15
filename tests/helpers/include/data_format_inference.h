@@ -109,9 +109,6 @@ constexpr DataFormat infer_unpack_out()
 {
     if constexpr (INPUT == DataFormat::Float32 && !UNPACKING_TO_DEST)
     {
-        // input format is Float32 in L1 and we are unpacking to src registers instead of dest register
-        // src registers can store 19-bit datums, so we truncate datum to Tf32 perserving 8-bit exponent and as much mantissa as possible
-
         // When input format in L1 is Float32 + unpacking to src registers (instead of directly to dest register)
         // Source registers can store 19-bit values, so we truncate Float32 to Tf32 if we know dest will be 32-bit format
         // which preserves the 8-bit exponent and as much mantissa precision as fits. If our dst regoster is 16-bit we directly truncate to 16-bit format

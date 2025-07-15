@@ -212,6 +212,8 @@ __attribute__((always_inline)) inline void write_timestamp(uint16_t id16, uint64
     PROFILER_META(MARKER_FULL(marker)) \
     llk_profiler::write_timestamp(MARKER_ID(marker), data);
 
+#define PROFILER_SYNC() tensix_sync()
+
 #else
 
 #define ZONE_SCOPED(marker)
@@ -219,5 +221,7 @@ __attribute__((always_inline)) inline void write_timestamp(uint16_t id16, uint64
 #define TIMESTAMP(marker)
 
 #define TIMESTAMP_DATA(marker, data)
+
+#define PROFILER_SYNC()
 
 #endif

@@ -112,6 +112,9 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
         ):
             pytest.skip(reason="This combination is not supported on BH architecture")
 
+    if formats.input_format == DataFormat.Int32:
+        pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
+
     if (
         approx_mode == ApproximationMode.Yes
         and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
