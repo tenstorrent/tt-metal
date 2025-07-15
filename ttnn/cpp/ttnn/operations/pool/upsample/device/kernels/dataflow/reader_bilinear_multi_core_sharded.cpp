@@ -92,7 +92,7 @@ void kernel_main() {
             dy = 1;
         }
 
-        if (in_batch_index_y2 == int(in_h)) {  // change later to not check with modulus
+        if (in_batch_index_y2 == int(in_h)) {
             // This would would mean that in_batch_index_y2 (the "lower row") corresponds to a padding row(specifically
             // the bottom padding row)
             if (dy > 0.5) {  // Due to math behind bilinear upsampling, dy could never be exactly 0.5, so this check
