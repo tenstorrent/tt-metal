@@ -168,14 +168,16 @@ inline void set_packer_strides(const uint pack_src_format, const uint pack_dst_f
                     : (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float16) ? 2
                                                                                                         : 1;
     uint y_stride = FACE_R_DIM * x_stride;
-    uint z_stride = PACK_CNT * FACE_C_DIM * y_stride;
-    uint w_stride = z_stride;
+    uint z_stride = FACE_C_DIM * y_stride;
+    uint w_stride = TILE_NUM_FACES * z_stride;
 
-    TT_SETDMAREG(0, LOWER_HALFWORD((x_stride << PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
+    uint32_t xy_stride = (x_stride << PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT) | (y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT);
+    uint32_t zw_stride = (z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT) | (w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT);
+    TT_SETDMAREG(0, LOWER_HALFWORD(xy_stride), 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(xy_stride), 0, HI_16(p_gpr_pack::TMP0));
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
-    TT_SETDMAREG(0, LOWER_HALFWORD((w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); // z-stride not used!
-    TT_SETDMAREG(0, UPPER_HALFWORD((w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, LOWER_HALFWORD(zw_stride), 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(zw_stride), 0, HI_16(p_gpr_pack::TMP0));
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
     TTI_NOP;
     TTI_NOP;
@@ -355,7 +357,7 @@ inline void set_packer_l1_offset(const uint pack_dst_format, const uint face_r_d
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void reconfig_packer_data_format(const uint pack_src_format, const uint pack_dst_format, const uint tile_size, const uint face_r_dim = FACE_R_DIM)
+inline void reconfig_packer_data_format(const uint pack_src_format, const uint pack_dst_format, const uint tile_size = 0, const uint face_r_dim = FACE_R_DIM)
 {
     // Get pointer to registers for current state ID
     volatile uint* cfg = get_cfg_pointer();
@@ -477,7 +479,7 @@ template <bool is_fp32_dest_acc_en, bool untilize>
 inline void configure_pack(
     const uint pack_src_format,
     const uint pack_dst_format,
-    const uint tile_size,
+    const uint tile_size    = 0,
     const uint face_r_dim   = FACE_R_DIM,
     const uint num_faces    = 4,
     const bool partial_face = false,
@@ -584,7 +586,7 @@ inline void select_packer_dest_registers()
 
 // Program packer destination addresses from GPRs
 template <PackSelMask PackSel = PACK_ALL>
-inline void program_packer_destination(uint32_t addr)
+inline void program_packer_destination(uint32_t addr, bool restore = true)
 {
     uint32_t new_l1_addr = (1 << 31) | addr;
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
@@ -595,7 +597,10 @@ inline void program_packer_destination(uint32_t addr)
 
     TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 0); // pack flush
 
-    TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
+    if (restore)
+    {
+        TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
+    }
 }
 
 template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool diagonal = false, uint32_t row_num_datums = TILE_C_DIM>

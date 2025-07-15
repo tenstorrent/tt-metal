@@ -71,10 +71,7 @@ class ckernel_unpack_template
     //      UNPACR_A3
     //      UNPACR_B
     //    else
-    //      SKIP_A0
-    //      SKIP_A1
-    //      SKIP_A2
-    //      SKIP_A3
+    //      SKIP_A
     //      SKIP_B
     //
     //  The configuration allows the following changes:

@@ -86,6 +86,38 @@ struct p_unpacr
     constexpr static uint AUTO_INC_CONTEXT      = (1); // Auto increment config context (max value set through unpacker config command)
 };
 
+#define TTI_UNPACR_COMMON(Unpack_block_selection, AddrMode, SetDatValid) \
+    TTI_UNPACR(                                                          \
+        Unpack_block_selection,                                          \
+        AddrMode,                                                        \
+        0 /*CfgContextCntInc*/,                                          \
+        0 /*CfgContextId*/,                                              \
+        0 /*AddrCntContextId*/,                                          \
+        1 /*OvrdThreadId*/,                                              \
+        SetDatValid,                                                     \
+        0 /*srcb_bcast*/,                                                \
+        0 /*ZeroWrite2*/,                                                \
+        0 /*AutoIncContextID*/,                                          \
+        0 /*RowSearch*/,                                                 \
+        0 /*SearchCacheFlush*/,                                          \
+        1 /*Last*/)
+
+#define TT_OP_UNPACR_COMMON(Unpack_block_selection, AddrMode, SetDatValid) \
+    TT_OP_UNPACR(                                                          \
+        Unpack_block_selection,                                            \
+        AddrMode,                                                          \
+        0 /*CfgContextCntInc*/,                                            \
+        0 /*CfgContextId*/,                                                \
+        0 /*AddrCntContextId*/,                                            \
+        1 /*OvrdThreadId*/,                                                \
+        SetDatValid,                                                       \
+        0 /*srcb_bcast*/,                                                  \
+        0 /*ZeroWrite2*/,                                                  \
+        0 /*AutoIncContextID*/,                                            \
+        0 /*RowSearch*/,                                                   \
+        0 /*SearchCacheFlush*/,                                            \
+        1 /*Last*/)
+
 struct p_unpacr_nop
 {
     constexpr static uint UNP_POP = 0b000;
@@ -110,6 +142,21 @@ struct p_srcb
     constexpr static uint BACKWARD_PASS = 0x1;
 };
 
+constexpr static uint SETADC_CH0(uint cnt)
+{
+    return cnt;
+}
+
+constexpr static uint SETADC_CH1(uint cnt)
+{
+    return cnt << 2;
+}
+
+constexpr static uint SETADC_CH01(uint cnt)
+{
+    return cnt << 2 | cnt;
+}
+
 struct p_setadc
 {
     constexpr static uint UNP0   = 0b001;
@@ -124,6 +171,13 @@ struct p_setadc
     constexpr static uint SET_Z = 2;
     constexpr static uint SET_W = 3;
 
+    constexpr static uint X  = 1;
+    constexpr static uint Y  = 2;
+    constexpr static uint XY = 3;
+    constexpr static uint Z  = 1;
+    constexpr static uint W  = 2;
+    constexpr static uint ZW = 3;
+
     constexpr static uint CH_0 = 0;
     constexpr static uint CH_1 = 1;
 };
@@ -133,6 +187,10 @@ struct p_pacr
     constexpr static uint P_ZERO_OUTPUT_DISABLED = 0x0;
     constexpr static uint P_ZERO_OUTPUT_ENABLED  = 0x1;
 };
+
+#define TTI_PACR_COMMON(AddrMode, ZeroWrite, PackSel, Flush, Last) TTI_PACR(AddrMode, ZeroWrite, PackSel, 0 /*OvrdThreadId*/, 0 /*Concat*/, Flush, Last)
+
+#define TT_OP_PACR_COMMON(AddrMode, ZeroWrite, PackSel, Flush, Last) TT_OP_PACR(AddrMode, ZeroWrite, PackSel, 0 /*OvrdThreadId*/, 0 /*Concat*/, Flush, Last)
 
 struct p_ind
 {
@@ -148,6 +206,12 @@ struct p_ind
     constexpr static uint LD_32bit = 1;
     constexpr static uint LD_16bit = 2;
     constexpr static uint LD_8bit  = 3;
+};
+
+struct p_mov
+{
+    constexpr static uint DEST_NORM    = 0;
+    constexpr static uint DEST_32B_LOW = 1;
 };
 
 struct p_mova2d
@@ -368,5 +432,46 @@ struct p_exp
     // ADJ_EXP : 1011 1101 0011 1111 (-0x4300 + 0x003F = 0xBD3F)
     constexpr static uint ADJ_EXP = 0xBD3F;
 };
+
+struct p_setdmareg
+{
+    constexpr static uint PAYLOAD_IMMEDIATE   = 0;
+    constexpr static uint PAYLOAD_16BIT       = 0;
+    constexpr static uint PAYLOAD_32BIT       = 1;
+    constexpr static uint PAYLOAD_128BIT      = 2;
+    constexpr static uint PAYLOAD_TILE_HEADER = 3;
+
+    constexpr static uint MODE_IMMEDIATE = 0;
+    constexpr static uint MODE_SIGNAL    = 1;
+};
+
+struct p_mop
+{
+    constexpr static uint MASK_LOOP   = 0;
+    constexpr static uint DOUBLE_LOOP = 1;
+};
+
+struct p_adddmareg
+{
+    constexpr static uint REG_PLUS_REG = 0;
+    constexpr static uint REG_PLUS_IMM = 1;
+};
+
+constexpr static uint REG2FLOP_FLOP_INDEX(uint addr)
+{
+    return addr - THCON_CFGREG_BASE_ADDR32;
+}
+
+struct p_reg2flop
+{
+    constexpr static uint WRITE_16B = 0;
+    constexpr static uint WRITE_4B  = 1;
+    constexpr static uint WRITE_2B  = 2;
+    constexpr static uint WRITE_1B  = 3;
+};
+
+#define TTI_REG2FLOP_COMMON(SizeSel, FlopIndex, RegIndex) TTI_REG2FLOP(SizeSel, 0 /*TargetSel*/, 0 /*ByteOffset*/, 0 /*ContextId*/, FlopIndex, RegIndex)
+
+#define TT_OP_REG2FLOP_COMMON(SizeSel, FlopIndex, RegIndex) TT_OP_REG2FLOP(SizeSel, 0 /*TargetSel*/, 0 /*ByteOffset*/, 0 /*ContextId*/, FlopIndex, RegIndex)
 
 } // namespace ckernel

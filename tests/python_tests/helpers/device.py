@@ -307,3 +307,12 @@ def wait_for_tensix_operations_finished(core_loc: str = "0,0"):
     wait_until_tensix_complete(core_loc, Mailbox.Packer)
     wait_until_tensix_complete(core_loc, Mailbox.Math)
     wait_until_tensix_complete(core_loc, Mailbox.Unpacker)
+
+
+def reset_mailboxes():
+    """Reset all core mailboxes before each test."""
+    core_loc = "0, 0"
+    reset_value = 0  # Constant - indicates the TRISC kernel run status
+    mailboxes = [Mailbox.Packer, Mailbox.Math, Mailbox.Unpacker]
+    for mailbox in mailboxes:
+        write_words_to_device(core_loc=core_loc, addr=mailbox.value, data=reset_value)

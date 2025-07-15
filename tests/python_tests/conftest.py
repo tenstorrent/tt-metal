@@ -3,7 +3,6 @@
 
 import logging
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -14,11 +13,10 @@ from requests.exceptions import ConnectionError, RequestException, Timeout
 from ttexalens import tt_exalens_init
 from ttexalens.tt_exalens_lib import (
     arc_msg,
-    write_words_to_device,
 )
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_arg_mapping import Mailbox
+from helpers.device import reset_mailboxes
 from helpers.log_utils import _format_log
 from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 
@@ -29,57 +27,15 @@ def init_llk_home():
     os.environ["LLK_HOME"] = str(Path(__file__).resolve().parents[2])
 
 
-def set_chip_architecture():
-    def _identify_chip_architecture(output):
-        if "Blackhole" in output:
-            return ChipArchitecture.BLACKHOLE
-        elif "Wormhole" in output:
-            return ChipArchitecture.WORMHOLE
-        return None
-
-    chip_arch = get_chip_architecture()
-    if chip_arch:
-        print(f"CHIP_ARCH is already set to {chip_arch}")
-        return chip_arch
-    try:
-        result = subprocess.run(
-            ["tt-smi", "-ls"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True,
-        )
-    except FileNotFoundError:
-        print("Error: tt-smi command not found.", file=sys.stderr)
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        print(f"Error: tt-smi failed with error: {e.stderr}", file=sys.stderr)
-        sys.exit(1)
-
-    architecture = _identify_chip_architecture(result.stdout)
-    if not architecture:
-        print(
-            "Error: Unable to detect architecture from tt-smi output.", file=sys.stderr
-        )
-        sys.exit(1)
-    os.environ["CHIP_ARCH"] = architecture.value
-    return architecture
-
-
 @pytest.fixture(autouse=True)
-def reset_mailboxes():
-    """Reset all core mailboxes before each test."""
-    core_loc = "0, 0"
-    reset_value = 0  # Constant - indicates the TRISC kernel run status
-    mailboxes = [Mailbox.Packer, Mailbox.Math, Mailbox.Unpacker]
-    for mailbox in mailboxes:
-        write_words_to_device(core_loc=core_loc, addr=mailbox.value, data=reset_value)
+def reset_mailboxes_fixture():
+    reset_mailboxes()
     yield
 
 
 @pytest.fixture(scope="session", autouse=True)
 def download_headers():
-    CHIP_ARCH = set_chip_architecture()
+    CHIP_ARCH = get_chip_architecture()
     if CHIP_ARCH not in [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE]:
         sys.exit(f"Unsupported CHIP_ARCH detected: {CHIP_ARCH.value}")
 
@@ -271,11 +227,11 @@ def pytest_configure(config):
 # decorate the test with @skip_for_wormhole.
 
 skip_for_wormhole = pytest.mark.skipif(
-    lambda: get_chip_architecture() == ChipArchitecture.WORMHOLE,
+    get_chip_architecture() == ChipArchitecture.WORMHOLE,
     reason="Test is not supported on Wormhole architecture",
 )
 
 skip_for_blackhole = pytest.mark.skipif(
-    lambda: get_chip_architecture() == ChipArchitecture.BLACKHOLE,
+    get_chip_architecture() == ChipArchitecture.BLACKHOLE,
     reason="Test is not supported on Blackhole architecture",
 )
