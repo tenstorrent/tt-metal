@@ -170,8 +170,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "reader_single_row_single_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -193,8 +192,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         compute_with_storage_grid_size.y,
         static_cast<uint32_t>(is_32_bit_data)};
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "writer_single_row_single_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(
@@ -215,7 +213,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         static_cast<uint32_t>(attributes.stable),
         synchronization_cb_index};
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_single_row_single_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -576,8 +574,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         semaphore_barrier,
     };
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "reader_cross_core_data_exchange.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -601,8 +598,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         semaphore_exchange_readers,
         static_cast<uint32_t>(is_32_bit_data)};
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "writer_cross_core_data_exchange.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(program, writer_kernel_id, core_range, {value_buffer->address()});
@@ -628,7 +624,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         packer_unpacker_sync_cb_index,
     };
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -889,8 +885,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         static_cast<uint32_t>(index_tensor_is_dram),
         static_cast<uint32_t>(is_32_bit_data)};
     const std::string coordinator_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "coordinator_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle coordinator_kernel_id = tt::tt_metal::CreateKernel(
         program,
         coordinator_kernel_path,
@@ -923,8 +918,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         compute_with_storage_grid_size.y,
         number_of_available_cores};
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "reader_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -950,8 +944,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         compute_with_storage_grid_size.y,
         number_of_available_cores};
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "writer_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(
