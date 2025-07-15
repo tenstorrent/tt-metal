@@ -92,8 +92,19 @@ def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_
     similarities2 = upper_triangle2[upper_triangle2 != 0]
     mean_similarity2 = similarities2.mean()
     inference_time = t1 - t0
+    sentence_per_sec = round(batch_size / inference_time)
     logger.info(
-        f"ttnn_sentencebert_batch_size: {len(inputs[0])}, One inference iteration time (sec): {inference_time}, Sentence per sec: {round(batch_size/inference_time)}"
+        f"ttnn_sentencebert_batch_size: {len(inputs[0])}, One inference iteration time (sec): {inference_time}, Sentence per sec: {sentence_per_sec}"
     )
+    assert sentence_per_sec > 2984
+    assert inference_time < 0.0214
     logger.info(f"Mean Cosine Similarity for Reference Model: {mean_similarity1}")
     logger.info(f"Mean Cosine Similarity for TTNN Model:: {mean_similarity2}")
+
+    # Check if the cosine similarities are approximately close
+    similarity_diff = abs(mean_similarity1 - mean_similarity2)
+    tolerance = 0.02  # 2% tolerance
+    assert (
+        similarity_diff < tolerance
+    ), f"Cosine similarities differ by {similarity_diff:.4f}, which exceeds tolerance of {tolerance}"
+    logger.info(f"Cosine similarities are close (difference: {similarity_diff:.4f})")
