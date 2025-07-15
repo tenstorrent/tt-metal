@@ -505,9 +505,6 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
 }
 
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
-    // https://github.com/tenstorrent/tt-metal/issues/23307
-    device_->disable_and_clear_program_cache();
-
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t read_write_size_bytes = WORD_SIZE * 2048;
     uint32_t reader_dst_address =
