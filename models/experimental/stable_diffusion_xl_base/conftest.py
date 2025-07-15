@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from conftest import is_6u, is_galaxy
 
 
 def pytest_addoption(parser):
@@ -17,6 +18,20 @@ def pytest_addoption(parser):
         action="store",
         default=5000,
         help="Number of prompts to process (default: 5000)",
+    )
+    parser.addoption(
+        "--reset-bool",
+        action="store",
+        type=int,
+        default=1,
+        help="Whether to reset periodically (1 or 0), default: 1",
+    )
+    parser.addoption(
+        "--reset-period",
+        action="store",
+        default=200,
+        type=int,
+        help="How often to reset (default: 200 (images))",
     )
 
 
@@ -35,3 +50,41 @@ def evaluation_range(request):
         num_prompts = 5000
 
     return start_from, num_prompts
+
+
+@pytest.fixture
+def reset_config(request):
+    reset_bool_val = request.config.getoption("--reset-bool")
+    reset_period = request.config.getoption("--reset-period")
+
+    if reset_bool_val is not None:
+        reset_bool = bool(reset_bool_val)
+    else:
+        reset_bool = True
+
+    if reset_period is not None:
+        reset_period = int(reset_period)
+    else:
+        reset_period = 200
+
+    return reset_bool, reset_period
+
+
+def get_device_name():
+    import ttnn
+
+    num_devices = ttnn.GetNumAvailableDevices()
+    if is_6u():
+        return "6U"
+    elif is_galaxy():
+        return "4U"
+    elif num_devices == 0:
+        return "CPU"
+    elif num_devices == 1:
+        return "N150"
+    elif num_devices == 2:
+        return "N300"
+    elif num_devices == 4:
+        return "N150x4"
+    elif num_devices == 8:
+        return "T3K"
