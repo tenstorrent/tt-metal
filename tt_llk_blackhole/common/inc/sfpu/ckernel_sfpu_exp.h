@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <limits>
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
@@ -10,9 +11,7 @@
 #include "sfpi.h"
 #include "sfpi_fp16.h"
 
-namespace ckernel
-{
-namespace sfpu
+namespace ckernel::sfpu
 {
 
 sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val)
@@ -84,8 +83,82 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in)
     return out;
 }
 
-template <bool APPROXIMATION_MODE, bool SCALE_EN, int ITERATIONS, bool FAST_APPROX, bool SKIP_POSITIVE_CHECK = false>
-void _calculate_exponential_(const int iterations, uint16_t exp_base_scale_factor = 0x3F80 /* 1.0f in BF16 */)
+inline sfpi::vFloat _calculate_exponential_approx_(sfpi::vFloat in)
+{
+    // * by 1/ln2 and add convert to 7.3 FxP format
+    sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat c23_73         = sfpi::vConstFloatPrgm1;
+    sfpi::vInt adj_exp          = sfpi::vConstIntPrgm2;
+    in                          = in * vConstLn2Recip + c23_73;
+
+    // Remove Exponent of 7 and bias the Mantissa to 127.
+    sfpi::vInt in_short = adj_exp + sfpi::reinterpret<sfpi::vInt>(in);
+
+    // SHL to move integer bits to exponent
+    in_short <<= 10 - p_exp::FRAC_BITS;
+    return sfpi::reinterpret<sfpi::vFloat>(in_short);
+}
+
+template <bool APPROXIMATION_MODE, bool SCALE_EN, bool SKIP_POSITIVE_CHECK>
+inline sfpi::vFloat _calculate_exponential_piecewise_(sfpi::vFloat in, const uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
+{
+    // This function is used to calculate the exponential of a value in a more accurate manner.
+    sfpi::vFloat result = 0.0f;
+    if constexpr (SCALE_EN)
+    {
+        in = in * sfpi::s2vFloat16b(exp_base_scale_factor);
+    }
+    if constexpr (APPROXIMATION_MODE)
+    {
+        if constexpr (!SKIP_POSITIVE_CHECK)
+        {
+            v_if (in >= 89)
+            {
+                // Algorithm is incorrect for inputs >= 89, so saturate output to infinity.
+                sfpi::vFloat in_inf = std::numeric_limits<float>::infinity();
+                result              = in_inf;
+            }
+            v_elseif (in < -42)
+            {
+                // Algorithm is incorrect for inputs < -42, so saturate output to 0.
+                result = 0.0f;
+            }
+            v_else
+            {
+                result = _calculate_exponential_approx_(in);
+            }
+            v_endif;
+        }
+        else
+        {
+            // SKIP_POSITIVE_CHECK is true, so user is responsible for ensuring inputs are <= 89.
+            v_if (in < -42)
+            {
+                result = 0.0f;
+            }
+            v_else
+            {
+                result = _calculate_exponential_approx_(in);
+            }
+            v_endif;
+        }
+    }
+    else
+    {
+        result = _sfpu_exp_(sfpi::setsgn(in, 0));
+
+        v_if (in < 0)
+        {
+            result = _sfpu_reciprocal_(result);
+        }
+        v_endif;
+    }
+
+    return result;
+}
+
+template <bool APPROXIMATION_MODE, bool SCALE_EN, int ITERATIONS, bool FAST_APPROX, bool SKIP_POSITIVE_CHECK>
+void _calculate_exponential_(const uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
 {
     if constexpr (FAST_APPROX && APPROXIMATION_MODE)
     {
@@ -182,84 +255,11 @@ void _calculate_exponential_(const int iterations, uint16_t exp_base_scale_facto
     else
     {
         // Unroll 8 best for approx, unroll 0 for precise, compiler figures this out
-        for (int d = 0; d < iterations; d++)
+        for (int d = 0; d < ITERATIONS; d++)
         {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            if constexpr (SCALE_EN)
-            {
-                val = val * sfpi::s2vFloat16b(exp_base_scale_factor);
-            }
-            if constexpr (APPROXIMATION_MODE)
-            {
-                if constexpr (!SKIP_POSITIVE_CHECK)
-                {
-                    v_if (val >= 89)
-                    {
-                        // Algorithm is incorrect for inputs >= 89, so saturate output to infinity.
-                        sfpi::vFloat val_inf = std::numeric_limits<float>::infinity();
-                        sfpi::dst_reg[0]     = val_inf;
-                    }
-                    v_elseif (val < -42)
-                    {
-                        // Algorithm is incorrect for inputs < -42, so saturate output to 0.
-                        sfpi::dst_reg[0] = 0.0f;
-                    }
-                    v_else
-                    {
-                        // * by 1/ln2 and add convert to 7.3 FxP format
-                        sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
-                        sfpi::vFloat c23_73         = sfpi::vConstFloatPrgm1;
-                        sfpi::vInt adj_exp          = sfpi::vConstIntPrgm2;
-                        val                         = val * vConstLn2Recip + c23_73;
-
-                        // Remove Exponent of 7 and bias the Mantissa to 127.
-                        sfpi::vInt val_short = adj_exp + sfpi::reinterpret<sfpi::vInt>(val);
-
-                        // SHL to move integer bits to exponent
-                        val_short <<= 10 - p_exp::FRAC_BITS;
-                        sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(val_short);
-                    }
-                    v_endif;
-                }
-                else
-                {
-                    // SKIP_POSITIVE_CHECK is true, so user is responsible for ensuring inputs are <= 89.
-                    v_if (val < -42)
-                    {
-                        sfpi::dst_reg[0] = 0.0f;
-                    }
-                    v_else
-                    {
-                        // * by 1/ln2 and add convert to 7.3 FxP format
-                        sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
-                        sfpi::vFloat c23_73         = sfpi::vConstFloatPrgm1;
-                        sfpi::vInt adj_exp          = sfpi::vConstIntPrgm2;
-                        val                         = val * vConstLn2Recip + c23_73;
-
-                        // Remove Exponent of 7 and bias the Mantissa to 127.
-                        sfpi::vInt val_short = adj_exp + sfpi::reinterpret<sfpi::vInt>(val);
-
-                        // SHL to move integer bits to exponent
-                        val_short <<= 10 - p_exp::FRAC_BITS;
-                        sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(val_short);
-                    }
-                    v_endif;
-                }
-            }
-            else
-            {
-                // Force sign to 0 (make number positive)
-                sfpi::vFloat result = _sfpu_exp_(sfpi::setsgn(val, 0));
-
-                v_if (val < 0)
-                {
-                    result = _sfpu_reciprocal_(result);
-                }
-                v_endif;
-
-                sfpi::dst_reg[0] = result;
-            }
-
+            sfpi::vFloat in     = sfpi::dst_reg[0];
+            sfpi::vFloat result = _calculate_exponential_piecewise_<APPROXIMATION_MODE, SCALE_EN, SKIP_POSITIVE_CHECK>(in, exp_base_scale_factor);
+            sfpi::dst_reg[0]    = result;
             sfpi::dst_reg++;
         }
     }
@@ -269,7 +269,7 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000 /* 1.0f in FP32 */>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale /* 1.0f in FP32 */>
 inline void _init_exponential_()
 {
     if constexpr (FAST_APPROX && APPROXIMATION_MODE)
@@ -413,5 +413,4 @@ inline void _init_exponential_()
     }
 }
 
-} // namespace sfpu
-} // namespace ckernel
+} // namespace ckernel::sfpu
