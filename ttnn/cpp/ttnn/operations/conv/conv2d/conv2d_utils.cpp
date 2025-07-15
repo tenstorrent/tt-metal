@@ -146,7 +146,7 @@ ParallelConfig determine_parallel_config(
     // while pooling can accept any height and either a tile multiple or half a tile for width.
     // This approach needs to be modified when other shard dimensions are supported.
     uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
-    uint32_t effective_tile_width = tt::constants::TILE_WIDTH;
+    uint32_t effective_tile_width = is_shard_width_tile_multiple ? tt::constants::TILE_WIDTH : 16;
     uint32_t out_nhw_ntiles = tt::div_up(batch_size * output_height * output_width, effective_tile_height);
     uint32_t input_channles_ntiles = tt::div_up(input_channels, effective_tile_width);
     uint32_t out_channels_ntiles = tt::div_up(output_channels, effective_tile_width);
@@ -174,8 +174,8 @@ ParallelConfig determine_parallel_config(
                 ? find_closest_largest_divisor_with_num_padding(
                       out_channels_ntiles, input_channles_ntiles, start_divisor_c)
                 : find_closest_largest_divisor(out_channels_ntiles, input_channles_ntiles, start_divisor_c);
-        num_cores_c = set_shard_width_to_half_tile_if_possible(
-            num_cores_c, input_channles_ntiles, start_divisor_c, !is_shard_width_tile_multiple);
+        num_cores_c =
+            set_shard_width_to_half_tile_if_possible(num_cores_c, input_channles_ntiles, start_divisor_c, false);
         uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
         CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
@@ -184,8 +184,8 @@ ParallelConfig determine_parallel_config(
         uint32_t num_cores_c = enable_channels_padding
                                    ? find_closest_largest_divisor_with_num_padding(input_channles_ntiles, max_num_cores)
                                    : find_closest_largest_divisor(input_channles_ntiles, max_num_cores);
-        num_cores_c = set_shard_width_to_half_tile_if_possible(
-            num_cores_c, input_channles_ntiles, max_num_cores, !is_shard_width_tile_multiple);
+        num_cores_c =
+            set_shard_width_to_half_tile_if_possible(num_cores_c, input_channles_ntiles, max_num_cores, false);
         grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
