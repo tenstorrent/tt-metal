@@ -50,6 +50,10 @@ class SdxlMmTest(OpTestBase):
             determinism_check_interval,
         )
 
+    def deallocate_activations(self):
+        if self.in0_mem_config != ttnn.DRAM_MEMORY_CONFIG:
+            self.activations.deallocate(True)
+
 
 # Test cases for matmuls that hang in SDXL UNet
 mm_test_cases = [
