@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 
-# TODO: (GR) Cleanup what determines the shapes, does anything else matter?
+# TODO: Cleanup what determines the shapes, does anything else matter?
 @dataclass(frozen=True)
 class PersistentBuffersConfiguration:
     is_wormhole: bool  # Assuming shapes are different on wormhole and blackhole
@@ -25,7 +25,6 @@ class PersistentBufferKey:
     memory_config: any
 
 
-# TODO: (GR) I believe llama 3.3 has the same weights, so that should also implicitly be supported
 supported_persistent_buffers_configurations = [
     PersistentBuffersConfiguration(
         is_wormhole=True,

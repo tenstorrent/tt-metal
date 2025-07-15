@@ -59,7 +59,7 @@ class TT_CCL:
             self.create_rs_persistent_buffers()
         )  # dict[tuple(PersistentBufferKey, PersistentBufferKey), ttnn_tensor] - intermediate_buffer, output_buffer
 
-        # TODO: (GR) Is this setup correct?
+        # TODO: Is this setup correct?
         worker_sub_device = ttnn.SubDevice([self.sub_device_crs])
         sub_device_manager = self.mesh_device.create_sub_device_manager([worker_sub_device], 0)
         self.mesh_device.load_sub_device_manager(sub_device_manager)
@@ -100,7 +100,7 @@ class TT_CCL:
             )
 
     def create_ag_persistent_buffer_key(self, input_shape, dtype, memory_config, dim, cluster_axis=None):
-        # TODO: (GR) Need custom hash because certain runtime memory_configs have both shard_spec and nd_shard_spec fields
+        # TODO: Need custom hash because certain runtime memory_configs have both shard_spec and nd_shard_spec fields
         # defined, and we can't manually define this kind of memory config for a preallocated buffer
         to_hash_memory_config = ttnn.MemoryConfig(
             memory_config.memory_layout,
@@ -127,7 +127,7 @@ class TT_CCL:
     ):
         assert dim == 3, "RS only supports dim 3"
 
-        # TODO: (GR) Need custom hash because certain runtime memory_configs have both shard_spec and nd_shard_spec fields
+        # TODO: Need custom hash because certain runtime memory_configs have both shard_spec and nd_shard_spec fields
         # defined, and we can't manually define this kind of memory config for a preallocated buffer
         hash_intermediate_memory_config = ttnn.MemoryConfig(
             intermediate_memory_config.memory_layout,
@@ -314,7 +314,6 @@ def tt_all_reduce(
             multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
             num_links=num_reduce_scatter_links,
             cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
             intermediate_memory_config=rs_intermediate_memory_config,
             memory_config=rs_output_memory_config,
             topology=topology,
