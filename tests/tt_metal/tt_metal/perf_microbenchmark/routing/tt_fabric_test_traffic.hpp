@@ -272,6 +272,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             TT_FATAL(!this->dst_node_ids.empty(), "2D multicast should have at least one destination node.");
             // TODO: fix this
             const auto& dst_rep_node_id = this->dst_node_ids[0];  // Representative destination
+            // chip_id and mesh_id is unused for low latency 2d mesh mcast
             const auto mcast_fields =
                 ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, this->hops);
             const auto mcast_args = mcast_fields.get_args();

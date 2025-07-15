@@ -1377,6 +1377,8 @@ private:
         // Split multi-directional hops into single-direction patterns
         auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
 
+        log_info(tt::LogTest, "src_device: {} split_hops_vec: {}, ", src_device, split_hops_vec);
+
         log_debug(
             LogTest,
             "Splitting sync pattern for device {} from 1 multi-directional to {} single-direction patterns",

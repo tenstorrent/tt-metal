@@ -89,3 +89,33 @@ Tests:
               device: [0, 6]
           - destination:
               device: [0, 7]
+
+  - name: "SingleSenderMeshUnicastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 200000
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]

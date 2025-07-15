@@ -230,7 +230,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 const auto& dest = sync_pattern.destination.value();
 
                 // Patterns are now already split into single-direction hops
-                const auto& single_direction_hops = dest.hops.value();
+                auto single_direction_hops = dest.hops.value();
 
                 TrafficParameters sync_traffic_parameters = {
                     .chip_send_type = sync_pattern.ftype.value(),
@@ -252,10 +252,17 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(
                     sync_sender.device, sync_core);  // populate the master coord
 
+                // for 2d mcast case
+                auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
+                    sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
+
+                log_info(tt::LogTest, "single_direction_hops: {}, ", single_direction_hops);
+                log_info(tt::LogTest, "device: {} dst_node_ids: {}, ", sync_sender.device, dst_node_ids);
+
                 TestTrafficSenderConfig sync_config = {
                     .parameters = sync_traffic_parameters,
                     .src_node_id = sync_sender.device,
-                    .dst_node_ids = {},             // Empty for multicast sync
+                    .dst_node_ids = dst_node_ids,   // Empty for multicast sync
                     .hops = single_direction_hops,  // Use already single-direction hops
                     .dst_logical_core = dummy_dst_core,
                     .target_address = sync_address,

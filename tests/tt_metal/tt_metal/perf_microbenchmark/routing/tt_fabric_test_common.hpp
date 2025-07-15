@@ -356,29 +356,23 @@ public:
 
         std::vector<FabricNodeId> dst_nodes;
         const MeshCoordinate& src_coord = get_device_coord(src_node);
-        auto displacements = convert_hops_to_displacement(hops);
+        log_info(tt::LogTest, "hops: {}, ", hops);
 
-        for (const auto& displacement : displacements) {
-            // Ignore zero-length displacements that can occur for some directions in the hops map
-            if (displacement == MeshCoordinate::zero_coordinate(displacement.dims())) {
-                continue;
-            }
-
-            const auto dst_coord = get_coord_from_displacement(src_coord, displacement);
-
-            if (chip_send_type == ChipSendType::CHIP_UNICAST) {
+        bool use_displacement_for_dst_nodes =
+            chip_send_type == ChipSendType::CHIP_UNICAST || this->topology_ == Topology::Linear;
+        if (use_displacement_for_dst_nodes) {
+            auto displacements = convert_hops_to_displacement(hops);
+            for (const auto& displacement : displacements) {
+                // Ignore zero-length displacements that can occur for some directions in the hops map
+                if (displacement == MeshCoordinate::zero_coordinate(displacement.dims())) {
+                    continue;
+                }
+                const auto dst_coord = get_coord_from_displacement(src_coord, displacement);
                 // For unicast, we only care about the final destination of each displacement vector.
                 dst_nodes.push_back(get_fabric_node_id(dst_coord));
-            } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
-                // For multicast, we care about all nodes along the path.
-                const auto coords_in_path = get_coords_from_range(src_coord, dst_coord);
-                for (const auto& coord : coords_in_path) {
-                    if (coord == src_coord) {
-                        continue;  // Don't include the source itself
-                    }
-                    dst_nodes.push_back(get_fabric_node_id(coord));
-                }
             }
+        } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
+            dst_nodes = get_mesh_topology_dst_node_ids(src_node, hops);
         }
         return dst_nodes;
     }
@@ -678,6 +672,58 @@ public:
                     split_hops.push_back({{dir, hop_count}});
                 }
             }
+        } else if (this->topology_ == Topology::Mesh) {
+            // For mesh topology, handle all cases including three-entry case
+            split_hops.reserve(8);
+
+            auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
+            auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
+            auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
+            auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
+
+            // East/West hops always get their own separate entries
+            if (east_hops > 0) {
+                split_hops.push_back({{RoutingDirection::E, east_hops}});
+            }
+            if (west_hops > 0) {
+                split_hops.push_back({{RoutingDirection::W, west_hops}});
+            }
+
+            // Individual north/south directions (only if no east/west)
+            if (north_hops > 0 && east_hops == 0 && west_hops == 0) {
+                split_hops.push_back({{RoutingDirection::N, north_hops}});
+            }
+            if (south_hops > 0 && east_hops == 0 && west_hops == 0) {
+                split_hops.push_back({{RoutingDirection::S, south_hops}});
+            }
+
+            // Two-direction combinations
+            if (north_hops > 0 && east_hops > 0 && west_hops == 0) {
+                split_hops.push_back({{RoutingDirection::N, north_hops}, {RoutingDirection::E, east_hops}});
+            }
+            if (north_hops > 0 && west_hops > 0 && east_hops == 0) {
+                split_hops.push_back({{RoutingDirection::N, north_hops}, {RoutingDirection::W, west_hops}});
+            }
+            if (south_hops > 0 && east_hops > 0 && west_hops == 0) {
+                split_hops.push_back({{RoutingDirection::S, south_hops}, {RoutingDirection::E, east_hops}});
+            }
+            if (south_hops > 0 && west_hops > 0 && east_hops == 0) {
+                split_hops.push_back({{RoutingDirection::S, south_hops}, {RoutingDirection::W, west_hops}});
+            }
+
+            // Three-direction case (north/south + east + west)
+            if (north_hops > 0 && east_hops > 0 && west_hops > 0) {
+                split_hops.push_back(
+                    {{RoutingDirection::N, north_hops},
+                     {RoutingDirection::E, east_hops},
+                     {RoutingDirection::W, west_hops}});
+            }
+            if (south_hops > 0 && east_hops > 0 && west_hops > 0) {
+                split_hops.push_back(
+                    {{RoutingDirection::S, south_hops},
+                     {RoutingDirection::E, east_hops},
+                     {RoutingDirection::W, west_hops}});
+            }
         } else {
             TT_THROW("Unsupported topology: {} for split_multicast_hops", this->topology_);
         }
@@ -732,7 +778,7 @@ public:
         } else if (topology_ == Topology::Mesh) {
             // TODO: update this logic once 2D mcast is supported
             // for now we return the first direction that is non-zero
-            // for 2D, since we use dimension order routing, lookup the directions in the order of N, E, S, W
+            // for 2D, since we use dimension order routing, lookup the directions in the order of N, S, E, W
             for (const auto& direction : FabricContext::routing_directions) {
                 if (hops.count(direction) > 0 && hops.at(direction) != 0) {
                     return direction;
@@ -808,13 +854,127 @@ public:
             case tt::tt_fabric::Topology::Mesh: {
                 multi_directional_hops = this->get_full_mcast_hops(src_device);
                 global_sync_val = this->get_num_sync_devices() - 1;
-                TT_THROW("We need mcast support for mesh topology to perform sync");
                 break;
             }
             default: TT_THROW("Unsupported topology for line sync: {}", static_cast<int>(topology_));
         }
 
         return {std::move(multi_directional_hops), global_sync_val};
+    }
+
+    std::vector<FabricNodeId> get_mesh_topology_dst_node_ids(
+        const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        std::vector<FabricNodeId> dst_nodes;
+        std::unordered_set<FabricNodeId> seen_nodes;
+
+        // Use the specialized splitting function that avoids three-entry case
+        auto split_hops_list = split_hops_for_tracing(hops);
+        log_info(tt::LogTest, "split_hops_list: {}, ", split_hops_list);
+
+        // Trace each split separately
+        for (const auto& split_hop : split_hops_list) {
+            auto path_nodes = trace_mesh_single_path(src_node_id, split_hop);
+            for (const auto& node : path_nodes) {
+                // try to preserve the ordering during its creation (path traversal order)
+                if (seen_nodes.find(node) == seen_nodes.end()) {
+                    seen_nodes.insert(node);
+                    dst_nodes.push_back(node);
+                }
+            }
+        }
+
+        return dst_nodes;
+    }
+
+    std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops_for_tracing(
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops;
+
+        auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
+        auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
+        auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
+        auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
+
+        // Case 1: Only east/west
+        if ((north_hops == 0 && south_hops == 0) && (east_hops > 0 || west_hops > 0)) {
+            split_hops.push_back(hops);
+        }
+        // Case 2: north/south + only one of east/west
+        else if ((north_hops > 0 || south_hops > 0) && (east_hops > 0) != (west_hops > 0)) {
+            split_hops.push_back(hops);
+        }
+        // Case 3: north/south + both east and west - split into two paths
+        else if ((north_hops > 0 || south_hops > 0) && east_hops > 0 && west_hops > 0) {
+            // Split into north/south + east
+            std::unordered_map<RoutingDirection, uint32_t> path1;
+            if (north_hops > 0) {
+                path1[RoutingDirection::N] = north_hops;
+            }
+            if (south_hops > 0) {
+                path1[RoutingDirection::S] = south_hops;
+            }
+            path1[RoutingDirection::E] = east_hops;
+            split_hops.push_back(path1);
+
+            // Split into north/south + west
+            std::unordered_map<RoutingDirection, uint32_t> path2;
+            if (north_hops > 0) {
+                path2[RoutingDirection::N] = north_hops;
+            }
+            if (south_hops > 0) {
+                path2[RoutingDirection::S] = south_hops;
+            }
+            path2[RoutingDirection::W] = west_hops;
+            split_hops.push_back(path2);
+        } else {
+            // Default case: just use the original hops
+            split_hops.push_back(hops);
+        }
+
+        return split_hops;
+    }
+
+    std::vector<FabricNodeId> trace_mesh_single_path(
+        const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        std::vector<FabricNodeId> dst_nodes;
+        auto remaining_hops = hops;  // Make a copy to modify
+        FabricNodeId current_node = src_node_id;
+
+        // Trace the path using dimension order routing
+        while (true) {
+            // Check if all remaining hops are 0
+            bool all_hops_zero = true;
+            for (const auto& [direction, hop_count] : remaining_hops) {
+                if (hop_count > 0) {
+                    all_hops_zero = false;
+                    break;
+                }
+            }
+            if (all_hops_zero) {
+                break;  // No more hops to process
+            }
+            // Find the next direction to route in
+            RoutingDirection next_direction = get_forwarding_direction(remaining_hops);
+
+            // Check if we have any remaining hops in this direction
+            if (remaining_hops.count(next_direction) == 0 || remaining_hops[next_direction] == 0) {
+                break;  // No more hops to process
+            }
+
+            uint32_t hops_in_direction = remaining_hops[next_direction];
+
+            // Trace all hops in this direction sequentially
+            for (uint32_t hop = 0; hop < hops_in_direction; hop++) {
+                // Move to next node in this direction
+                current_node = get_neighbor_node_id(current_node, next_direction);
+                dst_nodes.push_back(current_node);
+            }
+
+            // Mark this direction as completed
+            remaining_hops[next_direction] = 0;
+        }
+
+        return dst_nodes;
     }
 
     // Helper function to trace ring path with boundary turning logic
@@ -1071,7 +1231,7 @@ private:
             displacements.push_back(get_displacement_from_hops(
                 {{RoutingDirection::S, hops[RoutingDirection::S]}, {RoutingDirection::W, hops[RoutingDirection::W]}}));
         } else {
-            TT_FATAL(false, "Unsupported topology: {}", topology_);
+            TT_THROW("Unsupported topology: {}", topology_);
         }
         return displacements;
     }
