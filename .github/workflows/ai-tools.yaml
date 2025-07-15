@@ -11,39 +11,8 @@ on:
     types: [submitted]
 
 jobs:
-  claude-code-action:
-    if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@tt-ai')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@tt-ai')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@tt-ai')) ||
-      (github.event_name == 'issues' && contains(github.event.issue.body, '@tt-ai'))
-    runs-on: [arch-wormhole_b0, in-service, n300]
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
-      id-token: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 500
-
-      - name: Install unzip
-        run: |
-          # Check if unzip is available, install if missing
-          if ! command -v unzip &> /dev/null; then
-            echo "Installing unzip..."
-            sudo apt-get update && sudo apt-get install -y unzip
-          else
-            echo "unzip is already installed"
-          fi
-
-      - uses: anthropics/claude-code-action@beta
-        with:
-          anthropic_api_key: ${{ secrets.AY_KEY }}
-          github_token: ${{ secrets.AI_GH_TOKEN }}
-          trigger_phrase: "@tt-ai"
-          allowed_tools: "Bash(./build_metal.sh --debug)"
-          timeout_minutes: "30"
+  call-ai-assistant:
+    uses: tenstorrent/tt-metal/.github/workflows/ai_tools_impl.yaml@ay/tools_job
+    secrets:
+      AY_KEY: ${{ secrets.AY_KEY }}
+      AI_GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
