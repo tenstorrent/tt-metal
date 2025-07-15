@@ -1056,3 +1056,33 @@ def test_unary_log1p_ttnn(input_shapes, device):
     torch_output_tensor = golden_function(torch_input_tensor)
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+
+
+@pytest.mark.parametrize("scalar", [1, 2, -10, -25, 15.5, 28.5, -13.5, -29.5, 0, -0, -5, 8, 100, -100])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.int32, ttnn.int32),
+    ],
+)
+def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
+    torch.manual_seed(0)
+
+    if torch_dtype.is_floating_point:
+        torch_input_tensor_a = torch.empty((h, w), dtype=torch_dtype).uniform_(-100, 100)
+    else:
+        torch_input_tensor_a = torch.randint(low=-100, high=100, size=(h, w), dtype=torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.fill)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.fill(input_tensor_a, scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(torch_output_tensor, output_tensor)
