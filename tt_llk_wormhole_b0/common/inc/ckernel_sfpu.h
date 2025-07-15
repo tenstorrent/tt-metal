@@ -22,6 +22,7 @@
 #include "sfpu/ckernel_sfpu_cumsum.h"
 #include "sfpu/ckernel_sfpu_dropout.h"
 #include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_hardtanh.h"
 #include "sfpu/ckernel_sfpu_is_fp16_zero.h"
