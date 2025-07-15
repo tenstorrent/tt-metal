@@ -302,7 +302,8 @@ int main(int argc, char **argv) {
 
         ////////// TILE MULTICAST VERIFICATION //////////
         std::vector<bfloat16> received_tiles(num_dests * TILE_HW);
-        EnqueueReadMeshBuffer(cq, received_tiles, output_dram_buffer);  // read all multicast-received tiles to host.
+        // EnqueueReadMeshBuffer(cq, received_tiles, output_dram_buffer);  // read all multicast-received tiles to host.
+        ReadShard(cq, received_tiles, output_dram_buffer, {0, 0});
         bool verbose_verify =
             false;  // if enabled, the original and all multicast-received tiles are printed in full (32x32).
         verify_tiles(identity_tile, received_tiles, num_dests, verbose_verify);
