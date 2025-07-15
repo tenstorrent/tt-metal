@@ -43,6 +43,14 @@ GREEN = "\033[32m"  # For instructions
 ORANGE = "\033[33m"  # For warnings
 VERBOSE_CLR = "\033[94m"  # For verbose output
 
+# TODO: DELETE THIS
+RST = ""
+BLUE = ""  # For good values
+RED = ""  # For bad values
+GREEN = ""  # For instructions
+ORANGE = ""  # For warnings
+VERBOSE_CLR = ""  # For verbose output
+
 # Global variables for verbosity settings
 VERBOSE = False
 VVERBOSE = False
@@ -51,6 +59,7 @@ GDB_EN = False
 PORT = 6767
 CALLSTACK_LOG_PATH = os.environ.get("TT_METAL_HOME", "") + "/scripts/debugging_scripts/callstack.output"
 GDB_LOG_PATH = os.environ.get("TT_METAL_HOME", "") + "/scripts/debugging_scripts/gdb_log.txt"
+
 
 try:
     from tabulate import tabulate, TableFormat, Line, DataRow
@@ -405,7 +414,7 @@ def get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, p
     return launch_msg_rd_ptr, kernel_config_base, kernel_text_offset, watcher_kernel_id
 
 
-def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path, gdb_client, process_ids):
+def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path, ui_state, process_ids):
     printout_table = init_running_ops_table(enum_values)
 
     if printout_table is None:
@@ -466,7 +475,6 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                 kernel_path = os.path.realpath(kernel_path)
                 if not os.path.exists(kernel_path):
                     raiseTTTriageError(f"Kernel ELF file {kernel_path} does not exist.")
-
                 pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
                     print(f".", end="", flush=True)
@@ -483,8 +491,10 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                     cs = top_callstack(
                         pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
                     )
-                    if GDB_EN and proc_name == "BRISC":                            
-                        get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset)
+                    if GDB_EN and proc_name != "NCRISC":
+                        pid = process_ids.get(loc, {}).get(risc_name, None)
+                        if pid is not None:
+                            get_callstack_with_gdb(ui_state, process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset)
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
@@ -495,8 +505,10 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
 
                     cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
 
-                    if GDB_EN and proc_name == "BRISC": 
-                        get_callstack_with_gdb(gdb_client, process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
+                    if GDB_EN and proc_name != "NCRISC":
+                        pid = process_ids.get(loc, {}).get(risc_name, None)
+                        if pid is not None:
+                            get_callstack_with_gdb(ui_state, process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
 
             if VVERBOSE:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -543,9 +555,6 @@ def set_up_gdb(ui_state: UIState):
     gdb_client.stdin.write(f"target extended-remote localhost:{PORT}\n")
     gdb_client.stdin.flush()
 
-    gdb_client.stdin.write(f"shell > {CALLSTACK_LOG_PATH}\n")
-    gdb_client.stdin.flush()
-
     return gdb_client
 
 def tear_down_gdb(gdb_client, ui_state: UIState):
@@ -556,16 +565,18 @@ def tear_down_gdb(gdb_client, ui_state: UIState):
     # Stop GDB server
     ui_state.stop_gdb()
 
-def get_callstack_with_gdb(gdb_client, pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None):
+def get_callstack_with_gdb(ui_state, pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None):
+
+    gdb_client = set_up_gdb(ui_state)
+
     # Giving 0 as kernel_offset does not work
     add_symbol_file_cmd = f"add-symbol-file {elf_path} {kernel_offset}" if kernel_offset is not None else f"add-symbol-file {elf_path}"
     
-    f = open(CALLSTACK_LOG_PATH, "r")
-    callstack_output = f.read()
+    callstack_log_file = open(CALLSTACK_LOG_PATH, "r")
+    callstack_output = callstack_log_file.read()
 
     gdb_client.stdin.write(f"""\
     attach {pid}
-    info inferior
     {add_symbol_file_cmd}
     set prompt 
     set logging file {CALLSTACK_LOG_PATH}
@@ -579,9 +590,17 @@ def get_callstack_with_gdb(gdb_client, pid: int, loc, risc_name: str, elf_path: 
     gdb_client.stdin.flush()
 
     # Wait for command to finish
-    while callstack_output == f.read():
+    while callstack_output == callstack_log_file.read():
         time.sleep(0.01)
-    f.close()
+    callstack_log_file.close()
+
+    gdb_client.stdin.write("quit\n")
+    gdb_client.stdin.flush()
+
+    #tear_down_gdb(gdb_client, ui_state)
+
+    with open(GDB_LOG_PATH, "a") as gdb_log_file:
+        gdb_log_file.write(gdb_client.communicate()[0])
 
 
 
@@ -589,11 +608,22 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
     """Print the running operations on the device."""
     title(dump_running_ops.__doc__)
 
-    gdb_client = None
     process_ids = None
     if GDB_EN:
         ui_state = UIState(context)
-        gdb_client = set_up_gdb(ui_state)
+        # Start GDB server
+        try:
+            ui_state.start_gdb(PORT)
+        except Exception as e:
+            raiseTTTriageError(f"Failed to start GDB server on port {PORT}. Error: {e}")
+
+        # Clear the gdb log file before starting
+        with open(GDB_LOG_PATH, "w") as f:
+            f.truncate(0)
+
+        # Clear the callstack log file before starting
+        with open(CALLSTACK_LOG_PATH, "w") as f:
+            f.truncate(0)
 
         # Get mapping form risc location and name to process id
         process_ids = {}
@@ -605,7 +635,11 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
                 process_ids[loc][risc_name] = pid
             else:
                 process_ids[loc] = {risc_name: pid}  
+        
+        # Stop GDB server
+        ui_state.stop_gdb()
 
+    
 
     if inspector_data is None:
         print(f"  {ORANGE}We don't have inspector data. We will skip running ops dump.{RST}")
@@ -693,7 +727,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
         brisc_elf,
         pcs_tensix,
         a_kernel_path,
-        gdb_client,
+        ui_state,
         process_ids,
     )
     runinng_ops_table_idle_eth = get_running_ops_table(
@@ -705,7 +739,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
         idle_erisc_elf,
         pcs_idle_eth,
         a_kernel_path,
-        gdb_client,
+        ui_state,
         process_ids,
     )
 
@@ -716,14 +750,6 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
             print(tabulate(running_ops_table_tensix, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
         if runinng_ops_table_idle_eth is not None:
             print(tabulate(runinng_ops_table_idle_eth, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
-
-    if GDB_EN:
-        tear_down_gdb(gdb_client, ui_state)
-
-        # Should be option to log to some file
-        output, _ = gdb_client.communicate()
-        with open(GDB_LOG_PATH, "w") as f:
-            f.write(output)
 
 
     # WIP:
