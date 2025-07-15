@@ -241,12 +241,12 @@ run_yolov8s_perf() {
 
 }
 
-
-run_mobilenetv2_perf(){
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
-
-}
+# commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
+#run_mobilenetv2_perf(){
+#
+#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
+#
+#}
 
 run_yolov8s_world_perf() {
 
