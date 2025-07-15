@@ -360,7 +360,7 @@ class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixtu
 
 class DISABLED_CQMultiDeviceOnFabricFixture
     : public UnitMeshCQMultiDeviceFixture,
-      public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+      public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
 private:
     bool original_fd_fabric_en_ = false;
     inline static ARCH arch_ = tt::ARCH::Invalid;
