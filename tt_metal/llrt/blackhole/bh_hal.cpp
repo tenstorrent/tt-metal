@@ -148,7 +148,7 @@ void Hal::initialize_bh() {
 
     this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t {
         return get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) +
-               offsetof(blackhole::EthFwMailbox, arg) + arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]);
+               offsetof(blackhole::EthFwMailbox, arg) + (arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]));
     };
 
     this->device_features_func_ = [](DeviceFeature feature) -> bool {

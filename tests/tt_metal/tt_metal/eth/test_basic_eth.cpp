@@ -293,7 +293,12 @@ bool noc_reader_and_writer_kernels(
     return pass;
 }
 
-void RunBlackholeBasicEthKernelTest(tt::tt_metal::DispatchFixture* fixture, tt::tt_metal::IDevice* device, const tt::tt_metal::HalProgrammableCoreType& core_type, const tt::tt_metal::DataMovementProcessor& processor_1, const tt::tt_metal::DataMovementProcessor& processor_2) {
+static void RunBlackholeBasicEthKernelTest(
+    tt::tt_metal::DispatchFixture* fixture,
+    tt::tt_metal::IDevice* device,
+    const tt::tt_metal::HalProgrammableCoreType& core_type,
+    const tt::tt_metal::DataMovementProcessor& processor_1,
+    const tt::tt_metal::DataMovementProcessor& processor_2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t eth_l1_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
@@ -339,7 +344,12 @@ void RunBlackholeBasicEthKernelTest(tt::tt_metal::DispatchFixture* fixture, tt::
     }
 }
 
-void RunBlackholeBasicEthKernelMixedNocTest(tt::tt_metal::DispatchFixture* fixture, tt::tt_metal::IDevice* device, const tt::tt_metal::HalProgrammableCoreType& core_type, const tt::tt_metal::DataMovementProcessor& processor_1, const tt::tt_metal::DataMovementProcessor& processor_2) {
+static void RunBlackholeBasicEthKernelMixedNocTest(
+    tt::tt_metal::DispatchFixture* fixture,
+    tt::tt_metal::IDevice* device,
+    const tt::tt_metal::HalProgrammableCoreType& core_type,
+    const tt::tt_metal::DataMovementProcessor& processor_1,
+    const tt::tt_metal::DataMovementProcessor& processor_2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t read_write_size_bytes = WORD_SIZE * 2048;
     uint32_t reader_dst_address =
@@ -385,7 +395,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
-            for (int erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                 const auto ethernet_config = tt_metal::EthernetConfig{
                     .noc = tt_metal::NOC::NOC_0, .processor = static_cast<DataMovementProcessor>(erisc_idx)};
                 ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -426,7 +436,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) 
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
-            for (int erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                 const auto ethernet_config = tt_metal::EthernetConfig{
                     .noc = tt_metal::NOC::NOC_0, .processor = static_cast<DataMovementProcessor>(erisc_idx)};
                 ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(

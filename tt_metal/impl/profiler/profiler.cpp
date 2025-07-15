@@ -505,7 +505,7 @@ void DeviceProfiler::readRiscProfilerResults(
     HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
     const uint32_t riscCount = MetalContext::instance().hal().get_num_risc_processors(CoreType);
 
-    for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
+    for (uint32_t riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (data_source == ProfilerDataBufferSource::L1) {
             // Just grab the device end index

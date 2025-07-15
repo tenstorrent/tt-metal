@@ -1392,7 +1392,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
                 HalProgrammableCoreType::ACTIVE_ETH);
-            for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
                 log_info(
                     tt::LogTest,
                     "Test active ethernet runtime args for eth_core: {} DM{} using cr_set: {}",
@@ -1474,7 +1474,7 @@ TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) 
 
 TEST_P(DISABLED_MultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (const auto& device : devices_) {
-        for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+        for (uint32_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);
         }
     }
@@ -1827,7 +1827,7 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
         }
         const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
             HalProgrammableCoreType::ACTIVE_ETH);
-        for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test logical coordinates active ethernet DM{}", erisc_idx);
             local_test_functions::test_my_coordinates(
                 device,
@@ -1866,8 +1866,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
 
         const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
             HalProgrammableCoreType::ACTIVE_ETH);
-        for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
-            for (int cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            for (uint32_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
                 log_info(tt::LogTest, "Test logical coordinates CQ{} active ethernet DM{}", cq_id, erisc_idx);
                 local_test_functions::test_my_coordinates(
                     device,

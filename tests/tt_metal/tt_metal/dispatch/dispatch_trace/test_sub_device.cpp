@@ -104,7 +104,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceBasi
     device->load_sub_device_manager(sub_device_manager);
     const auto erisc_count =
         tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(HalProgrammableCoreType::ACTIVE_ETH);
-    for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+    for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
         log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
         auto [waiter_program, syncer_program, incrementer_program, global_sem] = create_basic_eth_sync_program(
             device, sub_device_1, sub_device_2, static_cast<DataMovementProcessor>(erisc_idx));
@@ -194,7 +194,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProg
 
     const auto erisc_count =
         tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(HalProgrammableCoreType::ACTIVE_ETH);
-    for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+    for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
         log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
         auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] = create_basic_eth_sync_program(
             device, sub_device_3, sub_device_4, static_cast<DataMovementProcessor>(erisc_idx));

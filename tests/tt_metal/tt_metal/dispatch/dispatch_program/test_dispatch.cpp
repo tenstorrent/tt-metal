@@ -56,13 +56,13 @@ static void test_sems_across_core_types(
             continue;
         }
 
-        int erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         if (active_eth) {
             erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
                 tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         }
-        for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test {} ethernet DM{}", active_eth ? "active" : "idle", erisc_idx);
             DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
 
