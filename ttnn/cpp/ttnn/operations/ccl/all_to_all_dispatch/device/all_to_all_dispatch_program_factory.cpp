@@ -442,7 +442,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             log_info(
                 tt::LogAlways,
                 "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
-                "tokens from {} to {}",
+                "token indices from {} to {}",
                 mesh_coordinate[0],
                 mesh_coordinate[1],
                 neighbor_coordinate[0],

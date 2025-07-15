@@ -153,7 +153,6 @@ def gen_tensors(
     batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16
 ):
     # create input tokens
-    assert batch % devices == 0
     assert experts % devices == 0
     assert selected_experts_k < experts
 
@@ -646,17 +645,17 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("cluster_axis", [0, 1])
-@pytest.mark.parametrize("batches_per_device", [16])
+@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["cluster_row", "cluster_col"])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
-    "seq_len, num_iters, warmup_iters",
+    "batches_per_device, seq_len, num_iters, warmup_iters",
     [
-        (2, 5, 1),
+        (16, 2, 2, 1),
+        (1, 3, 2, 1),
     ],
-    ids=["s2"],
+    ids=["b16s2", "b1s3"],
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])

@@ -54,6 +54,7 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             metadata_tensor.get_tensor_spec(),
             output_specs[1]);
     }
+    TT_FATAL(operation_attributes.num_links > 0, "Number of links must be specified at the moment");
 
     auto input_shape = input_tensor.get_tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
