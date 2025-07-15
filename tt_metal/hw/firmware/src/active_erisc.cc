@@ -80,7 +80,8 @@ inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
 
 inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+    // Also check enable_fw_flag[0] if we need to exit immediately
+    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE && enable_fw_flag[0]) {
         invalidate_l1_cache();
     }
     WAYPOINT("SED");
