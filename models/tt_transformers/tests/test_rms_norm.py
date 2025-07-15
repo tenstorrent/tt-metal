@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -34,6 +35,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_rms_norm_inference(
     max_seq_len,
     batch_size,
@@ -52,8 +54,10 @@ def test_rms_norm_inference(
     first_layer_prefix = state_dict_prefix + "attention_norm."
 
     # Create the inner RMSNormxw
+    tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
         device=mesh_device,
+        tt_ccl=tt_ccl,
         dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
@@ -101,6 +105,8 @@ def test_rms_norm_inference(
     )[:1, :, :, :]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
+
+    tt_ccl.close()
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")

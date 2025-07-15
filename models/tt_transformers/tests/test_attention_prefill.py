@@ -50,6 +50,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
         # 1024 * 64,
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(
     max_seq_len,
     paged_attention,

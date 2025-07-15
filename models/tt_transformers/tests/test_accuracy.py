@@ -110,6 +110,7 @@ def get_accuracy_thresholds(model_args, optimizations):
         pytest.param(False, id="reference_text"),
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_tt_model_acc(
     prefill_len,
     decode_len,
@@ -316,16 +317,25 @@ def test_tt_model_acc(
 
         if tt_model.args.num_devices > 1:
             if tt_model.args.is_galaxy:
-                tt_out_gathered = ttnn.all_gather(
+                tt_out_gathered = ttnn.experimental.all_gather_async(
                     tt_out,
                     dim=3,
+                    multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=tt_model.args.num_all_gather_links,
                     cluster_axis=0,
                     mesh_device=mesh_device,
                     topology=tt_model.args.ccl_topology(),
+                    subdevice_id=tt_model.tt_ccl.worker_sub_device_id,
                 )
             else:
-                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                tt_out_gathered = ttnn.experimental.all_gather_async(
+                    tt_out,
+                    dim=3,
+                    multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                    subdevice_id=tt_model.tt_ccl.worker_sub_device_id,
+                )
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
