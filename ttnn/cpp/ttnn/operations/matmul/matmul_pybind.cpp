@@ -644,8 +644,8 @@ void py_module(py::module& module) {
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied containing the weights of the experts. Needs to be on the device.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied, containing the tokens to be processed. Needs to be on the device.
             sparsity (ttnn.Tensor): the sparsity tensor containing the scale factor for each token for each expert. Needs to be on the device.
-
         Keyword Args:
+            nnz (int): the number of non-zero values in the sparsity tensor.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
@@ -671,7 +671,7 @@ void py_module(py::module& module) {
             >>> # Move sparsity bitmask to device
             >>> sparsity_bitmask = ttnn.to_device(sparsity_bitmask, device)
             >>> # Perform sparse matmul
-            >>> output = ttnn.sparse_matmul(expert_weights, tokens, sparsity_bitmask, 4)
+            >>> output = ttnn.sparse_matmul(expert_weights, tokens, sparsity_bitmask, nnz=4)
             >>> print(output.shape)
             [64, 128, 8, 512]
         )doc",
@@ -680,11 +680,10 @@ void py_module(py::module& module) {
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
                const ttnn::Tensor& sparsity,
-               const uint32_t num_batches,
+               uint32_t nnz,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
-               const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -695,11 +694,10 @@ void py_module(py::module& module) {
                     input_tensor_a,
                     input_tensor_b,
                     sparsity,
-                    num_batches,
+                    nnz,
                     memory_config,
                     dtype,
                     program_config,
-                    activation,
                     compute_kernel_config,
                     core_grid,
                     output_tile,
@@ -709,13 +707,12 @@ void py_module(py::module& module) {
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
-            py::arg("sparsity"),
-            py::arg("num_batches"),
             py::kw_only(),
+            py::arg("sparsity"),
+            py::arg("nnz"),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("activation") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
