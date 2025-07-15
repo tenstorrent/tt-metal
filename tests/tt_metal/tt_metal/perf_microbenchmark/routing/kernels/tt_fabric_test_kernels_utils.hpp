@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -21,6 +22,32 @@ inline uint32_t prng_next(uint32_t n) {
     x ^= x >> 17;
     x ^= x << 5;
     return x;
+}
+
+// Helper functions for writing test results
+inline void write_test_status(uint32_t result_buffer_base, uint32_t status) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_STATUS_INDEX] = status;
+}
+
+inline void write_test_cycles(uint32_t result_buffer_base, uint64_t cycles) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_CYCLES_INDEX] = static_cast<uint32_t>(cycles);
+    result_buffer[TT_FABRIC_CYCLES_INDEX + 1] = static_cast<uint32_t>(cycles >> 32);
+}
+
+inline void write_test_packets(uint32_t result_buffer_base, uint64_t packets) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_WORD_CNT_INDEX] = static_cast<uint32_t>(packets);
+    result_buffer[TT_FABRIC_WORD_CNT_INDEX + 1] = static_cast<uint32_t>(packets >> 32);
+}
+
+inline void clear_test_results(uint32_t result_buffer_base, uint32_t result_buffer_size) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    uint32_t num_words = result_buffer_size / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; i++) {
+        result_buffer[i] = 0;
+    }
 }
 
 struct SequentialDataPattern {
@@ -404,6 +431,88 @@ struct NocFusedSenderOperations {
     static void update_header_impl(SenderKernelTrafficConfig* config);
 };
 
+// line sync for each fabric connection.
+struct LineSyncConfig {
+    LineSyncConfig(
+        WorkerToFabricEdmSender* fabric_connection_handle,
+        const uint32_t packet_header_address,
+        const uint32_t line_sync_val) :
+        fabric_connection_handle(fabric_connection_handle), line_sync_val(line_sync_val) {
+        packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+    }
+
+    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
+        // setup header fields. 2 rt args for 1D
+        ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+            arg_idx, packet_header_address, packet_header, fabric_connection_handle);
+
+        // set up noc fields, 4 rt args
+        auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
+        line_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fields.dst_address);
+
+        uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+        packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
+    }
+
+    void global_sync_start() {
+        // send packet to remote devices
+        fabric_connection_handle->wait_for_empty_write_slot();
+        fabric_connection_handle->send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    void global_sync_finish() {
+        // sync wait
+        noc_semaphore_wait(line_sync_ptr, line_sync_val);
+    }
+
+private:
+    WorkerToFabricEdmSender* fabric_connection_handle;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
+    volatile tt_l1_ptr uint32_t* line_sync_ptr;
+    uint32_t line_sync_val;
+};
+
+template <bool IS_MASTER_CORE, uint8_t NUM_LOCAL_CORES>
+struct LocalSyncConfig {
+    LocalSyncConfig(const uint32_t sync_address, const uint32_t sync_val) :
+        sync_address(sync_address), sync_val(sync_val) {
+        sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_address);
+    }
+
+    void setup_core_coordinates(size_t& arg_idx) {
+        // Get core coordinates from runtime args
+        for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
+            sync_core_xy_encoding_[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+
+    void local_sync() {
+        if constexpr (IS_MASTER_CORE) {
+            // Master core: signal all local cores
+            for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
+                auto dest_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[i], sync_address);
+                noc_semaphore_inc(dest_noc_addr, 1);
+            }
+            // Wait for all local cores to acknowledge
+            noc_semaphore_wait(sync_ptr, NUM_LOCAL_CORES);
+        } else {
+            noc_semaphore_wait(sync_ptr, 1);
+            // send ack back to master sender
+            auto master_sender_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[0], sync_address);
+            noc_semaphore_inc(master_sender_noc_addr, 1);
+        }
+    }
+
+private:
+    std::array<uint32_t, NUM_LOCAL_CORES> sync_core_xy_encoding_;
+    uint32_t sync_address;
+    volatile tt_l1_ptr uint32_t* sync_ptr;
+    uint32_t sync_val;
+};
+
 struct SenderKernelTrafficConfig {
     SenderKernelTrafficConfig(
         WorkerToFabricEdmSender* fabric_connection_handle,
@@ -507,6 +616,37 @@ struct SenderKernelTrafficConfig {
 
         elapsed_cycles += get_timestamp() - start_timestamp;
         num_packets_processed += num_packets_to_send;
+    }
+
+    // Round-robin version: always sends exactly one packet
+    template <bool BENCHMARK_MODE>
+    void send_one_packet() {
+        uint64_t start_timestamp = get_timestamp();
+
+        fabric_connection_handle->wait_for_empty_write_slot();
+
+        if constexpr (!BENCHMARK_MODE) {
+            if (payload_size_bytes > 0 && payload_buffer_) {
+                payload_buffer_->fill_data(metadata.seed);
+
+                fabric_connection_handle->send_payload_without_header_non_blocking_from_address(
+                    payload_buffer_->get_physical_address(), payload_size_bytes);
+            }
+        }
+
+        fabric_connection_handle->send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
+        if constexpr (!BENCHMARK_MODE) {
+            if (payload_size_bytes > 0 && payload_buffer_) {
+                payload_buffer_->advance();
+                update_header_for_next_packet();
+            }
+            metadata.seed = prng_next(metadata.seed);
+        }
+
+        elapsed_cycles += get_timestamp() - start_timestamp;
+        num_packets_processed += 1;  // Always increment by 1
     }
 
     void advance_dst_address() {
@@ -633,10 +773,27 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
         fields.write_fields.payload_size_bytes);
 }
 
-struct SenderKernelMemoryAllocator {
-    SenderKernelMemoryAllocator() {}
+struct CommonMemoryMap {
+    CommonMemoryMap() = default;
+    static CommonMemoryMap build_from_args(size_t& arg_idx) { return CommonMemoryMap(arg_idx); }
 
-    static SenderKernelMemoryAllocator build_from_args(size_t& arg_idx) { return SenderKernelMemoryAllocator(arg_idx); }
+    uint32_t result_buffer_base;
+    uint32_t result_buffer_size;
+
+private:
+    CommonMemoryMap(size_t& arg_idx) {
+        result_buffer_base = get_arg_val<uint32_t>(arg_idx++);
+        result_buffer_size = get_arg_val<uint32_t>(arg_idx++);
+    }
+};
+
+struct SenderKernelMemoryMap {
+    // Encapsulated common memory map
+    CommonMemoryMap common;
+
+    SenderKernelMemoryMap() {}
+
+    static SenderKernelMemoryMap build_from_args(size_t& arg_idx) { return SenderKernelMemoryMap(arg_idx); }
 
     uint32_t get_packet_header_address() {
         uint32_t addr = curr_packet_header_address_;
@@ -655,7 +812,10 @@ struct SenderKernelMemoryAllocator {
     }
 
 private:
-    SenderKernelMemoryAllocator(size_t& arg_idx) {
+    SenderKernelMemoryMap(size_t& arg_idx) {
+        // Parse all memory map arguments in unified call:
+        // [result_buffer_base, result_buffer_size, packet_header_base, payload_buffer_base, highest_usable_address]
+        common = CommonMemoryMap::build_from_args(arg_idx);  // Parses first 2 args
         packet_header_region_base_ = get_arg_val<uint32_t>(arg_idx++);
         payload_buffer_region_base_ = get_arg_val<uint32_t>(arg_idx++);
         highest_usable_address_ = get_arg_val<uint32_t>(arg_idx++);
@@ -673,20 +833,33 @@ private:
 };
 
 /* Layout for the run time args for sender
-1. Memory map args
+1. Memory map args (unified: common + sender-specific args parsed together)
 2. Fabric connection args
 3. Traffic config args
 3.1. TrafficConfigCommonFields
 3.2. Chip send type fields
 3.3. Noc send type fields
 */
-template <uint8_t NUM_FABRIC_CONNECTIONS, uint8_t NUM_TRAFFIC_CONFIGS, bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+template <
+    uint8_t NUM_FABRIC_CONNECTIONS,
+    uint8_t NUM_TRAFFIC_CONFIGS,
+    bool IS_2D_FABRIC,
+    bool USE_DYNAMIC_ROUTING,
+    bool LINE_SYNC,
+    uint8_t NUM_LOCAL_SYNC_CORES>
 struct SenderKernelConfig {
+    static constexpr bool MASTER_SYNC_CORE = false;
     static SenderKernelConfig build_from_args(size_t& arg_idx) { return SenderKernelConfig(arg_idx); }
 
     void open_connections() {
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
             fabric_connections()[i].open();
+        }
+    }
+
+    void local_sync() {
+        if constexpr (LINE_SYNC) {
+            local_sync_config().local_sync();
         }
     }
 
@@ -696,9 +869,11 @@ struct SenderKernelConfig {
         }
     }
 
-    SenderKernelMemoryAllocator memory_allocator;
+    SenderKernelMemoryMap memory_map;
     alignas(WorkerToFabricEdmSender)
         std::array<char, NUM_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> fabric_connections_storage;
+    alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
+        std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
     alignas(SenderKernelTrafficConfig)
         std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(SenderKernelTrafficConfig)> traffic_configs_storage;
@@ -708,20 +883,40 @@ struct SenderKernelConfig {
     WorkerToFabricEdmSender* fabric_connections() {
         return reinterpret_cast<WorkerToFabricEdmSender*>(fabric_connections_storage.data());
     }
+    LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
+        return *reinterpret_cast<LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>*>(
+            local_sync_config_storage.data());
+    }
     SenderKernelTrafficConfig* traffic_configs(uint8_t idx) {
         return reinterpret_cast<SenderKernelTrafficConfig*>(
             traffic_configs_storage.data() + idx * sizeof(SenderKernelTrafficConfig));
     }
     SenderKernelTrafficConfig* get_traffic_config(uint8_t idx) { return traffic_config_ptrs[idx]; }
 
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return memory_map.common.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
+
 private:
     SenderKernelConfig(size_t& arg_idx) {
-        this->memory_allocator = SenderKernelMemoryAllocator::build_from_args(arg_idx);
+        // Parse unified memory map args (common + sender-specific in one call)
+        this->memory_map = SenderKernelMemoryMap::build_from_args(arg_idx);
 
         // Initialize fabric connections using placement new
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
             auto connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             new (&fabric_connections()[i]) WorkerToFabricEdmSender(connection);
+        }
+
+        // add line sync initializations here, for each fabric connection, ex, forward and backward connection, run line
+        // sync for all.
+        if constexpr (LINE_SYNC) {
+            uint32_t sync_address = get_arg_val<uint32_t>(arg_idx++);
+            uint32_t sync_val = get_arg_val<uint32_t>(arg_idx++);
+            new (&local_sync_config()) LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>(sync_address, sync_val);
+
+            // setup core coordinates
+            local_sync_config().setup_core_coordinates(arg_idx);
         }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
@@ -738,7 +933,7 @@ private:
             const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
             ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
 
-            uint32_t packet_header_address = this->memory_allocator.get_packet_header_address();
+            uint32_t packet_header_address = this->memory_map.get_packet_header_address();
             // Get pointer to pre-allocated storage and initialize with placement new
             SenderKernelTrafficConfig* config_ptr = traffic_configs(i);
             traffic_config_ptrs[i] = config_ptr;
@@ -755,7 +950,7 @@ private:
             // on the sender side, the physical buffer will only be the size of the payload
             uint32_t payload_buffer_size = metadata.payload_buffer_size;
             uint32_t payload_buffer_address =
-                this->memory_allocator.get_payload_buffer_address(traffic_config_ptrs[i]->payload_size_bytes);
+                this->memory_map.get_payload_buffer_address(traffic_config_ptrs[i]->payload_size_bytes);
             traffic_config_ptrs[i]->setup_payload_buffer(payload_buffer_address, payload_buffer_size);
         }
     };
@@ -952,16 +1147,30 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     uint32_t expected_atomic_value;
 };
 
+/* Layout for the run time args for receiver
+1. Memory map args (unified: result buffer only, as receivers don't allocate memory)
+2. Traffic config args
+2.1. TrafficConfigCommonFields
+2.2. Noc send type fields
+*/
 template <uint8_t NUM_TRAFFIC_CONFIGS>
 struct ReceiverKernelConfig {
     static ReceiverKernelConfig build_from_args(size_t& arg_idx) { return ReceiverKernelConfig(arg_idx); }
 
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return common_memory_map.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return common_memory_map.result_buffer_size; }
+
+    CommonMemoryMap common_memory_map;
     alignas(TrafficValidationConfigBase)
         std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(WriteAtomicIncValidationConfig)> validation_configs_storage;
     std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs;
 
 private:
     ReceiverKernelConfig(size_t& arg_idx) {
+        // Parse unified memory map args (common only for receivers)
+        this->common_memory_map = CommonMemoryMap::build_from_args(arg_idx);
+
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_configs[i] = nullptr;
         }
@@ -987,6 +1196,90 @@ private:
                 ASSERT(false);
             }
         }
+    }
+};
+
+/* ********************
+ * SyncKernelConfig   *
+ **********************/
+template <
+    uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
+    bool IS_2D_FABRIC,
+    bool USE_DYNAMIC_ROUTING,
+    uint8_t NUM_LOCAL_SYNC_CORES>
+struct SyncKernelConfig {
+    static SyncKernelConfig build_from_args(size_t& arg_idx) { return SyncKernelConfig(arg_idx); }
+
+    void global_sync() {
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            sync_fabric_connections()[i].open();
+        }
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            line_sync_configs()[i].global_sync_start();
+        }
+        // only need one of the config to check for the acks
+        line_sync_configs()[0].global_sync_finish();
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            sync_fabric_connections()[i].close();
+        }
+    }
+
+    void local_sync() { local_sync_config().local_sync(); }
+
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return memory_map.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return memory_map.result_buffer_size; }
+
+    CommonMemoryMap memory_map;
+    alignas(WorkerToFabricEdmSender)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> sync_fabric_connections_storage;
+    alignas(LineSyncConfig)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfig)> line_sync_configs_storage;
+    alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
+        std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
+
+    // Helper accessors
+    WorkerToFabricEdmSender* sync_fabric_connections() {
+        return reinterpret_cast<WorkerToFabricEdmSender*>(sync_fabric_connections_storage.data());
+    }
+    LineSyncConfig* line_sync_configs() { return reinterpret_cast<LineSyncConfig*>(line_sync_configs_storage.data()); }
+    LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
+        return *reinterpret_cast<LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>*>(local_sync_config_storage.data());
+    }
+
+private:
+    SyncKernelConfig(size_t& arg_idx) {
+        // Parse memory map args (common only)
+        memory_map = CommonMemoryMap::build_from_args(arg_idx);
+
+        // Initialize sync fabric connections using placement new
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            auto sync_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            new (&sync_fabric_connections()[i]) WorkerToFabricEdmSender(sync_connection);
+        }
+
+        // Initialize line sync configurations
+        uint32_t line_sync_val = get_arg_val<uint32_t>(arg_idx++);
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            // For sync kernel, we allocate packet headers from a simple base address
+            // since we don't need the complex memory management of SenderKernelMemoryMap
+            uint32_t packet_header_address =
+                memory_map.result_buffer_base + memory_map.result_buffer_size + i * sizeof(PACKET_HEADER_TYPE);
+            new (&line_sync_configs()[i])
+                LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
+
+            // setup packet header fields
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+                arg_idx, packet_header_address);
+        }
+
+        // Initialize local sync config
+        uint32_t sync_address = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t sync_val = get_arg_val<uint32_t>(arg_idx++);
+        new (&local_sync_config()) LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>(sync_address, sync_val);
+
+        // setup core coordinates
+        local_sync_config().setup_core_coordinates(arg_idx);
     }
 };
 

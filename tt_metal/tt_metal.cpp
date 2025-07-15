@@ -373,11 +373,6 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     return true;
 }
 
-void SetFabricConfig(
-    FabricConfig fabric_config, FabricReliabilityMode reliability_mode, std::optional<uint8_t> num_routing_planes) {
-    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode, num_routing_planes);
-}
-
 std::map<chip_id_t, IDevice*> CreateDevices(
     const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
@@ -956,6 +951,16 @@ IDevice* CreateDevice(
     const std::vector<uint32_t>& l1_bank_remap,
     const size_t worker_l1_size) {
     ZoneScoped;
+
+    // MMIO devices do not support dispatch on galaxy cluster
+    // Suggest the user to use the CreateDevices API
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        TT_FATAL(
+            !(tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
+              tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
+            "Galaxy cluster does not support dispatch on mmio devices. Please use CreateDevices API to open all "
+            "devices for dispatch.");
+    }
 
     tt::DevicePool::initialize(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);

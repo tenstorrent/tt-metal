@@ -105,7 +105,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
     tt::tt_metal::Layout layout{};
     tt::tt_metal::StorageType storage_type{};
 
-    auto shape = core::create_shape({1, 1, 1, 1});
+    auto shape = ttnn::Shape({1, 1, 1, 1});
     std::vector<uint8_t> bytes;
     file.get(std::string(name) + "/shape", bytes);
     from_bytes<ttnn::Shape>(bytes, shape);
