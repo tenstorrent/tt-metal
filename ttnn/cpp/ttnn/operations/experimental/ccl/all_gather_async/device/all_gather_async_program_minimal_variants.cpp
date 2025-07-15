@@ -156,7 +156,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const auto& output_tensor_shape = output_tensor.padded_shape();
 
     // op hyperparams
-    uint32_t chunks_per_sync_val = chunks_per_sync.value_or(1);
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
@@ -378,6 +377,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     global_worker_id * base_pages_per_worker + std::min(global_worker_id, remainder);
                 uint32_t input_tile_id_end =
                     (global_worker_id + 1) * base_pages_per_worker + std::min(global_worker_id + 1, remainder);
+                uint32_t chunks_per_sync_val =
+                    chunks_per_sync.value_or((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet);
 
                 // Reader
 		std::vector<uint32_t> sender_reader_compile_args = {

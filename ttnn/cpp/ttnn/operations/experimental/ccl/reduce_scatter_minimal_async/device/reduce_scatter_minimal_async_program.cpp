@@ -713,7 +713,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     bool is_last_chip = ring_index == ring_size - 1;
 
     // op hyperparams
-    uint32_t chunks_per_sync_val = chunks_per_sync.value_or(1);
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
@@ -960,6 +959,14 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 const bool do_final_reduction = !is_first_device_in_direction;
                 const int num_total_reduction_steps = num_intermediate_reduction_steps + (do_final_reduction ? 1 : 0);
                 const bool sync_with_other_direction = !(is_first_chip || is_last_chip);
+                uint32_t tiles_read =
+                    ((link * num_workers_per_direction + worker) * batch_slice_num_pages /
+                     (num_links * num_workers_per_direction));
+                uint32_t tiles_to_read = (link * num_workers_per_direction + worker + 1) * batch_slice_num_pages /
+                                         (num_links * num_workers_per_direction);
+                uint32_t chunks_per_sync_val =
+                    chunks_per_sync.value_or((tiles_to_read - tiles_read) / tile_granularity);
+
                 // Reader
 		std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,                                              // my_chip_id
