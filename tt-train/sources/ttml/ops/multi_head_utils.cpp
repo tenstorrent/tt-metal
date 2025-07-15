@@ -69,8 +69,7 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
         // (B, 1, S, E) -> (B, 1, E, S)
         auto grad_result = ttnn::transpose(grad_output, -2, -1);
         // (B, 1, E, S) -> (B, H, E/H, S)
-        grad_result =
-            ttnn::reshape(grad_result, core::create_shape({batch_size, num_heads, embedding_dim, sequence_length}));
+        grad_result = ttnn::reshape(grad_result, ttnn::Shape({batch_size, num_heads, embedding_dim, sequence_length}));
         // (B, H, E/H, S) -> (B, H, S, E/H)
         grad_result = ttnn::transpose(grad_result, -2, -1);
         x->add_grad(grad_result);

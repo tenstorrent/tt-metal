@@ -64,7 +64,7 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
             }
         }
     }
-    TT_ASSERT(false, "Could not find downstream device of Device {}", device_id);
+    TT_FATAL(false, "Could not find downstream device of Device {}", device_id);
     return device_id;
 }
 
@@ -169,6 +169,11 @@ KernelHandle FDKernel::configure_kernel_variant(
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
+    if (MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        // TG specific fabric routing
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+        defines["GALAXY_CLUSTER"] = "1";
+    }
 
     if (GetCoreType() == CoreType::WORKER) {
         return tt::tt_metal::CreateKernel(

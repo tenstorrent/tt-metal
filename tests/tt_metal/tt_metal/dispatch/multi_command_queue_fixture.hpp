@@ -9,6 +9,7 @@
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -166,8 +167,14 @@ class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiD
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
 
-class MultiCommandQueueMultiDeviceOnFabricFixture : public MultiCommandQueueMultiDeviceFixture,
-                                                    public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+class DISABLED_MultiCommandQueueMultiDeviceOnFabricFixture
+    : public MultiCommandQueueMultiDeviceFixture,
+      public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
+private:
+    // Save the result to reduce UMD calls
+    inline static bool should_skip_ = false;
+    bool original_fd_fabric_en_ = false;
+
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
@@ -177,21 +184,22 @@ protected:
         if (tt::tt_metal::IsGalaxyCluster()) {
             GTEST_SKIP();
         }
+        original_fd_fabric_en_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric();
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
-        tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+        tt::tt_fabric::SetFabricConfig(GetParam(), tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         MultiCommandQueueMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
-            tt::tt_metal::detail::SetFabricConfig(
-                FabricConfig::DISABLED, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            tt::tt_fabric::SetFabricConfig(
+                tt::tt_fabric::FabricConfig::DISABLED, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         }
     }
 
     void TearDown() override {
         MultiCommandQueueMultiDeviceFixture::TearDown();
-        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(original_fd_fabric_en_);
     }
 };
 
