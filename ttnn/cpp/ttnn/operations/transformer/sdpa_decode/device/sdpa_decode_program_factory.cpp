@@ -364,7 +364,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto im_tile = full_tile;
     auto stats_tile = full_tile;
 
-    // TODO: Directly get q input as tensor with 16x32 tiny tiles
+    // TODO: Directly get q input as tensor with 16x32 tiny tiles #25059
     // For now, use this flag in reader differentiate
     // - In non-causal mode, mask can be an input tensor which needs proper handling to read as 16x32 tiles
     // - Only support Float16_b since block float w/ shared exp needs special handling to read as 16x32 tiles
@@ -376,7 +376,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         q_tile = half_tile;
         mask_tile = half_tile;
 
-        // TODO: out_tile is re-packed as full 32x32 with PACK for now
+        // TODO: out_tile is re-packed as full 32x32 with PACK for now #25060
         // out_tile = half_tile;
 
         scalar_tile = half_tile;
