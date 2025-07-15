@@ -1067,8 +1067,17 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "item",
             [](const Tensor& self) -> py::object {
-                auto result = self.item();
-                return std::visit([](const auto& value) -> py::object { return py::cast(value); }, result);
+                switch (self.dtype()) {
+                    case DataType::FLOAT32: return py::cast(self.item<float>());
+                    case DataType::BFLOAT16: return py::cast(self.item<bfloat16>().to_float());
+                    case DataType::BFLOAT8_B:
+                    case DataType::BFLOAT4_B: return py::cast(self.item<float>());
+                    case DataType::INT32: return py::cast(self.item<int32_t>());
+                    case DataType::UINT32: return py::cast(self.item<uint32_t>());
+                    case DataType::UINT16: return py::cast(self.item<uint16_t>());
+                    case DataType::UINT8: return py::cast(self.item<uint8_t>());
+                    case DataType::INVALID: TT_THROW("Unsupported DataType");
+                }
             },
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.
