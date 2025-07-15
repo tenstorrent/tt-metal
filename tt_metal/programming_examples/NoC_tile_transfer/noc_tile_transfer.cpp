@@ -30,6 +30,15 @@ int main() {
 
     CoreRange sem_core_range = CoreRange(core0, core1);
 
+    // Check if the environment variable for kernels print is set
+    char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
+    if (env_var == nullptr) {
+        std::cerr
+            << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to (0,0),(0,1) to see the output of "
+               "the Data Movement kernels. Command: export TT_METAL_DPRINT_CORES=(0,0),(0,1)"
+            << std::endl;
+    }
+
     // Input data preparation
     constexpr uint32_t single_tile_size = sizeof(uint16_t) * tt::constants::TILE_HW;
     InterleavedBufferConfig dram_config{

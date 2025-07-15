@@ -59,6 +59,8 @@ const auto core1_physical_coord = device->worker_core_from_logical_core(core1);
 CoreRange sem_core_range = CoreRange(core0, core1);
 ```
 
+In this example each kernel will print some information. To see it in terminal remember to export environmental variable: `export TT_METAL_DPRINT_CORES=(0,0),(0,1)`.
+
 ---
 
 ### Input and Output Buffers
