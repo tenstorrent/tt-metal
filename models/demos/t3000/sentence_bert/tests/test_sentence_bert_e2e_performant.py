@@ -51,6 +51,9 @@ def test_e2e_performant_sentencebert_data_parallel(
     performant_runner.release()
 
     inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
+    sentence_per_sec = round(batch_size / inference_time_avg)
     logger.info(
-        f"ttnn_sentencebert_batch_size: {batch_size}, One inference iteration time (sec): {inference_time_avg}, Sentence per sec: {round(batch_size/inference_time_avg)}"
+        f"ttnn_sentencebert_batch_size: {batch_size}, One inference iteration time (sec): {inference_time_avg}, Sentence per sec: {sentence_per_sec}"
     )
+    assert inference_time_avg < 0.0240
+    assert sentence_per_sec > 2895
