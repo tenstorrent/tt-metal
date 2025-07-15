@@ -697,7 +697,7 @@ void pytensor_module(py::module& m_tensor) {
     pyTensor.def(py::init<ttnn::Tensor&>())
         .def(
             py::init<>([](std::vector<float>&& data,
-                          const std::vector<uint32_t>& shape,
+                          const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
                           const std::optional<Tile>& tile,
@@ -747,7 +747,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             py::init<>([](std::vector<float>&& data,
-                          const std::vector<uint32_t>& shape,
+                          const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
                           std::optional<MeshDevice*> device,
@@ -809,7 +809,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             py::init<>([](std::vector<float>&& data,
-                          const std::vector<uint32_t>& shape,
+                          const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
                           std::optional<MeshDevice*> device,
