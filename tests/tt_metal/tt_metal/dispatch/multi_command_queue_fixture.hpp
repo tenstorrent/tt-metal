@@ -299,7 +299,7 @@ class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiD
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
 
 class DISABLED_MultiCQMultiDeviceOnFabricFixture : public UnitMeshMultiCQMultiDeviceFixture,
-                                                   public ::testing::WithParamInterface<tt::tt_fabirc::FabricConfig> {
+                                                   public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
 private:
     // Save the result to reduce UMD calls
     inline static bool should_skip_ = false;
