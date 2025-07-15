@@ -20,6 +20,7 @@ from models.experimental.stable_diffusion_xl_base.conftest import get_device_nam
 
 IS_RING_6U_LOCAL = os.environ.get("RING_6U", "0") == "1"
 NUM_DEVICES_LOCAL = ttnn.GetNumAvailableDevices()
+DEVICE_NAME_LOCAL = get_device_name()
 
 NEW_JSON_FILE_NAME = "sdxl_test_results_with_reset.json"
 READ_JSON_FILE_NAME = RESULTS_FILE_NAME
@@ -71,19 +72,26 @@ def test_accuracy_with_reset(
     for current_start in range(start_from, start_from + num_prompts, reset_period):
         current_num_prompts = min(reset_period, start_from + num_prompts - current_start)
 
-        prefix = (
-            ["env", "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml"] if need_yaml_bool else []
+        env = ["env"] if need_yaml_bool or is_galaxy() else []
+        prefix_for_yaml = (
+            ["WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml"] if need_yaml_bool else []
         )  # required in CI
-        command = prefix + [
-            "pytest",
-            "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py",
-            "--start-from",
-            str(current_start),
-            "--num-prompts",
-            str(current_num_prompts),
-            "-k",
-            vae_str,
-        ]
+        prefix_for_throttle = ["TT_MM_THROTTLE_PERF=5"] if is_galaxy() else []  # for galaxies, to avoid hangs
+        command = (
+            env
+            + prefix_for_yaml
+            + prefix_for_throttle
+            + [
+                "pytest",
+                "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py",
+                "--start-from",
+                str(current_start),
+                "--num-prompts",
+                str(current_num_prompts),
+                "-k",
+                vae_str,
+            ]
+        )
         subprocess.run(command, check=True)
 
         json_file_path = f"{OUT_ROOT}/{READ_JSON_FILE_NAME}"
@@ -96,7 +104,14 @@ def test_accuracy_with_reset(
             max_inference_time = max(data["benchmarks_summary"][0]["max_inference_time"], max_inference_time)
 
         if reset_bool and current_start + reset_period < start_from + num_prompts:
-            subprocess.run(["tt-smi", "-r"], check=True)
+            if is_galaxy():
+                subprocess.run(["tt-smi", "-r", "/opt/tt_metal_infra/scripts/reset.json"], check=True)
+                subprocess.run(["sleep", "60"], check=True)
+            else:
+                subprocess.run(["tt-smi", "-r"], check=True)
+            logger.info(
+                f"reset done for device {DEVICE_NAME_LOCAL} after {current_start + current_num_prompts} prompts"
+            )
 
     images = sdxl_collect_images(start_from, num_prompts)
 
@@ -129,7 +144,7 @@ def test_accuracy_with_reset(
     data = {
         "model": "sdxl",  # For compatibility with current processes
         "metadata": {
-            "device": "N150",
+            "device": DEVICE_NAME_LOCAL,
             "device_vae": vae_on_device,
             "start_from": start_from,
             "num_prompts": num_prompts,
@@ -137,7 +152,7 @@ def test_accuracy_with_reset(
         },
         "benchmarks_summary": [
             {
-                "device": get_device_name(),
+                "device": DEVICE_NAME_LOCAL,
                 "model": "sdxl",
                 "average_denoising_time": average_denoising_time,
                 "average_vae_time": average_vae_time,
