@@ -6,30 +6,35 @@
 
 // L1 to DRAM write
 void kernel_main() {
-    constexpr uint32_t dst_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t bank_id = get_compile_time_arg_val(1);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
-    constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(5);
-    constexpr uint32_t test_id = get_compile_time_arg_val(6);
+    constexpr uint32_t test_id = get_compile_time_arg_val(0);
+    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
+    constexpr uint32_t pages_per_transaction = get_compile_time_arg_val(2);
+    constexpr uint32_t bytes_per_page = get_compile_time_arg_val(3);
+    constexpr uint32_t dram_addr = get_compile_time_arg_val(4);
+    constexpr uint32_t dram_channel = get_compile_time_arg_val(5);
+    constexpr uint32_t local_l1_addr = get_compile_time_arg_val(6);
+    constexpr uint32_t sem_id = get_compile_time_arg_val(7);
 
-    constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
-    constexpr uint32_t total_num_pages = num_of_transactions * transaction_num_pages;
+    constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
 
-    DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
-    DeviceTimestampedData("Test id", test_id);
+    constexpr bool dram = true;
+    uint64_t dram_noc_addr = get_noc_addr_from_bank_id<dram>(dram_channel, dram_addr);
 
-    cb_wait_front(cb_id_out0, 1);
-    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+    uint32_t sem_addr = get_semaphore(sem_id);
+    auto sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+
+    // Wait for semaphore to be set by the reader
+    noc_semaphore_wait(sem_ptr, 1);
+
     {
         DeviceZoneScopedN("RISCV0");
-        uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(l1_read_addr, dst_noc_addr, transaction_size_bytes);
+            noc_async_write(local_l1_addr, dram_noc_addr, bytes_per_transaction);
         }
         noc_async_write_barrier();
     }
-    cb_pop_front(cb_id_out0, 1);
+
+    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
+    DeviceTimestampedData("Test id", test_id);
 }
