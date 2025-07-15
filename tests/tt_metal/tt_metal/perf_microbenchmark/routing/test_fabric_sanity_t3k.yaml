@@ -14,6 +14,37 @@ Tests:
     patterns:
       - type: all_to_all_multicast
 
+  - name: "MeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 200000
+
+    patterns:
+      - type: all_to_all_multicast
+
+  - name: "MeshMulticastDynamic"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 200000
+
+    patterns:
+      - type: all_to_all_multicast
+
   - name: "UnidirLinearMulticast"
     benchmark_mode: true
     sync: true
@@ -29,6 +60,20 @@ Tests:
     patterns:
       - type: unidirectional_linear_multicast
 
+  - name: "UnidirMeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 200000
+
+    patterns:
+      - type: unidirectional_linear_multicast
 
   - name: "FullRingMulticast"
     benchmark_mode: true

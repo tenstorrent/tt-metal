@@ -242,6 +242,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                     .mcast_start_hops = sync_pattern.mcast_start_hops,
                     .seed = config.seed,
                     .topology = config.fabric_setup.topology,
+                    .routing_type = config.fabric_setup.routing_type.value(),
                     .mesh_shape = this->fixture_->get_mesh_shape(),
                 };
 
@@ -317,6 +318,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .mcast_start_hops = pattern.mcast_start_hops,
                 .seed = config.seed,
                 .topology = config.fabric_setup.topology,
+                .routing_type = config.fabric_setup.routing_type.value(),
                 .mesh_shape = this->fixture_->get_mesh_shape(),
             };
 

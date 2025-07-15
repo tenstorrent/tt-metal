@@ -199,6 +199,7 @@ struct TrafficParameters {
     // Global context
     uint32_t seed;
     Topology topology;
+    RoutingType routing_type;
     tt::tt_metal::distributed::MeshShape mesh_shape;
 };
 
@@ -270,11 +271,36 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
             TT_FATAL(!this->dst_node_ids.empty(), "2D multicast should have at least one destination node.");
-            // TODO: fix this
             const auto& dst_rep_node_id = this->dst_node_ids[0];  // Representative destination
+            auto adjusted_hops = this->hops;
+
+            // Handle dynamic routing by adjusting hops
+            bool is_dynamic_routing = (this->parameters.routing_type == RoutingType::Dynamic);
+            if (is_dynamic_routing) {
+                auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
+                auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
+                auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
+                auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
+                // for dynamic routing, decrement north/south hops by 1, since the start dst node is accounted as one
+                // hop.
+                if (north_hops > 0) {
+                    adjusted_hops[RoutingDirection::N] -= 1;
+                }
+                if (south_hops > 0) {
+                    adjusted_hops[RoutingDirection::S] -= 1;
+                }
+                // for dynamic routing, decrement east/west hops by 1, since the start dst node is accounted as one hop.
+                if (north_hops == 0 && south_hops == 0 && east_hops > 0) {
+                    adjusted_hops[RoutingDirection::E] -= 1;
+                }
+                if (north_hops == 0 && south_hops == 0 && west_hops > 0) {
+                    adjusted_hops[RoutingDirection::W] -= 1;
+                }
+            }
+
             // chip_id and mesh_id is unused for low latency 2d mesh mcast
             const auto mcast_fields =
-                ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, this->hops);
+                ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, adjusted_hops);
             const auto mcast_args = mcast_fields.get_args();
             args.insert(args.end(), mcast_args.begin(), mcast_args.end());
         } else {
