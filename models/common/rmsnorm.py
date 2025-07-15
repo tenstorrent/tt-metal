@@ -39,6 +39,7 @@ class RMSNorm(LightweightModule):
         dim,
         state_dict,
         weight_key,
+        tt_ccl=None,
         layer_num=None,
         state_dict_prefix=None,
         weight_cache_path=None,
@@ -55,6 +56,10 @@ class RMSNorm(LightweightModule):
     ):
         super().__init__()
         self.device = device
+<<<<<<< HEAD
+=======
+        self.tt_ccl = tt_ccl
+>>>>>>> 02390c1471 (RMSNorm)
         self.eps = eps
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
@@ -147,6 +152,7 @@ class RMSNorm(LightweightModule):
     ):
         assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
+        assert self.tt_ccl is not None, "Distributed RMSNorm requires tt_ccl"
 
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
@@ -181,6 +187,7 @@ class RMSNorm(LightweightModule):
             weight=weight,
             compute_kernel_config=compute_kernel_config,
         )
-        tt_stats.deallocate(True)
+        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
+            tt_stats.deallocate(True)
 
         return tt_out
