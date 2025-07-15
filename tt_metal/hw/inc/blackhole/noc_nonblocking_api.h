@@ -777,3 +777,134 @@ inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
 }
+
+// clang-format off
+/**
+ * Sets the stateful registers for an asynchronous read from a specified source node located at NOC
+ * coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function is used to set up the state for
+ * \a ncrisc_noc_read_with_state, which will issue the actual read request.
+ *
+ * The source node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument                        | Description                                        | Data type | Valid range                                              | required |
+ * |---------------------------------|----------------------------------------------------|-----------|----------------------------------------------------------|----------|
+ * | noc                             | Which NOC to use for the transaction               | uint32_t  | 0 or 1                                                   | True     |
+ * | cmd_buf                         | Which command buffer to use for the transaction    | uint32_t  | 0 - 3                                                    | True     |
+ * | src_noc_addr                    | Encoding of the source NOC location (x,y)+address  | uint64_t  | Results of \a get_noc_addr calls                         | True     |
+ * | len_bytes                       | Size of the transaction in bytes.                  | uint32_t  | 0..1 MB                                                  | False    |
+ * | vc                              | Which VC to use for the transaction                | uint32_t  | 0 - 3                                                    | False    |
+ * | noc_mode (template parameter)   | NOC mode for the transaction                       | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | one_packet (template parameter) | Whether transaction size is <= NOC_MAX_BURST_SIZE  | bool      | true or false                                            | False    |
+ * | use_vc (template parameter)     | Use custom VC, enables vc parameter                | bool      | true or false                                            | False    |
+ */
+// clang-format on
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false, bool use_vc = false>
+inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
+    uint32_t noc, uint32_t cmd_buf, uint64_t src_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    if constexpr (use_vc) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    // Handles reading from PCIe
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & 0x1000000F);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+
+    // If one packet, set data size
+    if constexpr (one_packet) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous read from a specified source node located at NOC
+ * coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function) for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
+ * This function must be preceded by a call to \a ncrisc_noc_read_set_state.
+ * This function is used to issue the actual read request after the state has been set up.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                        | Data type | Valid range                                              | required |
+ * |-------------------------------------|----------------------------------------------------|-----------|----------------------------------------------------------|----------|
+ * | noc                                 | Which NOC to use for the transaction               | uint32_t  | 0 or 1                                                   | True     |
+ * | cmd_buf                             | Which command buffer to use for the transaction    | uint32_t  | 0 - 3                                                    | True     |
+ * | src_local_addr                      | Address in local L1 memory on source core          | uint32_t  | 0..1 MB                                                  | True     |
+ * | dst_local_addr                      | Address in local L1 memory on destination core     | uint32_t  | 0..1 MB                                                  | True     |
+ * | len_bytes                           | Size of transaction in bytes                       | uint32_t  | 0..1 MB                                                  | False    |
+ * | noc_mode (template parameter)       | NOC mode for the transaction                       | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | inc_num_issued (template parameter) | Increment enable for transaction issued counters   | bool      | true or false                                            | False    |
+ * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE  | bool      | true or false                                            | False    |
+ */
+// clang-format on
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true, bool one_packet = false>
+inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
+    if constexpr (inc_num_issued && noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+    if constexpr (!one_packet) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    if constexpr (inc_num_issued && noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous read for all transaction sizes.
+ * Refer to \a ncrisc_noc_read_with_state for more details.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                        | Data type | Valid range                                              | required |
+ * |-------------------------------------|----------------------------------------------------|-----------|----------------------------------------------------------|----------|
+ * | noc                                 | Which NOC to use for the transaction               | uint32_t  | 0 or 1                                                   | True     |
+ * | cmd_buf                             | Which command buffer to use for the transaction    | uint32_t  | 0 - 3                                                    | True     |
+ * | src_local_addr                      | Address in local L1 memory on source core          | uint32_t  | 0..1 MB                                                  | True     |
+ * | dst_local_addr                      | Address in local L1 memory on destination core     | uint32_t  | 0..1 MB                                                  | True     |
+ * | len_bytes                           | Size of transaction in bytes                       | uint32_t  | 0..1 MB                                                  | True     |
+ * | noc_mode (template parameter)       | NOC mode for the transaction                       | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | inc_num_issued (template parameter) | Increment enable for transaction issued counters   | bool      | true or false                                            | False    |
+ */
+// clang-format on
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true>
+inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
+    if (len_bytes > NOC_MAX_BURST_SIZE) {
+        // Set data size for while loop
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+
+        while (len_bytes > NOC_MAX_BURST_SIZE) {
+            ncrisc_noc_read_with_state<noc_mode, inc_num_issued, true /* one_packet */>(
+                noc, cmd_buf, src_local_addr, dst_local_addr);
+
+            len_bytes -= NOC_MAX_BURST_SIZE;
+            src_local_addr += NOC_MAX_BURST_SIZE;
+            dst_local_addr += NOC_MAX_BURST_SIZE;
+        }
+    }
+
+    // left-over packet
+    ncrisc_noc_read_with_state<noc_mode, inc_num_issued>(noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
+}
