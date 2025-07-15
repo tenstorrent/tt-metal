@@ -40,7 +40,7 @@ class Emb(torch.nn.Module):
         1024 * 32,
     ),
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_model_inference_CI(t3k_mesh_device, reset_seeds, seq_len, is_ci_env):
     # Set additional Mistral flag for CI
     if is_ci_env:

@@ -167,6 +167,7 @@ def run_test_FalconCausalLM_inference(
         model_config,
         tt_cache_path,
         use_global_cos_sin_cache=use_global_cos_sin_cache,
+        seq_len=seq_len,
     )
 
     # TODO: Generate embeddings and attention_mask on device
@@ -308,6 +309,7 @@ def run_test_FalconCausalLM_inference(
     ],
     ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconCausalLM_inference(
     num_devices,
     model_version,

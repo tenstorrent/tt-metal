@@ -404,6 +404,7 @@ class TtFalconModel(TtFalconModelShared):
         model_config,
         tt_cache_path,
         use_global_cos_sin_cache,
+        seq_len,
     ):
         super().__init__(
             mesh_device=mesh_device,
@@ -415,6 +416,7 @@ class TtFalconModel(TtFalconModelShared):
             model_config=model_config,
             tt_cache_path=tt_cache_path,
             use_global_cos_sin_cache=use_global_cos_sin_cache,
+            seq_len=seq_len,
         )
 
     def __call__(

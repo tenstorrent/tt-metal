@@ -64,7 +64,7 @@ def run_test_FalconMLP_inference(
     pytorch_out = pytorch_FalconMLP_model(mlp_input)
     # TT hardware execution -------------------------------------------------------------
 
-    tt_ccl = TT_CCL(mesh_device)
+    tt_ccl = TT_CCL(mesh_device, model_config, seq_len)
     tt_FalconMLP_model = TtFalconMLP(
         mesh_device,
         tt_ccl,
@@ -132,7 +132,7 @@ def run_test_FalconMLP_inference(
     ],
     ids=("BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"),
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconMLP_inference(
     num_devices,
     model_version,

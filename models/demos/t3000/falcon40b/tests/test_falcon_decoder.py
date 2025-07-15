@@ -230,7 +230,7 @@ def run_test_FalconDecoder_inference(
     )
 
     # TT hardware execution =================================================================
-    tt_ccl = TT_CCL(mesh_device)
+    tt_ccl = TT_CCL(mesh_device, model_config, seq_len)
     tt_FalconDecoder_model = TtFalconDecoderLayer(
         mesh_device,
         tt_ccl,
@@ -353,7 +353,7 @@ def run_test_FalconDecoder_inference(
     ],
     ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconDecoder_inference(
     num_devices,
     model_version,

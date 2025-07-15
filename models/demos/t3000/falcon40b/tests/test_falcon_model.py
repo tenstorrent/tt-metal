@@ -166,6 +166,7 @@ def run_test_FalconModel_inference(
         model_config,
         tt_cache_path,
         use_global_cos_sin_cache=use_global_cos_sin_cache,
+        seq_len=seq_len,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -306,7 +307,7 @@ def run_test_FalconModel_inference(
     ],
     ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconModel_inference(
     num_devices,
     model_version,
