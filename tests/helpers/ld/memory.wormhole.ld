@@ -32,3 +32,4 @@ MEMORY
     TRISC1_LOADER_CODE_MEM : ORIGIN = (76288 + (0 * 1024) + (16 * 1024) + (0 * 1024)), LENGTH = (0 * 1024)
     TRISC2_LOADER_CODE_MEM : ORIGIN = (76288 + (0 * 1024) + (16 * 1024) + (0 * 1024) + (0 * 1024)), LENGTH = (0 * 1024)
 }
+PROVIDE(__instrn_buffer = 0xFFE4000);
