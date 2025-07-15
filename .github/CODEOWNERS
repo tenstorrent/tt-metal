@@ -46,6 +46,7 @@ tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
+tt_metal/hw/inc/accessor @tenstorrent/metalium-developers-ttnn-core
 tt_metal/hw/firmware/ @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/toolchain/ @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @pgkeller @nathan-TT
@@ -100,6 +101,7 @@ tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
 tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @omilyutin-tt
+tests/tt_metal/tt_metal/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @omilyutin-tt @tenstorrent/metalium-developers-infra
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT @pgkeller
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @pgkeller
@@ -259,7 +261,7 @@ models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions
 models/demos/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov8s_world @ssinghalTT @tenstorrent/cse-developer-ttnn
-models/experimental/yolov10 @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/demos/yolov10x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov9c @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov8x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov8s @ssinghalTT @tenstorrent/cse-developer-ttnn

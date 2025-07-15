@@ -77,6 +77,7 @@ jobs:
           else
             echo "Running CIv2 compatible tests"
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov10x/tests -m models_device_performance_bare_metal
             pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600 || FAILED=$((FAILED+1))
             pytest models/demos/distilbert/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
@@ -100,10 +101,10 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vanilla_unet/test -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8s_world/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov10/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov10x/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov7/tests/perf/test_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
           fi
 
