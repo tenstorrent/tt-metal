@@ -1,1 +1,0 @@
-../../../ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops_TG.py
