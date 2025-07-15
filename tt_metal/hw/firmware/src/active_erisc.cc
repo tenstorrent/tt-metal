@@ -29,6 +29,12 @@
 #include "debug/stack_usage.h"
 #include "debug/dprint.h"
 
+#if defined(LINK_CHECK_ENABLED)
+constexpr bool link_check_enabled = true;
+#else
+constexpr bool link_check_enabled = false;
+#endif
+
 uint8_t noc_index;
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
@@ -81,9 +87,11 @@ inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
 
 inline void service_base_fw() {
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
-    reinterpret_cast<void (*)(uint32_t)>(
-        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(
-        MEM_AERISC_LIVE_LINK_STATUS_BASE);
+    if constexpr (link_check_enabled) {
+        reinterpret_cast<void (*)(uint32_t)>(
+            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(
+            MEM_AERISC_LIVE_LINK_STATUS_BASE);
+    }
 }
 
 inline void wait_subordinate_eriscs() {

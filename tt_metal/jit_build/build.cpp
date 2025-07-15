@@ -28,6 +28,7 @@
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.h>
 
@@ -532,6 +533,12 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                 "-DRISC_B0_HW ";
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+
+            // Links need to be checked
+            const auto cluster_type = MetalContext::instance().get_cluster().get_cluster_type();
+            if (cluster_type == ClusterType::P150_X2 || cluster_type == ClusterType::P150_X4) {
+                this->defines_ += "-DLINK_CHECK_ENABLED=1 ";
+            }
 
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisc.cc");
