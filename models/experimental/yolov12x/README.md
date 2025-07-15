@@ -2,6 +2,8 @@
 
 Wormhole N150, N300
 
+### NOTE:
+
 To obtain the perf reports through profiler, please build with following command:
 ```
 ./build_metal.sh -p
@@ -18,7 +20,7 @@ The entry point to yolov12x model is YoloV12x in `models/experimental/yolov12x/t
 
 Use the following command to run the Yolo12x model with pre-trained weights :
 ```sh
-pytest models/experimental/yolov12x/tests/pcc/test_ttnn_yolov12x.py::test_yolov12x[pretrained_weight_true-0]
+pytest models/experimental/yolov12x/demo/demo.py
 ```
 
 ### Model performant running with Trace+2CQ
