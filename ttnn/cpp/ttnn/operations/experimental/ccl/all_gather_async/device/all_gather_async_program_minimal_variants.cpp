@@ -377,8 +377,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     global_worker_id * base_pages_per_worker + std::min(global_worker_id, remainder);
                 uint32_t input_tile_id_end =
                     (global_worker_id + 1) * base_pages_per_worker + std::min(global_worker_id + 1, remainder);
-                uint32_t chunks_per_sync_val =
-                    chunks_per_sync.value_or((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet);
+                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(
+                    std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1));
 
                 // Reader
 		std::vector<uint32_t> sender_reader_compile_args = {
