@@ -88,8 +88,8 @@ def test_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
     )
 
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -137,8 +137,8 @@ def test_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
     )
     freqs_cis = torch.complex(cos, sin)
 

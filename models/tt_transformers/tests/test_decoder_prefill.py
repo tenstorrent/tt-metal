@@ -89,8 +89,8 @@ def test_decoder_inference(
         mesh_device,
         max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
@@ -151,7 +151,7 @@ def test_decoder_inference(
             model_args.head_dim,
             model_args.max_seq_len * 2,
             model_args.rope_theta,
-            model_args.rope_scaling_factor,
+            model_args.rope_scaling.factor if model_args.rope_scaling else None,
         )[positions]
 
         # Reference model
