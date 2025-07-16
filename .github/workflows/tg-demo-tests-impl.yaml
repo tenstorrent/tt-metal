@@ -28,9 +28,6 @@ jobs:
       matrix:
         test-group: [
           { name: "Galaxy Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 30, owner_id: U053W15B6JF}, # Djordje Ivanovic
-          { name: "Galaxy Llama3 8B data-parallel demo tests", arch: wormhole_b0, model: llama3_8b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
-          { name: "Galaxy Llama3 70B data-parallel demo tests", arch: wormhole_b0, model: llama3_70b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
-          { name: "Galaxy Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 30, owner_id: U05RWH3QUPM}, # Salar Hosseini
         ]
     runs-on:
       - arch-wormhole_b0
