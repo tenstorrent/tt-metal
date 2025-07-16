@@ -29,6 +29,14 @@ test_suite_bh_single_pcie_small_ml_model_tests() {
     pytest models/demos/blackhole/resnet50/tests/upstream_pipeline
 }
 
+test_suite_bh_single_pcie_didt_tests() {
+    echo "[upstream-tests] Running BH upstream didt tests"
+    pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k "1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+    pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+    pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "with_gelu and 1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+    pytest tests/didt/test_lm_head_matmul.py::test_lm_head_matmul -k "1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+}
+
 verify_llama_dir_() {
     if [ -z "${LLAMA_DIR}" ]; then
       echo "Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
@@ -135,11 +143,13 @@ declare -A hw_topology_test_suites
 # Store test suites as newline-separated lists
 hw_topology_test_suites["blackhole"]="test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests
+test_suite_bh_single_pcie_didt_tests
 test_suite_bh_single_pcie_small_ml_model_tests
 test_suite_bh_single_pcie_llama_demo_tests" # NOTE: This test MUST be last because of the requirements install currently in the llama tests
 
 hw_topology_test_suites["blackhole_no_models"]="test_suite_bh_single_pcie_python_unit_tests
-test_suite_bh_single_pcie_metal_unit_tests"
+test_suite_bh_single_pcie_metal_unit_tests
+test_suite_bh_single_pcie_didt_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
 test_suite_bh_llmbox_metal_unit_tests
