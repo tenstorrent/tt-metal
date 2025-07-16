@@ -167,26 +167,6 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-DataType Tensor::get_dtype() const { return dtype(); }
-Layout Tensor::get_layout() const { return layout(); }
-
-const TensorSpec& Tensor::get_tensor_spec() const { return tensor_spec(); }
-
-const ttnn::Shape& Tensor::get_logical_shape() const { return logical_shape(); }
-
-const ttnn::Shape& Tensor::get_padded_shape() const { return padded_shape(); }
-
-uint64_t Tensor::get_logical_volume() const { return logical_shape().volume(); }
-uint32_t Tensor::volume() const { return padded_shape().volume(); }
-
-Storage& Tensor::get_storage() { return this->tensor_attributes->get_storage(); }
-
-const DistributedTensorConfig& Tensor::get_distributed_tensor_config() const {
-    return this->tensor_attributes->get_distributed_tensor_config();
-}
-
-const Storage& Tensor::get_storage() const { return this->tensor_attributes->get_storage(); }
-
 template <>
 Tensor Tensor::from_span<float>(
     tt::stl::Span<const float> buffer,
