@@ -646,7 +646,7 @@ void TilizeUntilizeBigBufferImpl(const TilizeUntilizeBigBuffersParams& params) {
 class TilizeUntilizeBigBufferTestsFixture : public ::testing::TestWithParam<TilizeUntilizeBigBuffersParams> {};
 class TilizeUntilizeBigBufferShortTestsFixture : public ::testing::TestWithParam<TilizeUntilizeBigBuffersParams> {};
 
-// Disabled by default, since they take a lot of timne to run. To still run them, use --gtest_also_run_disabled_tests
+// Disabled by default, since they take a lot of time to run. To still run them, use --gtest_also_run_disabled_tests
 TEST_P(TilizeUntilizeBigBufferTestsFixture, DISABLED_TilizeUntilizeBigBuffer) {
     auto params = GetParam();
     TilizeUntilizeBigBufferImpl(params);
