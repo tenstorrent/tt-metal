@@ -35,23 +35,14 @@ from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
 # Import the new Pydantic configuration system
 try:
-    from .model_configs import (
+    from models.tt_transformers.tt.model_configs import (
         parse_model_config_from_dict,
-        StandardModelConfig,
-        ModelArchitecture
+        StandardModelConfig
     )
     PYDANTIC_CONFIG_AVAILABLE = True
 except ImportError:
-    try:
-        from model_configs import (
-            parse_model_config_from_dict,
-            StandardModelConfig,
-            ModelArchitecture
-        )
-        PYDANTIC_CONFIG_AVAILABLE = True
-    except ImportError:
-        PYDANTIC_CONFIG_AVAILABLE = False
-        logger.warning("Pydantic model configuration system not available. Falling back to legacy configuration parsing.")
+    PYDANTIC_CONFIG_AVAILABLE = False
+    logger.warning("Pydantic model configuration system not available. Falling back to legacy configuration parsing.")
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -1428,28 +1419,14 @@ class ModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = standard_config.norm_eps
         self.vocab_size = standard_config.vocab_size
-        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else standard_config.padded_vocab_size
         self.head_dim = standard_config.head_dim
         self.max_context_len = standard_config.max_position_embeddings
 
         # MLP dimensions
-        self.hidden_dim = standard_config.intermediate_size
+        self.hidden_dim = standard_config.hidden_dim
         self.ffn_dim_multiplier = standard_config.ffn_dim_multiplier
         self.multiple_of = standard_config.multiple_of
-
-        # Extract model name from config if available
-        if "_name_or_path" in raw_config:
-            if is_hf:
-                normalized_path = os.path.normpath(raw_config["_name_or_path"])
-                # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
-                if "snapshots" in normalized_path:
-                    full_model_name = normalized_path.split(os.path.sep)[-3]
-                    self.model_name = full_model_name.split("--")[-1]
-                else:
-                    self.model_name = os.path.basename(normalized_path)
-            else:
-                self.model_name = os.path.basename(raw_config["_name_or_path"])
-            logger.info(f"Model name from config: {self.model_name}")
 
         # Model-specific validations
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
@@ -1485,17 +1462,12 @@ class ModelArgs:
         self.rope_theta = standard_config.rope_theta
         
         # Handle RoPE scaling
-        if standard_config.rope_scaling:
-            self.rope_scaling_factor = standard_config.rope_scaling.factor
-            self.orig_context_len = standard_config.rope_scaling.original_max_position_embeddings
-        else:
-            self.rope_scaling_factor = None
-            self.orig_context_len = None
+        self.rope_scaling = standard_config.rope_scaling
 
         # Vision params (from raw config since not standardized yet)
-        self.vision_chunk_size = raw_config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = raw_config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = raw_config.get("vision_num_cross_attention_layers", -1)
+        self.vision_chunk_size = standard_config.vision_chunk_size
+        self.vision_max_num_chunks = standard_config.vision_max_num_chunks
+        self.vision_num_cross_attention_layers = standard_config.vision_num_cross_attention_layers
 
         # Vision constants
         self.vision_dim = 1280
