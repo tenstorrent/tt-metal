@@ -255,6 +255,9 @@ void WatcherDeviceReader::Dump(FILE* file) {
     highest_stack_usage.clear();
     used_kernel_names.clear();
 
+    // Ensure any L1 writes are flushed
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+
     // Ignore storage-only cores
     std::unordered_set<CoreCoord> storage_only_cores;
     uint8_t num_hw_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
