@@ -7,6 +7,7 @@
 #include "debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
@@ -30,6 +31,14 @@ using DrainerStatus = EDMStatus;
 }  // namespace tt::tt_fabric
 
 void kernel_main() {
+    size_t rt_args_idx = 0;
+    auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
+    for (uint32_t i = 0; i < num_regions_to_clear; i++) {
+        auto address = get_arg_val<uint32_t>(rt_args_idx++);
+        auto size = get_arg_val<uint32_t>(rt_args_idx++);
+        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
+    }
+
     auto status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::DrainerStatus::STARTED;
 

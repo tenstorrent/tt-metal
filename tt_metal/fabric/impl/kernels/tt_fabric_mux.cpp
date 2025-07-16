@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
@@ -115,10 +116,19 @@ void forward_data(
 }
 
 void kernel_main() {
+    size_t rt_args_idx = 0;
+
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
-    size_t rt_args_idx = 0;
+    // clear out memory regions
+    auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
+    for (uint32_t i = 0; i < num_regions_to_clear; i++) {
+        auto address = get_arg_val<uint32_t>(rt_args_idx++);
+        auto size = get_arg_val<uint32_t>(rt_args_idx++);
+        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
+    }
+
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
@@ -185,6 +195,22 @@ void kernel_main() {
     uint32_t heartbeat = 0;
 #endif
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
+        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
+        if (got_graceful_termination) {
+            bool all_channels_drained = true;
+            for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
+                all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
+            }
+            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
+                all_channels_drained &=
+                    get_ptr_val(channel_id + NUM_FULL_SIZE_CHANNELS) == NUM_BUFFERS_HEADER_ONLY_CHANNEL;
+            }
+
+            if (all_channels_drained) {
+                break;
+            }
+        }
+
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
                 for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
