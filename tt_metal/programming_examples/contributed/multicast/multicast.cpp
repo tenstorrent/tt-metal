@@ -162,7 +162,6 @@ int main(int argc, char **argv) {
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(
         device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     ////////// PROGRAM BLOCK //////////
