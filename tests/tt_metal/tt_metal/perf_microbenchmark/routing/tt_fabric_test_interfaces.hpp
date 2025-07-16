@@ -62,6 +62,7 @@ public:
     virtual ~IRouteManager() = default;
     virtual MeshShape get_mesh_shape() const = 0;
     virtual uint32_t get_num_mesh_dims() const = 0;
+    virtual bool wrap_around_mesh(FabricNodeId node) const = 0;
     virtual std::vector<FabricNodeId> get_dst_node_ids_from_hops(
         FabricNodeId src_node_id,
         std::unordered_map<RoutingDirection, uint32_t>& hops,
@@ -78,12 +79,14 @@ public:
         const FabricNodeId& src_node_id, uint32_t dim) const = 0;
     virtual std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const = 0;
-    virtual uint32_t get_num_sync_devices() const = 0;
-    virtual std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
+    virtual uint32_t get_num_sync_devices(bool wrap_around_mesh) const = 0;
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_wrap_around_mesh_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
         const FabricNodeId& dst_node_backward_id,
         HighLevelTrafficPattern pattern_type) const = 0;
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
+        const FabricNodeId& src_node_id, HighLevelTrafficPattern pattern_type, uint32_t dim) const = 0;
     virtual std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_multicast_hops(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const = 0;

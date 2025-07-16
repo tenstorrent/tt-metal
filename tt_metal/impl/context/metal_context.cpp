@@ -414,6 +414,15 @@ void MetalContext::set_fabric_config(
     std::optional<uint8_t> num_routing_planes) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
     force_reinit_ = true;
+
+    // Reset control plane when switching from DISABLED to enabled or between different configs
+    // This ensures the correct mesh graph descriptor is used for the new fabric config
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED &&
+        fabric_config != tt_fabric::FabricConfig::DISABLED) {
+        log_info(tt::LogMetal, "Resetting control plane for new fabric config: {}", fabric_config);
+        global_control_plane_.reset();
+    }
+
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED || fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;

@@ -535,8 +535,19 @@ private:
                 continue;
             }
 
-            // Use the shared ring traversal helper from fixture
-            auto ring_path = fixture_->trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, hop_count);
+            // Use the appropriate ring traversal helper based on mesh type
+            std::vector<std::pair<FabricNodeId, RoutingDirection>> ring_path;
+
+            // Check if this is a wrap-around mesh
+            bool is_wrap_around = fixture_->wrap_around_mesh(src_node_id);
+
+            if (is_wrap_around) {
+                // Use the existing wrap-around mesh logic
+                ring_path = fixture_->trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, hop_count);
+            } else {
+                // Use the new non wrap-around mesh logic
+                ring_path = fixture_->trace_non_wrap_around_mesh_ring_path(src_node_id, initial_direction, hop_count);
+            }
 
             // Count traffic at each device boundary
             // ring_path contains (destination_node, direction_to_reach_it)

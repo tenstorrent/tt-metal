@@ -1293,41 +1293,63 @@ private:
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
 
+        bool wrap_around_mesh = this->route_manager_.wrap_around_mesh(devices.front());
+        log_info(LogTest, "wrap_around_mesh {}", wrap_around_mesh);
+
+        std::unordered_map<RoutingDirection, uint32_t> hops;
         for (const auto& src_node : devices) {
-            // Get ring neighbors - returns nullopt for non-perimeter devices
-            auto ring_neighbors = this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_node, devices);
+            if (wrap_around_mesh) {
+                // Get ring neighbors - returns nullopt for non-perimeter devices
+                auto ring_neighbors = this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_node, devices);
 
-            // Check if the result is valid (has value)
-            if (!ring_neighbors.has_value()) {
-                // Skip this device as it's not on the perimeter and can't participate in ring multicast
-                log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_node.chip_id);
-                continue;
-            }
-
-            // Extract the valid ring neighbors
-            auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
-
-            auto hops = this->route_manager_.get_full_or_half_ring_mcast_hops(
-                src_node, dst_node_forward, dst_node_backward, pattern_type);
-
-            ParsedTrafficPatternConfig specific_pattern;
-            specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
-            specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
-
-            auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
-
-            auto it = std::find_if(test.senders.begin(), test.senders.end(), [&](const ParsedSenderConfig& s) {
-                // Compare FabricNodeId with DeviceIdentifier
-                if (std::holds_alternative<FabricNodeId>(s.device)) {
-                    return std::get<FabricNodeId>(s.device) == src_node;
+                // Check if the result is valid (has value)
+                if (!ring_neighbors.has_value()) {
+                    // Skip this device as it's not on the perimeter and can't participate in ring multicast
+                    log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_node.chip_id);
+                    continue;
                 }
-                return false;
-            });
 
-            if (it != test.senders.end()) {
-                it->patterns.push_back(merged_pattern);
+                // Extract the valid ring neighbors
+                auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
+
+                hops = this->route_manager_.get_wrap_around_mesh_full_or_half_ring_mcast_hops(
+                    src_node, dst_node_forward, dst_node_backward, pattern_type);
+
+                ParsedTrafficPatternConfig specific_pattern;
+                specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
+                specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
+
+                auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+
+                auto it = std::find_if(test.senders.begin(), test.senders.end(), [&](const ParsedSenderConfig& s) {
+                    // Compare FabricNodeId with DeviceIdentifier
+                    if (std::holds_alternative<FabricNodeId>(s.device)) {
+                        return std::get<FabricNodeId>(s.device) == src_node;
+                    }
+                    return false;
+                });
+
+                if (it != test.senders.end()) {
+                    it->patterns.push_back(merged_pattern);
+                } else {
+                    test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                }
             } else {
-                test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
+                    // Skip dimensions with only one device
+                    if (this->route_manager_.get_mesh_shape()[dim] < 2) {
+                        continue;
+                    }
+
+                    hops = this->route_manager_.get_full_or_half_ring_mcast_hops(src_node, pattern_type, dim);
+
+                    ParsedTrafficPatternConfig specific_pattern;
+                    specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
+                    specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
+
+                    auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+                    test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                }
             }
         }
     }
@@ -1381,6 +1403,8 @@ private:
         // Topology-specific routing - get multi-directional hops first
         auto [multi_directional_hops, global_sync_val] =
             this->route_manager_.get_sync_hops_and_val(src_device, devices);
+
+        log_info(tt::LogTest, "src_device: {} multi_directional_hops: {}, ", src_device, multi_directional_hops);
 
         // Split multi-directional hops into single-direction patterns
         auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
