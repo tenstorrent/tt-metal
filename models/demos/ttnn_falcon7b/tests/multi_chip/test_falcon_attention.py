@@ -118,6 +118,10 @@ def test_falcon_attention(
         mesh_device,
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
+    _position_ids = position_ids
+    if _position_ids is None:
+        _position_ids = torch.arange(seq_len)
+    position_embeddings = torch_model.rotary_emb(attention_input, _position_ids.unsqueeze(0))
 
     pytorch_out, pytorch_layer_present = torch_model(
         attention_input,
@@ -126,6 +130,7 @@ def test_falcon_attention(
         position_ids=position_ids,
         layer_past=layer_past,
         use_cache=True,
+        position_embeddings=position_embeddings,
     )
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,

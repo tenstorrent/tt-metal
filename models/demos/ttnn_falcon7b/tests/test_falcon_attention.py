@@ -73,6 +73,10 @@ def test_falcon_attention(
         llm_mode, dtype, attention_input, batch, seq_len, configuration.num_attention_heads, kv_cache_len, device
     )
     layer_past, tt_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
+    _position_ids = position_ids
+    if _position_ids is None:
+        _position_ids = torch.arange(seq_len)
+    position_embeddings = torch_model.rotary_emb(attention_input, _position_ids.unsqueeze(0))
 
     pytorch_out, pytorch_layer_present = torch_model(
         attention_input,
@@ -81,6 +85,7 @@ def test_falcon_attention(
         position_ids=position_ids,
         layer_past=layer_past,
         use_cache=True,
+        position_embeddings=position_embeddings,
     )
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
