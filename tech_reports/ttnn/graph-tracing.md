@@ -354,12 +354,13 @@ operation-timeout-seconds will enable a timeout mechanism for operations, the va
 We have included an example case in the test_graph_capture.py file, you can check it here:
 
 ```
-def test_graph_capture_with_hang(device):
+def test_graph_capture_with_hang_device_operation(device):
+    return
     # Create input tensor
     tt_input = ttnn.empty(
         shape=(1, 1, 2048, 512),
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
@@ -368,36 +369,35 @@ def test_graph_capture_with_hang(device):
 
     failed = False
     try:
-        output = ttnn.test.test_hang_operation(tt_input)
+        ttnn.prim.test_hang_device_operation(tt_input)
+        ttnn._ttnn.device.synchronize_device(device)
         failed = False
-    except RuntimeError as e:
+    except Exception as e:
+        print("Exception captured")
+        ttnn._ttnn.device.close_device(device)
         captured_graph = ttnn.graph.end_graph_capture()
         failed = True
         assert "TIMEOUT" in str(e)
+        assert "potential hang detected, please check the graph capture" in str(e)
 
-    # this is the normal case for CI
-    if not failed:
-        assert output == tt_input
-    else:
-        # this is the case for --ttnn-enable-operation-timeout
+    if failed:
+        print(captured_graph)
+        # this is the case for --operation-timeout-seconds
         # the graph should have captured the arguments to the hang operation
         assert (
             captured_graph[1]["arguments"][0]
-            == .... # the arguments to the hang operation
+            == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, 512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
         )
-
 ```
 
-You can check the full test here: https://github.com/tenstorrent/tt-metal/pull/22756/files#diff-0b28f2a718f7dad91bb0aab5246bde64a3ad5a88dc6d35b5bc65219386d7f100
+You can check the full test here: https://github.com/tenstorrent/tt-metal/pull/22756
 
 
 Please note that given the hacky nature of this test, it is recommended to build with --debug flag.
 
 In this case, we are using a ttnn.test.test_hang_operation, which is a test operation that runs a while(true) loop.
 The idea behind it is to simulate an unresponsive operation, so we can test the graph capture and the arguments that generated the hang.
-If metal is not compiled with the flags previously mentioned, it will just return the input tensor.
-
-
+Please never use this operation in production code, it is only for testing purposes.
 
 ### What is next for this tool?
 - Supporting more operations
