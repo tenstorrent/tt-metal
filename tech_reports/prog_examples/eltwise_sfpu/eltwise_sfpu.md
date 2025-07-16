@@ -8,7 +8,7 @@ To build and execute, you may use the following commands:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/eltwise_sfpu
+    ./build/programming_examples/metal_example_eltwise_sfpu
 ```
 
 ## Circular buffers for data movement to/from compute engine
