@@ -186,7 +186,7 @@ jobs:
       - get-image-tags
       - build-images
     runs-on:
-      - BH-LLMBox
+      - quad-bh-01
       - in-service
       - cloud-virtual-machine
     steps:
