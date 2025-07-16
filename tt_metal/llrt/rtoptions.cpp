@@ -84,8 +84,7 @@ RunTimeOptions::RunTimeOptions() {
         ParseFeatureEnv((RunTimeDebugFeatures)i);
     }
 
-    // Test mode has no env var, default is disabled
-    test_mode_enabled = false;
+    test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
 
     profiler_enabled = false;
     profile_dispatch_cores = false;
