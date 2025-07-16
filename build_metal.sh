@@ -5,7 +5,7 @@ set -eo pipefail
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 ARCH=`uname -m`
 
-# VERSION_ID and BUILD_ID are standard within /etc/os-release but both options
+# VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
 source /etc/os-release
 VERSION="unknown-version"
 if [[ -v "$VERSION_ID" ]]; then
