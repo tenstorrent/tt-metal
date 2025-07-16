@@ -191,10 +191,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
-    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
-        this->risc_configs.emplace_back(risc_id);
-    }
-
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;
         buffer_address += receiver_channel_counters_size_bytes;
