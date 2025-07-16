@@ -154,6 +154,7 @@ class ReshardConfig(OpConfigBase):
 class RMSNormConfig(OpConfigBase):
     """RMSNorm config"""
 
+    mesh_device: ConfigDevice
     epsilon: float
     weight: ConfigWeight
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None

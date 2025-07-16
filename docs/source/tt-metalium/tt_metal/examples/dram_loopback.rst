@@ -54,20 +54,22 @@ Note that almost all operations on the Tensix are aligned with tiles. And a tile
 
 There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.
 
-Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Setting page size equal to the buffer size means that the entire buffer will live on a single bank. This is not recommended for performance and in most cases, page size is set to the size of a tile. However, this configuration allows easy illustration of NoC operations. However, these are implementation details and the programmer should not be overly concerned with them.
+Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enabels easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
+
+The L1 buffer is created with a size equal to the size of a single tile, which will act as a buffer for old temporary data. Then be written back to DRAM.
 
 .. code-block:: cpp
 
+  constexpr uint32_t num_tiles = 50;
   constexpr uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
   constexpr uint32_t single_tile_size = sizeof(bfloat16) * tile_size;
-  constexpr uint32_t num_tiles = 50;
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
   tt_metal::InterleavedBufferConfig l1_config{
-                                        .device=device,
-                                        .size = dram_buffer_size,
-                                        .page_size = dram_buffer_size,
-                                        .buffer_type = tt_metal::BufferType::L1
-                                        };
+      .device=device,
+      .size = single_tile_size,
+      .page_size = single_tile_size,
+      .buffer_type = tt_metal::BufferType::L1
+  };
 
   Buffer l1_buffer = CreateBuffer(l1_config);
 
@@ -76,20 +78,17 @@ The only difference between the L1 and DRAM buffer is the ``BufferType``. The L1
 .. code-block:: cpp
 
   tt_metal::InterleavedBufferConfig dram_config{
-                                        .device=device,
-                                        .size = dram_buffer_size,
-                                        .page_size = dram_buffer_size,
-                                        .buffer_type = tt_metal::BufferType::DRAM
-                                        };
+      .device=device,
+      .size = dram_buffer_size,
+      .page_size = single_tile_size,
+      .buffer_type = tt_metal::BufferType::DRAM
+  };
 
   Buffer input_dram_buffer = CreateBuffer(dram_config);
   const uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
   Buffer output_dram_buffer = CreateBuffer(dram_config);
   const uint32_t output_dram_buffer_addr = output_dram_buffer.address();
-
-  const uint32_t input_bank_id = 0;
-  const uint32_t output_bank_id = 0;
 
 Sending real data into DRAM
 ---------------------------
@@ -136,32 +135,60 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
 The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
 
+The ``InterleavedAddrGenFast`` object handles bank addressing and page size automatically, simplifying interleaved buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
+
 .. code-block:: cpp
 
     // tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp
     void kernel_main() {
-        std::uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
+        std::uint32_t l1_buffer_addr        = get_arg_val<uint32_t>(0);
         std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
-        std::uint32_t dram_buffer_src_bank  = get_arg_val<uint32_t>(2);
         std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(3);
-        std::uint32_t dram_buffer_dst_bank  = get_arg_val<uint32_t>(4);
-        std::uint32_t dram_buffer_size      = get_arg_val<uint32_t>(5);
+        std::uint32_t num_tiles             = get_arg_val<uint32_t>(3);
 
-        std::uint64_t dram_buffer_src_noc_addr =
-            get_noc_addr_from_bank_id</*dram=*/true>(dram_buffer_src_bank, dram_buffer_src_addr);
-        // Read data into L1 buffer
-        noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, dram_buffer_size);
-        noc_async_read_barrier(); // wait for transfer to complete
+        const uint32_t tile_size_bytes = 32 * 32 * 2; // same tile size as in the host code
+        const InterleavedAddrGenFast<true> in0 = {
+            .bank_base_address = dram_buffer_src_addr, // The base address of the buffer
+            .page_size = tile_size_bytes,              // The size of a buffer page
+            .data_format = DataFormat::Float16_b,      // The data format of the buffer
+        };
 
-        std::uint64_t dram_buffer_dst_noc_addr =
-            get_noc_addr_from_bank_id</*dram=*/true>(dram_buffer_dst_bank, dram_buffer_dst_addr);
-        // write data from L1 back into DRAM
-        noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
-        noc_async_write_barrier(); // wait for transfer to complete
+        const InterleavedAddrGenFast<true> out0 = {
+            .bank_base_address = dram_buffer_dst_addr,
+            .page_size = tile_size_bytes,
+            .data_format = DataFormat::Float16_b,
+        };
+
+        for(uint32_t i=0;i<num_tiles;i++) {
+            noc_async_read_tile(i, in0, l1_buffer_addr);
+            noc_async_read_barrier();
+
+            noc_async_write_tile(i, out0, l1_buffer_addr);
+            noc_async_write_barrier();
+        }
     }
 
 .. note::
-    Accessing DRAM using an address and bank pair is complicated and not scalable. Most kernels uses interleaved buffers and ``InterleavedAddrGenFast`` instead (introduced in the next example). This acts much more like a pointer and is much easier to use. The interleaved buffer is simply a buffer with page size equal to the tile size.
+  ``InterleavedAddrGenFast`` handles address generation for tiled interleaved buffers automatically. For none tiled layouts or when manual address control is needed, use ``InterleavedAddrGen`` or calculate addresses manually. Without the helper, the kernel implementation would be:
+
+  .. code-block:: cpp
+
+    constexpr std::uint32_t num_dram_banks = 6; // Number of DRAM banks on Wormhole
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        // Round-robin bank selection
+        uint32_t bank_id = i % num_dram_banks;
+        // Offset within the bank for the current tile
+        uint32_t offset_within_bank = i / num_dram_banks * tile_size_bytes;
+        std::uint64_t dram_buffer_src_noc_addr =
+            get_noc_addr_from_bank_id</*dram=*/true>(bank_id, dram_buffer_src_addr + offset_within_bank);
+        std::uint64_t dram_buffer_dst_noc_addr =
+            get_noc_addr_from_bank_id</*dram=*/true>(bank_id, dram_buffer_dst_addr + offset_within_bank);
+
+        noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, tile_size_bytes);
+        noc_async_read_barrier();
+        noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, tile_size_bytes);
+        noc_async_write_barrier();
+    }
 
 
 Setting runtime arguments for the data movement kernel
@@ -172,10 +199,8 @@ Setting runtime arguments for the data movement kernel
   const std::vector<uint32_t> runtime_args = {
       l1_buffer.address(),
       input_dram_buffer.address(),
-      input_bank_id,
       output_dram_buffer.address(),
-      output_bank_id,
-      l1_buffer.size()
+      num_tiles
   };
 
   SetRuntimeArgs(
@@ -189,11 +214,8 @@ We now set runtime arguments for our data movement kernel. The kernel can then a
 
 * Where the L1 buffer starts (memory address)
 * Where the input DRAM buffer starts (memory address)
-* The channel index of the input DRAM buffer
 * Where the output DRAM buffer starts (memory address)
-* The channel index of the output DRAM buffer
-* The size of the copy
-  * Which happens to be the same as the size of the L1 buffer
+* How many tiles we are copying (this is used to determine how many times to copy data)
 
 Running the program
 -------------------

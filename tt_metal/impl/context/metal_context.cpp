@@ -61,7 +61,7 @@ void MetalContext::initialize(
     size_t worker_l1_size,
     bool minimal) {
     // Workaround for galaxy and BH, need to always re-init
-    if (cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
+    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
@@ -136,7 +136,7 @@ void MetalContext::initialize(
             clear_dram_state(device_id);
         }
         int ai_clk = cluster_->get_device_aiclk(device_id);
-        log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
+        log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
         generate_device_bank_to_noc_tables(device_id);
 
         // Create build env for this device, and build FW if it's not built already

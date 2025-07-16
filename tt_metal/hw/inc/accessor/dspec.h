@@ -35,7 +35,7 @@ template <
     typename ShardShapeWrapper = ArrayDynamicWrapper,
     typename BankCoordsWrapper = ArrayDynamicWrapper,
     bool IsInterleaved = false,
-    bool IsDramInterleaved = false>
+    bool IsDram = false>
 struct DistributionSpec {
     static constexpr bool has_static_rank = RankCT != 0;
     static constexpr bool has_static_num_banks = NumBanksCT != 0;
@@ -45,13 +45,10 @@ struct DistributionSpec {
     static constexpr bool shapes_static = has_static_rank && tensor_shape_static && shard_shape_static;
     static constexpr bool is_static = shapes_static && bank_coords_static;
     static constexpr bool is_interleaved = IsInterleaved;
-    static constexpr bool is_dram_interleaved = IsDramInterleaved;
-    static_assert(
-        !is_dram_interleaved || (is_dram_interleaved && is_interleaved),
-        "DRAM interleaved cannot be true if interleaved is false");
+    static constexpr bool is_dram = IsDram;
 
     static constexpr auto rank_ct = RankCT;
-    static constexpr uint32_t num_banks_ct = NumBanksCT;
+    static constexpr auto num_banks_ct = NumBanksCT;
 
     using ShapeDynamic = detail::Span<uint32_t>;
     using BankCoordsDynamic = detail::Span<uint16_t>;
@@ -357,8 +354,6 @@ auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
         "Bank coords must be CRTA if num_banks is not known at compile time!");
 
     constexpr bool is_interleaved = !ArgsOffsets::is_sharded;
-    constexpr bool is_dram_interleaved = is_interleaved && ArgsOffsets::is_dram;
-
     return DistributionSpec<
         ArgsOffsets::RankCT,
         ArgsOffsets::NumBanksCT,
@@ -366,7 +361,7 @@ auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
         ShardShapeType,
         BankCoordsType,
         is_interleaved,
-        is_dram_interleaved>(
+        ArgsOffsets::is_dram>(
         rank,
         num_banks,
         ArgsOffsets::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args_offsets.tensor_shape_crta_offset())

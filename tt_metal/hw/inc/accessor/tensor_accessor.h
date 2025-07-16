@@ -14,6 +14,22 @@
 #include "dataflow_api_addrgen.h"
 #endif
 
+namespace tensor_accessor {
+// This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
+//      Adds proper xy coordinates for NOC address
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
+    // TODO: Should interleaved_addr_gen:: functions moved into common helper?
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(bank_id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(bank_id, bank_offset_index);
+    uint32_t bank_offset = interleaved_addr_gen::get_bank_offset<true>(bank_index);
+    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
+    uint64_t noc_addr = get_noc_addr_helper(noc_xy, bank_offset);
+    return noc_addr;
+}
+#endif
+}  // namespace tensor_accessor
+
 /**
  * @brief Accessor that encapsulates the logic for accessing tensors pages.
  *
@@ -135,10 +151,9 @@ private:
         const auto& packed_xy_coords = dspec().packed_xy_coords();
         auto bank_x = (packed_xy_coords[page_mapping.bank_id] >> 8) & 0xFF;
         auto bank_y = packed_xy_coords[page_mapping.bank_id] & 0xFF;
-        return NOC_XY_ADDR(
-            DYNAMIC_NOC_X(noc, bank_x),
-            DYNAMIC_NOC_Y(noc, bank_y),
-            bank_base_address + page_mapping.bank_page_offset * page_size + offset);
+        auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
+                                         : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
+        return bank_start + bank_base_address + page_mapping.bank_page_offset * page_size + offset;
     }
 
     PageMapping get_bank_and_offset_from_page_id(uint32_t page_id) const {
@@ -174,7 +189,7 @@ template <
     typename TensorShapeWrapper,
     typename ShardShapeWrapper,
     typename BankCoordsWrapper,
-    bool IsDramInterleaved>
+    bool IsDram>
 struct TensorAccessor<tensor_accessor::DistributionSpec<
     RankCT,
     NumBanksCT,
@@ -182,7 +197,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     ShardShapeWrapper,
     BankCoordsWrapper,
     /* IsInterleaved */ true,
-    IsDramInterleaved>> : public InterleavedAddrGen<IsDramInterleaved> {
+    IsDram>> : public InterleavedAddrGen<IsDram> {
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
@@ -191,7 +206,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         this->bank_base_address = bank_base_address_in;
         this->page_size = page_size_in;
         this->aligned_page_size =
-            align_power_of_2(page_size_in, interleaved_addr_gen::get_allocator_alignment<IsDramInterleaved>());
+            align_power_of_2(page_size_in, interleaved_addr_gen::get_allocator_alignment<IsDram>());
     }
 };
 #endif
