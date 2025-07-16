@@ -15,8 +15,14 @@ namespace ttnn::operations::transformer {
 void ScaledDotProductAttention::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    bool use_mla = this->use_mla.value_or(false);
     // Common validations for both modes
-    TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors (Q, K, V)");
+    if (use_mla) {
+        TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors (Q, K)");
+        TT_FATAL(this->head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
+    } else {
+        TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors (Q, K, V)");
+    }
     TT_FATAL(
         optional_input_tensors.size() == 1 or optional_input_tensors.size() == 2,
         "Must have 1 or 2 optional tensors (mask/page_table)");
@@ -99,7 +105,7 @@ void ScaledDotProductAttention::validate(
         // Shape checks
         const auto q_shape = input_tensors.at(0).logical_shape();
         const auto k_shape = input_tensors.at(1).logical_shape();
-        const auto v_shape = input_tensors.at(2).logical_shape();
+        const auto v_shape = use_mla ? input_tensors.at(1).logical_shape() : input_tensors.at(2).logical_shape();
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
@@ -111,15 +117,32 @@ void ScaledDotProductAttention::validate(
                 Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
         }
 
-        TT_FATAL(
-            k_shape[0] == B && v_shape[0] == B, "K and V batch must match. Got K: {}, V: {}", k_shape[0], v_shape[0]);
-        TT_FATAL(v_shape[1] == nkv, "K and V num_heads must match. Got K: {}, V: {}", k_shape[1], v_shape[1]);
-        TT_FATAL(v_shape[2] == Sk, "K and V sequence length must match. Got K: {}, V: {}", k_shape[2], v_shape[2]);
-        TT_FATAL(
-            k_shape[3] == DH && v_shape[3] == DH,
-            "K and V hidden dim must match. Got K: {}, V: {}",
-            k_shape[3],
-            v_shape[3]);
+        if (use_mla) {
+            // Head dim v validation
+            TT_FATAL(
+                this->head_dim_v <= q_shape[3],
+                "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
+                head_dim_v,
+                q_shape[3]);
+            TT_FATAL(
+                this->head_dim_v <= k_shape[3],
+                "Head dimension of V must be less than or equal to head dim of K, got {} and {}",
+                this->head_dim_v,
+                q_shape[3]);
+        } else {
+            TT_FATAL(
+                k_shape[0] == B && v_shape[0] == B,
+                "K and V batch must match. Got K: {}, V: {}",
+                k_shape[0],
+                v_shape[0]);
+            TT_FATAL(v_shape[1] == nkv, "K and V num_heads must match. Got K: {}, V: {}", k_shape[1], v_shape[1]);
+            TT_FATAL(v_shape[2] == Sk, "K and V sequence length must match. Got K: {}, V: {}", k_shape[2], v_shape[2]);
+            TT_FATAL(
+                k_shape[3] == DH && v_shape[3] == DH,
+                "K and V hidden dim must match. Got K: {}, V: {}",
+                k_shape[3],
+                v_shape[3]);
+        }
         TT_FATAL(
             nqh >= nkv && nqh % nkv == 0,
             "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
@@ -164,7 +187,7 @@ void ScaledDotProductAttention::validate(
         // Additional chunked-specific validations
         const auto q_shape = input_tensors.at(0).logical_shape();
         const auto k_shape = input_tensors.at(1).logical_shape();
-        const auto v_shape = input_tensors.at(2).logical_shape();
+        const auto v_shape = use_mla ? input_tensors.at(1).logical_shape() : input_tensors.at(2).logical_shape();
         const auto page_table_shape = page_table.logical_shape();
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
@@ -173,9 +196,14 @@ void ScaledDotProductAttention::validate(
         const auto DH = q_shape[3];
         const auto k_page_size = k_shape[2];
         const uint32_t num_pages_per_user = page_table.logical_shape()[1];
-        // Check that k page size matches v page size
-        TT_FATAL(
-            k_page_size == v_shape[2], "K page size must match V page size. Got K: {}, V: {}", k_page_size, v_shape[2]);
+        if (!use_mla) {
+            // Check that k page size matches v page size
+            TT_FATAL(
+                k_page_size == v_shape[2],
+                "K page size must match V page size. Got K: {}, V: {}",
+                k_page_size,
+                v_shape[2]);
+        }
         // Check that page table has same batch size as input tensors
         TT_FATAL(
             page_table_shape[0] == B,
@@ -185,12 +213,14 @@ void ScaledDotProductAttention::validate(
         // Calculate K length based on number of pages per user
         const uint32_t kv_length = num_pages_per_user * k_page_size;
 
-        TT_FATAL(v_shape[1] == nkv, "K and V num_heads must match. Got K: {}, V: {}", k_shape[1], v_shape[1]);
-        TT_FATAL(
-            k_shape[3] == DH && v_shape[3] == DH,
-            "K and V hidden dim must match. Got K: {}, V: {}",
-            k_shape[3],
-            v_shape[3]);
+        if (!use_mla) {
+            TT_FATAL(v_shape[1] == nkv, "K and V num_heads must match. Got K: {}, V: {}", k_shape[1], v_shape[1]);
+            TT_FATAL(
+                k_shape[3] == DH && v_shape[3] == DH,
+                "K and V hidden dim must match. Got K: {}, V: {}",
+                k_shape[3],
+                v_shape[3]);
+        }
         TT_FATAL(
             nqh >= nkv && nqh % nkv == 0,
             "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
@@ -254,8 +284,11 @@ void ScaledDotProductAttention::validate(
 std::vector<TensorSpec> ScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     auto& input = input_tensors.at(0);
-    return {
-        TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
+    auto shape = input.logical_shape();
+    if (use_mla) {
+        shape[3] = this->head_dim_v.value_or(shape[3]);
+    }
+    return {TensorSpec(shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 std::uint32_t ScaledDotProductAttention::get_q_chunk_size() const {
@@ -272,7 +305,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
     std::vector<Tensor>& output_tensors) const {
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = input_tensors.at(2);
+    auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
     const auto& attn_mask = optional_input_tensors.at(0);
 
@@ -300,7 +333,9 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         q_chunk_size,
         k_chunk_size,
         this->compute_kernel_config,
-        this->program_config);
+        this->program_config,
+        this->use_mla.value_or(false),
+        this->head_dim_v.value_or(0));
 }
 
 operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_model(
@@ -309,7 +344,7 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
     std::vector<Tensor>& output_tensors) const {
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = input_tensors.at(2);
+    auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
@@ -332,7 +367,9 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
     auto v_shape = input_tensor_v.logical_shape();
     TT_ASSERT(q_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor Q rank != 4");
     TT_ASSERT(k_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor K rank != 4");
-    TT_ASSERT(v_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor V rank != 4");
+    if (!use_mla) {
+        TT_ASSERT(v_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor V rank != 4");
+    }
 
     bool is_chunked_prefill = this->chunk_start_idx.has_value();
 
@@ -343,9 +380,16 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
 
     const auto Sq = q_shape[2];
     const auto Sk = (is_chunked_prefill) ? q_shape[-2] + chunk_start_idx.value() : k_shape[2];
-    const auto Sv = v_shape[3];
     const auto DH = q_shape[3];
-    const auto DV = v_shape[2];
+
+    uint32_t Sv, DV;
+    if (use_mla) {
+        Sv = k_shape[2];
+        DV = k_shape[3];
+    } else {
+        Sv = v_shape[3];
+        DV = v_shape[2];
+    }
 
     TT_ASSERT(batch_size_q == batch_size_k, "ScaledDotProductAttention perf model: Q and K have unequal batch size!");
     TT_ASSERT(q_shape[3] == k_shape[3], "ScaledDotProductAttention perf model: Q and K have unequal hidden dim!");
@@ -385,6 +429,7 @@ operation::Hash ScaledDotProductAttention::compute_program_hash(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     bool is_chunked_prefill = this->chunk_start_idx.has_value();
     return operation::hash_operation<ScaledDotProductAttention>(
+        this->head_dim_v,
         this->scale,
         this->output_mem_config,
         this->program_config,

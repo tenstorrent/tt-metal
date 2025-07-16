@@ -54,6 +54,8 @@ jobs:
 
   build-docker-image:
     uses: ./.github/workflows/build-docker-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       distro: ${{ inputs.distro || 'ubuntu' }}
@@ -175,7 +177,7 @@ jobs:
         run: |
           # Restore shim to legit clang-tidy
           # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
-          ln -sf $(which clang-tidy-17) ./clang-tidy-shim
+          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
 
       - name: Prepare ccache summary
         run: |
