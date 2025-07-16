@@ -5,6 +5,16 @@ on:
     branches:
       - akirby/multi-host-workflow
   workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Virtual environment configuration'
+        required: true
+        default: "2"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "4"
 
 jobs:
   deploy:
@@ -13,7 +23,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+      - name: Generate the rankfile
+        run: generate-rankfile.sh ${{ github.event.inputs.configuration }}
       - name: Run tt-smi via mpirun command
+        env:
+          VIRTUAL_CONFIG: ${{ github.event.inputs.configuration }}
         run: |
           echo "Running mpirun command on multiple hosts"
           mpirun --rankfile /etc/rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
