@@ -370,10 +370,9 @@ def test_graph_capture_with_hang_device_operation(device):
         ttnn._ttnn.device.synchronize_device(device)
     except Exception as e:
         print("Exception captured")
-        ttnn._ttnn.device.close_device(device)
         captured_graph = ttnn.graph.end_graph_capture()
+        print(captured_graph)
         assert "TIMEOUT" in str(e)
-        assert "potential hang detected, please check the graph capture" in str(e)
 ```
 
 
