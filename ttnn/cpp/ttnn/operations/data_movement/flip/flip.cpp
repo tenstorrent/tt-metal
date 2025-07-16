@@ -44,7 +44,7 @@ ttnn::Tensor flip_impl(
     // bool typecast = formatted_input_tensor.dtype() == DataType::BFLOAT8_B and !bfloat8_supported &&
     // !input_tensor.is_sharded(); formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor,
     // DataType::BFLOAT16) : formatted_input_tensor;
-
+    log_debug(tt::LogOp, "flip_impl");
     auto output = ttnn::prim::flip(formatted_input_tensor, dims, memory_config, std::nullopt);
 
     return output;
@@ -58,6 +58,9 @@ ttnn::Tensor ExecuteFlip::invoke(
     const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
     const auto input_rank = input_tensor.logical_shape().rank();
+
+    log_debug(tt::LogOp, "ExecuteFlip::invoke");
+
     TT_FATAL(input_rank <= 5, "Flip operation supports tensors with rank up to 5, got rank {}", input_rank);
     TT_FATAL(!dims.empty(), "Flip dimensions cannot be empty");
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
@@ -71,7 +74,13 @@ ttnn::Tensor ExecuteFlip::invoke(
     auto mem_conf = memory_config.value_or(input_tensor.memory_config());
 
     // Check for no-op case
-    if (detail::is_flip_nop(input_tensor, normalized_dims)) {
+    log_debug(tt::LogOp, "dims: {}", dims);
+    log_debug(tt::LogOp, "normalized_dims: {}", normalized_dims);
+
+    bool is_flip_nop = detail::is_flip_nop(input_tensor, normalized_dims);
+    log_debug(tt::LogOp, "is_flip_nop: {}", is_flip_nop);
+
+    if (is_flip_nop) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
 

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
+
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
 
@@ -17,15 +19,18 @@ FlipDeviceOperation::program_factory_t FlipDeviceOperation::select_program_facto
     bool is_horizontal_flip = (dims.size() == 1) && (dims[0] == rank - 1);
     bool is_vertical_flip = (dims.size() == 1) && (dims[0] == rank - 2);
 
+    log_debug(tt::LogOp, "layout: {}", layout);
+
     if (layout == Layout::TILE) {
         return MultiCoreTiled{};
-    }
-
-    if (layout == Layout::ROW_MAJOR) {
+    } else {
         return MultiCoreRowMajor{};
     }
 
-    return MultiCoreGeneric{};
+    // if (layout == Layout::ROW_MAJOR) {
+    // }
+
+    // return MultiCoreGeneric{};
 }
 
 void FlipDeviceOperation::validate_on_program_cache_miss(

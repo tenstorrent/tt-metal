@@ -70,7 +70,7 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/flip/device/kernels/dataflow/"
-        "reader_flip_interleaved_rm.cpp",
+        "reader_interleaved_rm.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -78,7 +78,7 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/flip/device/kernels/dataflow/"
-        "writer_flip_interleaved_rm.cpp",
+        "writer_interleaved_rm.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
 

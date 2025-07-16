@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-namespace NAMESPACE {
+#include "dataflow_api.h"
 
-void MAIN {}
-
-}  // namespace NAMESPACE
+void kernel_main() {}
