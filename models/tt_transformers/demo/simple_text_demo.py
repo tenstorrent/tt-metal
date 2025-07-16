@@ -639,6 +639,7 @@ def test_demo_text(
 
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
+        instruct = False
 
     repeat_batch_prompts = []
     for i in range(repeat_batches):
