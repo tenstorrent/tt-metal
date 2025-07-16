@@ -309,7 +309,12 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
             (2, 3, 40, 50),
             ttnn.float32,
             ttnn.TILE_LAYOUT,
-            ttnn.NdShardSpec([1, 1, 32, 32], core_ranges, ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.NdShardSpec(
+                [1, 1, 32, 32],
+                core_ranges,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
             buffer_type=ttnn.BufferType.L1,
         ),
         # Sharding using TensorSpec methods
@@ -336,6 +341,10 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
         # 2D width sharding
         ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).width_sharded(
             core_ranges
+        ),
+        # Customized ND sharding
+        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).sharded(
+            (1, 37, 37), core_ranges, ttnn.ShardShapeAlignment.RECOMMENDED
         ),
     ],
 )
