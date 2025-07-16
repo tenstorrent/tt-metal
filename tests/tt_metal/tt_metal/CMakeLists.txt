@@ -6,10 +6,11 @@ target_link_libraries(
         test_common_libs
 )
 
-set(TT_METAL_TESTS_SRCS_SLOW_DISPATCH
+set(TT_METAL_TESTS_SRCS
     test_bmm.cpp
     test_add_two_ints.cpp
     # test_compile_args.cpp         <- not tested in run_tt_metal.py
+    test_eltwise_binary.cpp
     # test_eltwise_unary.cpp        <- not tested in run_tt_metal.py
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
@@ -35,35 +36,10 @@ set(TT_METAL_TESTS_SRCS_SLOW_DISPATCH
     test_core_range_set.cpp
     test_compile_sets_kernel_binaries.cpp
     test_compile_program.cpp
-)
-
-foreach(TEST_SRC ${TT_METAL_TESTS_SRCS_SLOW_DISPATCH})
-    get_filename_component(TEST ${TEST_SRC} NAME_WE)
-    add_executable(${TEST} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SRC})
-    target_link_libraries(${TEST} PUBLIC test_metal_common_libs)
-    target_include_directories(
-        ${TEST}
-        PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-            ${PROJECT_SOURCE_DIR}/tests
-            ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
-            ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-    set_target_properties(
-        ${TEST}
-        PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY
-                ${PROJECT_BINARY_DIR}/test/tt_metal
-    )
-    list(APPEND METAL_TEST_TARGETS_SLOW_DISPATCH ${TEST})
-endforeach()
-
-set(TT_METAL_TESTS_SRCS_FAST_DISPATCH
-    test_eltwise_binary.cpp
     test_clean_init.cpp
 )
 
-foreach(TEST_SRC ${TT_METAL_TESTS_SRCS_FAST_DISPATCH})
+foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     get_filename_component(TEST ${TEST_SRC} NAME_WE)
     add_executable(${TEST} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SRC})
     target_link_libraries(${TEST} PUBLIC test_metal_common_libs)
@@ -81,7 +57,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS_FAST_DISPATCH})
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/tt_metal
     )
-    list(APPEND METAL_TEST_TARGETS_FAST_DISPATCH ${TEST})
+    list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
@@ -100,8 +76,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 add_custom_target(
     metal_tests
     DEPENDS
-        ${METAL_TEST_TARGETS_FAST_DISPATCH}
-        ${METAL_TEST_TARGETS_SLOW_DISPATCH}
+        ${METAL_TEST_TARGETS}
         metal_perf_microbenchmark_tests
         unit_tests_api
         unit_tests_data_movement
@@ -146,54 +121,3 @@ install(
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
         COMPONENT metalium-validation
 )
-
-install(
-    TARGETS
-        ${METAL_TEST_TARGETS_FAST_DISPATCH}
-        DESTINATION
-        ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/unit_cpp_tests/fast_dispatch
-        COMPONENT
-        metalium-cpp-tests
-        PERMISSIONS
-        OWNER_READ
-        OWNER_WRITE
-        OWNER_EXECUTE
-        GROUP_READ
-        GROUP_EXECUTE
-)
-
-set(EXCLUDE_TEST "test_stress_noc_mcast")
-
-set(METAL_TEST_TARGETS_SLOW_DISPATCH_INSTALL "")
-foreach(target ${METAL_TEST_TARGETS_SLOW_DISPATCH})
-    if(NOT target STREQUAL ${EXCLUDE_TEST})
-        list(APPEND METAL_TEST_TARGETS_SLOW_DISPATCH_INSTALL ${target})
-    endif()
-endforeach()
-
-install(
-    TARGETS
-        ${METAL_TEST_TARGETS_SLOW_DISPATCH_INSTALL}
-        DESTINATION
-        ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/unit_cpp_tests/slow_dispatch
-        COMPONENT
-        metalium-cpp-tests
-        PERMISSIONS
-        OWNER_READ
-        OWNER_WRITE
-        OWNER_EXECUTE
-        GROUP_READ
-        GROUP_EXECUTE
-)
-
-add_library(unit_tests_unit_smoke OBJECT)
-add_library(TT::Metalium::Test::Unit::Smoke ALIAS unit_tests_unit_smoke)
-
-target_sources(
-    unit_tests_unit_smoke
-    PRIVATE
-        test_add_two_ints.cpp
-    # Add more unit smoke test files here in the future
-)
-
-target_link_libraries(unit_tests_unit_smoke PRIVATE test_metal_common_libs)
