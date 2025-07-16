@@ -6,7 +6,6 @@ import pytest
 import torch
 import ttnn
 from ttnn.graph_tracer_utils import GraphTracerUtils
-import time
 
 
 @pytest.mark.parametrize("scalar", [3])
