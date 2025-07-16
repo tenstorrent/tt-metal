@@ -38,4 +38,9 @@ function(GENERATE_FBS_HEADER FBS_FILE)
         COMMAND_EXPAND_LISTS
     )
     set(FBS_GENERATED_HEADER_FILE ${FBS_GENERATED_HEADER_FILE} PARENT_SCOPE)
+
+    if(TARGET all_generated_files)
+        add_custom_target(${FBS_FILE_NAME} DEPENDS ${FBS_GENERATED_HEADER_FILE})
+        add_dependencies(all_generated_files ${FBS_FILE_NAME})
+    endif()
 endfunction()
