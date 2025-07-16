@@ -8,17 +8,19 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
-#include "models/gpt2.hpp"
+#include "models/distributed/llama.hpp"
+#include "models/llama.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 
-class NanoGPTTest : public ::testing::Test {
+class NanoLlamaTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
@@ -29,37 +31,61 @@ protected:
     }
 };
 
+class NanoLlamaMultiDeviceTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto shape = tt::tt_metal::distributed::MeshShape(1, 2);
+        ttml::autograd::ctx().open_device(shape);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
 using ttml::autograd::TensorPtr;
 using namespace ttml;
 
+struct TrainingConfig {
+    uint32_t seed = 5489U;
+    uint32_t model_save_interval = 500;
+    uint32_t batch_size = 64;
+    uint32_t num_epochs = 1;
+    uint32_t max_steps = 5000;
+    float learning_rate = 3e-4F;
+    float weight_decay = 1e-2F;
+    bool use_moreh_adamw = false;
+    // works only for AdamW
+    bool use_kahan_summation = false;
+    // accumulate batches for gradient update
+    uint32_t gradient_accumulation_steps = 1;
+    std::string model_path;
+    std::string data_path;
+    ttml::models::llama::LlamaConfig transformer_config;
+
+    // mpi config
+    bool enable_mpi = false;
+    uint32_t num_mh_workers = 0U;
+};
+
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
-// tokens, targets, mask
+// tokens, targets, masks
 using BatchType = std::tuple<TensorPtr, TensorPtr, TensorPtr>;
 using DataLoader = ttml::datasets::DataLoader<
     ttml::datasets::InMemoryTokenDataset,
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
 
-struct TrainingConfig {
-    std::string project_name;
-    uint32_t seed = 5489U;
-    uint32_t model_save_interval = 500;
-    uint32_t batch_size = 64;
-    uint32_t num_epochs = 1;
-    uint32_t max_steps = 100;
-    float learning_rate = 3e-4F;
-    float weight_decay = 1e-2F;
-    std::string model_path;
-    std::string data_path;
-    ttml::models::gpt2::TransformerConfig transformer_config;
-};
+// test training with MorehAdamW, nanollama config, memory efficient runner
+// no clip grad norm
+void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
+    if (use_tensor_parallel && use_ddp) {
+        throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
+    }
 
-void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
     auto config = TrainingConfig();
-    config.transformer_config.dropout_prob = 0.0F;
-    config.transformer_config.runner_type =
-        memory_efficient ? ttml::models::gpt2::RunnerType::MemoryEfficient : ttml::models::gpt2::RunnerType::Default;
-    config.data_path = "/shakespeare.txt";
+    config.transformer_config.runner_type = ttml::models::llama::RunnerType::MemoryEfficient;
+    config.data_path = std::string(TEST_DATA_DIR) + "/shakespeare.txt";
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
@@ -108,7 +134,7 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
         mask, ttnn::Shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data](std::vector<DatasetSample> &&samples) {
+        [sequence_length, num_heads, device, &cached_data, use_ddp](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -126,34 +152,72 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                data, ttnn::Shape({batch_size, 1, 1, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
-            auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
-                targets, ttnn::Shape({batch_size * sequence_length}), device));
+
+            auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
+                if (use_ddp) {
+                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+                    auto data_tensor =
+                        ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                            data,
+                            ttnn::Shape({batch_size, 1, 1, sequence_length}),
+                            device,
+                            ttnn::Layout::ROW_MAJOR,
+                            mapper.get()));
+                    auto targets_tensor =
+                        ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                            targets,
+                            ttnn::Shape({batch_size, sequence_length}),
+                            device,
+                            ttnn::Layout::ROW_MAJOR,
+                            mapper.get()));
+                    return {data_tensor, targets_tensor};
+                }
+
+                const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+                auto data_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        data,
+                        ttnn::Shape({batch_size, 1, 1, sequence_length}),
+                        device,
+                        ttnn::Layout::ROW_MAJOR,
+                        mapper.get()));
+                auto targets_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                        targets, ttnn::Shape({batch_size, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
+                return {data_tensor, targets_tensor};
+            };
+
+            auto [data_tensor, targets_tensor] = create_data_and_targets();
             end_timer = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);
             return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
         };
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
-
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    config.transformer_config.vocab_size = (tokenizer->get_vocab_size() + 31) / 32 * 32;
-    auto model = ttml::models::gpt2::create(config.transformer_config);
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    auto round_up_to_tile = [](uint32_t value, uint32_t tile_size) -> uint32_t {
+        return (value + tile_size - 1) / tile_size * tile_size;
+    };
+    config.transformer_config.vocab_size =
+        round_up_to_tile(tokenizer->get_vocab_size(), (use_tensor_parallel ? num_devices : 1U) * 32U);
+
+    std::shared_ptr<ttml::autograd::ModuleBase> model;
+    if (use_tensor_parallel) {
+        config.transformer_config.num_groups = num_devices;
+        config.transformer_config.num_heads = num_devices * 2;
+        config.transformer_config.embedding_dim = (384U / 3U) * config.transformer_config.num_heads;
+
+        model = ttml::models::distributed::llama::create(config.transformer_config);
+    } else {
+        model = ttml::models::llama::create(config.transformer_config);
+    }
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
 
-    auto create_optimizer = [&]() -> std::shared_ptr<ttml::optimizers::OptimizerBase> {
-        if (use_moreh_adamw) {
-            return std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
-        } else {
-            return std::make_shared<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
-        }
-    };
-
-    auto optimizer = create_optimizer();
+    auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
 
     std::vector<double> steps_time;
     std::vector<float> losses;
@@ -165,6 +229,13 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
         auto loss = ttml::ops::nll_loss(output, target);
         auto loss_float = ttml::core::to_vector(loss->get_value())[0];
         loss->backward();
+
+        // synchronize gradients for multi-device case, no-op if single device
+        auto parameters = model->parameters();
+        if (!use_tensor_parallel) {
+            ttml::core::distributed::synchronize_parameters(parameters);
+        }
+
         optimizer->step();
         ttml::autograd::ctx().reset_graph();
         auto global_step = optimizer->get_steps();
@@ -179,18 +250,14 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
 
     // verify program cache
     auto program_cache_entries = device->num_program_cache_entries();
-    if (!use_moreh_adamw) {
-        EXPECT_EQ(program_cache_entries, 123);
-    } else {
-        EXPECT_EQ(program_cache_entries, 102);
-    }
+
+    float abs_tol = 1e-4;
+    EXPECT_NEAR(program_cache_entries, 79, abs_tol);
 
     // verify time per step
     size_t num_steps_below = 0;
-    const double expected_default_runner_time_ms = 330.0;
     const double expected_memory_efficient_runner_time_ms = 450.0;
-    double expected_time_ms =
-        memory_efficient ? expected_memory_efficient_runner_time_ms : expected_default_runner_time_ms;
+    double expected_time_ms = expected_memory_efficient_runner_time_ms;
     for (auto &time : steps_time) {
         num_steps_below += (time < expected_time_ms);
     }
@@ -199,80 +266,55 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
     }
 
     // verify loss
-    if (!use_moreh_adamw) {
-        EXPECT_EQ(losses.size(), config.max_steps);
-        EXPECT_EQ(losses[0], 4.6875);
-        EXPECT_EQ(losses[9], 2.96875);
-        EXPECT_EQ(losses[19], 2.703125);
-        EXPECT_EQ(losses[29], 2.59375);
-        EXPECT_EQ(losses[39], 2.546875);
-        EXPECT_EQ(losses[49], 2.5);
-        EXPECT_EQ(losses[59], 2.484375);
-        EXPECT_EQ(losses[69], 2.46875);
-        EXPECT_EQ(losses[79], 2.453125);
-        EXPECT_EQ(losses[89], 2.4375);
-        EXPECT_EQ(losses[99], 2.453125);
-    } else {
-        EXPECT_EQ(losses.size(), config.max_steps);
-        EXPECT_EQ(losses[0], 4.6875);
-        EXPECT_EQ(losses[9], 2.96875);
-        EXPECT_EQ(losses[19], 2.703125);
-        EXPECT_EQ(losses[29], 2.59375);
-        EXPECT_EQ(losses[39], 2.546875);
-        EXPECT_EQ(losses[49], 2.484375);
-        EXPECT_EQ(losses[59], 2.484375);
-        EXPECT_EQ(losses[69], 2.46875);
-        EXPECT_EQ(losses[79], 2.453125);
-        EXPECT_EQ(losses[89], 2.4375);
-        EXPECT_EQ(losses[99], 2.4375);
-    }
+    EXPECT_NEAR(losses.size(), config.max_steps, abs_tol);
+
+    EXPECT_NEAR(losses[0], 0.024047852, abs_tol);
+    EXPECT_NEAR(losses[9], -2.296875, abs_tol);
+    EXPECT_NEAR(losses[19], -3.296875, abs_tol);
+    EXPECT_NEAR(losses[29], -4.46875, abs_tol);
+    EXPECT_NEAR(losses[39], -5.6875, abs_tol);
+    EXPECT_NEAR(losses[49], -6.875, abs_tol);
+    EXPECT_NEAR(losses[59], -8.0625, abs_tol);
+    EXPECT_NEAR(losses[69], -9.3125, abs_tol);
+    EXPECT_NEAR(losses[79], -10.5625, abs_tol);
+    EXPECT_NEAR(losses[89], -11.9375, abs_tol);
+    EXPECT_NEAR(losses[99], -13.1875, abs_tol);
 }
 
-bool should_run_tests() {
-    const char *env_var = std::getenv("ENABLE_CI_ONLY_TT_TRAIN_TESTS");
-    return env_var ? true : ENABLE_CI_ONLY_TT_TRAIN_TESTS;
+bool should_run_nightly_tests() {
+    const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
+    return env_var ? true : ENABLE_NIGHTLY_TT_TRAIN_TESTS;
+}
+
+bool should_run_multi_device_tests() {
+    bool enable_nightly = should_run_nightly_tests();
+    bool sufficient_devices = tt::tt_metal::GetNumAvailableDevices() >= 2;
+    return enable_nightly && sufficient_devices;
 }
 
 /*
-This tests are supposed to run only in CI.
-Change the value of ENABLE_CI_ONLY_TT_TRAIN_TESTS to true to run them.
+These tests are meant for nightly CI runs.
+Change the value of ENABLE_NIGHTLY_TT_TRAIN_TESTS to true to run them.
 If one of these tests fails, it means one (or more) of the following:
 - program cache size changed (new ops added/removed silently)
 - time per step changed (performance regression)
 - loss values changed (regression in ops accuracy)
 */
 
-TEST_F(NanoGPTTest, AdamW) {
-    GTEST_SKIP() << "Skipping AdamW";
-    return;
-    if (should_run_tests()) {
-        train_test(/* use_moreh_adamw */ false, /* memory_efficient */ false);
+TEST_F(NanoLlamaTest, NIGHTLY_Default) {
+    if (should_run_nightly_tests()) {
+        train_test();
     }
 }
 
-TEST_F(NanoGPTTest, MorehAdamW) {
-    GTEST_SKIP() << "Skipping MorehAdamW";
-    return;
-
-    if (should_run_tests()) {
-        train_test(/* use_moreh_adamw */ true, /* memory_efficient */ false);
+TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_TensorParallel) {
+    if (should_run_multi_device_tests()) {
+        train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
     }
 }
 
-TEST_F(NanoGPTTest, AdamW_MemoryEfficient) {
-    GTEST_SKIP() << "Skipping AdamW + MemoryEfficient";
-    return;
-
-    if (should_run_tests()) {
-        train_test(/* use_moreh_adamw */ false, /* memory_efficient */ true);
-    }
-}
-
-TEST_F(NanoGPTTest, MorehAdamW_MemoryEfficient) {
-    GTEST_SKIP() << "Skipping MorehAdamW + MemoryEfficient";
-    return;
-
-    if (should_run_tests()) {
-        train_test(/* use_moreh_adamw */ true, /* memory_efficient */ true);
+TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_DDP) {
+    if (should_run_multi_device_tests()) {
+        train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
     }
 }
