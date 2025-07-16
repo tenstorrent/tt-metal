@@ -82,9 +82,9 @@ inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
 inline void service_base_fw() {
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
     if (is_port_up()) {
+        // Write to MEM_AERISC_LIVE_LINK_STATUS_BASE for debug
         reinterpret_cast<void (*)(uint32_t)>(
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(
-            MEM_AERISC_LIVE_LINK_STATUS_BASE);
+            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
     }
 }
 
