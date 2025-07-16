@@ -33,5 +33,5 @@ case $(VIRTUAL_CONFIG) in
                 device_args="--device /dev/tenstorrent/3"
                 ;;
         esac
-
+esac
 docker run --rm $device_args -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 ${@:1}
