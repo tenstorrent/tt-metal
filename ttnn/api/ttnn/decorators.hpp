@@ -5,11 +5,6 @@
 #pragma once
 
 #include <reflect>
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
-#include <future>
-#include <chrono>
-#endif
-
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/common/queue_id.hpp"
@@ -157,41 +152,7 @@ private:
     auto invoke_composite(args_t&&... args) const {
         ZoneScopedN("Run composite ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data), cpp_fully_qualified_name.size());
-
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
-        // Since this section of the code is quite critical, we add conditional compiling
-        // for cases where we need to troubleshoot hangs with graph capture
-        // They are more an exception than the norm, so we don't want to pay the cost of the future
-        // and the exception handling for the timeout.
-        // Create a future to run the operation asynchronously
-        int timeout_seconds = TTNN_OPERATION_TIMEOUT_SECONDS;
-        const auto timeout = std::chrono::seconds(timeout_seconds);
-
-        using ReturnType = decltype(operation_t::invoke(std::forward<decltype(args)>(args)...));
-        std::promise<ReturnType> promise;
-        auto future = promise.get_future();
-
-        std::thread t([&promise, &args...]() mutable {
-            try {
-                promise.set_value(operation_t::invoke(std::forward<decltype(args)>(args)...));
-            } catch (...) {
-                promise.set_exception(std::current_exception());
-            }
-        });
-
-        if (future.wait_for(timeout) == std::future_status::timeout) {
-            pthread_cancel(t.native_handle());
-            t.detach();
-            TT_THROW(
-                "TIMEOUT: ttnn operation {} timed out, potential hang detected, please check the graph capture",
-                cpp_fully_qualified_name.data);
-        } else {
-            t.join();
-            return future.get();
-        }
-#else
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
-#endif
     }
 };
 

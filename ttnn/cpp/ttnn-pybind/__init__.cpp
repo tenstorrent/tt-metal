@@ -68,7 +68,7 @@
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
 #include "ttnn/operations/rand/rand_pybind.hpp"
-#include "ttnn/operations/test/test_hang_operation_pybind.hpp"
+#include "ttnn/operations/experimental/test/hang_device/hang_device_operation_pybind.hpp"
 
 namespace ttnn::operations {
 
