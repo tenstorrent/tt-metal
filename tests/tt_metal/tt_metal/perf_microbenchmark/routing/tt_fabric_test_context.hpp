@@ -161,9 +161,6 @@ public:
                     auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                         sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
 
-                    log_info(tt::LogTest, "single_direction_hops: {}, ", single_direction_hops);
-                    log_info(tt::LogTest, "device: {} dst_node_ids: {}, ", sync_sender.device, dst_node_ids);
-
                     TestTrafficSenderConfig sync_config = {
                         .parameters = sync_traffic_parameters,
                         .src_node_id = sync_sender.device,

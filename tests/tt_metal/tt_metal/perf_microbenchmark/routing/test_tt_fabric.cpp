@@ -58,8 +58,13 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
 
-    // Initialize CSV file for bandwidth results
-    test_context.initialize_csv_file();
+    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
+    for (const auto& config : raw_test_configs) {
+        if (config.benchmark_mode) {
+            test_context.initialize_csv_file();
+            break;
+        }
+    }
 
     cmdline_parser.apply_overrides(raw_test_configs);
 

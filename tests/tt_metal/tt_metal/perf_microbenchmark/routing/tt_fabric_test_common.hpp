@@ -675,10 +675,10 @@ public:
             // For mesh topology, handle all cases including three-entry case
             split_hops.reserve(8);
 
-            auto north_hops = hops.at(RoutingDirection::N);
-            auto south_hops = hops.at(RoutingDirection::S);
-            auto east_hops = hops.at(RoutingDirection::E);
-            auto west_hops = hops.at(RoutingDirection::W);
+            auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
+            auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
+            auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
+            auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
 
             // East/West hops always get their own separate entries
             if (east_hops > 0) {
@@ -868,7 +868,6 @@ public:
 
         // Use the specialized splitting function that avoids three-entry case
         auto split_hops_list = split_hops_for_tracing(hops);
-        log_info(tt::LogTest, "split_hops_list: {}, ", split_hops_list);
 
         // Trace each split separately
         for (const auto& split_hop : split_hops_list) {
@@ -889,10 +888,10 @@ public:
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
         std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops;
 
-        auto north_hops = hops.at(RoutingDirection::N);
-        auto south_hops = hops.at(RoutingDirection::S);
-        auto east_hops = hops.at(RoutingDirection::E);
-        auto west_hops = hops.at(RoutingDirection::W);
+        auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
+        auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
+        auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
+        auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
 
         // Case 1: Only east/west
         if ((north_hops == 0 && south_hops == 0) && (east_hops > 0 || west_hops > 0)) {

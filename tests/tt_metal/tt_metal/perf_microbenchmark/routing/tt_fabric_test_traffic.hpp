@@ -277,10 +277,10 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             // Handle dynamic routing by adjusting hops
             bool is_dynamic_routing = (this->parameters.routing_type == RoutingType::Dynamic);
             if (is_dynamic_routing) {
-                auto north_hops = hops.at(RoutingDirection::N);
-                auto south_hops = hops.at(RoutingDirection::S);
-                auto east_hops = hops.at(RoutingDirection::E);
-                auto west_hops = hops.at(RoutingDirection::W);
+                auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
+                auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
+                auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
+                auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
                 // for dynamic routing, decrement north/south hops by 1, since the start dst node is accounted as one
                 // hop.
                 if (north_hops > 0) {
