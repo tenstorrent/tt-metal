@@ -39,9 +39,8 @@ public:
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
-    std::unique_lock<std::mutex> lock() { return std::unique_lock<std::mutex>(mutex_); }
-    // lock must be held while using the returned reference
-    const std::unordered_set<Buffer*>& get_allocated_buffers() const;
+    std::unordered_set<Buffer*> get_allocated_buffers() const;
+    size_t get_num_allocated_buffers() const;
 
     uint32_t get_num_banks(const BufferType& buffer_type) const;
     DeviceAddr get_bank_size(const BufferType& buffer_type) const;

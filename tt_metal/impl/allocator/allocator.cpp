@@ -163,7 +163,15 @@ void Allocator::deallocate_buffers() {
     trace_buffer_manager_->deallocate_all();
 }
 
-const std::unordered_set<Buffer*>& Allocator::get_allocated_buffers() const { return allocated_buffers_; }
+std::unordered_set<Buffer*> Allocator::get_allocated_buffers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocated_buffers_;
+}
+
+size_t Allocator::get_num_allocated_buffers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocated_buffers_.size();
+}
 
 uint32_t Allocator::get_num_banks(const BufferType& buffer_type) const {
     std::lock_guard<std::mutex> lock(mutex_);

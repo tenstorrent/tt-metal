@@ -49,11 +49,7 @@ DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
 std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferInfo> buffer_infos;
     for (auto device : devices) {
-        std::unordered_set<tt::tt_metal::Buffer*> allocated_buffers;
-        {
-            auto lock = device->allocator()->lock();
-            allocated_buffers = device->allocator()->get_allocated_buffers();
-        }
+        const auto allocated_buffers = device->allocator()->get_allocated_buffers();
         for (const auto& buffer : allocated_buffers) {
             auto device_id = device->id();
             auto address = buffer->address();
@@ -105,11 +101,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
 std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferPageInfo> buffer_page_infos;
     for (auto device : devices) {
-        std::unordered_set<tt::tt_metal::Buffer*> allocated_buffers;
-        {
-            auto lock = device->allocator()->lock();
-            allocated_buffers = device->allocator()->get_allocated_buffers();
-        }
+        const auto allocated_buffers = device->allocator()->get_allocated_buffers();
         for (const auto& buffer : allocated_buffers) {
             if (not buffer->is_l1()) {
                 continue;
