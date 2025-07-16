@@ -167,7 +167,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             semaphore,
             barrier_semaphore,
             sub_device_id,
-            fused_op_signaler);
+            fused_op_signaler,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel);
     } else {
         TT_FATAL(topology == ccl::Topology::Linear, "Must be line or ring");
         return line_reduce_scatter_minimal_async_helper(
@@ -211,6 +214,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
     auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
@@ -226,6 +232,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
     bool fuse_op = fused_op_signaler.has_value();
 
+    // op hyperparams
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
+    uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
+
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
@@ -236,7 +246,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     // Each sender is reader + compute + writer
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
-    uint32_t num_workers_per_direction = 2;
     uint32_t num_cores_per_link =
         num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
     uint32_t num_workers_per_link = num_directions_per_link * num_workers_per_direction;
@@ -384,7 +393,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             auto num_full_size_channels = num_workers_per_direction;
             auto num_header_only_channels = 0;
             uint32_t payload_size_bytes = num_tiles_to_write_per_packet * op_config.get_page_size();
-            uint32_t num_buffers_full_size_channels = 1;
             size_t buffer_size_bytes_full_size_channel =
                 tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
             const uint32_t l1_unreserved_base_address =
@@ -432,6 +440,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
                 uint32_t worker_id = link * num_workers_per_direction + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
+                uint32_t tiles_read = (worker_id * batch_slice_num_pages / num_workers);
+                uint32_t tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
+                uint32_t chunks_per_sync_val =
+                    chunks_per_sync.value_or((tiles_to_read - tiles_read) / tile_granularity / 2);
 
                 std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,                                              // my_chip_id
@@ -448,6 +460,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     num_batches,                                             // num_batches
                     fuse_op,                                                 // fused op
                     dir,                                                     // direction
+                    chunks_per_sync_val,
                 };
 		if (input_is_sharded) {
 		  shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -510,7 +523,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     ring_size,                                               // ring_size
                     num_batches,                                             // num_batches
                     num_tiles_to_write_per_packet,                           // num_tiles_to_write_per_packet
-                    dir                                                      // direction
+                    dir,                                                     // direction
+                    chunks_per_sync_val,
                 };
                 append_fabric_mux_connection_ct_args(
                     false,  // is_2d_fabric
