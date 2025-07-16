@@ -84,18 +84,10 @@ TEST_F(LinearRegressionDDPTest, Full) {
 
             const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
             auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-                data,
-                ttml::core::create_shape({batch_size, 1, 1, num_features}),
-                device,
-                ttnn::Layout::TILE,
-                mapper.get()));
+                data, ttnn::Shape({batch_size, 1, 1, num_features}), device, ttnn::Layout::TILE, mapper.get()));
             auto targets_tensor =
                 ttml::autograd::create_tensor(ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-                    targets,
-                    ttml::core::create_shape({batch_size, 1, 1, num_targets}),
-                    device,
-                    ttnn::Layout::TILE,
-                    mapper.get()));
+                    targets, ttnn::Shape({batch_size, 1, 1, num_targets}), device, ttnn::Layout::TILE, mapper.get()));
 
             return std::make_pair(data_tensor, targets_tensor);
         };

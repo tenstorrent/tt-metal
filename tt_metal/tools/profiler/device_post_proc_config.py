@@ -302,8 +302,8 @@ class test_ethernet_dispatch_cores(default_setup):
         "Ethernet CQ Prefetch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "ERISC", "zone_name": "KERNEL-MAIN-HD"},
-            "end": {"risc": "ERISC", "zone_name": "KERNEL-MAIN-HD"},
+            "start": {"risc": "ERISC", "zone_name": "CQ-PREFETCH"},
+            "end": {"risc": "ERISC", "zone_name": "CQ-PREFETCH"},
         },
     }
     detectOps = False

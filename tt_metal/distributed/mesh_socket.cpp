@@ -99,3 +99,29 @@ tt::tt_fabric::FabricNodeId MeshSocket::get_fabric_node_id(SocketEndpoint endpoi
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace std {
+
+std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
+    const tt::tt_metal::distributed::SocketConfig& config) const noexcept {
+    std::optional<tt::tt_metal::distributed::multihost::Rank> distributed_context_rank = std::nullopt;
+    std::optional<tt::tt_metal::distributed::multihost::Size> distributed_context_size = std::nullopt;
+    if (config.distributed_context) {
+        distributed_context_rank = config.distributed_context->rank();
+        distributed_context_size = config.distributed_context->size();
+    }
+    return tt::stl::hash::hash_objects_with_default_seed(
+        config.socket_connection_config,
+        config.socket_mem_config,
+        config.sender_rank,
+        config.receiver_rank,
+        distributed_context_rank,
+        distributed_context_size);
+}
+
+std::size_t hash<tt::tt_metal::distributed::MeshSocket>::operator()(
+    const tt::tt_metal::distributed::MeshSocket& socket) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(socket.attribute_values());
+}
+
+}  // namespace std

@@ -10,8 +10,15 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_binary
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         binary.cpp
         common/binary_op_utils.cpp
@@ -24,16 +31,6 @@ target_sources(
         device/element_wise_multi_core_sfpu_pgm_factory.cpp
         device/broadcast_height_multi_core_sharded_optimized_program_factory.cpp
         device/broadcast_height_multi_core_sharded_program_factory.cpp
-)
-
-file(GLOB_RECURSE kernels device/kernels/*)
-target_sources(
-    ttnn_op_eltwise_binary
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})

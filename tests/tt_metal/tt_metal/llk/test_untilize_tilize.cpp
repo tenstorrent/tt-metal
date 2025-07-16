@@ -80,6 +80,7 @@ struct TestConfig {
     // Whether or not we want the result to be stored in DST in FP32 is
     // controlled with this flag:
     bool fp32_dest_acc_en = false;
+    bool fast_tilize = false;
     uint32_t input_single_tile_size;
     uint32_t output_single_tile_size;
     // Block height in tiles:
@@ -209,6 +210,9 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     if (test_config.fp32_dest_acc_en) {
         defines["DST_ACCUM_MODE"] = "1";
     }
+    if (test_config.fast_tilize) {
+        defines["FAST_TILIZE"] = "1";
+    }
 
     auto eltwise_unary_kernel = tt_metal::CreateKernel(
         program,
@@ -321,15 +325,18 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         std::cout << "RESULTS " << std::endl;
         print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
     }
-    ASSERT_TRUE(pass);
     log_info(
         tt::LogTest,
-        "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, pass = {}",
+        "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, ShortInit = "
+        "{}, FastTilize = {}, pass = {}",
         test_config.num_tiles_r,
         test_config.num_tiles_c,
         test_config.fp32_dest_acc_en,
         test_config.dst_full_sync_en,
+        test_config.short_init,
+        test_config.fast_tilize,
         pass);
+    ASSERT_TRUE(pass);
 }
 
 }  // namespace unit_tests::compute::tilize
@@ -350,6 +357,31 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
                 unit_tests::compute::tilize::TestConfig test_config = {
                     .dst_full_sync_en = dst_full_sync_en,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .input_single_tile_size = 2 * 1024,
+                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
+                    .num_tiles_r = num_tile[0],
+                    .num_tiles_c = num_tile[1],
+                    .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
+                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+TEST_F(DeviceFixture, TensixComputeFastTilize) {
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    for (auto num_tile : num_tiles) {
+        for (bool fp32_dest_acc_en : {false}) {
+            // FP32 dest acc not possible for GS
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                continue;
+            }
+            for (bool dst_full_sync_en : {false}) {
+                unit_tests::compute::tilize::TestConfig test_config = {
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .fast_tilize = true,
                     .input_single_tile_size = 2 * 1024,
                     .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
                     .num_tiles_r = num_tile[0],
@@ -393,6 +425,32 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
                     .short_init = true,
                     .dst_full_sync_en = dst_full_sync_en,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .input_single_tile_size = 2 * 1024,
+                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
+                    .num_tiles_r = num_tile[0],
+                    .num_tiles_c = num_tile[1],
+                    .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
+                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+TEST_F(DeviceFixture, TensixComputeFastTilizeShortInit) {
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    for (auto num_tile : num_tiles) {
+        for (bool fp32_dest_acc_en : {false}) {
+            // FP32 dest acc not possible for GS
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                continue;
+            }
+            for (bool dst_full_sync_en : {false}) {
+                unit_tests::compute::tilize::TestConfig test_config = {
+                    .short_init = true,
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .fast_tilize = true,
                     .input_single_tile_size = 2 * 1024,
                     .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
                     .num_tiles_r = num_tile[0],
@@ -471,31 +529,6 @@ TEST_F(DeviceFixture, TensixComputePackUntilize) {
             }
             for (bool dst_full_sync_en : {true, false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
-                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputePackUntilizeShortInit) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .short_init = true,
                     .dst_full_sync_en = dst_full_sync_en,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .input_single_tile_size = 2 * 1024,
