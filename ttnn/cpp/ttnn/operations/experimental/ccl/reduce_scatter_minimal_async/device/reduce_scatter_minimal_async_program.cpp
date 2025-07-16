@@ -798,26 +798,25 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
 
-            // update senders
-            std::vector<std::vector<std::vector<RuntimeArgsData>>> reader_runtime_args_by_core;
-            std::vector<std::vector<std::vector<RuntimeArgsData>>> writer_runtime_args_by_core;
-            for (uint32_t core_idx = 0; core_idx < num_senders_per_routing_plane; core_idx++) {
-                reader_runtime_args_by_core.push_back(GetRuntimeArgs(program, reader_kernel_ids[core_idx]));
-                writer_runtime_args_by_core.push_back(GetRuntimeArgs(program, writer_kernel_ids[core_idx]));
-            }
-            for (uint32_t i = 0; i < sender_worker_cores.size(); i++) {
-                CoreCoord core = sender_worker_cores[i];
-                // sender reader
-                auto& worker_reader_sender_runtime_args =
-                    reader_runtime_args_by_core[i % num_senders_per_routing_plane][core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
-                worker_reader_sender_runtime_args[2] = output.buffer()->address();
-                // sender writer
-                auto& worker_writer_sender_runtime_args =
-                    writer_runtime_args_by_core[i % num_senders_per_routing_plane][core.x][core.y];
-                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+            const auto* reduce_scatter_operation = static_cast<const ReduceScatterMinimalAsync*>(operation);
+            const auto& semaphores = reduce_scatter_operation->semaphore;
+            const auto& num_links = reduce_scatter_operation->num_links;
+
+            for (uint32_t link = 0; link < num_links; link++) {
+                for (uint32_t core_idx = 0; core_idx < num_senders_per_routing_plane; core_idx++) {
+                    CoreCoord core = sender_worker_cores[link * 2 + core_idx];
+                    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx], core);
+                    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx], core);
+                    reader_runtime_args[0] = input.buffer()->address();
+                    reader_runtime_args[1] = intermed.buffer()->address();
+                    reader_runtime_args[2] = output.buffer()->address();
+                    reader_runtime_args[3] = semaphores.at(0 + link * 3).address();
+                    writer_runtime_args[0] = intermed.buffer()->address();
+                    writer_runtime_args[1] = output.buffer()->address();
+                    writer_runtime_args[4] = semaphores.at(0 + link * 3).address();
+                    writer_runtime_args[5] = semaphores.at(1 + link * 3).address();
+                    writer_runtime_args[6] = semaphores.at(2 + link * 3).address();
+                }
             }
         };
 
