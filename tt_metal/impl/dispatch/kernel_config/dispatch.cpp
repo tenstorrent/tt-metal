@@ -31,6 +31,7 @@
 #include "dispatch/system_memory_manager.hpp"
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 using namespace tt::tt_metal;
 
