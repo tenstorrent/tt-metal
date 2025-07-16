@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
-from yolov6l import RepVGGBlock, BepC3, SPPF, ConvBNSiLU
+from yolov6l import SPPF, BepC3, ConvBNSiLU, RepVGGBlock
 
 
 class CSPBepBackbone(nn.Module):
