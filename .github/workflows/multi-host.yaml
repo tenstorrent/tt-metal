@@ -24,11 +24,11 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Generate the rankfile
-        run: ./generate-rankfile.sh "2"
+        run: ./generate-rankfile.sh "1"
 
       - name: Run tt-smi via mpirun command
         env:
-          VIRTUAL_CONFIG: "2"
+          VIRTUAL_CONFIG: "1"
         run: |
           echo "Running mpirun command on multiple hosts"
           mpirun --rankfile rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
