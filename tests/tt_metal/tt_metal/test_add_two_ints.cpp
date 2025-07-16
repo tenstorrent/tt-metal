@@ -36,12 +36,6 @@
 using namespace tt;
 
 TEST(SlowDispatch, AddTwoInts) {
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (!slow_dispatch_mode) {
-        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-        putenv(env);
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -100,7 +94,4 @@ TEST(SlowDispatch, AddTwoInts) {
     ASSERT_EQ(first_kernel_result[0], first_expected_result);
     ASSERT_EQ(second_kernel_result[0], second_expected_result);
     ASSERT_TRUE(tt_metal::CloseDevice(device));
-    if (!slow_dispatch_mode) {
-        unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
-    }
 }
