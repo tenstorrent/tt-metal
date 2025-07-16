@@ -149,14 +149,6 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dev_completion_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     } else if (static_config_.is_d_variant.value()) {
-        uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
-        uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
-        uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
-        uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
-
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
@@ -214,7 +206,7 @@ void DispatchKernel::GenerateStaticConfigs() {
             tt_fabric::Topology::Mesh;
         static_config_.is_2d_fabric_dynamic =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_config() ==
-            tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
+            tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
     } else {
         static_config_.is_2d_fabric = false;
         static_config_.is_2d_fabric_dynamic = false;
@@ -349,8 +341,6 @@ void DispatchKernel::GenerateDependentConfigs() {
         // Or direct connection to DISPATCH_H if using fabric
         //
         // + A Dispatch_s if enabled
-        auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
-        auto mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[0]);
 
         bool found_dispatch_s = false;
         bool found_mux = false;

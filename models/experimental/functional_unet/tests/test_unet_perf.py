@@ -39,7 +39,7 @@ def test_unet_model(batch, groups, device, iterations, reset_seeds):
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 4, 1430.0),),
+    ((1, 4, 1435.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_perf.py::test_unet_model"
@@ -134,7 +134,7 @@ def test_unet_trace_perf(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2350.0),)
+    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2400.0),)
 )
 def test_unet_trace_perf_multi_device(
     batch: int,

@@ -31,7 +31,7 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data(24, -1.F);
-    auto shape = ttml::core::create_shape({1, 2, 3, 4});
+    auto shape = ttnn::Shape({1, 2, 3, 4});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto res = ttnn::max(tensor, /* dim */ 3, /* keepdim */ true);
     auto res_vector = ttml::core::to_vector(res);
@@ -48,7 +48,7 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne) {
 TEST_F(TrivialTnnFixedTest, TestMaxNegativeBatch) {
     auto* device = &ttml::autograd::ctx().get_device();
 
-    auto shape = ttml::core::create_shape({4, 1, 1, 4});
+    auto shape = ttnn::Shape({4, 1, 1, 4});
     std::vector<float> data(16);
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
@@ -77,7 +77,7 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_0) {
     for (int i = 0; i < data.size(); ++i) {
         data[i] = 100.F + static_cast<float>(i);
     }
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_data = ttml::core::to_vector(tensor);
     EXPECT_NEAR(tensor_data[0], 100.F, 1e-2);
@@ -98,7 +98,7 @@ TEST_F(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
     for (int i = 0; i < data.size(); ++i) {
         data[i] = -100.F + static_cast<float>(i);
     }
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_data = ttml::core::to_vector(tensor);
     EXPECT_NEAR(tensor_data[0], -100.F, 1e-2);
@@ -122,7 +122,7 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_2) {
     const size_t features = 10U;
     std::vector<float> data(batch_size * features, 0.F);
     data[0] = 1.0F;
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_data = ttml::core::to_vector(tensor);
     EXPECT_NEAR(tensor_data[0], 1.F, 1e-2);
@@ -149,7 +149,7 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_0) {
     std::vector<float> data(batch_size * features);
     std::iota(data.begin(), data.end(), 0);
 
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_shape = tensor.logical_shape();
     EXPECT_EQ(tensor_shape[0], batch_size);
@@ -178,7 +178,7 @@ TEST_F(TrivialTnnFixedTest, TestDivide) {
         rhs[i] = static_cast<float>(i + 1);
     }
 
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto lhs_tensor = ttml::core::from_vector(lhs, shape, device);
     auto rhs_tensor = ttml::core::from_vector(rhs, shape, device);
 
@@ -210,7 +210,7 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
         value += step;
     }
 
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_shape = tensor.logical_shape();
     EXPECT_EQ(tensor_shape[0], batch_size);

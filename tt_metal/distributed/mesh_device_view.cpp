@@ -13,9 +13,11 @@
 #include "assert.hpp"
 #include "device.hpp"
 #include "mesh_config.hpp"
+#include "tt_metal/distributed/distributed_coordinate_system.hpp"
 #include "mesh_coord.hpp"
 #include "shape2d.hpp"
 #include "shape_base.hpp"
+#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -33,12 +35,35 @@ std::vector<IDevice*> get_devices_from_coordinates(
 
 }  // namespace
 
-MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) : devices_(devices) {
+MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) :
+    devices_(devices.shape()) {
     if (devices_.shape().dims() == 2) {
         shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
     }
-    for (const auto& [coord, device] : devices_) {
-        device_coordinates_.emplace(device->id(), coord);
+
+    // Convert IDevice* to MaybeRemote<IDevice*> and populate
+    for (const auto& [coord, device] : devices) {
+        auto maybe_device = device ? MaybeRemote<IDevice*>::local(device)
+                                  : MaybeRemote<IDevice*>::remote();
+        devices_.at(coord) = maybe_device;
+
+        if (device) {
+            device_coordinates_.emplace(device->id(), coord);
+        }
+    }
+}
+
+MeshDeviceView::MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices) :
+    devices_(devices.shape()) {
+    if (devices_.shape().dims() == 2) {
+        shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
+    }
+
+    // Copy the MaybeRemote values and build coordinate map
+    for (const auto& [coord, maybe_device] : devices) {
+        devices_.at(coord) = maybe_device;
+
+        maybe_device.if_local([this, &coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); });
     }
 }
 
@@ -48,7 +73,7 @@ MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
 MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
     DeviceView devices_in_region;
     for (const auto& coord : range) {
-        devices_in_region.push_back(devices_.at(coord));
+        devices_.at(coord).if_local([&devices_in_region](const auto& device) { devices_in_region.push_back(device); });
     }
     return devices_in_region;
 }
@@ -63,7 +88,8 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_row(size_t row) const {
     std::vector<IDevice*> row_devices;
     row_devices.reserve(shape_2d_->width());
     for (int col = 0; col < shape_2d_->width(); ++col) {
-        row_devices.push_back(devices_.at(MeshCoordinate(row, col)));
+        const auto& coord = MeshCoordinate(row, col);
+        devices_.at(coord).if_local([&row_devices](const auto& device) { row_devices.push_back(device); });
     }
     return row_devices;
 }
@@ -74,7 +100,8 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
     std::vector<IDevice*> col_devices;
     col_devices.reserve(shape_2d_->height());
     for (int row = 0; row < shape_2d_->height(); ++row) {
-        col_devices.push_back(devices_.at(MeshCoordinate(row, col)));
+        const auto& coord = MeshCoordinate(row, col);
+        devices_.at(coord).if_local([&col_devices](const auto& device) { col_devices.push_back(device); });
     }
     return col_devices;
 }
@@ -106,10 +133,19 @@ bool MeshDeviceView::contains(const MeshCoordinate& coord) const noexcept {
 }
 
 IDevice* MeshDeviceView::get_device(const MeshCoordinate& coord) const {
-    return contains(coord) ? devices_.at(coord) : nullptr;
+    if (!contains(coord)) {
+        return nullptr;
+    }
+    auto& maybe_device = devices_.at(coord);
+    TT_FATAL(maybe_device.is_local(), "Cannot get device for remote device at coordinate {}", coord);
+    return *maybe_device;
 }
 const IDevice* MeshDeviceView::at(const MeshCoordinate& coord) const noexcept {
-    return contains(coord) ? devices_.at(coord) : nullptr;
+    if (!contains(coord)) {
+        return nullptr;
+    }
+    const auto& maybe_device = devices_.at(coord);
+    return maybe_device.is_local() ? *maybe_device : nullptr;
 }
 
 bool MeshDeviceView::operator==(const MeshDeviceView& other) const {
@@ -139,7 +175,9 @@ MeshCoordinate MeshDeviceView::find_device(chip_id_t device_id) const {
 
 chip_id_t MeshDeviceView::find_device_id(const MeshCoordinate& coord) const {
     TT_FATAL(contains(coord), "Coordinate {} not found in mesh {}", coord, devices_.shape());
-    return devices_.at(coord)->id();
+    auto& maybe_device = devices_.at(coord);
+    TT_FATAL(maybe_device.is_local(), "Cannot get device ID for remote device at coordinate {}", coord);
+    return (*maybe_device)->id();
 }
 
 bool MeshDeviceView::is_mesh_2d() const { return shape_2d_.has_value(); }
@@ -223,6 +261,52 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return this->devices_.values(); }
+MeshDeviceView::DeviceView MeshDeviceView::get_devices() const {
+    return extract_locals(devices_.values());
+}
+
+MeshCoordinate MeshDeviceView::local_offset() const {
+    // Find the minimum coordinate that has a local device
+    std::optional<MeshCoordinate> min_coord;
+    for (const auto& [coord, maybe_device] : devices_) {
+        if (maybe_device.is_local()) {
+            if (!min_coord.has_value() || coord < min_coord.value()) {
+                return coord;
+            }
+        }
+    }
+    TT_THROW("No local devices found in mesh");
+}
+
+MeshShape MeshDeviceView::local_shape() const {
+    // Find the bounding box of all local devices
+    std::optional<MeshCoordinate> min_coord, max_coord;
+
+    for (const auto& [coord, maybe_device] : devices_) {
+        if (maybe_device.is_local()) {
+            if (!min_coord.has_value() || coord < min_coord.value()) {
+                min_coord = coord;
+            }
+            if (!max_coord.has_value() || max_coord.value() < coord) {
+                max_coord = coord;
+            }
+        }
+    }
+
+    TT_FATAL(min_coord.has_value() && max_coord.has_value(), "No local devices found in mesh");
+
+    // Calculate shape from bounding box
+    return MeshShape(
+        max_coord.value()[0] - min_coord.value()[0] + 1,
+        max_coord.value()[1] - min_coord.value()[1] + 1
+    );
+}
+
+bool MeshDeviceView::is_local_coordinate(const MeshCoordinate& coord) const {
+    if (!contains(coord)) {
+        return false;
+    }
+    return devices_.at(coord).is_local();
+}
 
 }  // namespace tt::tt_metal::distributed

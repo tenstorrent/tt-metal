@@ -30,7 +30,9 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
            (input == UINT16 && output == BFLOAT8_B) || (input == UINT16 && output == BFLOAT16) ||
            (input == UINT16 && output == FLOAT32) || (input == UINT16 && output == UINT32) ||
            (input == UINT32 && output == BFLOAT4_B) || (input == UINT32 && output == BFLOAT8_B) ||
-           (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32);
+           (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32) ||
+           (input == UINT16 && output == INT32) || (input == INT32 && output == UINT16) ||
+           (input == UINT32 && output == UINT16);
 }
 
 std::map<std::string, std::string> get_defines(
@@ -266,6 +268,10 @@ std::map<std::string, std::string> get_defines_fp32(
         case BinaryOpType::RIGHT_SHIFT:
             new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
             op_name = "binary_right_shift_tile";
+            break;
+        case BinaryOpType::LOGICAL_RIGHT_SHIFT:
+            new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
+            op_name = "binary_logical_right_shift_tile";
             break;
         case BinaryOpType::MAXIMUM:
             new_defines.insert({"BINOP_INIT", fmt::format("binary_max_tile_init();")});

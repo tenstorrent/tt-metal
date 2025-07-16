@@ -18,12 +18,10 @@ from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     encode_prompt_hf,
     encode_prompt_instruct,
-    freqs_to_rotation_matrix,
     get_base_model_name,
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
-    precompute_freqs,
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -571,7 +569,9 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150":
+        if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
+            self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"
+        ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
 
@@ -602,11 +602,6 @@ class ModelArgs:
         self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
-
-        self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor, self.orig_context_len
-        )  # for prefill
-        self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
@@ -795,7 +790,7 @@ class ModelArgs:
                 m=num_rows(seq_len),
                 k=k_dim,
                 n=n_dim,
-                grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+                grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
@@ -1361,6 +1356,10 @@ class ModelArgs:
         else:
             return ""
 
+    def _set_model_specific_params(self):
+        # Gemma3 specific params
+        self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
+
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
@@ -1467,6 +1466,8 @@ class ModelArgs:
         self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
+
+        self._set_model_specific_params()
 
     @property
     def use_scaled_rope(self):
@@ -1665,6 +1666,9 @@ class ModelArgs:
         )  # TODO: Needed for TG hang workaround
 
         if in0_block_w is None:
+            assert (
+                k % (self.tile_size * grid_size[1]) == 0
+            ), f"Input width must be divisible by tile size times grid size"
             in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
