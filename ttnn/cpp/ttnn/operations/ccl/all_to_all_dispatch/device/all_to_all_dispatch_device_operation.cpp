@@ -34,8 +34,8 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
-        auto sparse_token_tensor = output_tensors[0];
-        auto metadata_tensor = output_tensors[1];
+        const auto& sparse_token_tensor = output_tensors[0];
+        const auto& metadata_tensor = output_tensors[1];
         TT_FATAL(
             sparse_token_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "Output tensor must be in row major layout");
