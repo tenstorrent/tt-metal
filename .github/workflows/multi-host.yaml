@@ -24,7 +24,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
       - name: Generate the rankfile
-        run: generate-rankfile.sh ${{ github.event.inputs.configuration }}
+        run: ./generate-rankfile.sh ${{ github.event.inputs.configuration }}
       - name: Run tt-smi via mpirun command
         env:
           VIRTUAL_CONFIG: ${{ github.event.inputs.configuration }}
