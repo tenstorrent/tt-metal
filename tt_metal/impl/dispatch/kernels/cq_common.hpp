@@ -9,6 +9,8 @@
 #include "dataflow_api.h"
 #include "cq_helpers.hpp"
 
+#include "debug/sanitize_noc.h"
+
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
 struct CQReadInterface {
@@ -216,6 +218,7 @@ FORCE_INLINE void cq_noc_async_write_init_state(
     constexpr bool posted = false;
     constexpr uint32_t vc = mcast ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
 
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
     constexpr uint32_t noc_cmd_field =
         NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
@@ -298,6 +301,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
     constexpr bool posted = false;
     constexpr uint32_t static_vc = NOC_UNICAST_WRITE_VC;
 
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
     constexpr uint32_t noc_cmd_field = (static_vc_alloc ? NOC_CMD_VC_STATIC : 0x0) | NOC_CMD_STATIC_VC(static_vc) |
                                        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
                                        (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
