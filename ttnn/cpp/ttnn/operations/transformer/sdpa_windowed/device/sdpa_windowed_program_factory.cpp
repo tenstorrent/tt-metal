@@ -281,7 +281,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        cu_window_seqlens_npages,
+        cu_window_seqlens_npages,  // todo)) remove this
         num_cores,
     };
 
@@ -358,6 +358,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat cu_window_seqlens_df = tt::tt_metal::datatype_to_dataformat_converter(cu_window_seqlens.dtype());
+    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -375,6 +376,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
     log_debug(tt::LogOp, "v_data_format: {}", v_df);
+    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
     log_debug(tt::LogOp, "out_data_format: {}", out_df);
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
@@ -404,7 +406,6 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     CreateCircularBuffer(program, core_grid, c_in3_config);
 
     // cb_mask_in
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
     uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
     uint32_t mask_ntiles = qk_ntiles_per_chunk * k_num_chunks;
     auto c_in4_config = CircularBufferConfig(mask_ntiles * mask_tile_size, {{tt::CBIndex::c_4, mask_df}})
