@@ -15,6 +15,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/persistent_kernel_cache.hpp>
 #include "llrt.hpp"
 
 namespace tt::tt_metal {
@@ -87,6 +88,7 @@ protected:
         }
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        tt::tt_metal::detail::EnablePersistentKernelCache();
         id_to_device_ = tt::tt_metal::detail::CreateDevices(
             ids,
             tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs(),
