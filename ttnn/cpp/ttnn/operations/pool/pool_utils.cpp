@@ -44,7 +44,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
 }
 
 bool is_pool_op_one_scalar_per_core(
-    const Pool2DType pool_type,
+    Pool2DType pool_type,
     bool ceil_mode,
     uint32_t ceil_h,
     uint32_t ceil_w,
@@ -130,15 +130,15 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
-    const uint32_t pad_h,
-    const uint32_t pad_w,
-    const uint32_t ceil_pad_h,
-    const uint32_t ceil_pad_w,
-    const bool ceil_mode,
-    const uint32_t kernel_h,
-    const uint32_t kernel_w,
-    const uint32_t out_h,
-    const uint32_t out_w,
+    uint32_t pad_h,
+    uint32_t pad_w,
+    uint32_t ceil_pad_h,
+    uint32_t ceil_pad_w,
+    bool ceil_mode,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t out_h,
+    uint32_t out_w,
     const MemoryConfig& input_memory,
     const MemoryConfig& output_memory,
     Pool2DType pool_type,

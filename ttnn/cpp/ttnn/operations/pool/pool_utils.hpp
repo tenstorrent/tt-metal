@@ -43,7 +43,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
 std::map<std::string, std::string> get_defines(Pool2DType pool_type);
 
 bool is_pool_op_one_scalar_per_core(
-    const Pool2DType pool_type,
+    Pool2DType pool_type,
     bool ceil_mode,
     uint32_t ceil_h,
     uint32_t ceil_w,
@@ -75,11 +75,11 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
-    const uint32_t pad_h,
-    const uint32_t pad_w,
-    const uint32_t ceil_pad_h,
-    const uint32_t ceil_pad_w,
-    const bool ceil_mode,
+    uint32_t pad_h,
+    uint32_t pad_w,
+    uint32_t ceil_pad_h,
+    uint32_t ceil_pad_w,
+    bool ceil_mode,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t out_h,
