@@ -16,6 +16,9 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 
+#include "debug/dprint.h"
+#include "debug/dprint_tile.h"
+
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
     // inputs come in full, outputs go out full
@@ -50,19 +53,19 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
     constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
-    // DPRINT_UNPACK({
-    //     DPRINT << " ---- scale_cb (UNPACK) ---- " << ENDL();
-    //     // [INFO] print out the mask tiles in its data format
-    //     for (uint8_t iii = 0; iii < 32; ++iii) {
-    //         DPRINT << TileSlice(
-    //                       scale_cb,
-    //                       0,
-    //                       SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-    //                       true,
-    //                       true)
-    //                << ENDL();
-    //     }
-    // });
+    DPRINT_UNPACK({
+        DPRINT << " ---- scale_cb (UNPACK) ---- " << ENDL();
+        // [INFO] print out the mask tiles in its data format
+        for (uint8_t iii = 0; iii < 32; ++iii) {
+            DPRINT << TileSlice(
+                          scale_cb,
+                          0,
+                          SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                          true,
+                          true)
+                   << ENDL();
+        }
+    });
     cb_wait_front(in0_cb, num_tiles);
     // DPRINT_UNPACK({
     //     DPRINT << " ---- cb_qk_im (UNPACK) ---- " << num_tiles << ENDL();

@@ -230,7 +230,7 @@ void kernel_main() {
     // const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
     // const auto cu_window_seqlens_tile_shape = TensorTileShape(1, 1, 1, cu_window_seqlens_npages);
 
-    // riscv_wait(10000000);
+    riscv_wait(1000000000);
 
     // load the entire cu_window_seqlens tensor into a circular buffer
     const uint32_t cb_cu_window_seqlens_ptr = get_write_ptr(cb_cu_window_seqlens_in);

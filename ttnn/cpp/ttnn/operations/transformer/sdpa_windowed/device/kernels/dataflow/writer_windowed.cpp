@@ -51,8 +51,35 @@ void kernel_main() {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
-    riscv_wait(10000);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    // {
+    //     cb_reserve_back(cb_identity_scale_in, 1);
+    //     const uint32_t write_addr = get_write_ptr(cb_identity_scale_in);
+    //     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    //     for (int i = 0; i < get_tile_size(cb_identity_scale_in) / 4; ++i) {
+    //         ptr[i] = 0;
+    //     }
+    //     for (int k = 0; k < 4; ++k) {
+    //         uint32_t idx = k << 7;
+    //         for (int j = 0; j < 8; ++j) {
+    //             ptr[idx + j] = identity_scalar_packed;
+    //         }
+    //     }
+    //     DPRINT << " cb_id: " << cb_identity_scale_in << ENDL();
+    //     DPRINT << " scaler: " << identity_scalar_packed << ENDL();
+    //     for (uint8_t iii = 0; iii < 32; ++iii) {
+    //         DPRINT << TileSlice(
+    //                       cb_identity_scale_in,
+    //                       0,
+    //                       SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+    //                       TSLICE_OUTPUT_CB,
+    //                       TSLICE_WR_PTR,
+    //                       true,
+    //                       true)
+    //                << ENDL();
+    //     }
+    //     cb_push_back(cb_identity_scale_in, 1);
+    // }
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
