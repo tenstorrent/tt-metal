@@ -121,3 +121,15 @@ install(
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
         COMPONENT metalium-validation
 )
+
+add_library(unit_tests_unit_smoke OBJECT)
+add_library(TT::Metalium::Test::Unit::Smoke ALIAS unit_tests_unit_smoke)
+
+target_sources(
+    unit_tests_unit_smoke
+    PRIVATE
+        test_add_two_ints.cpp
+    # Add more unit smoke test files here in the future
+)
+
+target_link_libraries(unit_tests_unit_smoke PRIVATE test_metal_common_libs)
