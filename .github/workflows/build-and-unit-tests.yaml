@@ -44,6 +44,7 @@ jobs:
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
           {name: llk, cmd: "./build/test/tt_metal/unit_tests_llk"},
+          {name: silicon_with_simulator_soc, cmd: "TT_METAL_SILICON_WITH_SIMULATOR_SOC=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter=DeviceFixture.TensixBinaryComputeSingleCoreSingleTileAdd"},
           {name: sfpi, cmd: "./build/test/tt_metal/unit_tests_sfpi"},
           {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=MeshDeviceSuite.*"},
           {name: FD2, cmd: ./tests/scripts/run_cpp_fd2_tests.sh},
