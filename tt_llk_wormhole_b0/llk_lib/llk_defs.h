@@ -61,10 +61,8 @@ enum class EltwiseBinaryReuseDestType
 
 enum DstSync
 {
-    SyncHalf   = 0,
-    SyncFull   = 1,
-    SyncTile16 = 2,
-    SyncTile2  = 3,
+    SyncHalf = 0,
+    SyncFull = 1,
 };
 
 enum BroadcastType
