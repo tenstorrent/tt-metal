@@ -1172,7 +1172,9 @@ void create_cq_program(IDevice* device) {
 }
 
 void compile_cq_programs() {
-    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
+    bool temp_enable_kernel_cache = tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw() &&
+                                    !detail::GetPersistentKernelCacheEnabled();
+    if (temp_enable_kernel_cache) {
         detail::EnablePersistentKernelCache();
     }
 
@@ -1181,7 +1183,7 @@ void compile_cq_programs() {
     // Write runtime args to device
     command_queue_compile_group.write_runtime_args(/*force_slow_dispatch=*/true);
 
-    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
+    if (temp_enable_kernel_cache) {
         detail::DisablePersistentKernelCache();
     }
 }
