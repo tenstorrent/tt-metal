@@ -24,6 +24,7 @@ struct DramConfig {
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreCoord core_coord = {0, 0};
     uint32_t dram_channel = 0;
+    uint32_t virtual_channel = 0;
 };
 
 /// @brief Does Dram --> Reader --> L1 CB --> Writer --> Dram.
@@ -75,7 +76,8 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         (uint32_t)output_dram_address,
         (uint32_t)test_config.dram_channel,
         (uint32_t)l1_address,
-        (uint32_t)sem_id};
+        (uint32_t)sem_id,
+        (uint32_t)test_config.virtual_channel};
 
     // Kernels
     auto reader_kernel = CreateKernel(
@@ -146,13 +148,14 @@ void directed_ideal_test(
     uint32_t num_devices_,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
-    uint32_t dram_channel = 0) {
+    uint32_t dram_channel = 0,
+    uint32_t virtual_channel = 0) {
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t num_of_transactions = 1;
+    uint32_t num_of_transactions = 256;
     uint32_t pages_per_transaction = max_transmittable_pages;
 
     // Test config
@@ -163,7 +166,8 @@ void directed_ideal_test(
         .bytes_per_page = bytes_per_page,
         .l1_data_format = DataFormat::Float16_b,
         .core_coord = core_coord,
-        .dram_channel = dram_channel};
+        .dram_channel = dram_channel,
+        .virtual_channel = virtual_channel};
 
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -253,8 +257,10 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMChannels) {
     CoreCoord core_coord = {0, 0};
 
     for (unsigned int dram_channel = 0; dram_channel < devices_.at(0)->num_dram_channels(); dram_channel++) {
-        unit_tests::dm::dram::directed_ideal_test(
-            arch_, devices_, num_devices_, test_case_id, core_coord, dram_channel);
+        for (unsigned int vc = 0; vc < 4; vc++) {
+            unit_tests::dm::dram::directed_ideal_test(
+                arch_, devices_, num_devices_, test_case_id, core_coord, dram_channel, vc);
+        }
     }
 }
 
