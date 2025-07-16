@@ -10,7 +10,7 @@
 
 namespace ttnn {
 
-namespace operations::experimental {
+namespace operations::data_movement {
 
 struct TOSAScatterOperation {
     static Tensor invoke(
@@ -21,11 +21,9 @@ struct TOSAScatterOperation {
         const std::optional<MemoryConfig>& opt_out_memory_config);
 };
 
-}  // namespace operations::experimental
+}  // namespace operations::data_movement
 
-namespace experimental {
 constexpr auto tosa_scatter = ttnn::
-    register_operation<"ttnn::experimental::tosa_scatter", ttnn::operations::experimental::TOSAScatterOperation>();
-}  // namespace experimental
+    register_operation<"ttnn::experimental::tosa_scatter", ttnn::operations::data_movement::TOSAScatterOperation>();
 
 }  // namespace ttnn

@@ -9,7 +9,7 @@
 #include "tosa_scatter.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::tosa_scatter::detail {
+namespace ttnn::operations::data_movement::tosa_scatter::detail {
 
 void bind_tosa_scatter_operation(py::module& module) {
     auto doc =
@@ -46,10 +46,10 @@ void bind_tosa_scatter_operation(py::module& module) {
                 output = ttnn.experimental.tosa_scatter(input_ttnn, index_ttnn, source_ttnn)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::tosa_scatter);
+    using OperationType = decltype(ttnn::tosa_scatter);
     bind_registered_operation(
         module,
-        ttnn::experimental::tosa_scatter,
+        ttnn::tosa_scatter,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -68,4 +68,4 @@ void bind_tosa_scatter_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::tosa_scatter::detail
+}  // namespace ttnn::operations::data_movement::tosa_scatter::detail

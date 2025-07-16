@@ -10,7 +10,7 @@
 #include "scatter_enums.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::scatter::detail {
+namespace ttnn::operations::data_movement::scatter::detail {
 
 void bind_scatter_operation(py::module& module) {
     auto doc =
@@ -52,11 +52,10 @@ void bind_scatter_operation(py::module& module) {
                 output = ttnn.experimental.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::scatter);
+    using OperationType = decltype(ttnn::data_movement::scatter);
     bind_registered_operation(
         module,
-        ttnn::experimental::scatter,
-        doc,
+        ttnn::experimental::doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
@@ -67,13 +66,7 @@ void bind_scatter_operation(py::module& module) {
                const std::optional<experimental::scatter::ScatterReductionType>& opt_reduction,
                const QueueId& queue_id = DefaultQueueId) -> Tensor {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    dim,
-                    index_tensor,
-                    source_tensor,
-                    opt_out_memory_config,
-                    opt_reduction);
+                    queue_id, input_tensor, dim, index_tensor, source_tensor, opt_out_memory_config, opt_reduction);
             },
             py::arg("input").noconvert(),
             py::arg("dim"),
@@ -85,4 +78,4 @@ void bind_scatter_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::scatter::detail
+}  // namespace ttnn::operations::data_movement::scatter::detail

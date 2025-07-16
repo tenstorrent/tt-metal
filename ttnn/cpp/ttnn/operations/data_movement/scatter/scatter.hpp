@@ -12,7 +12,7 @@
 
 namespace ttnn {
 
-namespace operations::experimental {
+namespace operations::data_movement {
 
 struct ScatterOperation {
     static Tensor invoke(
@@ -25,11 +25,9 @@ struct ScatterOperation {
         const std::optional<scatter::ScatterReductionType>& opt_reduction);
 };
 
-}  // namespace operations::experimental
+}  // namespace operations::data_movement
 
-namespace experimental {
 constexpr auto scatter =
-    ttnn::register_operation<"ttnn::experimental::scatter", ttnn::operations::experimental::ScatterOperation>();
-}  // namespace experimental
+    ttnn::register_operation<"ttnn::experimental::scatter", ttnn::operations::data_movement::ScatterOperation>();
 
 }  // namespace ttnn

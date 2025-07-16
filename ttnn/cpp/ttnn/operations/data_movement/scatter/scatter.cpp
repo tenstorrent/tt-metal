@@ -16,7 +16,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -51,19 +51,12 @@ void validate_inputs(
     }
 }
 
-bool is_i32(const DataType& dt) {
-    return (dt == DataType::UINT32) || (dt == DataType::INT32);
-}
+bool is_i32(const DataType& dt) { return (dt == DataType::UINT32) || (dt == DataType::INT32); }
 
-bool is_last_dim(const Shape& shape, const uint32_t& dim) {
-    return (dim == shape.rank() - 1) || (dim == -1);
-}
+bool is_last_dim(const Shape& shape, const uint32_t& dim) { return (dim == shape.rank() - 1) || (dim == -1); }
 
 void check_support(
-    const Tensor& input_tensor,
-    const Tensor& index_tensor,
-    const Tensor& source_tensor,
-    const int32_t& dim) {
+    const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
     const auto& input_dtype = input_tensor.dtype();
     const auto& index_dtype = index_tensor.dtype();
     const auto& source_dtype = source_tensor.dtype();
@@ -74,60 +67,58 @@ void check_support(
     const auto& index_shape = index_tensor.logical_shape();
     const auto& source_shape = source_tensor.logical_shape();
     // check if transpose int garbage case
-    TT_FATAL(
-        !(is_i32(input_dtype) && !is_last_dim(input_shape, dim)),
-        "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - input tensor is {}.",
-        magic_enum::enum_name(input_dtype)
-    );
-    TT_FATAL(
-        !(is_i32(index_dtype) && !is_last_dim(index_shape, dim)),
-        "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - index tensor is {}.",
-        magic_enum::enum_name(index_dtype)
-    );
-    TT_FATAL(
-        !(is_i32(source_dtype) && !is_last_dim(source_shape, dim)),
-        "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - source tensor is {}.",
-        magic_enum::enum_name(source_dtype)
-    );
+    // TT_FATAL(
+    //     !(is_i32(input_dtype) && !is_last_dim(input_shape, dim)),
+    //     "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - input tensor is {}.",
+    //     magic_enum::enum_name(input_dtype));
+    // TT_FATAL(
+    //     !(is_i32(index_dtype) && !is_last_dim(index_shape, dim)),
+    //     "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - index tensor is {}.",
+    //     magic_enum::enum_name(index_dtype));
+    // TT_FATAL(
+    //     !(is_i32(source_dtype) && !is_last_dim(source_shape, dim)),
+    //     "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - source tensor is {}.",
+    //     magic_enum::enum_name(source_dtype));
     // check if to_layout fp32 tiled precision case
     TT_FATAL(
         !(input_dtype == DataType::FLOAT32 && input_layout == Layout::TILE),
         "Scatter doesn't work for fp32 tiled tensors yet (see to_layout issue #) - input tensor is {} {}.",
         input_dtype,
-        input_layout
-    );
+        input_layout);
     TT_FATAL(
         !(source_dtype == DataType::FLOAT32 && source_layout == Layout::TILE),
         "Scatter doesn't work for fp32 tiled tensors yet (see to_layout issue #) - source tensor is {} {}.",
         source_dtype,
-        source_layout
-    );
+        source_layout);
     // check if to_layout int32 tiled row>256 garbage case
     constexpr uint32_t to_layout_int32_scatter_axis_max_length = 256;
     TT_FATAL(
-        !(is_i32(input_dtype) && input_layout == Layout::TILE && input_shape[dim] > to_layout_int32_scatter_axis_max_length),
-        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - input tensor is of type: {}, layout: {} and input_shape[scatter_axis] == {}",
+        !(is_i32(input_dtype) && input_layout == Layout::TILE &&
+          input_shape[dim] > to_layout_int32_scatter_axis_max_length),
+        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - input tensor is of "
+        "type: {}, layout: {} and input_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
         magic_enum::enum_name(input_dtype),
         magic_enum::enum_name(input_layout),
-        input_shape[dim]
-    );
+        input_shape[dim]);
     TT_FATAL(
-        !(is_i32(index_dtype) && index_layout == Layout::TILE && index_shape[dim] > to_layout_int32_scatter_axis_max_length),
-        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - index tensor is of type: {}, layout: {} and index_shape[scatter_axis] == {}",
+        !(is_i32(index_dtype) && index_layout == Layout::TILE &&
+          index_shape[dim] > to_layout_int32_scatter_axis_max_length),
+        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - index tensor is of "
+        "type: {}, layout: {} and index_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
         magic_enum::enum_name(index_dtype),
         magic_enum::enum_name(index_layout),
-        index_shape[dim]
-    );
+        index_shape[dim]);
     TT_FATAL(
-        !(is_i32(source_dtype) && source_layout == Layout::TILE && source_shape[dim] > to_layout_int32_scatter_axis_max_length),
-        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - source tensor is of type: {}, layout: {} and source_shape[scatter_axis] == {}",
+        !(is_i32(source_dtype) && source_layout == Layout::TILE &&
+          source_shape[dim] > to_layout_int32_scatter_axis_max_length),
+        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - source tensor is of "
+        "type: {}, layout: {} and source_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
         magic_enum::enum_name(source_dtype),
         magic_enum::enum_name(source_layout),
-        source_shape[dim]
-    );
+        source_shape[dim]);
 }
 
 Tensor pre_scatter_transform_tensor(
@@ -249,9 +240,7 @@ Tensor ScatterOperation::invoke(
         source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
     const MemoryConfig final_memory_config{
-        output_memory_config.has_value()
-            ? output_memory_config.value()
-            : input_tensor.memory_config()};
+        output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
 
     Tensor output = ttnn::prim::scatter(
         transformed_input_tensor,
@@ -271,4 +260,4 @@ Tensor ScatterOperation::invoke(
     return output;
 }
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::operations::data_movement
