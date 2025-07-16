@@ -1,4 +1,3 @@
----
 name: Multi-host Deployment
 on:
   push:
@@ -19,18 +18,17 @@ on:
 jobs:
   deploy:
     runs-on:
-        - multi-host
+      - multi-host
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-      - name: Echo configuration input value
-        run: |
-            echo "Configuration input value is: ${{ inputs.configuration }}"
+
       - name: Generate the rankfile
-        run: ./generate-rankfile.sh ${{ inputs.configuration }}
+        run: ./generate-rankfile.sh "2"
+
       - name: Run tt-smi via mpirun command
         env:
-          VIRTUAL_CONFIG: ${{ inputs.configuration }}
+          VIRTUAL_CONFIG: "2"
         run: |
           echo "Running mpirun command on multiple hosts"
           mpirun --rankfile /etc/rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
