@@ -65,7 +65,11 @@ volatile tt_l1_ptr uint32_t (*profiler_data_buffer)[kernel_profiler::PROFILER_L1
 
 #if defined(COMPILE_FOR_BRISC)
 constexpr uint32_t myRiscID = 0;
-#elif defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
+#elif defined(COMPILE_FOR_AERISC)
+constexpr uint32_t myRiscID = COMPILE_FOR_AERISC;
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+constexpr uint32_t myRiscID = COMPILE_FOR_IDLE_ERISC;
+#elif defined(COMPILE_FOR_ERISC)
 constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_NCRISC)
 constexpr uint32_t myRiscID = 1;
