@@ -24,6 +24,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -36,6 +37,11 @@
 using namespace tt;
 
 TEST(SlowDispatch, AddTwoInts) {
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
+    tt_metal::detail::DispatchStateCheck(false, true);
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -94,4 +100,7 @@ TEST(SlowDispatch, AddTwoInts) {
     ASSERT_EQ(first_kernel_result[0], first_expected_result);
     ASSERT_EQ(second_kernel_result[0], second_expected_result);
     ASSERT_TRUE(tt_metal::CloseDevice(device));
+
+    unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
+    tt_metal::detail::DispatchStateCheck(true, true);
 }
