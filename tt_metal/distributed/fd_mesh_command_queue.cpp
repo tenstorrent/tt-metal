@@ -202,6 +202,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         expected_num_workers_completed_[*sub_device_id] = 0;
     }
 
+    // Block after clearing counter(s) on dispatcher
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
