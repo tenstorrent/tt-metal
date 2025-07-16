@@ -23,7 +23,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(
     unit_tests_ttnn_smoke
     PRIVATE
-        test_multiprod_queue.cpp
         test_multi_cq_multi_dev.cpp
         test_reflect.cpp
         test_to_and_from_json.cpp
@@ -55,6 +54,7 @@ target_sources(
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_matmul_benchmark.cpp
+        test_multiprod_queue.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
