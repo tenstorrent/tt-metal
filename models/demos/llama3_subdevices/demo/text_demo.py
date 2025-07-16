@@ -512,7 +512,7 @@ def test_demo_text(
         # Load reference outputs for PCC check
         if pcc_check:
             vocab_size = 128256
-            if is_ci_env:
+            if is_ci_env or galaxy_type == "6U":
                 ref_output_path = f"/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
             else:
                 ref_output_path = f"/proj_sw/user_dev/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"

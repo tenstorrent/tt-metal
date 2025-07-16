@@ -243,6 +243,7 @@ void MAIN {
          * @param out_chunk_tiles - Number of output chunk tiles
          */
         {
+            uint32_t cb_out_mm = cb_out_accumulate_im;
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 /* QK = Q_CHUNK @ K_CHUNK */
                 reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
@@ -307,7 +308,7 @@ void MAIN {
                 cb_matmul_blocks(
                     cb_qk_im,
                     cb_v_in,
-                    cb_out_im,
+                    cb_out_mm,
                     Sq_chunk_t,
                     vDHt,
                     Sk_chunk_t_dynamic,
@@ -324,9 +325,10 @@ void MAIN {
 
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
-                    reconfig_data_format_srca(cb_out_im);
-                    pack_reconfig_data_format(cb_out_accumulate_im);
-                    move_block<true>(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
+                    cb_out_mm = cb_out_im;
+                    // reconfig_data_format_srca(cb_out_im);
+                    // pack_reconfig_data_format(cb_out_accumulate_im);
+                    // move_block<true>(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
                 } else {
                     reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_exp_max_diff);
