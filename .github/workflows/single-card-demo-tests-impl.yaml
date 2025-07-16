@@ -36,8 +36,8 @@ jobs:
           { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
           { name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas (vguduruTT)
           { name: "sentence_bert", runner-label: "N150", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
-          { name: "yolov11", runner-label: "N150", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
-          { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
+          #{ name: "yolov11", runner-label: "N150", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
+          #{ name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           #{ name: "mobilenetv2", runner-label: "N150", performance: true, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           #{ name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E}, # Dalar Vartanians
