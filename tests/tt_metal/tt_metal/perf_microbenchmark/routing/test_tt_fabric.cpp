@@ -139,7 +139,9 @@ int main(int argc, char** argv) {
             test_context.validate_results();
             log_info(tt::LogTest, "Test {} Results validated.", built_test.name);
 
-            test_context.profile_results(built_test);
+            if (test_context.get_benchmark_mode()) {
+                test_context.profile_results(built_test);
+            }
 
             test_context.reset_devices();
         }

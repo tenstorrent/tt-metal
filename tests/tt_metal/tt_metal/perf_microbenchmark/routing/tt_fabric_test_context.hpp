@@ -386,6 +386,8 @@ public:
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
 
+    bool get_benchmark_mode() { return benchmark_mode_; }
+
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
     void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }

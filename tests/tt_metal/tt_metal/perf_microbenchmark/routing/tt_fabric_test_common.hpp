@@ -356,7 +356,6 @@ public:
 
         std::vector<FabricNodeId> dst_nodes;
         const MeshCoordinate& src_coord = get_device_coord(src_node);
-        log_info(tt::LogTest, "hops: {}, ", hops);
 
         bool use_displacement_for_dst_nodes =
             chip_send_type == ChipSendType::CHIP_UNICAST || this->topology_ == Topology::Linear;
@@ -676,10 +675,10 @@ public:
             // For mesh topology, handle all cases including three-entry case
             split_hops.reserve(8);
 
-            auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
-            auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
-            auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
-            auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
+            auto north_hops = hops.at(RoutingDirection::N);
+            auto south_hops = hops.at(RoutingDirection::S);
+            auto east_hops = hops.at(RoutingDirection::E);
+            auto west_hops = hops.at(RoutingDirection::W);
 
             // East/West hops always get their own separate entries
             if (east_hops > 0) {
@@ -890,10 +889,10 @@ public:
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
         std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops;
 
-        auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
-        auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
-        auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
-        auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
+        auto north_hops = hops.at(RoutingDirection::N);
+        auto south_hops = hops.at(RoutingDirection::S);
+        auto east_hops = hops.at(RoutingDirection::E);
+        auto west_hops = hops.at(RoutingDirection::W);
 
         // Case 1: Only east/west
         if ((north_hops == 0 && south_hops == 0) && (east_hops > 0 || west_hops > 0)) {
