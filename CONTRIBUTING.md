@@ -2,19 +2,18 @@
 
 This repository (`tt-llk`) is **consumed by another repository** (`tt-metal`) as a git submodule. The following rules aim to ensure safe and coordinated development across both projects.
 
-
 ## ✅ General Principles
 
 - This repository is **used as a git submodule** by `tt-metal`.
 - **Prefer backward compatibility** when possible, but breaking changes are acceptable when properly coordinated.
 - **Breaking changes must be coordinated** with `tt-metal` maintainers before being merged here.
 
-
 ## 🔒 Breaking Changes
 
 ### What Is a Breaking Change?
 
 A breaking change is any change that:
+
 - Removes or alters public APIs, interfaces, or headers.
 - Changes existing behavior in a non-backward-compatible way.
 - Adds new build/runtime dependencies.
@@ -46,21 +45,18 @@ A breaking change is any change that:
      - **All checks are passing**.
      - Reviewers from both repositories have approved your changes.
 
-
 ## 🔁 Submodule Update Guidelines
 
 - Never update the submodule pointer in the `tt-metal` to an **untested** or **unstable** commit.
 - Submodule updates must reference a **compatible and validated** commit on `main` branch.
 
-
-
 ## 🚫 Anti-Patterns
 
 Avoid the following:
+
 - Merging breaking changes to the submodule **before verifying compatibility**.
 - Leaving the submodule pointer in a detached or unverified state.
 - Introducing broad interface changes without notifying the maintainers.
-
 
 ## 📣 Summary
 
@@ -86,6 +82,7 @@ Beyond submodule coordination, this repository follows standard development prac
 This project and everyone participating in it is expected to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md). Please read it to understand the standards of behavior we expect from all contributors and community members.
 
 ## Code Formatting and Style
+
 This project has adopted C++ formatting and style as defined in `.clang-format`.
 There are additional requirements such as license headers.
 
@@ -98,7 +95,8 @@ As part of maintaining consistent code formatting across the project, we have in
 Pre-commit is a framework for managing and maintaining multi-language pre-commit hooks. It helps catch common issues early by running a set of hooks before code is committed, automating tasks like:
 
 - Formatting code (e.g., fixing trailing whitespace, enforcing end-of-file newlines)
-- Running linters (e.g., `clang-format`, `black`, `flake8`)
+- Running linters (e.g., `clang-format`, `black`, `pylint`)
+- Fixing common spelling mistakes.
 - Checking for merge conflicts or other common issues.
 
 For more details on pre-commit, you can visit the [official documentation](https://pre-commit.com/).
@@ -123,12 +121,30 @@ To set up pre-commit on your local machine, follow these steps:
    ```
 
    This command will configure your local Git to run the defined hooks automatically before each commit.
-3. **Run Pre-commit Hooks Manually**:
+
+3. **Commit Your Code**:
+   When you run `git commit`, the pre-commit hooks will automatically execute. If any issues are found, the commit will be aborted, and you will see a message indicating what needs to be fixed. Simply correct the issues and re-commit.
+
+   If a hook makes changes to your files (e.g., auto-formatting), you will need to `git add` the modified files before committing again.
+
+4. **Run Pre-commit Hooks Manually (optional)**:
    You can also run the hooks manually against all files at any time with:
 
    ```bash
    pre-commit run --all-files
    ```
+
+### Spell Checking with `codespell`
+
+We use `codespell` to automatically fix common spelling errors in our codebase and documentation. It runs on every commit and also checks commit messages for typos.
+
+If `codespell` reports a false positive (a word that is correctly spelled but not in its dictionary), you can add it to our project's ignore list.
+
+**How to Add a Word to the Ignore List:**
+
+1. **Add the word**: The ignore list is located in the `.codespellignore` file in the root of the repository. Add the word you want to ignore to a new line in the file.
+
+2. **Commit the change**: Commit the updated `.codespellignore` file along with your other changes.
 
 ### Ignoring formatting commits in git blame
 

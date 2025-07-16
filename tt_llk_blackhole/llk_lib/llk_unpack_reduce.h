@@ -75,7 +75,7 @@ inline void _llk_unpack_reduce_hw_configure_(
 template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose = 0)
 {
-    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
+    // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
 

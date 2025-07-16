@@ -101,7 +101,7 @@ void run_kernel()
 
         _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();
 
-        // Note: argument passed to _llk_math_eltwise_binary_sfpu_start_ is dest index of firs operand, and
+        // Note: argument passed to _llk_math_eltwise_binary_sfpu_start_ is dest index of first operand, and
         // argument passed of _calculate_sfpu_binary_ is dest index of the second operand
 
         _llk_math_eltwise_binary_sfpu_start_<DstSync::SyncHalf>(0);

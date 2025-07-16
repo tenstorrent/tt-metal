@@ -182,7 +182,7 @@ constexpr DataFormat infer_pack_in()
     // - If dest register stores 32-bit data (FP32_ACC = true), packer input format can be set to desired output format,
     //   as gasket can convert Float32 to any format (except Float16_A).
     // - If destination registers do not store 32-bit data, gasket cannot convert,
-    //   so the packer input format will be same as dest regsiter format.
+    //   so the packer input format will be same as dest register format.
     return FP32_ACC ? OUTPUT : INPUT;
 }
 

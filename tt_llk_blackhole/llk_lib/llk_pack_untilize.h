@@ -80,7 +80,7 @@ inline void _llk_pack_untilize_mop_config_(
     Since there are two inner loop operations, the instruction set by set_last_inner_loop_instr
     will replace the second inner loop operation (in the last iteration, call the PACR instruction
     with the Last bit set to 1 instead of 0 to close the row).
-    Therefore, by setting the W counter to maxium value (15) as a start operation,
+    Therefore, by setting the W counter to maximum value (15) as a start operation,
     TT_OP_INCADCZW in the inner loop will set it to 0 in the first iteration of the inner loop.
     */
     tmp.set_start_op(TT_OP_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 15));

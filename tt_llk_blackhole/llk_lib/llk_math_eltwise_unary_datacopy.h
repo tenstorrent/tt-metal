@@ -39,7 +39,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
         // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
         // zero flags clearing is dropped.
-        // To mitigate that, we issue additional zero flag clear instruction immediatelly after unpack tile to dest is done.
+        // To mitigate that, we issue additional zero flag clear instruction immediately after unpack tile to dest is done.
         // RISC-to-dest event is not currently used.
 
 #pragma GCC unroll 0

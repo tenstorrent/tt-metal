@@ -16,7 +16,7 @@ uint32_t unp_cfg_context          = 0;
 uint32_t pack_sync_tile_dst_ptr   = 0;
 uint32_t math_sync_tile_dst_index = 0;
 uint32_t tile_size                = 128;
-const int iterations              = 32; // Dependant on size of input tensor (1024 currently). Could be made dynamic once tensor size becomes variable.
+const int iterations              = 32; // Dependent on size of input tensor (1024 currently). Could be made dynamic once tensor size becomes variable.
 
 volatile uint32_t* const buffer_A_tilized = reinterpret_cast<volatile uint32_t*>(0x17000);
 

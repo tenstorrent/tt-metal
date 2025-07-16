@@ -487,7 +487,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
-    // init replay buffer for rebuild interation 'm_iter' if uninitialized
+    // init replay buffer for rebuild iteration 'm_iter' if uninitialized
     bool init_rebuild = (topk_replay_init != m_iter + 1) ? true : false;
 
     uint dst_addr_offset = 0;

@@ -29,7 +29,7 @@ sfpi_inline void copy_result_to_dreg0(int addr)
 
 // Test infrastructure is set up to test float values, not ints
 // Viewing the ints as floats leads to a mess (eg, denorms)
-// Instead, compare in the kernel to the expected result and write a sentinal
+// Instead, compare in the kernel to the expected result and write a sentinel
 // value for "pass" and the sfpi::vInt v value for "fail"
 // Assumes this code is called in an "inner" if
 sfpi_inline void set_expected_result(int addr, float sentinel, int expected, sfpi::vInt v)
@@ -105,7 +105,7 @@ sfpi_test_noinline void test2()
 sfpi_test_noinline void test3()
 {
     // Test SFPENCC, SFPSETCC, SFPCOMPC, LOADI, MAD (in conditionals)
-    // Note: WH complains about the integer tests storing into float formated
+    // Note: WH complains about the integer tests storing into float formatted
     // sfpi::dst_reg w/ exponent of 0, so some tests use SFPOR to pass the result
     // through violating the spirit of testing one thing at a time
 
@@ -582,7 +582,7 @@ sfpi_test_noinline void test5()
     sfpi::vFloat b = 20.0F;
 
     // Note: loading sfpi::dst_reg[0] takes a reg and comparing against a float const
-    // takes a reg so can't store A, B and C across the condtionals
+    // takes a reg so can't store A, B and C across the conditionals
 
     v_if (sfpi::dst_reg[0] == 12.0F)
     {
@@ -1839,7 +1839,7 @@ sfpi_test_noinline void test11()
     {
         // Use L0
         sfpi::vFloat h    = -0.3F;
-        sfpi::vUInt l2a   = 0xA010; // Mulitply by -0.25, add 0.5
+        sfpi::vUInt l2a   = 0xA010; // Multiply by -0.25, add 0.5
         h                 = lut_sign(h, l0a, l1a, l2a);
         sfpi::dst_reg[11] = h;
     }
@@ -1847,7 +1847,7 @@ sfpi_test_noinline void test11()
     {
         // Use L0
         sfpi::vFloat h    = -0.3F;
-        sfpi::vUInt l2a   = 0xA010; // Mulitply by -0.25, add 0.5
+        sfpi::vUInt l2a   = 0xA010; // Multiply by -0.25, add 0.5
         h                 = lut(h, l0a, l1a, l2a);
         sfpi::dst_reg[11] = h;
     }
@@ -1855,7 +1855,7 @@ sfpi_test_noinline void test11()
     {
         // Use L0
         sfpi::vFloat h  = -0.3F;
-        sfpi::vUInt l2a = 0xA010; // Mulitply by -0.25, add 0.5
+        sfpi::vUInt l2a = 0xA010; // Multiply by -0.25, add 0.5
         // Test used a bias on Grayskull, not supported on Wormhole
         h                 = lut_sign(h, l0a, l1a, l2a);
         sfpi::dst_reg[11] = h;
@@ -1864,7 +1864,7 @@ sfpi_test_noinline void test11()
     {
         // Use L0
         sfpi::vFloat h  = -0.3F;
-        sfpi::vUInt l2a = 0xA010; // Mulitply by -0.25, add 0.5
+        sfpi::vUInt l2a = 0xA010; // Multiply by -0.25, add 0.5
         // Test used a bias on Grayskull, not supported on Wormhole
         h                 = lut(h, l0a, l1a, l2a);
         sfpi::dst_reg[11] = h;
@@ -1873,7 +1873,7 @@ sfpi_test_noinline void test11()
     {
         // Use L1
         sfpi::vFloat h  = 1.0F;
-        sfpi::vUInt l2a = 0xA010; // Mulitply by -0.25, add 0.5
+        sfpi::vUInt l2a = 0xA010; // Multiply by -0.25, add 0.5
         // Test used a bias on Grayskull, not supported on Wormhole
         h                 = lut(h, l0a, l1a, l2a);
         sfpi::dst_reg[11] = h;
@@ -1882,7 +1882,7 @@ sfpi_test_noinline void test11()
     {
         // Use L2
         sfpi::vFloat h    = 4.0F;
-        sfpi::vUInt l2a   = 0xA010; // Mulitply by -0.25, add 0.5
+        sfpi::vUInt l2a   = 0xA010; // Multiply by -0.25, add 0.5
         h                 = lut_sign(h, l0a, l1a, l2a);
         sfpi::dst_reg[11] = h;
     }
@@ -1895,8 +1895,8 @@ sfpi_test_noinline void test11()
         l1a = 0;
 
         // These are fakedout w/ emule
-        TTI_SFPLOADI(0, SFPLOADI_MOD0_USHORT, 0xFF20); // Mulitply by 0.0, add 0.25
-        TTI_SFPLOADI(1, SFPLOADI_MOD0_USHORT, 0x2010); // Mulitply by 0.25, add 0.5
+        TTI_SFPLOADI(0, SFPLOADI_MOD0_USHORT, 0xFF20); // Multiply by 0.0, add 0.25
+        TTI_SFPLOADI(1, SFPLOADI_MOD0_USHORT, 0x2010); // Multiply by 0.25, add 0.5
         sfpi::vUInt l0b, l1b;
         l0b = l_reg[LRegs::LReg0];
         l1b = l_reg[LRegs::LReg1];

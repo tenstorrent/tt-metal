@@ -663,7 +663,7 @@ inline void _llk_math_matmul_(
                 ckernel_template::run(instrn_buffer);
             }
 
-            // Clear srcB or srcA at end of re-use (once per u block row)
+            // Clear srcB or srcA at end of reuse (once per u block row)
             if (rut == (rut_dim - 1))
             {
                 if (reuse_a)

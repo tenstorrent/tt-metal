@@ -303,7 +303,7 @@ inline void configure_unpack_AB(
     }
     tile_descriptor.f.in_data_format = (uint)unpA_src_format;
     tile_descriptor.f.uncompressed   = 1; // Input tile is uncompressed
-    tile_descriptor.f.x_dim          = 0; // Not used for unpA as value is overriden by per context x_dim set below. Used for unpB
+    tile_descriptor.f.x_dim          = 0; // Not used for unpA as value is overridden by per context x_dim set below. Used for unpB
     tile_descriptor.f.y_dim          = 1;
     tile_descriptor.f.z_dim          = unpA_num_faces;
     // tile_descriptor.f.blobs_per_xy_plane = 0;

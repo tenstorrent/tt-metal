@@ -1253,7 +1253,7 @@ PACR_SETREG:
           start_bit: 23
           description: "Set to 1 to trigger register write"
     description: "Set MMIO register through packer pipeline. Max register value is limited to 10-bit (upper bits must be don't care!). 32-bit address is assembled
-                  as desribed under AddrSel field."
+                  as described under AddrSel field."
 
 UNPACR:
     op_binary: 0x42
@@ -1280,7 +1280,7 @@ UNPACR:
         - name: AutoIncContextID
           field_type: BIN
           start_bit: 3
-          description: "Auto increment config context ID after evey unpack instruction"
+          description: "Auto increment config context ID after every unpack instruction"
           fcov_point_bool:
         - name: ZeroWrite2
           field_type: BIN
@@ -1404,7 +1404,7 @@ SETDMAREG:
         - name: SetSignalsMode
           field_type: BIN
           start_bit: 7
-          description: "Sets registers from signals routed into TDMA block rather than from payload immediate bellow. In this mode payload immediate represents a mux control for which 16b signal chunk to feed into selected register"
+          description: "Sets registers from signals routed into TDMA block rather than from payload immediate below. In this mode payload immediate represents a mux control for which 16b signal chunk to feed into selected register"
           fcov_point_bool:
         - name: Payload_SigSel
           field_type: DEC
@@ -1915,9 +1915,9 @@ ATINCGET:
         - name: MemHierSel
           field_type: BIN
           start_bit: 23
-          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+          description: "Selects whether transaction is targeting DataRam (0) or L1 (1)"
           fcov_point_bool:
-    description: "Atomic increment and get - will read value in targetted memory location and return it to TDMA register and post-increment it atomically with the value pointed by DataRegIndex field"
+    description: "Atomic increment and get - will read value in targeted memory location and return it to TDMA register and post-increment it atomically with the value pointed by DataRegIndex field"
 
 ATINCGETPTR:
     op_binary: 0x62
@@ -1959,7 +1959,7 @@ ATINCGETPTR:
         - name: MemHierSel
           field_type: BIN
           start_bit: 23
-          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+          description: "Selects whether transaction is targeting DataRam (0) or L1 (1)"
           fcov_point_bool:
     description: >
         Atomic increment and get pointer - will access a memory location designated as a FIFO pointer location (contains a 32b read pointer and a 32b write pointer), return the
@@ -1985,11 +1985,11 @@ ATSWAP:
         - name: SwapMask
           field_type: DEC
           start_bit: 14
-          description: "Swap mask at 16b granulatiry (8b of mask for 16B words)"
+          description: "Swap mask at 16b granularity (8b of mask for 16B words)"
         - name: MemHierSel
           field_type: BIN
           start_bit: 23
-          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+          description: "Selects whether transaction is targeting DataRam (0) or L1 (1)"
           fcov_point_bool:
     description: "Atomic unconditional SWAP. Swaps selected 16b chunks of memory location with new ones provided on write data bus."
 
@@ -2077,7 +2077,7 @@ STOREIND:
         - name: MemHierSel
           field_type: BIN
           start_bit: 23
-          description: "Selects whether transaction is targetting source regfile (0) or L1 (1)"
+          description: "Selects whether transaction is targeting source regfile (0) or L1 (1)"
           fcov_point_bool:
     description: "Store indirect. Stores data from TDMA register to memory location specified by a combination of base+offset provided in other TDMA registers. Supports auto-increment on offset value."
 
@@ -2169,7 +2169,7 @@ SFPLOADI:
       - name: imm16
         field_type: DEC
         start_bit: 0
-        description: immedate op
+        description: immediate op
         fcov_point_bin_interval:
           bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
                   {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]

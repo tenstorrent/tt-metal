@@ -651,7 +651,7 @@ constexpr static uint TRACK_TDMA                   = 1 << 3;
 constexpr static uint TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
 constexpr static uint TRACK_ALL                    = 0x1F;
 
-// Uses a template to guarantee compiletime execution (could probably
+// Uses a template to guarantee compile time execution (could probably
 // get away with constexpr but this seems better)
 template <uint bitmask>
 inline void set_ttsync_enables()
@@ -832,7 +832,7 @@ union bstatus_u
 
 inline void init_prng_seed(const uint seed)
 {
-    // The seed for PRNG should at least be initialized during chip bootup time.
+    // The seed for PRNG should at least be initialized during chip boot-up time.
     volatile uint tt_reg_ptr *cfg  = get_cfg_pointer();
     cfg[PRNG_SEED_Seed_Val_ADDR32] = seed;
 

@@ -524,7 +524,7 @@ inline void configure_pack(
     pack_counters_u pack_counters;
     pack_counters.val                       = 0;
     pack_counters.f.pack_reads_per_xy_plane = face_r_dim; // Number of reads per face
-                                                          // Used for resetting tile posistion generator for edge masks
+                                                          // Used for resetting tile position generator for edge masks
     for (uint i = 0; i < 4; i++)
     {
         cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
@@ -568,7 +568,7 @@ inline void flip_packer_dest_offset_id()
 }
 
 // Flip packer dest register offset to 0 or DEST_REGISTER_HALF_SIZE
-// flip-flopping between two halfs
+// flip-flopping between two halves
 template <DstSync Dst>
 inline void select_packer_dest_registers()
 {

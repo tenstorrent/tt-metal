@@ -143,7 +143,7 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
     unpack_to_dest = (
         formats.input_format.is_32_bit()
         and dest_acc
-        == DestAccumulation.Yes  # If dest_acc is off, we unpack Float32 into 16-bit format in src regsiters (later copied over in dest reg for SFPU op)
+        == DestAccumulation.Yes  # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
     )
     test_config = {
         "formats": formats,

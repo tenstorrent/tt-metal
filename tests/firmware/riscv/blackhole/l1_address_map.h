@@ -116,7 +116,7 @@ struct address_map
     static constexpr std::uint32_t MAX_SIZE            = 1499136;
     static constexpr std::uint32_t MAX_L1_LOADING_SIZE = 1 * 1024 * 1024;
 
-    static constexpr std::uint32_t RISC_LOCAL_MEM_BASE = 0xffb00000; // Actaul local memory address as seen from risc firmware
+    static constexpr std::uint32_t RISC_LOCAL_MEM_BASE = 0xffb00000; // Actual local memory address as seen from risc firmware
                                                                      // As part of the init risc firmware will copy local memory data from
                                                                      // l1 locations listed above into internal local memory that starts
                                                                      // at RISC_LOCAL_MEM_BASE address
@@ -136,7 +136,7 @@ struct address_map
     static constexpr std::uint32_t PERF_RISC_MAILBOX_SIZE = 8;
     // Signal to ncrisc that the performance buffer has been drained.
     static constexpr std::uint32_t PERF_RESET_PTR_MAILBOX_SIZE = 4;
-    // Signal to all cores within a chip that the epoch comamnd for all cores has been sent;
+    // Signal to all cores within a chip that the epoch command for all cores has been sent;
     static constexpr std::uint32_t PERF_ANALYZER_COMMAND_START_PTR_SIZE = 8;
     static constexpr std::uint32_t PERF_ANALYZER_COMMAND_START_VAL_SIZE = 4;
     static constexpr std::uint32_t PERF_UNUSED_SIZE                     = 24;
