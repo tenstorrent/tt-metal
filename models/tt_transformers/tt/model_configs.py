@@ -23,27 +23,28 @@ class ModelArchitecture(str, Enum):
 
 class RopeScalingType(str, Enum):
     """Types of RoPE scaling."""
-    LINEAR = "linear"
-    DYNAMIC = "dynamic"
+    # LINEAR = "linear"
+    # DYNAMIC = "dynamic"
     YARN = "yarn"
     LLAMA3 = "llama3"
 
 
 class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
+    rope_type: RopeScalingType = Field(exclude=True, description="RoPE scaling type")
     factor: float
-    type: Optional[RopeScalingType] = None
-    rope_type: Optional[str] = None
-    original_max_position_embeddings: Optional[int] = None
+    original_max_position_embeddings: int
+    # Llama-3.x specific parameters
     low_freq_factor: Optional[float] = None
     high_freq_factor: Optional[float] = None
+    # Yarn-specific parameters - we could have a separate class for each type
     beta_fast: Optional[int] = None
     beta_slow: Optional[int] = None
     mscale: Optional[float] = None
     mscale_all_dim: Optional[float] = None
 
 
-class StandardModelConfig(BaseModel):
+class TTModelConfig(BaseModel):
     """
     Standardized model configuration that all specific formats convert to.
     This is what model_config.py should consume.
@@ -55,10 +56,10 @@ class StandardModelConfig(BaseModel):
     n_kv_heads: int = Field(description="Number of key-value heads")
     head_dim: Optional[int] = Field(None, description="Dimension per attention head")
     vocab_size: int = Field(description="Vocabulary size")
-    
+    padded_vocab_size: Optional[int] = Field(None, description="Padded vocabulary size")
+
     # MLP configuration
     hidden_dim: Optional[int] = Field(None, description="Hidden dimension for MLP")
-    intermediate_size: Optional[int] = Field(None, description="Intermediate size for MLP")
     ffn_dim_multiplier: Optional[float] = Field(None, description="FFN dimension multiplier")
     multiple_of: Optional[int] = Field(None, description="FFN dimension must be multiple of this")
     
@@ -68,20 +69,12 @@ class StandardModelConfig(BaseModel):
     # RoPE configuration
     rope_theta: float = Field(description="RoPE theta parameter")
     rope_scaling: Optional[RopeScaling] = Field(None, description="RoPE scaling configuration")
-    rope_scaling_factor: Optional[float] = Field(None, description="Simple RoPE scaling factor")
-    use_scaled_rope: Optional[bool] = Field(None, description="Whether to use scaled RoPE")
-    max_position_embeddings: Optional[int] = Field(None, description="Maximum sequence length")
     
     # Vision model parameters (for multimodal models)
     vision_chunk_size: Optional[int] = Field(-1, description="Vision chunk size")
     vision_max_num_chunks: Optional[int] = Field(4, description="Maximum number of vision chunks")
     vision_num_cross_attention_layers: Optional[int] = Field(-1, description="Number of cross-attention layers")
     
-    # MoE parameters (for mixture of experts models)
-    n_routed_experts: Optional[int] = Field(None, description="Number of routed experts")
-    n_shared_experts: Optional[int] = Field(None, description="Number of shared experts")
-    num_experts_per_tok: Optional[int] = Field(None, description="Number of experts per token")
-    moe_intermediate_size: Optional[int] = Field(None, description="MoE intermediate size")
     
     # Model metadata
     model_type: Optional[str] = Field(None, description="Model type identifier")
@@ -109,9 +102,9 @@ class MetaLlamaConfig(BaseModel):
     use_scaled_rope: Optional[bool] = None
     rope_scaling_factor: Optional[float] = None
     
-    def to_standard(self) -> StandardModelConfig:
+    def to_standard(self) -> TTModelConfig:
         """Convert to standard format."""
-        return StandardModelConfig(
+        return TTModelConfig(
             dim=self.dim,
             n_layers=self.n_layers,
             n_heads=self.n_heads,
@@ -157,23 +150,23 @@ class HuggingFaceLlamaConfig(BaseModel):
     transformers_version: Optional[str] = None
     use_cache: Optional[bool] = None
     
-    def to_standard(self) -> StandardModelConfig:
+    def to_standard(self) -> TTModelConfig:
         """Convert to standard format."""
         rope_scaling_obj = None
         if self.rope_scaling:
             rope_scaling_obj = RopeScaling(**self.rope_scaling)
         
-        return StandardModelConfig(
+        return TTModelConfig(
             dim=self.hidden_size,
             n_layers=self.num_hidden_layers,
             n_heads=self.num_attention_heads,
             n_kv_heads=self.num_key_value_heads,
             vocab_size=self.vocab_size,
-            intermediate_size=self.intermediate_size,
+            hidden_dim=self.intermediate_size,
             norm_eps=self.rms_norm_eps,
             rope_theta=self.rope_theta,
             rope_scaling=rope_scaling_obj,
-            max_position_embeddings=self.max_position_embeddings,
+            max_context_len=self.max_position_embeddings,
             architecture=ModelArchitecture.LLAMA,
             model_type=self.model_type
         )
@@ -194,7 +187,7 @@ class QwenConfig(BaseModel):
     model_type: str
     
     # Qwen-specific fields
-    attention_dropout: Optional[float] = None
+    attention_dropout: Optional[float] = None 
     sliding_window: Optional[int] = None
     max_window_layers: Optional[int] = None
     use_sliding_window: Optional[bool] = None
@@ -209,18 +202,18 @@ class QwenConfig(BaseModel):
     transformers_version: Optional[str] = None
     use_cache: Optional[bool] = None
     
-    def to_standard(self) -> StandardModelConfig:
+    def to_standard(self) -> TTModelConfig:
         """Convert to standard format."""
-        return StandardModelConfig(
+        return TTModelConfig(
             dim=self.hidden_size,
             n_layers=self.num_hidden_layers,
             n_heads=self.num_attention_heads,
             n_kv_heads=self.num_key_value_heads,
             vocab_size=self.vocab_size,
-            intermediate_size=self.intermediate_size,
+            hidden_dim=self.intermediate_size,
             norm_eps=self.rms_norm_eps,
             rope_theta=self.rope_theta,
-            max_position_embeddings=self.max_position_embeddings,
+            max_context_len=self.max_position_embeddings,
             architecture=ModelArchitecture.QWEN2,
             model_type=self.model_type
         )
@@ -278,23 +271,23 @@ class DeepSeekV3Config(BaseModel):
     quantization_config: Optional[Dict[str, Any]] = None
     num_nextn_predict_layers: Optional[int] = None
     
-    def to_standard(self) -> StandardModelConfig:
+    def to_standard(self) -> TTModelConfig:
         """Convert to standard format."""
         rope_scaling_obj = None
         if self.rope_scaling:
             rope_scaling_obj = RopeScaling(**self.rope_scaling)
         
-        return StandardModelConfig(
+        return TTModelConfig(
             dim=self.hidden_size,
             n_layers=self.num_hidden_layers,
             n_heads=self.num_attention_heads,
             n_kv_heads=self.num_key_value_heads,
             vocab_size=self.vocab_size,
-            intermediate_size=self.intermediate_size,
+            hidden_dim=self.intermediate_size,
             norm_eps=self.rms_norm_eps,
             rope_theta=self.rope_theta,
             rope_scaling=rope_scaling_obj,
-            max_position_embeddings=self.max_position_embeddings,
+            max_context_len=self.max_position_embeddings,
             n_routed_experts=self.n_routed_experts,
             n_shared_experts=self.n_shared_experts,
             num_experts_per_tok=self.num_experts_per_tok,
@@ -342,7 +335,7 @@ def detect_config_format(config_data: Dict[str, Any]) -> str:
     return "hf_llama"
 
 
-def parse_model_config(config_path: Union[str, Path]) -> StandardModelConfig:
+def parse_model_config(config_path: Union[str, Path]) -> TTModelConfig:
     """
     Parse a model configuration file and return a standardized configuration.
     
@@ -350,7 +343,7 @@ def parse_model_config(config_path: Union[str, Path]) -> StandardModelConfig:
         config_path: Path to the configuration file (config.json or params.json)
         
     Returns:
-        StandardModelConfig object with normalized parameters
+        TTModelConfig object with normalized parameters
         
     Raises:
         ValueError: If the configuration format is not supported
@@ -380,7 +373,7 @@ def parse_model_config(config_path: Union[str, Path]) -> StandardModelConfig:
     return config.to_standard()
 
 
-def parse_model_config_from_dict(config_data: Dict[str, Any]) -> StandardModelConfig:
+def parse_model_config_from_dict(config_data: Dict[str, Any]) -> TTModelConfig:
     """
     Parse a model configuration from a dictionary and return a standardized configuration.
     
@@ -388,7 +381,7 @@ def parse_model_config_from_dict(config_data: Dict[str, Any]) -> StandardModelCo
         config_data: Configuration dictionary
         
     Returns:
-        StandardModelConfig object with normalized parameters
+        TTModelConfig object with normalized parameters
         
     Raises:
         ValueError: If the configuration format is not supported
@@ -410,7 +403,7 @@ def parse_model_config_from_dict(config_data: Dict[str, Any]) -> StandardModelCo
 
 
 # Convenience function for backward compatibility
-def get_standard_config(checkpoint_dir: Union[str, Path]) -> StandardModelConfig:
+def get_standard_config(checkpoint_dir: Union[str, Path]) -> TTModelConfig:
     """
     Get a standardized configuration from a checkpoint directory.
     
@@ -421,7 +414,7 @@ def get_standard_config(checkpoint_dir: Union[str, Path]) -> StandardModelConfig
         checkpoint_dir: Path to the checkpoint directory
         
     Returns:
-        StandardModelConfig object with normalized parameters
+        TTModelConfig object with normalized parameters
     """
     checkpoint_dir = Path(checkpoint_dir)
     
