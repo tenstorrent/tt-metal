@@ -406,7 +406,11 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
 
         if (elapsed_time.count() > TTNN_OPERATION_TIMEOUT_SECONDS) {
-            TT_THROW("TIMEOUT: device timeout, potential hang detected, please check the graph capture");
+            TT_THROW(
+                "TIMEOUT: device timeout after {} seconds, potential hang detected, you can use the following tool to "
+                "troubleshoot this: "
+                "https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md",
+                TTNN_OPERATION_TIMEOUT_SECONDS);
         }
 #endif
     } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
