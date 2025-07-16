@@ -86,7 +86,7 @@ jobs:
           github_token: ${{ secrets.AI_GH_TOKEN }}
           trigger_phrase: "@tt-ai"
           allowed_tools: |
-           - Bash(./build_metal.sh --debug)
+           - Bash(./build_metal.sh --debug -c)
            - Bash(gh issue create:*)
            - Bash(gh issue edit:*)
            - Bash(gh issue close:*)
