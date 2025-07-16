@@ -351,11 +351,9 @@ We have added the following configuration
 
 operation-timeout-seconds will enable a timeout mechanism for operations, the value is the amount of seconds we will wait for the operation to finish.
 
-We have included an example case in the test_graph_capture.py file, you can check it here:
-
+Here is an example of how to use it:
 ```
 def test_graph_capture_with_hang_device_operation(device):
-    return
     # Create input tensor
     tt_input = ttnn.empty(
         shape=(1, 1, 2048, 512),
@@ -367,33 +365,17 @@ def test_graph_capture_with_hang_device_operation(device):
 
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
-    failed = False
     try:
         ttnn.prim.test_hang_device_operation(tt_input)
         ttnn._ttnn.device.synchronize_device(device)
-        failed = False
     except Exception as e:
         print("Exception captured")
         ttnn._ttnn.device.close_device(device)
         captured_graph = ttnn.graph.end_graph_capture()
-        failed = True
         assert "TIMEOUT" in str(e)
         assert "potential hang detected, please check the graph capture" in str(e)
-
-    if failed:
-        print(captured_graph)
-        # this is the case for --operation-timeout-seconds
-        # the graph should have captured the arguments to the hang operation
-        assert (
-            captured_graph[1]["arguments"][0]
-            == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, 512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
-        )
 ```
 
-You can check the full test here: https://github.com/tenstorrent/tt-metal/pull/22756
-
-
-Please note that given the hacky nature of this test, it is recommended to build with --debug flag.
 
 In this case, we are using a ttnn.test.test_hang_operation, which is a test operation that runs a while(true) loop.
 The idea behind it is to simulate an unresponsive operation, so we can test the graph capture and the arguments that generated the hang.
