@@ -125,7 +125,7 @@ void kernel_main() {
             noc_async_read_page(bA * batchB + bB, s_sparsity, l1_write_addr_sparsity);
             noc_async_read_barrier();
 
-            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_sparsity) == 0) {
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_sparsity) != 0) {
                 uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
                 uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
                 for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
