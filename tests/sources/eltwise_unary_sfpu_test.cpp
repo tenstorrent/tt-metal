@@ -122,6 +122,10 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format)
             ckernel::sfpu::_init_exp2_<APPROX_MODE>();
             ckernel::sfpu::_calculate_exp2_<APPROX_MODE, iterations>();
             break;
+        case SfpuType::hardsigmoid:
+            ckernel::sfpu::_init_hardsigmoid_<APPROX_MODE>();
+            ckernel::sfpu::_calculate_activation_<APPROX_MODE, ckernel::ActivationType::Hardsigmoid, iterations>();
+            break;
         default:
             return;
     }

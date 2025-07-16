@@ -223,10 +223,11 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count)
 
 enum class ActivationType
 {
-    Celu     = 0,
-    Elu      = 1,
-    Gelu     = 2,
-    Hardtanh = 3,
+    Celu        = 0,
+    Elu         = 1,
+    Gelu        = 2,
+    Hardtanh    = 3,
+    Hardsigmoid = 4,
 };
 
 enum class BinaryOp : uint8_t

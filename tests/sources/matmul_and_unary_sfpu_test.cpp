@@ -95,6 +95,10 @@ void call_sfpu_operation(SfpuType operation)
         case SfpuType::square:
             ckernel::sfpu::_calculate_square_<APPROX_MODE, iterations>(iterations);
             break;
+        case SfpuType::hardsigmoid:
+            ckernel::sfpu::_init_hardsigmoid_<APPROX_MODE>();
+            ckernel::sfpu::_calculate_activation_<APPROX_MODE, ckernel::ActivationType::Hardsigmoid, iterations>();
+            break;
         default:
             return;
     }
