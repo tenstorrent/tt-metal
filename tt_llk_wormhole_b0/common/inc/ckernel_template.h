@@ -142,7 +142,7 @@ public:
     // Default B instruction without rarefy
     static constexpr uint DEF_B_instr = TT_OP_UNPACR(1, 0b01, 0, 0, 0, 0, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    // Deafult halo A instructions
+    // Default halo A instructions
     static constexpr uint DEF_A0_instr = TT_OP_UNPACR(
         0, 0b00, 0, p_unpacr::TILE0_CFG_CONTEXT, p_unpacr::TILE0_ADDRCNT_CONTEXT, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, p_unpacr::AUTO_INC_CONTEXT, 1, 0, 1);
     static constexpr uint DEF_A1_instr = TT_OP_UNPACR(
@@ -231,7 +231,7 @@ public:
         uint B_instr     = DEF_B_instr,
         uint skipB_instr = DEF_SKIP_B);
 
-    // More abstraction to re-use above templates for kernel to run loop of N instructions
+    // More abstraction to reuse above templates for kernel to run loop of N instructions
     static ckernel_unpack_template loopx1instr(uint instr0, uint skip0 = TT_OP_NOP);
     static ckernel_unpack_template loopx2instr(uint instr0, uint instr1, uint skip0 = TT_OP_NOP, uint skip1 = TT_OP_NOP);
 

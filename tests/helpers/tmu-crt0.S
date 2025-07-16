@@ -36,7 +36,7 @@ CRT_START:
   li      t1, 0x4000                   # Load MEM_MOVER_VIEW_IRAM_BASE_ADDR to t1
   sw      t1, 0(t0)                    # Store the value from t1 into the memory location at t0
 
-  # *RISCV_TDMA_REG_XMOV_SIZE = lenght(.loader_code) >> 4; // RISCV_TDMA_REG_XMOV_SIZE = 0xFFB11008
+  # *RISCV_TDMA_REG_XMOV_SIZE = length(.loader_code) >> 4; // RISCV_TDMA_REG_XMOV_SIZE = 0xFFB11008
   # li    t0, 0xFFB11008               # Load RISCV_TDMA_REG_XMOV_SIZE to t0
   lui     t0, 0xFFB11                  # Load upper 20 bits of RISCV_TDMA_REG_XMOV_SIZE to t0
   addi    t0, t0, 0x008                # Load lower 12 bits of RISCV_TDMA_REG_XMOV_SIZE to t0

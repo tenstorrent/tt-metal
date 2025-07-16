@@ -106,12 +106,12 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
     TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b0010); // Clear l1 addr y cnt
     if constexpr (first_pass)
     {
-        // Select bootom faces in the 2nd pass
+        // Select bottom faces in the 2nd pass
         TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, 0);
     }
     else
     {
-        // Select bootom faces in the 2nd pass
+        // Select bottom faces in the 2nd pass
         TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, 2);
     }
 
