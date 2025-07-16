@@ -886,6 +886,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
             tt_metal::detail::WriteToDeviceL1(
                 dev, core_to_terminate.logical_core, core_to_terminate.address, val, core_to_terminate.core_type);
         }
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev_id);
     }
 
     // Terminate fabric routers

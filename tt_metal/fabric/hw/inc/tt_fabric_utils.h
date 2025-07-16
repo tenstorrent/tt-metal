@@ -15,6 +15,10 @@
 namespace tt::tt_fabric {
 
 /* Termination signal handling*/
+FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE;
+}
+
 FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // mailboxes defined in tt_metal/hw/inc/ethernet/tunneling.h
     invalidate_l1_cache();
