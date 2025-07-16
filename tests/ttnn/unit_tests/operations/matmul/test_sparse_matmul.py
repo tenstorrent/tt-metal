@@ -17,7 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("mkn", [(128, 7168, 2048), (128, 2048, 7168)])
-@pytest.mark.parametrize("num_experts", [2])
+@pytest.mark.parametrize("num_experts", [8])
 @pytest.mark.parametrize("num_tokens", [(2, 1)])  # , (64, 128), (64, 256)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -31,18 +31,14 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
     in1 = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
 
     sparsity_shape = (1, b, s, num_experts)
-    sparsity = torch.ones(sparsity_shape)
+    sparsity = torch.rand(sparsity_shape)
 
     # Mark some as 0 to test the sparsity
-    # sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
-    # number_of_zeros = random.randint(0, sparsity.numel() - 1)
-    # zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
-    # sparsity.view(-1)[zero_indices] = 0.0
+    sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
+    number_of_zeros = random.randint(0, sparsity.numel() - 1)
+    zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
+    sparsity.view(-1)[zero_indices] = 0.0
 
-    # sparsity[0, 0, 0, 0] = 0.0
-    # sparsity[0, 1, 0, 0] = 0.0
-
-    sparsity[0, 0, 0, 1] = 0.0
     sparsity = sparsity.to(dtype=torch.float32)
 
     nnz = int((sparsity != 0).sum().item())

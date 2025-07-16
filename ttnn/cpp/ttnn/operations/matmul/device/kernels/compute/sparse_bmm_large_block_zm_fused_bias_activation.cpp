@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,7 +58,7 @@ inline void reblock_and_untilize(
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n);
+            pack_untilize_dest<out_subblock_w, out_block_w>(out_cb_id, 1, n);
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
@@ -204,7 +204,7 @@ void MAIN {
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                                pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
@@ -230,7 +230,7 @@ void MAIN {
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                matmul_pack_tile(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                                pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
@@ -268,7 +268,7 @@ void MAIN {
 #ifdef PACKER_L1_ACC
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-                    pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
+                    pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
                     copy_tile_to_dst_init_short(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(

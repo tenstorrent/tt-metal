@@ -94,11 +94,11 @@ void kernel_main() {
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
 
     for (uint32_t bA = 0; bA < batchA; ++bA) {
-        for (uint32_t bB = 0; bB < batchB; ++bB) {
-            noc_async_read_page(bA * batchB + bB, s_sparsity, l1_write_addr_sparsity);
-            noc_async_read_barrier();
+        noc_async_read_page(bA, s_sparsity, l1_write_addr_sparsity);
+        noc_async_read_barrier();
 
-            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_sparsity) == 0) {
+        for (uint32_t bB = 0; bB < batchB; ++bB) {
+            if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_sparsity)[bB] == 0) {
                 continue;
             }
 
