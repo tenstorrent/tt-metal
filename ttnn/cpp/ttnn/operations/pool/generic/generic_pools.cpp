@@ -86,7 +86,7 @@ static Tensor pool2d_invoke(
                 false,
                 false,
                 is_in_tiled,  // if input is tiled we need to choose num_cores_c to make the shard width to be a tile
-                              // multiple
+                              // multiple, it cannot be 16
                 0);
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
@@ -124,12 +124,11 @@ static Tensor pool2d_invoke(
     // update the shard spec to match the output shape
     auto shard_spec = out_memory_config.shard_spec().value();
     uint32_t output_shard_width_padded =
-        input_tensor.dtype() == DataType::BFLOAT8_B
-            ? tt::round_up(channels / num_cores_c, tt::constants::TILE_WIDTH)
-            : tt::round_up(
-                  channels / num_cores_c *
-                      tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype())),
-                  tt::constants::TILE_WIDTH);
+        is_out_tiled ? tt::round_up(channels / num_cores_c, tt::constants::TILE_WIDTH)
+                     : tt::round_up(
+                           channels / num_cores_c *
+                               tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype())),
+                           tt::constants::TILE_WIDTH);
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
