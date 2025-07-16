@@ -85,7 +85,8 @@ static Tensor pool2d_invoke(
                 ShardOrientation::ROW_MAJOR,
                 false,
                 false,
-                is_in_tiled,  // if input is tiled we need the shard width to be a tile multiple
+                is_in_tiled,  // if input is tiled we need to choose num_cores_c to make the shard width to be a tile
+                              // multiple
                 0);
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
