@@ -187,6 +187,7 @@ from ttnn.types import (
     CoreGrid,
     CoreRange,
     Shape,
+    TensorSpec,
     Tensor,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
