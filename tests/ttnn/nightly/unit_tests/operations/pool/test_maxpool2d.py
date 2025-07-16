@@ -187,12 +187,6 @@ def run_max_pool(
     act_reshaped = act_permuted.reshape(act_shape)
 
     if dtype == ttnn.bfloat8_b:
-        if (in_h * in_w) % 32 != 0:
-            pytest.skip("For BFP8_B datatype, input height * width should be multiple of 32")
-        if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED and (in_c / max_cores) % 32 != 0:
-            pytest.skip("For BFP8_B datatype, input channels / max_cores should be multiple of 32")
-        if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED and (in_c / cores_x) % 32 != 0:
-            pytest.skip("For BFP8_B datatype, input channels / cores_x should be multiple of 32")
         ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)

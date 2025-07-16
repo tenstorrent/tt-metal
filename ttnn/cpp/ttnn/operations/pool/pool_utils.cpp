@@ -105,22 +105,22 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     // pooling can accept any height and either a tile multiple or half a tile for width.
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_c = 1;
-        uint32_t tile_size = channels / num_cores_c;
-        if (tile_size != 16 && tile_size % tt::constants::TILE_WIDTH != 0) {
+        uint32_t c_per_core = channels / num_cores_c;
+        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
             return std::nullopt;
         }
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto grid_x = pconfig.grid.ranges()[0].end_coord.x - pconfig.grid.ranges()[0].start_coord.x + 1;
         auto grid_y = pconfig.grid.ranges()[0].end_coord.y - pconfig.grid.ranges()[0].start_coord.y + 1;
         uint32_t num_cores_c = block_shard_orientation == ShardOrientation::COL_MAJOR ? grid_y : grid_x;
-        uint32_t tile_size = channels / num_cores_c;
-        if (tile_size != 16 && tile_size % tt::constants::TILE_WIDTH != 0) {
+        uint32_t c_per_core = channels / num_cores_c;
+        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
             return std::nullopt;
         }
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t num_cores_c = pconfig.grid.num_cores();
-        uint32_t tile_size = channels / num_cores_c;
-        if (tile_size != 16 && tile_size % tt::constants::TILE_WIDTH != 0) {
+        uint32_t c_per_core = channels / num_cores_c;
+        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
             return std::nullopt;
         }
     }
@@ -277,6 +277,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             ttnn::Shape({1, 1, nhw, out_channel_padded}), parallel_config, tt::constants::TILE_HEIGHT);
     };
 
+    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+
     auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
         auto input_parallel_config = pool::determine_valid_parallel_config(
             layout,
@@ -288,6 +290,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             orientation,
             false,
             false,
+            is_in_tiled,  // if input is tiled we need the shard width to be a tile multiple,
             0);
 
         if (!input_parallel_config.has_value()) {
