@@ -27,8 +27,8 @@ void kernel_main() {
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t start_page_index = get_arg_val<uint32_t>(rt_args_idx++);
 
-    auto output_addr_gen_args = make_tensor_accessor_args<output_args_cta_idx, output_args_crta_idx>();
-    auto output_addr_gen = make_tensor_accessor_from_args(output_addr_gen_args, output_base_addr, page_size);
+    auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
+    auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, page_size);
 
     for (uint32_t page_index = start_page_index; page_index < start_page_index + num_pages; ++page_index) {
         cb_wait_front(scratch_buffer_cb_id, 1);
