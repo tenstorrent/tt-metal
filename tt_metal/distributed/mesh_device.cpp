@@ -156,8 +156,14 @@ MeshDevice::ScopedDevices::ScopedDevices(
         /*use_max_eth_core_count_on_all_devices*/ true,
         /* initialize_fabric_and_dispatch_fw */ false);
 
-    for (auto device_id : local_devices) {
-        local_devices_.push_back(opened_local_devices_.at(device_id));
+    for (auto device_id : device_ids) {
+        if (device_id.is_local()) {
+            auto* device = opened_local_devices_.at(*device_id);
+            local_devices_.push_back(device);
+            devices_.push_back(MaybeRemoteDevice::local(device));
+        } else {
+            devices_.push_back(MaybeRemoteDevice::remote());
+        }
     }
 }
 
