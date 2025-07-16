@@ -362,7 +362,7 @@ inline void cfg_rmw(uint32_t cfg_addr32, uint32_t cfg_shamt, uint32_t cfg_mask, 
     volatile uint tt_reg_ptr *cfg_regs = reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_CFG_BASE);
     uint32_t cfg_data                  = cfg_regs[addr];
 
-    // Shift and mask wrdata to properly align withn 32-bit DWORD
+    // Shift and mask wrdata to properly align within 32-bit DWORD
     wrdata <<= cfg_shamt;
     wrdata &= cfg_mask;
 

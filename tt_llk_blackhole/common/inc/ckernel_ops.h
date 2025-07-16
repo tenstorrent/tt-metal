@@ -214,7 +214,7 @@
 
 #define TT_OP_GATESRCRST(reset_srcb_gate_control, reset_srca_gate_control) TT_OP(0x35, (((reset_srcb_gate_control) << 1) + ((reset_srca_gate_control) << 0)))
 #define TT_GATESRCRST_VALID(reset_srcb_gate_control, reset_srca_gate_control) \
-    (ckernel::is_valid(reset srcb gate control, 23) && ckernel::is_valid(reset srca gate control, 1))
+    (ckernel::is_valid(reset_srcb_gate_control, 23) && ckernel::is_valid(reset_srca_gate_control, 1))
 #define TT_GATESRCRST(reset_srcb_gate_control, reset_srca_gate_control) \
     ckernel::instrn_buffer[0] = TT_OP_GATESRCRST(reset_srcb_gate_control, reset_srca_gate_control)
 #define TTI_GATESRCRST(reset_srcb_gate_control, reset_srca_gate_control) INSTRUCTION_WORD(TT_OP_GATESRCRST(reset_srcb_gate_control, reset_srca_gate_control))
@@ -1051,7 +1051,7 @@
 #define TTI_WRCFG(GprAddress, wr128b, CfgReg)      INSTRUCTION_WORD(TT_OP_WRCFG(GprAddress, wr128b, CfgReg))
 
 #define TT_OP_XMOV(Mov_block_selection, Last)    TT_OP(0x40, (((Mov_block_selection) << 23) + ((Last) << 0)))
-#define TT_XMOV_VALID(Mov_block_selection, Last) (ckernel::is_valid(Mov block selection, 1) && ckernel::is_valid(Last, 23))
+#define TT_XMOV_VALID(Mov_block_selection, Last) (ckernel::is_valid(Mov_block_selection, 1) && ckernel::is_valid(Last, 23))
 #define TT_XMOV(Mov_block_selection, Last)       ckernel::instrn_buffer[0] = TT_OP_XMOV(Mov_block_selection, Last)
 #define TTI_XMOV(Mov_block_selection, Last)      INSTRUCTION_WORD(TT_OP_XMOV(Mov_block_selection, Last))
 

@@ -62,7 +62,7 @@ def test_profiler_primitives():
     ), f"Expected timestamp.timestamp > 0, got {timestamp.timestamp}"
     assert (
         timestamp.data is None
-    ), f"Expected timestamp.date to be None, got {timestamp.data}"
+    ), f"Expected timestamp.data to be None, got {timestamp.data}"
 
     # TIMESTAMP_DATA
     timestamp_data = runtime.pack[0]

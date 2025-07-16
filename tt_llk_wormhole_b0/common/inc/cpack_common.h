@@ -106,7 +106,7 @@ typedef union
     dest_rd_ctrl_t f;
 } dest_rd_ctrl_u;
 
-// PACK_EDGE_OFFSET_SEC[0:3] register sutructure
+// PACK_EDGE_OFFSET_SEC[0:3] register structure
 //
 // Lower 16b represent a mask that is applied on a single row of one face on the packer output
 // Higher 16b contain information about which TILE_ROW_SET_MAPPING register is used for each packer (only in PACK_EDGE_OFFSET_SEC0)

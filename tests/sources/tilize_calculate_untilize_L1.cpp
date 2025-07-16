@@ -40,7 +40,7 @@ void run_kernel()
 
     /*
     In this test we fuse two LLK pipeline runs, one is to unpack untilized buffers/operands from L1 (39-45) and pack them in tilized format(130-145).
-    The next run unpacks these two tilized operands, performs a math compute and pack them out in utilized format.
+    The next run unpacks these two tilized operands, performs a math compute and pack them out in untilized format.
     Since we have set all three TRISCs to run at the same time, fusing these two runs will cause a race condition where unpacker will immediately read from
     L1 before the packer has completed writing to L1. To prevent the unpacker from prematurely reading from L1 before packer has completed write
     the unpacker needs to wait for packer to finish writing to L1 before it starts reading from L1 for the second iteration of LLK pipeline.
