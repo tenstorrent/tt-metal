@@ -370,6 +370,7 @@ def format_callstack(cs):
         result.append(line)
     return result
 
+
 def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
     firmware_elf_path = a_kernel_path + f"../../../firmware/{risc_name.lower()}/{risc_name.lower()}.elf"
     return os.path.realpath(firmware_elf_path)
@@ -414,7 +415,9 @@ def get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, p
     return launch_msg_rd_ptr, kernel_config_base, kernel_text_offset, watcher_kernel_id
 
 
-def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path, ui_state, process_ids):
+def get_running_ops_table(
+    dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path, ui_state, process_ids
+):
     printout_table = init_running_ops_table(enum_values)
 
     if printout_table is None:
@@ -429,7 +432,6 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
             row = [loc.to_str("logical")]
 
         for risc_name in block.risc_names:
-
             proc_name = risc_name.upper()
             proc_type = enum_values["ProcessorTypes"][proc_name]
             proc_class = enum_values["dispatch_core_processor_classes"][proc_name]
@@ -495,7 +497,9 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                     if GDB_EN and proc_name != "NCRISC":
                         pid = process_ids.get(loc, {}).get(risc_name, None)
                         if pid is not None:
-                            get_callstack_with_gdb(ui_state, process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset)
+                            get_callstack_with_gdb(
+                                ui_state, process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset
+                            )
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
@@ -537,59 +541,35 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
 
     return printout_table
 
-def set_up_gdb(ui_state: UIState):
-    # Start GDB server
-    try:
-        ui_state.start_gdb(PORT)
-    except Exception as e:
-        raiseTTTriageError(f"Failed to start GDB server on port {PORT}. Error: {e}")
-
-    # Start GDB process
-    gdb_client = subprocess.Popen(
-        ["../tt-exalens/build/sfpi/compiler/bin/riscv32-tt-elf-gdb", "--quiet"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True, 
-        bufsize=1
-    )
-
-    gdb_client.stdin.write(f"target extended-remote localhost:{PORT}\n")
-    gdb_client.stdin.flush()
-
-    return gdb_client
-
-def tear_down_gdb(gdb_client, ui_state: UIState):
-    # Stop GDB client
-    gdb_client.stdin.write("quit\n")
-    gdb_client.stdin.flush()
-
-    # Stop GDB server
-    ui_state.stop_gdb()
 
 def get_callstack_with_gdb(ui_state, pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None):
-
     # Start GDB client
     gdb_client = subprocess.Popen(
-        ["../tt-exalens/build/sfpi/compiler/bin/riscv32-tt-elf-gdb", "--quiet"],
+        [
+            "../tt-exalens/build/sfpi/compiler/bin/riscv32-tt-elf-gdb",
+            "--quiet",
+        ],  # TODO: Think of a way to get gdb to metal
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True, 
-        bufsize=1
+        text=True,
+        bufsize=1,
     )
 
     # Giving 0 as kernel_offset does not work
-    add_symbol_file_cmd = f"add-symbol-file {elf_path} {kernel_offset}" if kernel_offset is not None else f"add-symbol-file {elf_path}"
-    
+    add_symbol_file_cmd = (
+        f"add-symbol-file {elf_path} {kernel_offset}" if kernel_offset is not None else f"add-symbol-file {elf_path}"
+    )
+
     callstack_log_file = open(CALLSTACK_LOG_PATH, "r")
     callstack_output = callstack_log_file.read()
 
-    gdb_client.stdin.write(f"""\
+    gdb_client.stdin.write(
+        f"""\
     target extended-remote localhost:{PORT}
     attach {pid}
     {add_symbol_file_cmd}
-    set prompt 
+    set prompt
     set logging file {CALLSTACK_LOG_PATH}
     set logging enabled on
     printf "{pid} -> {loc} {risc_name}\\n"
@@ -598,7 +578,8 @@ def get_callstack_with_gdb(ui_state, pid: int, loc, risc_name: str, elf_path: st
     printf "\\n"
     set logging enabled off
     detach
-    """)
+    """
+    )
     gdb_client.stdin.flush()
 
     # Wait for command to finish TODO: Think of a better way to do this
@@ -612,6 +593,7 @@ def get_callstack_with_gdb(ui_state, pid: int, loc, risc_name: str, elf_path: st
     with open(GDB_LOG_PATH, "a") as gdb_log_file:
         gdb_log_file.write(gdb_client.communicate()[0])
 
+
 def get_process_ids(ui_state: UIState):
     process_ids = {}
     for pid, process in ui_state.gdb_server.available_processes.items():
@@ -624,6 +606,7 @@ def get_process_ids(ui_state: UIState):
             process_ids[loc] = {risc_name: pid}
 
     return process_ids
+
 
 def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context: Context):
     """Print the running operations on the device."""
@@ -761,7 +744,6 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
         # Stop gdb server
         ui_state.stop_gdb()
 
-
     # WIP:
     # # Print callstack for this location using tt_exalens_lib
     # fw_elf_path = a_kernel_path + "../../../firmware/trisc1/trisc1.elf"
@@ -793,7 +775,7 @@ def main(argv=None):
     VVERBOSE = args["--vverbose"]
     HALT_ON_ERROR = args["--halt-on-error"]
     GDB_EN = args["--gdb"]
-    PORT = int(args["--port"]) 
+    PORT = int(args["--port"])
 
     context = init_ttexalens(use_noc1=False)
     device_ids = list(context.devices.keys())
