@@ -57,9 +57,6 @@ VVERBOSE = False
 context = None
 GDB_EN = False
 PORT = 6767
-CALLSTACK_LOG_PATH = os.environ.get("TT_METAL_HOME", "") + "/scripts/debugging_scripts/callstack.output"
-GDB_LOG_PATH = os.environ.get("TT_METAL_HOME", "") + "/scripts/debugging_scripts/gdb_log.txt"
-
 
 try:
     from tabulate import tabulate, TableFormat, Line, DataRow
@@ -81,6 +78,7 @@ try:
     from ttexalens.parse_elf import mem_access
     from ttexalens.uistate import UIState
     from ttexalens.context import Context
+    from ttexalens.hardware.risc_debug import CallstackEntry
 except ImportError as e:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     install_script = os.path.join(os.path.dirname(script_dir), "install_debugger.sh")
@@ -278,8 +276,9 @@ def collect_pcs_from_riscv(
         pc_dict = dict()
         for risc_name in block.risc_names:
             risc_debug = block.get_risc_debug(risc_name)
-            if not risc_name == "ncrisc" and not risc_debug.is_halted():
-                risc_debug.halt()
+            if GDB_EN:
+                if not risc_name == "ncrisc" and not risc_debug.is_halted():
+                    risc_debug.halt()
             pc_dict[risc_name + "_pc"] = risc_debug.get_pc()
         pcs[block.location] = pc_dict
     return pcs
@@ -497,15 +496,16 @@ def get_running_ops_table(
                         pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
                     )
                     # Since we are halting when attaching to process, we can't attach to NCRISC
-                    if GDB_EN and proc_name != "NCRISC":
+                    if GDB_EN:
                         pid = process_ids.get(loc, {}).get(risc_name, None)
                         if pid is not None:
-                            get_callstack_with_gdb(
-                                ui_state, process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset
+                            cs = (
+                                get_callstack_with_gdb(
+                                    process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset
+                                )
+                                if proc_name != "NCRISC"
+                                else ["GDB does not support callstack for NCRISC"]
                             )
-                            risc_debug = block.get_risc_debug(risc_name)
-                            if risc_debug.is_halted():
-                                risc_debug.cont()
 
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -518,10 +518,14 @@ def get_running_ops_table(
                     cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
 
                     # Since we are halting when attaching to process, we can't attach to NCRISC
-                    if GDB_EN and proc_name != "NCRISC":
+                    if GDB_EN:
                         pid = process_ids.get(loc, {}).get(risc_name, None)
                         if pid is not None:
-                            get_callstack_with_gdb(ui_state, process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
+                            cs = (
+                                get_callstack_with_gdb(process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
+                                if proc_name != "NCRISC"
+                                else ["GDB does not support callstack for NCRISC"]
+                            )
 
             if VVERBOSE:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -543,13 +547,14 @@ def get_running_ops_table(
             if kernel_name or kernel_config_base or VVERBOSE:
                 printout_table.append(row)
                 if cs:
-                    for line in format_callstack(cs):
+                    cs = format_callstack(cs) if not GDB_EN else cs
+                    for line in cs:
                         printout_table.append(["", "", "", "", "", "", "", line])
 
     return printout_table
 
 
-def get_callstack_with_gdb(ui_state, pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None):
+def get_callstack_with_gdb(pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None) -> list[str]:
     # Start GDB client
     gdb_client = subprocess.Popen(
         [
@@ -568,37 +573,29 @@ def get_callstack_with_gdb(ui_state, pid: int, loc, risc_name: str, elf_path: st
         f"add-symbol-file {elf_path} {kernel_offset}" if kernel_offset is not None else f"add-symbol-file {elf_path}"
     )
 
-    callstack_log_file = open(CALLSTACK_LOG_PATH, "r")
-    callstack_output = callstack_log_file.read()
-
     gdb_client.stdin.write(
         f"""\
     target extended-remote localhost:{PORT}
     attach {pid}
     {add_symbol_file_cmd}
-    set prompt
-    set logging file {CALLSTACK_LOG_PATH}
-    set logging enabled on
-    printf "{pid} -> {loc} {risc_name}\\n"
-    p/x $pc
     backtrace
-    printf "\\n"
-    set logging enabled off
     detach
     """
     )
     gdb_client.stdin.flush()
 
-    # Wait for command to finish TODO: Think of a better way to do this
-    while callstack_output == callstack_log_file.read():
-        time.sleep(0.01)
-    callstack_log_file.close()
+    # TODO: Find better way to wait for gdb command to finish
+    time.sleep(0.1)
 
     gdb_client.stdin.write("quit\n")
     gdb_client.stdin.flush()
 
-    with open(GDB_LOG_PATH, "a") as gdb_log_file:
-        gdb_log_file.write(gdb_client.communicate()[0])
+    cs = []
+    for line in gdb_client.communicate()[0].splitlines():
+        if "#" in line:
+            cs.append(line[line.find("#") :])
+
+    return cs
 
 
 def get_process_ids(ui_state: UIState):
@@ -627,12 +624,6 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
             ui_state.start_gdb(PORT)
         except Exception as e:
             raiseTTTriageError(f"Failed to start GDB server on port {PORT}. Error: {e}")
-
-        # Clear log files before starting
-        with open(GDB_LOG_PATH, "w") as f:
-            f.truncate(0)
-        with open(CALLSTACK_LOG_PATH, "w") as f:
-            f.truncate(0)
 
         # Get mapping form risc location and name to process id
         process_ids = get_process_ids(ui_state)
