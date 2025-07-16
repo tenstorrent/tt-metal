@@ -3,7 +3,6 @@ add_library(TTNN::Ops::Experimental::Test ALIAS ttnn_op_experimental_test)
 
 target_precompile_headers(ttnn_op_experimental_test REUSE_FROM TT::CommonPCH)
 
-target_sources(ttnn_op_experimental_test PRIVATE hang_host/hang_host_operation.cpp)
 target_sources(ttnn_op_experimental_test PRIVATE hang_device/hang_device_operation.cpp)
 
 target_include_directories(ttnn_op_experimental_test PRIVATE ${FixmeOpIncDirs})

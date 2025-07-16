@@ -122,6 +122,7 @@ if(DEFINED TTNN_OPERATION_TIMEOUT_SECONDS)
     add_definitions(-DTTNN_OPERATION_TIMEOUT_SECONDS=${TTNN_OPERATION_TIMEOUT_SECONDS})
     message(STATUS "TTNN Operation Timeout: ${TTNN_OPERATION_TIMEOUT_SECONDS} seconds")
 else()
+    add_definitions(-DTTNN_OPERATION_TIMEOUT_SECONDS=0)
     message(STATUS "TTNN Operation Timeout: Disabled")
 endif()
 
