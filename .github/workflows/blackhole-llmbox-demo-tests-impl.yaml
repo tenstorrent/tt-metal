@@ -38,7 +38,7 @@ jobs:
            {
             name: "llama3.3-70b quietbox data-parallel=4 performance",
             arch: blackhole,
-            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4,
+            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32",
             owner_id: U03PUAKE719 # Miguel Tairum
            }
         ]
