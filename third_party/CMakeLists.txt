@@ -325,15 +325,3 @@ CPMAddPackage(
 ####################################################################################################################
 # mlpack
 ####################################################################################################################
-
-if(BUILD_MLP_OP_PERF)
-    CPMAddPackage(NAME LAPACK GITHUB_REPOSITORY Reference-LAPACK/lapack)
-
-    CPMAddPackage(NAME BLAS GIT_REPOSITORY https://github.com/OpenMathLib/OpenBLAS.git)
-
-    # Fetch Armadillo (C++ linear algebra library)
-    CPMAddPackage(NAME Armadillo GITHUB_REPOSITORY conradsnicta/armadillo-code)
-
-    # Fetch mlpack (machine learning library)
-    CPMAddPackage(NAME mlpack GITHUB_REPOSITORY mlpack/mlpack)
-endif()
