@@ -31,4 +31,4 @@ jobs:
           VIRTUAL_CONFIG: "2"
         run: |
           echo "Running mpirun command on multiple hosts"
-          mpirun --rankfile /etc/rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
+          mpirun --rankfile rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
