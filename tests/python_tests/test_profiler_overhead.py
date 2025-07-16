@@ -28,7 +28,7 @@ def test_profiler_overhead():
 
     runtime = Profiler.get_data(test_config["testname"])
 
-    # filter out all zones that dont have marker "OVERHEAD"
+    # filter out all zones that don't have marker "OVERHEAD"
     overhead_zones = [x for x in runtime.unpack if x.full_marker.marker == "OVERHEAD"]
     assert (
         len(overhead_zones) == 32

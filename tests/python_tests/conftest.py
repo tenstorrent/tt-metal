@@ -87,7 +87,7 @@ def download_headers():
                     time.sleep(RETRY_DELAY)
                     RETRY_DELAY *= 2
             except RequestException as e:
-                print(f"Non-retriable error on attempt {attempt}: {e}")
+                print(f"Non-retryable error on attempt {attempt}: {e}")
                 return False
         return False
 

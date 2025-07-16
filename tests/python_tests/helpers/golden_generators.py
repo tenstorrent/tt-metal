@@ -570,7 +570,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         result = [self.ops[operation](t1[i], t2[i]) for i in range(len(t1))]
         return torch.tensor(result, dtype=format_dict[data_format])
 
-    # Operation methods are cover by Eltwise Binary Golden
+    # Operation methods are covered by Eltwise Binary Golden
     def _xlogy(self, x, y):
         # Unable to model edge cases for Tensix behavior in golden.
         # Tensix shows inconsistent patterns in handling non-finite results for xlogy, depending on the input,

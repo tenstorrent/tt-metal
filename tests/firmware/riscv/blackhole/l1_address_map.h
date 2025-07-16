@@ -67,7 +67,7 @@ struct address_map
     static constexpr std::uint32_t NCRISC_L1_RUNTIME_SECTION_SIZE = 16 * 1024;
     static constexpr std::uint32_t NCRISC_L1_SCRATCH_BASE =
         NCRISC_L1_RUNTIME_SECTION_BASE +
-        0x200; // L1 Scratch used by NCRISC sized NCRISC_L1_SCRATCH_SIZE, skip 0x200 because some of the beginning of NCRISC is used .e.g. TEST_MAILBOX
+        0x200; // L1 Scratch used by NCRISC sized NCRISC_L1_SCRATCH_SIZE, skip 0x200 because some of the beginning of NCRISC is used e.g. TEST_MAILBOX
     static constexpr std::uint32_t NCRISC_L1_CONTEXT_BASE =
         NCRISC_L1_RUNTIME_SECTION_BASE + 0x20; // If changing make sure to modify src/firmware/riscv/targets/ncrisc/contextASM.S
     static constexpr std::uint32_t NCRISC_L1_DRAM_POLLING_CTRL_BASE = NCRISC_L1_RUNTIME_SECTION_BASE + 0x40;
@@ -85,7 +85,7 @@ struct address_map
     static_assert(FIRMWARE_BASE % NOC_ADDRESS_ALIGNMENT == 0, "FIRMWARE_BASE must be aligned to NOC_ADDRESS_ALIGNMENT");
     static_assert(NCRISC_FIRMWARE_BASE % NOC_ADDRESS_ALIGNMENT == 0, "NCRISC_FIRMWARE_BASE must be aligned to NOC_ADDRESS_ALIGNMENT");
     static_assert(TRISC0_BASE % NOC_ADDRESS_ALIGNMENT == 0, "TRISC0_BASE must be aligned to NOC_ADDRESS_ALIGNMENT");
-    static_assert(TRISC1_BASE % NOC_ADDRESS_ALIGNMENT == 0, "TROSC1_BASE must be aligned to NOC_ADDRESS_ALIGNMENT");
+    static_assert(TRISC1_BASE % NOC_ADDRESS_ALIGNMENT == 0, "TRISC1_BASE must be aligned to NOC_ADDRESS_ALIGNMENT");
     static_assert(TRISC2_BASE % NOC_ADDRESS_ALIGNMENT == 0, "TRISC2_BASE must be aligned to NOC_ADDRESS_ALIGNMENT");
     static_assert(EPOCH_RUNTIME_CONFIG_BASE % NOC_ADDRESS_ALIGNMENT == 0, "EPOCH_RUNTIME_CONFIG_BASE must be aligned to NOC_ADDRESS_ALIGNMENT");
     static_assert(OVERLAY_BLOB_BASE % NOC_ADDRESS_ALIGNMENT == 0, "OVERLAY_BLOB_BASE must be aligned to NOC_ADDRESS_ALIGNMENT");
@@ -128,7 +128,7 @@ struct address_map
     // Parameter UNPACK_PACK_PERF_BUF_SIZE_LEVEL_1 assumes the following PERF_BUF_SIZE = 12KB - 768
     static constexpr std::uint32_t PERF_BUF_SIZE = FIRMWARE_SIZE - BRISC_FIRMWARE_SIZE - ZEROS_SIZE;
 
-    // This value must be equal to the sum of all all the subsequent sizes in this section
+    // This value must be equal to the sum of all the subsequent sizes in this section
     static constexpr std::uint32_t PERF_TOTAL_SETUP_BUFFER_SIZE = 64;
     // Queue header below is used for the concurrent performance trace
     static constexpr std::uint32_t PERF_QUEUE_HEADER_SIZE = 16;
