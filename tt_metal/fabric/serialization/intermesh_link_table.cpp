@@ -12,6 +12,8 @@ std::vector<uint8_t> serialize_to_bytes(const IntermeshLinkTable& intermesh_link
     flatbuffers::FlatBufferBuilder builder;
 
     auto mesh_id = tt::tt_fabric::flatbuffer::CreateMeshId(builder, *(intermesh_link_table.local_mesh_id));
+    auto host_rank_id =
+        tt::tt_fabric::flatbuffer::CreateHostRankId(builder, *(intermesh_link_table.local_host_rank_id));
 
     // Create vector of EthernetLink objects (flatbuffers dont support std::unordered_map directly)
     std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::EthernetLink>> ethernet_links;
@@ -34,7 +36,7 @@ std::vector<uint8_t> serialize_to_bytes(const IntermeshLinkTable& intermesh_link
 
     // Create the root IntermeshLinkTable
     auto serialized_intermesh_link_table =
-        tt::tt_fabric::flatbuffer::CreateIntermeshLinkTable(builder, mesh_id, ethernet_links_vector);
+        tt::tt_fabric::flatbuffer::CreateIntermeshLinkTable(builder, mesh_id, host_rank_id, ethernet_links_vector);
 
     // Finish the buffer
     builder.Finish(serialized_intermesh_link_table);
@@ -55,6 +57,10 @@ IntermeshLinkTable deserialize_from_bytes(const std::vector<uint8_t>& data) {
 
     if (intermesh_link_table->local_mesh_id()) {
         result.local_mesh_id = MeshId{intermesh_link_table->local_mesh_id()->value()};
+    }
+
+    if (intermesh_link_table->local_host_rank_id()) {
+        result.local_host_rank_id = HostRankId{intermesh_link_table->local_host_rank_id()->value()};
     }
 
     // Extract intermesh links into unordered_map
