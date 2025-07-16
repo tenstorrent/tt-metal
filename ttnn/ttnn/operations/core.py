@@ -237,12 +237,12 @@ def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[ttnn.DataType] = None,
     *,
+    spec: Optional[ttnn.TensorSpec] = None,
     tile: Optional[ttnn.Tile] = None,
     pad_value: Optional[float] = None,
-    layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
+    layout: Optional[ttnn.Layout] = None,
     device: Optional[ttnn.MeshDevice] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    spec: Optional[ttnn.TensorSpec] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
@@ -281,10 +281,22 @@ def from_torch(
             raise RuntimeError(
                 f"ttnn.from_torch: spec shape {spec.shape} must be the same as tensor shape {tensor.shape}"
             )
+        if dtype is not None:
+            raise RuntimeError("ttnn.from_torch: dtype must be None when spec is specified")
+        if layout is not None:
+            raise RuntimeError("ttnn.from_torch: layout must be None when spec is specified")
+        if memory_config is not None:
+            raise RuntimeError("ttnn.from_torch: memory_config must be None when spec is specified")
+        if tile is not None:
+            raise RuntimeError("ttnn.from_torch: tile must be None when spec is specified")
+
         dtype = spec.dtype
         layout = spec.layout
         memory_config = spec.memory_config
         tile = spec.tile
+
+    if layout is None:
+        layout = ttnn.ROW_MAJOR_LAYOUT
 
     if memory_config is not None and memory_config.is_sharded():
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
