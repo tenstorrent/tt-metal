@@ -598,43 +598,12 @@ def test_graph_capture_without_dtype_json_output(device):
     assert mem_config_item3["shard_spec"] == "std::nullopt"
 
 
-# this test is meaningless unless you compile with --ttnn-enable-operation-timeout
-def test_graph_capture_with_hang_host_operation(device):
-    # Create input tensor
-    tt_input = ttnn.empty(
-        shape=(1, 1, 2048, 512),
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-
-    failed = False
-    try:
-        output = ttnn.experimental.test.test_hang_host_operation(tt_input)
-        failed = False
-    except RuntimeError as e:
-        captured_graph = ttnn.graph.end_graph_capture()
-        failed = True
-        assert "TIMEOUT" in str(e)
-        assert "ttnn::experimental::test::test_hang_host_operation" in str(e)
-
-    # this is the normal case for CI
-    if not failed:
-        assert output == tt_input
-    else:
-        # this is the case for --ttnn-enable-operation-timeout
-        # the graph should have captured the arguments to the hang operation
-        assert (
-            captured_graph[1]["arguments"][0]
-            == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, 512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
-        )
+# This test is disabled by default because it will hang the device
+# if you want to experiment with a hanging device, remove the return statement below
 
 
-# this test is meaningless unless you compile with --ttnn-enable-operation-timeout
 def test_graph_capture_with_hang_device_operation(device):
+    return
     # Create input tensor
     tt_input = ttnn.empty(
         shape=(1, 1, 2048, 512),
@@ -648,7 +617,7 @@ def test_graph_capture_with_hang_device_operation(device):
 
     failed = False
     try:
-        output = ttnn.prim.test_hang_device_operation(tt_input)
+        ttnn.prim.test_hang_device_operation(tt_input)
         ttnn._ttnn.device.synchronize_device(device)
         failed = False
     except Exception as e:
@@ -659,10 +628,7 @@ def test_graph_capture_with_hang_device_operation(device):
         assert "TIMEOUT" in str(e)
         assert "potential hang detected, please check the graph capture" in str(e)
 
-    # this is the normal case for CI
-    if not failed:
-        assert output == tt_input
-    else:
+    if failed:
         print(captured_graph)
         # this is the case for --ttnn-enable-operation-timeout
         # the graph should have captured the arguments to the hang operation
