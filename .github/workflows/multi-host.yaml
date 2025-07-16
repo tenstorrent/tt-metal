@@ -26,10 +26,6 @@ jobs:
       - name: Generate the rankfile
         run: ./generate-rankfile.sh "4"
 
-      - name: Echo Environment Variables
-        run: |
-            mpirun --rankfile rankfile --tag-output "env|sort"
-
       - name: Run tt-smi via mpirun command
         run: |
           echo "Running mpirun command on multiple hosts"
