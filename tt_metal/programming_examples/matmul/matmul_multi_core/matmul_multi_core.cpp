@@ -264,10 +264,6 @@ void matmul_multi_core(
 int main() {
     bool pass = true;
 
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     try {
         constexpr int device_id = 0;
         IDevice* device = CreateDevice(device_id);

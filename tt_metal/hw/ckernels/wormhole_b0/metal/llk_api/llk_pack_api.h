@@ -284,6 +284,58 @@ inline void llk_matmul_pack(
 }
 
 /*************************************************************************
+ * LLK PACK FAST TILIZE
+ *************************************************************************/
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_hw_configure(const llk_pack_params_t* pack_params) {
+    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
+
+    _llk_pack_fast_tilize_hw_configure_<is_fp32_dest_acc_en>(pack_src_format[output_id], pack_dst_format[output_id]);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_hw_configure_disaggregated(const std::uint32_t pack_output) {
+    const llk_pack_params_t llk_pack_params = {.pack_output = pack_output};
+
+    llk_pack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&llk_pack_params);
+}
+
+inline void llk_pack_fast_tilize_init(
+    const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
+    const std::uint8_t input_id = get_output_id(input_operand);
+    const std::uint8_t output_id = get_output_id(pack_output);
+    const uint32_t use_32bit_dest =
+        pack_src_format[input_id] == (uint)DataFormat::Float32 || pack_src_format[input_id] == (uint)DataFormat::Tf32;
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
+    const std::uint32_t output_id = get_output_id(pack_output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool partial_face = get_output_partial_face(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+}
+
+inline void llk_pack_fast_tilize_block(
+    const std::uint32_t tile_index,
+    const std::uint32_t output,
+    const std::uint32_t output_tile_index,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units) {
+    const std::uint8_t output_id = get_output_id(output);
+
+    const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
+
+    _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units);
+}
+
+/*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
 
