@@ -4,10 +4,10 @@ set -x
 
 case $OMPI_COMM_WORLD_LOCAL_RANK in
     0)
-        device_args="--device /dev/tenstorrent/0" # set from ansible inventory?
+        device_args="--device /dev/tenstorrent/0 --device /dev/tenstorrent/1 " # set from ansible inventory?
         ;;
     1)
-        device_args="--device /dev/tenstorrent/1" # set from ansible inventory?
+        device_args="--device /dev/tenstorrent/2 --device /dev/tenstorrent/3 " # set from ansible inventory?
         ;;
 esac
 
