@@ -68,18 +68,6 @@ class CommandQueueBufferFixture : public CommandQueueFixture {};
 
 class CommandQueueProgramFixture : public CommandQueueFixture {};
 
-class CommandQueueTraceFixture : public CommandQueueFixture {
-protected:
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    }
-
-    void CreateDevice(const size_t trace_region_size) { this->create_device(trace_region_size); }
-};
-
 class UnitMeshCQFixture : public DispatchFixture {
 protected:
     void SetUp() override {
@@ -132,18 +120,6 @@ protected:
 };
 
 class UnitMeshCQProgramFixture : public UnitMeshCQFixture {};
-
-class UnitMeshCQTraceFixture : public UnitMeshCQFixture {
-protected:
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    }
-
-    void CreateDevices(const size_t trace_region_size) { this->create_devices(trace_region_size); }
-};
 
 class UnitMeshCQTraceFixture : public UnitMeshCQFixture {
 protected:
