@@ -22,7 +22,7 @@ on:
         default: "config-tg"
 
 jobs:
-  tg-demo-tests:
+  tg-deepseek-tests:
     strategy:
       fail-fast: false
       matrix:
