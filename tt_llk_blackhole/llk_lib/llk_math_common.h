@@ -46,7 +46,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 template <DstSync Dst>
 inline void _llk_math_wait_for_dest_available_()
 {
-    // These liteweight functions for sync with packer imply
+    // These lightweight functions for sync with packer imply
     // no mode change - entire epoch is either double buffer or single buffer
 #ifdef PERF_DUMP
     if constexpr (MATH_PACK_DECOUPLE == 0)

@@ -165,7 +165,7 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
     if (array_id == dbg_array_id::SRCA)
     {
         // Save dest row
-        // WWhen SrcA array is selected we need to copy row from src register into dest to be able to dump data
+        // When SrcA array is selected we need to copy row from src register into dest to be able to dump data
         // Dump from SrcA array is not supported
         // Save dest row to SFPU register
         // Move SrcA into dest row

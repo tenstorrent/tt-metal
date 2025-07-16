@@ -832,7 +832,7 @@ union bstatus_u
 
 inline void init_prng_seed(const uint seed)
 {
-    // The seed for PRNG should at least be initialzied during chip bootup time.
+    // The seed for PRNG should at least be initialized during chip bootup time.
     volatile uint tt_reg_ptr *cfg  = get_cfg_pointer();
     cfg[PRNG_SEED_Seed_Val_ADDR32] = seed;
 
