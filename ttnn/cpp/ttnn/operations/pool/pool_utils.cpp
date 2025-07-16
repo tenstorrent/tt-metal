@@ -310,7 +310,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             count_include_pad,
             divisor_override);
 
-        return {l1_usage, input_parallel_config};
+        return {.l1_usage = l1_usage, .config = input_parallel_config};
     };
 
     auto l1_config_height = calc_l1_usage_inner(TensorMemoryLayout::HEIGHT_SHARDED, ShardOrientation::ROW_MAJOR);
