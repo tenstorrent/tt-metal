@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     Program program = CreateProgram();
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
     CoreCoord core = {0, 0};
-    auto core_mesh_coord = distributed::MeshCoordinate(0, 0);
+    const auto device_coord = distributed::MeshCoordinate(0, 0);
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     const uint32_t n_tiles = 64;
@@ -138,8 +138,11 @@ int main(int argc, char** argv) {
     MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
     MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
 
-    distributed::WriteShard(cq, a, a_data, core_mesh_coord);
-    distributed::WriteShard(cq, b, b_data, core_mesh_coord);
+
+    //We're writing to a shard allocated on Device Coordinate 0, 0, since this is a 1x1 
+    // When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    distributed::WriteShard(cq, a, a_data, device_coord);
+    distributed::WriteShard(cq, b, b_data, device_coord);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data
     // movement processors act independent to other cores. And the 3 compute processors act together (hence 1 kerenl for
@@ -199,7 +202,10 @@ int main(int argc, char** argv) {
 
     // Read the output buffer.
     std::vector<uint32_t> c_data;
-    distributed::ReadShard(cq, c_data, c, core_mesh_coord);
+
+    //We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1 
+    // When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    distributed::ReadShard(cq, c_data, c, device_coord);
     distributed::Finish(cq);
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";
