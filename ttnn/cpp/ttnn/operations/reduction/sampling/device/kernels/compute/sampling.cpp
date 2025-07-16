@@ -12,7 +12,7 @@
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
@@ -212,7 +212,8 @@ void top_k() {
     ckernel::topk_tile_init();
 
     if (first_call) {
-        transpose_wh_init(input_cb_index, input_transposed_cb_index);
+        compute_kernel_hw_startup(input_cb_index, index_transposed_cb_index);
+        transpose_init(input_cb_index);
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = false;
@@ -227,14 +228,14 @@ void top_k() {
             cb_wait_front(index_cb_index, 2);
 
             reconfig_data_format_srca(input_cb_index);
-            transpose_wh_init_short(input_cb_index);
-            transpose_wh_tile(input_cb_index, 0, 0);
-            transpose_wh_tile(input_cb_index, 1, 1);
+            transpose_init(input_cb_index);
+            transpose_tile(input_cb_index, 0, 0);
+            transpose_tile(input_cb_index, 1, 1);
 
             reconfig_data_format_srca(index_cb_index);
-            transpose_wh_init_short(index_cb_index);
-            transpose_wh_tile(index_cb_index, 0, 2);
-            transpose_wh_tile(index_cb_index, 1, 3);
+            transpose_init(index_cb_index);
+            transpose_tile(index_cb_index, 0, 2);
+            transpose_tile(index_cb_index, 1, 3);
 
             // llk_topk_sort -> inplace
             ckernel::topk_local_sort(0, (int)ascending, logk - 1);
@@ -311,13 +312,13 @@ void top_k() {
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
-        transpose_wh_init_short(input_transposed_cb_index);
+        transpose_init(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         cb_wait_front(input_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
             cb_reserve_back(values_cb_index, 1);
-            transpose_wh_tile(input_transposed_cb_index, i, 0);
+            transpose_tile(input_transposed_cb_index, i, 0);
             pack_tile(0, values_cb_index);
             cb_push_back(values_cb_index, 1);
             release_dst();
@@ -327,13 +328,13 @@ void top_k() {
 
         // transpose index tiles and pack into output buffer
         reconfig_data_format_srca(index_transposed_cb_index);
-        transpose_wh_init_short(index_transposed_cb_index);
+        transpose_init(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         cb_wait_front(index_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
             cb_reserve_back(output_ind_cb_index, 1);
-            transpose_wh_tile(index_transposed_cb_index, i, 0);
+            transpose_tile(index_transposed_cb_index, i, 0);
             pack_tile(0, output_ind_cb_index);
             cb_push_back(output_ind_cb_index, 1);
             release_dst();

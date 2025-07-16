@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
@@ -94,7 +94,8 @@ void MAIN {
     constexpr uint32_t index_dest_end = 3;
 
     ckernel::topk_tile_init();
-    transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
+    compute_kernel_hw_startup(input_tensor_cb_index, index_tensor_transposed_cb_index);
+    transpose_init(input_tensor_cb_index);
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const bool ascending = !descending;
