@@ -24,7 +24,7 @@ Resource link - [source](https://github.com/meituan/YOLOv6)
 ### Details:
 - The entry point to yolov6l model is TtYolov6l in `models/demos/yolov6l/tt/ttnn_yolov6l.py`.
 - Batch size :1
-- Supported Input Resolution - (640,480) (Height,Width)
+- Supported Input Resolution - (640,640) (Height,Width)
 
 ### How to Run:
 
