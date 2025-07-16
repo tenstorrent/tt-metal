@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <type_traits>
 
 namespace tt {
 
@@ -20,9 +21,11 @@ namespace tt {
  *
  * @note If b is zero, this results in undefined behavior.
  */
-constexpr uint32_t div_up(uint32_t a, uint32_t b) {
+template <typename A, typename B>
+constexpr auto div_up(A a, B b) noexcept -> std::common_type_t<A, B> {
+    using T = std::common_type_t<A, B>;
     assert(b != 0 && "Divide by zero error in div_up");
-    return static_cast<uint32_t>((a + b - 1) / b);
+    return static_cast<T>((static_cast<T>(a) + static_cast<T>(b) - 1) / static_cast<T>(b));
 }
 
 /**
@@ -36,8 +39,11 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
  *
  * @note Internally uses div_up. If b is zero, this results in undefined behavior.
  */
-constexpr uint32_t round_up(uint32_t a, uint32_t b) { return b * div_up(a, b); }
-
+template <typename A, typename B>
+constexpr auto round_up(A a, B b) {
+    using T = std::common_type_t<A, B>;
+    return static_cast<T>(b) * div_up(static_cast<T>(a), static_cast<T>(b));
+}
 /**
  * @brief Rounds down a to the nearest multiple of b.
  *
@@ -49,6 +55,10 @@ constexpr uint32_t round_up(uint32_t a, uint32_t b) { return b * div_up(a, b); }
  *
  * @note If b is zero, this results in undefined behavior.
  */
-constexpr uint32_t round_down(uint32_t a, uint32_t b) { return a / b * b; }
+template <typename A, typename B>
+constexpr auto round_down(A a, B b) {
+    using T = std::common_type_t<A, B>;
+    return static_cast<T>(b) * (static_cast<T>(a) / static_cast<T>(b));
+}
 
 }  // namespace tt
