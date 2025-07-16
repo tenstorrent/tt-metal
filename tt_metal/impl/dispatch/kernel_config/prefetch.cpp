@@ -29,6 +29,7 @@
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
 #include "dispatch/system_memory_manager.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 using namespace tt::tt_metal;
 

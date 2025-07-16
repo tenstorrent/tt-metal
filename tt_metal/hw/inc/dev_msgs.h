@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 
@@ -243,6 +245,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocMixedVirtualandPhysical = 10,
     DebugSanitizeInlineWriteDramUnsupported = 11,
     DebugSanitizeNocAddrMailbox = 12,
+    DebugSanitizeNocLinkedTransactionViolation = 13,
 };
 
 struct debug_assert_msg_t {
@@ -307,6 +310,8 @@ struct watcher_msg_t {
     volatile uint32_t enable;
     struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
+    std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
+    uint8_t pad_0[2];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;

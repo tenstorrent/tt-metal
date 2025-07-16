@@ -24,18 +24,18 @@ jobs:
   smoke:
     runs-on: >-
       ${{
-        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b-viommu') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
+        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b' || contains(inputs.runner, 'viommu')) && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
-      image: ${{ (inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b-viommu') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b' || contains(inputs.runner, 'viommu')) && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
         UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
       volumes:
         - /work
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: --device /dev/tenstorrent
     defaults:
       run:
