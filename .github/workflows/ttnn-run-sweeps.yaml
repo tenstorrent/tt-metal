@@ -242,11 +242,13 @@ on:
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw_sharded
           - eltwise.unary_backward.mul_bw.mul_bw
+          - eltwise.unary_backward.mul_bw.mul_bw_output
           - eltwise.unary_backward.softplus_bw.softplus_bw
           - eltwise.unary_backward.softplus_bw.softplus_bw_sharded
           - eltwise.unary_backward.threshold_bw.threshold_bw
           - eltwise.unary_backward.threshold_bw.threshold_bw_sharded
           - eltwise.unary_backward.div_bw.div_bw
+          - eltwise.unary_backward.div_bw.div_bw_output
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.log_bw.log_bw_sharded
           - eltwise.unary_backward.relu6_bw.relu6_bw
@@ -269,7 +271,9 @@ on:
           - eltwise.unary_backward.sqrt_bw.sqrt_bw_sharded
           - eltwise.unary_backward.add_bw.add_bw
           - eltwise.unary_backward.add_bw.add_bw_sharded
+          - eltwise.unary_backward.add_bw.add_bw_output
           - eltwise.unary_backward.assign_bw.assign_bw
+          - eltwise.unary_backward.assign_bw.assign_bw_output
           - eltwise.unary_backward.fill_bw.fill_bw
           - eltwise.unary_backward.fill_bw.fill_bw_sharded
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
@@ -355,6 +359,8 @@ on:
           - eltwise.binary.multiply.multiply_forge
           - eltwise.binary.multiply.multiply_llama
           - eltwise.binary.multiply.mul_no_act_llama
+          - eltwise.binary.multiply.multiply_output
+          - eltwise.binary.multiply.multiply_unary_output
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
@@ -420,14 +426,19 @@ on:
           - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw
           - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw_sharded
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
+          - eltwise.binary_backward.addalpha_bw.addalpha_bw_output
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
+          - eltwise.binary_backward.subalpha_bw.subalpha_bw_output
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
           - eltwise.binary_backward.hypot_bw.hypot_bw
           - eltwise.binary_backward.add_bw.add_bw
+          - eltwise.binary_backward.add_bw.add_bw_output
           - eltwise.binary_backward.sub_bw.sub_bw
           - eltwise.binary_backward.sub_bw.sub_bw_sharded
           - eltwise.binary_backward.mul_bw.mul_bw
+          - eltwise.binary_backward.mul_bw.mul_bw_output
           - eltwise.binary_backward.div_bw.div_bw
+          - eltwise.binary_backward.div_bw.div_bw_output
           - eltwise.binary_backward.fmod_bw.fmod_bw
           - eltwise.binary_backward.remainder_bw.remainder_bw
           - eltwise.binary_backward.rsub_bw.rsub_bw
@@ -462,6 +473,7 @@ on:
           - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
           - embedding_bw.embedding_bw
+          - embedding_bw.embedding_bw_output
           - fused.softmax_traces
           - fused.layer_norm_traces
           - reduction.backward.prod_bw.prod_bw
