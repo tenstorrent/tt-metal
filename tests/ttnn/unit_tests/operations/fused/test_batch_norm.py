@@ -502,7 +502,8 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, device)
         return pccs
 
     # Execute low-accuracy groupnorm
-    config_low = ttnn.WormholeComputeKernelConfig(
+    config_low = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
@@ -511,7 +512,8 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, device)
     pccs_low = compute_pccs_for_tensors(torch_tensors, tt_tensors)
 
     # Execute high-accuracy groupnorm
-    config_high = ttnn.WormholeComputeKernelConfig(
+    config_high = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
