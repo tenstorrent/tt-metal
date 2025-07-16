@@ -61,7 +61,7 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     uint8_t fabric_ep_y,
     size_t fabric_ep_status_address,
     uint32_t local_fabric_ep_status_address) {
-    uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_status_address);
+    uint64_t noc_addr = get_noc_addr((uint32_t)fabric_ep_x, (uint32_t)fabric_ep_y, fabric_ep_status_address);
     auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
 
     local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::TERMINATED;
