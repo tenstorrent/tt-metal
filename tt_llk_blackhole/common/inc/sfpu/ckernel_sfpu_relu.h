@@ -35,24 +35,30 @@ inline void _calculate_lrelu_(const int iterations, uint slope)
     }
 }
 
+sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshold)
+{
+    sfpi::vFloat result = val;
+    v_if (result > threshold)
+    {
+        result = threshold;
+    }
+    v_endif;
+    v_if (result < 0.0f)
+    {
+        result = 0.0f;
+    }
+    v_endif;
+    return result;
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _relu_max_(const int iterations, uint uint_threshold)
 {
     sfpi::vFloat threshold = sfpi::s2vFloat16(uint_threshold, sfpi::s2vFloat16::fp16a);
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat a = sfpi::dst_reg[0];
-        v_if (a > threshold)
-        {
-            a = threshold;
-        }
-        v_endif;
-        v_if (a < 0.0f)
-        {
-            a = 0.0f;
-        }
-        v_endif;
-        sfpi::dst_reg[0] = a;
+        sfpi::vFloat a   = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = _relu_max_body_(a, threshold);
         sfpi::dst_reg++;
     }
 }

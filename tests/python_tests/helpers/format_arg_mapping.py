@@ -64,6 +64,7 @@ class MathOperation(Enum):
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
+    Hardsigmoid = OpSpec("hardsigmoid", MathOpType.SFPU_UNARY)
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     Neg = OpSpec("neg", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)

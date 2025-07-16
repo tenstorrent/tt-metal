@@ -360,6 +360,7 @@ class UnarySFPUGolden:
             MathOperation.Elu: self._elu,
             MathOperation.Exp: self._exp,
             MathOperation.Exp2: self._exp2,
+            MathOperation.Hardsigmoid: self._hardsigmoid,
         }
         self.data_format = None
 
@@ -475,6 +476,14 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return input_tensor.fill_(5).item()
+
+    def _hardsigmoid(self, x):
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.nn.functional.hardsigmoid(input_tensor).item()
 
 
 @register_golden

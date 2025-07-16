@@ -69,6 +69,7 @@ all_params = generate_params(
         MathOperation.Celu,
         MathOperation.Cos,
         MathOperation.Gelu,
+        MathOperation.Hardsigmoid,
         MathOperation.Log,
         MathOperation.Reciprocal,
         MathOperation.Silu,
@@ -103,7 +104,13 @@ def test_matmul_and_unary_sfpu(
         pytest.skip("Square operation in LoFi is not fully functional yet")
     if (
         formats.input_format == formats.output_format == DataFormat.Float16
-        and mathop in [MathOperation.Log, MathOperation.Sqrt, MathOperation.Square]
+        and mathop
+        in [
+            MathOperation.Log,
+            MathOperation.Sqrt,
+            MathOperation.Square,
+            MathOperation.Hardsigmoid,
+        ]
         and dest_acc == DestAccumulation.No
         and get_chip_architecture() == ChipArchitecture.BLACKHOLE
     ):

@@ -70,6 +70,7 @@ float_ops = [
     MathOperation.Elu,
     MathOperation.Exp,
     MathOperation.Exp2,
+    MathOperation.Hardsigmoid,
 ]
 
 int_ops = [
