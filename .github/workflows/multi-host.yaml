@@ -24,10 +24,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
       - name: Generate the rankfile
-        run: ./generate-rankfile.sh ${{ github.event.inputs.configuration }}
+        run: ./generate-rankfile.sh ${{ inputs.configuration }}
       - name: Run tt-smi via mpirun command
         env:
-          VIRTUAL_CONFIG: ${{ github.event.inputs.configuration }}
+          VIRTUAL_CONFIG: ${{ inputs.configuration }}
         run: |
           echo "Running mpirun command on multiple hosts"
           mpirun --rankfile /etc/rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
