@@ -63,7 +63,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     )
 
     # Create PT input
-    pt_attention_input = torch.randn(batch, seq_len, dim)
+    pt_attention_input = torch.rand(batch, seq_len, dim)
     attention_mask = torch.zeros(batch, 1, seq_len, seq_len)
 
     B, T, D = pt_attention_input.shape

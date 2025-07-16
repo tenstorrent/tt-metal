@@ -35,6 +35,8 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             weight_key="attention_norm",
             weight_dtype=dtype,
             is_distributed=configuration.is_distributed_norm,
+            sharded_program_config=configuration.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
+            sharded_output_config=configuration.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )
         self.attention_norm = DistributedNorm(inner_rms, configuration, TG=configuration.is_galaxy)
 
@@ -55,6 +57,8 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             weight_key="ffn_norm",
             weight_dtype=dtype,
             is_distributed=configuration.is_distributed_norm,
+            sharded_program_config=configuration.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
+            sharded_output_config=configuration.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )
 
         self.ffn_norm = DistributedNorm(ffn_rms, configuration, TG=configuration.is_galaxy)
@@ -63,7 +67,7 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             mesh_device=mesh_device,
             args=configuration,
             state_dict=state_dict,
-            weight_cache_path=configuration.weight_cache_path(dtype),
+            weight_cache_path=weight_cache_path,
             state_dict_prefix=f"{state_dict_prefix}feed_forward.",
             dtype=dtype,
         )
