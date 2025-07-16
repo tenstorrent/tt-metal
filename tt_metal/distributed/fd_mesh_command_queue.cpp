@@ -490,7 +490,7 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     }
 #if TTNN_OPERATION_TIMEOUT_SECONDS > 0
     if (thread_exception_ptr_) {
-        TT_THROW("TIMEOUT AFTER {} seconds: potential hang detected", TTNN_OPERATION_TIMEOUT_SECONDS);
+        std::rethrow_exception(thread_exception_ptr_);
     }
 #endif
 }
@@ -715,48 +715,28 @@ void FDMeshCommandQueue::read_completion_queue() {
             }
             if (exit_condition_) {
                 return;
-            } else {
-                uint32_t num_reads = num_outstanding_reads_.load();
-                for (uint32_t i = 0; i < num_reads; i++) {
-                    std::visit(
-                        ttsl::overloaded{
-                            [this](MeshBufferReadDescriptor& mesh_read_descriptor) {
-                                copy_buffer_data_to_user_space(mesh_read_descriptor);
-                            },
-                            [this](MeshReadEventDescriptor& mesh_read_descriptor) {
-                                read_completion_queue_event(mesh_read_descriptor);
-                            },
-                            [this](MeshCoreDataReadDescriptor& mesh_read_descriptor) {
-                                read_l1_data_from_completion_queue(mesh_read_descriptor);
-                            },
-                        },
-                        *completion_queue_reads_.pop());
-                }
-                if (exit_condition_) {
-                    return;
-                } else {
-                    uint32_t num_reads = num_outstanding_reads_.load();
-                    for (uint32_t i = 0; i < num_reads; i++) {
-                        auto mesh_read_descriptor = *(completion_queue_reads_.pop());
-                        std::visit(
-                            [&](auto&& mesh_read_descriptor) {
-                                using T = std::decay_t<decltype(mesh_read_descriptor)>;
-                                if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
-                                    this->copy_buffer_data_to_user_space(mesh_read_descriptor);
-                                } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
-                                    this->read_completion_queue_event(mesh_read_descriptor);
-                                } else {
-                                    this->read_l1_data_from_completion_queue(mesh_read_descriptor);
-                                }
-                            },
-                            mesh_read_descriptor);
-                    }
-                    std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-                    num_outstanding_reads_.fetch_sub(num_reads);
-                    if (num_outstanding_reads_ == 0) {
-                        reads_processed_cv_.notify_one();
-                    }
-                }
+            }
+
+            uint32_t num_reads = num_outstanding_reads_.load();
+            for (uint32_t i = 0; i < num_reads; i++) {
+                auto mesh_read_descriptor = *(completion_queue_reads_.pop());
+                std::visit(
+                    [&](auto&& mesh_read_descriptor) {
+                        using T = std::decay_t<decltype(mesh_read_descriptor)>;
+                        if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
+                            this->copy_buffer_data_to_user_space(mesh_read_descriptor);
+                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
+                            this->read_completion_queue_event(mesh_read_descriptor);
+                        } else {
+                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
+                        }
+                    },
+                    mesh_read_descriptor);
+            }
+            std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+            num_outstanding_reads_.fetch_sub(num_reads);
+            if (num_outstanding_reads_ == 0) {
+                reads_processed_cv_.notify_one();
             }
         } catch (std::runtime_error e) {
             // Let's clean up the state so the main thread can handle it.
