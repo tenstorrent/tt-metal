@@ -2,7 +2,7 @@
 
 set -x
 
-case $(VIRTUAL_CONFIG) in
+case $VIRTUAL_CONFIG in
     1)
         case $OMPI_COMM_WORLD_LOCAL_RANK in
             0)
