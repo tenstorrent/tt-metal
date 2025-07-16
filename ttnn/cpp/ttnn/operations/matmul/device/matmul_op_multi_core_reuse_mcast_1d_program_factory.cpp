@@ -2884,29 +2884,30 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
-    auto in0_tile = a.tensor_spec().tile();
-    auto in1_tile = b.tensor_spec().tile();
+    const auto in0_tile = a.tensor_spec().tile();
+    const auto in1_tile = b.tensor_spec().tile();
+
     // cannot use the output tensor tile directly as that might be changed by user override
-    auto in0_tile_shape = in0_tile.get_tile_shape();
-    auto in1_tile_shape = in1_tile.get_tile_shape();
-    auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
+    const auto in0_tile_shape = in0_tile.get_tile_shape();
+    const auto in1_tile_shape = in1_tile.get_tile_shape();
+    const auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    const auto in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    const auto in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    const auto output_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
-    tt_metal::IDevice* device = a.device();
+    const auto device = a.device();
 
-    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
-    uint32_t interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
+    const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    const auto interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
 
-    tt_metal::Buffer* in0_buffer = a.buffer();
-    tt_metal::Buffer* in1_buffer = b.buffer();
-    tt_metal::Buffer* sparsity_buffer = sparsity.buffer();
-    tt_metal::Buffer* out_buffer = output_tensor.buffer();
+    const auto in0_buffer = a.buffer();
+    const auto in1_buffer = b.buffer();
+    const auto sparsity_buffer = sparsity.buffer();
+    const auto out_buffer = output_tensor.buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -2916,18 +2917,18 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B_A = get_batch_size(ashape);
-    uint32_t B_B = get_batch_size(bshape);
-    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
-    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
-    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
+    const auto B_A = get_batch_size(ashape);
+    const auto B_B = get_batch_size(bshape);
+    const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
+    const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
+    const uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores = num_cores_x * num_cores_y;
+    uint32_t num_cores_available = num_cores_x * num_cores_y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
@@ -2935,10 +2936,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
     TT_FATAL(
-        num_blocks_total <= num_cores,
-        "Number of blocks exceeds number of cores: {} blocks > {} cores",
+        num_blocks_total <= num_cores_available,
+        "Number of blocks exceeds number of cores available: {} blocks > {} cores",
         num_blocks_total,
-        num_cores);
+        num_cores_available);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -2954,9 +2955,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    const auto interm0_data_format = packer_l1_acc_en
+                                         ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                         : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -2982,6 +2983,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
+
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_tiles = out_block_tiles;  // No double buffer
     uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
@@ -2994,6 +2996,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t num_cores_with_work = num_blocks_total;
 
     uint32_t in0_sender_num_cores = 1;
+    uint32_t num_cores = num_cores_with_work;
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
@@ -3001,15 +3004,11 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     CoreRangeSet in0_mcast_sender_cores =
         num_cores_to_corerangeset(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
-    CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
         num_cores_to_corerangeset(num_cores_with_work, compute_with_storage_grid_size, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
-    uint32_t in0_mcast_receiver_num_dests = std::min(
-        in0_mcast_receiver_num_cores,
-        num_cores);  // should always be number of cores in receiver grid up to number of active cores
 
     CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid;
     CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
