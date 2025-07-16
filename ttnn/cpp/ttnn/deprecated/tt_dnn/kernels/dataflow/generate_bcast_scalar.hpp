@@ -5,6 +5,8 @@
 #pragma once
 
 #include "dataflow_api.h"
+#include "debug/dprint.h"
+#include "debug/dprint_tile.h"
 
 // W-bcast scalar
 // Tile is assumed to have 16-bit elements
@@ -19,6 +21,22 @@ FORCE_INLINE void generate_bcast_col_scalar(const uint32_t cb_id, const uint32_t
             ptr[idx + j] = scalar_val;
         }
     }
+
+    // riscv_wait(1000);
+    // DPRINT << " cb_id: " << cb_id << ENDL();
+    // DPRINT << " scalar: " << scalar << ENDL();
+    // for (uint8_t iii = 0; iii < 32; ++iii) {
+    //     DPRINT << TileSlice(
+    //                   cb_id,
+    //                   0,
+    //                   SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+    //                   TSLICE_OUTPUT_CB,
+    //                   TSLICE_WR_PTR,
+    //                   true,
+    //                   true)
+    //            << ENDL();
+    // }
+
     cb_push_back(cb_id, 1);
 }
 

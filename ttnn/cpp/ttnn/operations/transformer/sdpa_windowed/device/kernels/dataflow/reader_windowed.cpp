@@ -230,11 +230,13 @@ void kernel_main() {
     // const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
     // const auto cu_window_seqlens_tile_shape = TensorTileShape(1, 1, 1, cu_window_seqlens_npages);
 
+    // riscv_wait(10000000);
+
     // load the entire cu_window_seqlens tensor into a circular buffer
     const uint32_t cb_cu_window_seqlens_ptr = get_write_ptr(cb_cu_window_seqlens_in);
     cb_reserve_back(cb_cu_window_seqlens_in, 1);
     noc_async_read_tile(0, cu_window_seqlens_reader, cb_cu_window_seqlens_ptr);
-    noc_async_read_barrier();  // Wait until tile reads are done
+    noc_async_read_barrier();  // Wait until tile reads are done todo)) try to remove this barrier
     cb_push_back(cb_cu_window_seqlens_in, 1);
     auto get_cu_window_seqlens = [&](uint32_t idx) -> uint32_t {
         if constexpr (cu_window_seqlens_data_format == DataFormat::UInt32) {
@@ -329,6 +331,7 @@ void kernel_main() {
 
                     // [INFO] Generate windowed attention mask on-the-fly for q_row_tile_count x k_row_tile_count tiles
                     // [INFO] q_chunk_size and k_chunk_size can differ
+                    DPRINT << "  [GENERATE MASK] mask_chunk_tiles: " << mask_chunk_tiles << ENDL();
                     cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                     uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                     uint64_t noc_write_addr_base = get_noc_addr(mask_write_ptr);
@@ -448,7 +451,7 @@ void kernel_main() {
                                     covered_window_q_start_idx - q_start_idx,
                                     covered_window_q_end_idx - q_start_idx);
 
-                                // for (uint8_t iii = 0; iii < 31; ++iii) {
+                                // for (uint8_t iii = 0; iii < 32; ++iii) {
                                 //     DPRINT << TileSlice(
                                 //                   cb_mask_in,
                                 //                   in_mask_tile_id,
@@ -468,6 +471,7 @@ void kernel_main() {
 
                                 if (covered_window_q_end_idx >= window_high_idx &&
                                     covered_window_k_end_idx >= window_high_idx) {
+                                    // get the next window when the covering of the current window is complete
                                     local_mask_windows_low_idx += 1;
                                     auto result = get_window_indices(local_mask_windows_low_idx);
                                     window_low_idx = result.first;
@@ -489,7 +493,7 @@ void kernel_main() {
                         mask_tile_id += Skt;
                     }
                     // DPRINT << "  before barrier: mask_tile_id: " << mask_tile_id << ENDL();
-                    noc_async_read_barrier();
+                    noc_async_read_barrier();  // todo)) use this to remove the previous barrier on k (q too?)
                     // DPRINT << "  after barrier: mask_tile_id: " << mask_tile_id
                     //        << " mask_chunk_tiles: " << mask_chunk_tiles << ENDL();
                     cb_push_back(cb_mask_in, mask_chunk_tiles);

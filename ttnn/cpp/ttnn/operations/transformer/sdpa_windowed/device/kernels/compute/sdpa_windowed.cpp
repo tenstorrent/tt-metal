@@ -9,7 +9,9 @@
 
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
+
 #include "debug/dprint.h"
+#include "debug/dprint_tile.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -66,6 +68,8 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+    // riscv_wait(10000000);
+
     mm_init(cb_q_in, cb_k_in, cb_out);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
@@ -94,20 +98,117 @@ void MAIN {
 
                     /* QK = Q_CHUNK @ K_CHUNK */
                     pack_reconfig_data_format(cb_qk_im);
-                    matmul_blocks(
-                        cb_q_in,
-                        cb_k_in,
-                        cb_qk_im,
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        DHt,
-                        qk_num_blocks,
-                        qk_in0_num_subblocks,
-                        qk_in1_num_subblocks,
-                        qk_in0_block_w,
-                        qk_subblock_h,
-                        qk_subblock_w,
-                        true /*transpose*/);
+                    {
+                        const uint32_t& in0_cb = cb_q_in;
+                        const uint32_t& in1_cb = cb_k_in;
+                        const uint32_t& out_cb = cb_qk_im;
+                        const uint32_t& M = Sq_chunk_t;
+                        const uint32_t& N = Sk_chunk_t;
+                        const uint32_t& K = DHt;
+                        const uint32_t& num_blocks = qk_num_blocks;
+                        const uint32_t& in0_num_subblocks = qk_in0_num_subblocks;
+                        const uint32_t& in1_num_subblocks = qk_in1_num_subblocks;
+                        const uint32_t& in0_block_w = qk_in0_block_w;
+                        const uint32_t& subblock_h = qk_subblock_h;
+                        const uint32_t& subblock_w = qk_subblock_w;
+                        const bool& transpose = true;
+
+                        mm_block_init_short(
+                            in0_cb,
+                            in1_cb,
+                            transpose /*transpose*/,
+                            subblock_w /*ct_dim*/,
+                            subblock_h /*rt_dim*/,
+                            in0_block_w /*kt_dim*/);
+
+                        uint32_t output_num_tiles = M * N;
+                        uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+                        uint32_t in0_index_offset = 0;
+
+                        reconfig_data_format(in1_cb, in0_cb);
+                        cb_wait_front(in1_cb, K * N);
+                        cb_reserve_back(out_cb, output_num_tiles);
+
+                        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+                            uint32_t in1_index_offset = 0;
+                            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+                                tile_regs_acquire();
+
+                                uint32_t dst_index = 0;
+                                uint32_t in0_index = in0_index_offset;
+                                uint32_t in1_index = in1_index_offset;
+
+                                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                                    matmul_block(
+                                        in0_cb,
+                                        in1_cb,
+                                        in0_index,
+                                        in1_index,
+                                        dst_index,
+                                        transpose,
+                                        subblock_w,
+                                        subblock_h,
+                                        in0_block_w);
+                                    in0_index++;
+                                    in1_index += N;
+                                }
+                                tile_regs_commit();
+
+                                tile_regs_wait();
+                                uint32_t dst_idx = 0;
+                                uint32_t out_col_offset = in1_subblock * subblock_w;
+                                for (uint32_t r = 0; r < subblock_h; r++) {
+                                    uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
+                                    for (uint32_t c = 0; c < subblock_w; c++) {
+                                        pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                                        dst_idx++;
+                                    }
+                                }
+                                tile_regs_release();
+                                in1_index_offset += subblock_w;
+                            }
+                            in0_index_offset += subblock_h * in0_block_w;
+                        }
+                        cb_pop_front(in1_cb, K * N);
+
+                        // DPRINT_PACK({
+                        //     DPRINT << " output_num_tiles: " << output_num_tiles << ENDL();
+                        //     riscv_wait(1000); // Wait for 1000 cycles
+                        //     // [INFO] print out the mask tiles in its data format
+                        //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                        //         DPRINT << TileSlice(
+                        //                       out_cb,
+                        //                       0,
+                        //                       SliceRange{
+                        //                           .h0 = iii,
+                        //                           .h1 = (uint8_t)(iii + 1),
+                        //                           .hs = 1,
+                        //                           .w0 = 0,
+                        //                           .w1 = 32,
+                        //                           .ws = 1},
+                        //                       true,
+                        //                       true)
+                        //                << ENDL();
+                        //     }
+                        // });
+
+                        cb_push_back(out_cb, output_num_tiles);
+                    }
+
+                    // matmul_blocks(
+                    //     cb_q_in,
+                    //     cb_k_in,
+                    //     cb_qk_im,
+                    //     Sq_chunk_t,
+                    //     Sk_chunk_t,
+                    //     DHt,
+                    //     qk_num_blocks,
+                    //     qk_in0_num_subblocks,
+                    //     qk_in1_num_subblocks,
+                    //     qk_in0_block_w,
+                    //     qk_subblock_h,
+                    //     qk_subblock_w,
+                    //     true /*transpose*/);
 
                     /**
                      * Note
@@ -120,47 +221,43 @@ void MAIN {
                      * Apply attention_mask: the same as use_provided_mask of SDPA:
                      * QK += MASK
                      */
-                    // uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-                    // volatile tt_l1_ptr uint8_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(mask_write_ptr);
-                    // constexpr uint32_t tile_bytes = 576;  // bfp4_b tile
-                    // for (uint32_t i = 0; i < tile_bytes; ++i) {
-                    //     DPRINT << HEX() << ptr[i] << " ";
-                    // }
-                    // DPRINT << ENDL();
                     reconfig_data_format(cb_qk_im, cb_mask_in);
                     // Manually inlining: add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                     add_tiles_init(cb_qk_im, cb_mask_in);
                     cb_wait_front(cb_qk_im, qk_chunk_tiles);
                     cb_wait_front(cb_mask_in, qk_chunk_tiles);
+                    // DPRINT << " qk_chunk_tiles: " << qk_chunk_tiles << ENDL();
                     for (uint32_t i = 0; i < qk_chunk_tiles; i++) {
-                        DPRINT_UNPACK({
-                            // [INFO] print out the mask tiles in its data format
-                            for (uint8_t iii = 0; iii < 32; ++iii) {
-                                DPRINT << TileSlice(
-                                              cb_mask_in,
-                                              i,
-                                              SliceRange{
-                                                  .h0 = iii,
-                                                  .h1 = (uint8_t)(iii + 1),
-                                                  .hs = 1,
-                                                  .w0 = 0,
-                                                  .w1 = 32,
-                                                  .ws = 1},
-                                              true,
-                                              true)
-                                       << ENDL();
-                            }
-                            // // [INFO] print out the raw bytes`
-                            // uint32_t mask_read_ptr = CB_RD_PTR(cb_mask_in);
-                            // volatile tt_l1_ptr uint32_t* ptr =
-                            //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_read_ptr);
-                            // constexpr uint32_t tile_num_words = 576 / 4;
-                            // for (uint32_t j = 0; j < tile_num_words; ++j) {
-                            //     DPRINT << HEX() << ptr[j] << " ";
-                            // }
-                            // DPRINT << ENDL();
-                        });
+                        // DPRINT << " ---- cb_mask_in (UNPACK) ---- " << ENDL();
                         // DPRINT_UNPACK({
+                        //     // [INFO] print out the mask tiles in its data format
+                        //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                        //         DPRINT << TileSlice(
+                        //                       cb_mask_in,
+                        //                       i,
+                        //                       SliceRange{
+                        //                           .h0 = iii,
+                        //                           .h1 = (uint8_t)(iii + 1),
+                        //                           .hs = 1,
+                        //                           .w0 = 0,
+                        //                           .w1 = 32,
+                        //                           .ws = 1},
+                        //                       true,
+                        //                       true)
+                        //                << ENDL();
+                        //     }
+                        //     // // [INFO] print out the raw bytes
+                        //     // uint32_t mask_read_ptr = CB_RD_PTR(cb_mask_in);
+                        //     // volatile tt_l1_ptr uint32_t* ptr =
+                        //     //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_read_ptr);
+                        //     // constexpr uint32_t tile_num_words = 576 / 4;
+                        //     // for (uint32_t j = 0; j < tile_num_words; ++j) {
+                        //     //     DPRINT << HEX() << ptr[j] << " ";
+                        //     // }
+                        //     // DPRINT << ENDL();
+                        // });
+                        // DPRINT_UNPACK({
+                        //     DPRINT << " ---- cb_qk_im (UNPACK) ---- " << i << " " << qk_chunk_tiles << ENDL();
                         //     // [INFO] print out the mask tiles in its data format
                         //     for (uint8_t iii = 0; iii < 32; ++iii) {
                         //         DPRINT << TileSlice(
@@ -183,29 +280,25 @@ void MAIN {
                         add_tiles(cb_qk_im, cb_mask_in, i, i, 0);
                         pack_tile(0, cb_qk_im);
                         release_dst();
-
-                        // DPRINT_PACK({
-                        //     // [INFO] print out the mask tiles in its data format
-                        //     for (uint8_t iii = 0; iii < 32; ++iii) {
-                        //         DPRINT << TileSlice(
-                        //                       cb_qk_im,
-                        //                       i,
-                        //                       SliceRange{
-                        //                           .h0 = iii,
-                        //                           .h1 = (uint8_t)(iii + 1),
-                        //                           .hs = 1,
-                        //                           .w0 = 0,
-                        //                           .w1 = 32,
-                        //                           .ws = 1},
-                        //                       true,
-                        //                       true)
-                        //                << ENDL();
-                        //     }
-                        // });
                     }
                     cb_pop_front(cb_mask_in, qk_chunk_tiles);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
                     cb_reserve_back(cb_qk_im, qk_chunk_tiles);
+                    // DPRINT_PACK({
+                    //     DPRINT << " ---- cb_qk_im (PACK) ---- " << qk_chunk_tiles << ENDL();
+                    //     // [INFO] print out the mask tiles in its data format
+                    //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                    //         DPRINT << TileSlice(
+                    //                       cb_qk_im,
+                    //                       0,
+                    //                       SliceRange{
+                    //                           .h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws =
+                    //                           1},
+                    //                       true,
+                    //                       true)
+                    //                << ENDL();
+                    //     }
+                    // });
                     cb_push_back(cb_qk_im, qk_chunk_tiles);
 
                     /**
@@ -239,20 +332,113 @@ void MAIN {
 
                     cb_wait_front(cb_qk_im, qk_chunk_tiles);
                     /* OUT_IM = QK @ V_CHUNK */
-                    matmul_blocks(
-                        cb_qk_im,
-                        cb_v_in,
-                        alias_mm2_cur_out,
-                        Sq_chunk_t,
-                        DHt,
-                        Sk_chunk_t,
-                        out_num_blocks,
-                        out_in0_num_subblocks,
-                        out_in1_num_subblocks,
-                        out_in0_block_w,
-                        out_subblock_h,
-                        out_subblock_w,
-                        false /*transpose*/);
+                    {
+                        const uint32_t& in0_cb = cb_qk_im;
+                        const uint32_t& in1_cb = cb_v_in;
+                        const uint32_t& out_cb = alias_mm2_cur_out;
+                        const uint32_t& M = Sq_chunk_t;
+                        const uint32_t& N = DHt;
+                        const uint32_t& K = Sk_chunk_t;
+                        const uint32_t& num_blocks = out_num_blocks;
+                        const uint32_t& in0_num_subblocks = out_in0_num_subblocks;
+                        const uint32_t& in1_num_subblocks = out_in1_num_subblocks;
+                        const uint32_t& in0_block_w = out_in0_block_w;
+                        const uint32_t& subblock_h = out_subblock_h;
+                        const uint32_t& subblock_w = out_subblock_w;
+                        const bool& transpose = false;
+
+                        mm_block_init_short(
+                            in0_cb,
+                            in1_cb,
+                            transpose /*transpose*/,
+                            subblock_w /*ct_dim*/,
+                            subblock_h /*rt_dim*/,
+                            in0_block_w /*kt_dim*/);
+
+                        uint32_t output_num_tiles = M * N;
+                        uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+                        uint32_t in0_index_offset = 0;
+
+                        reconfig_data_format(in1_cb, in0_cb);
+                        cb_wait_front(in1_cb, K * N);
+                        cb_reserve_back(out_cb, output_num_tiles);
+
+                        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+                            uint32_t in1_index_offset = 0;
+                            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+                                tile_regs_acquire();
+
+                                uint32_t dst_index = 0;
+                                uint32_t in0_index = in0_index_offset;
+                                uint32_t in1_index = in1_index_offset;
+
+                                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                                    matmul_block(
+                                        in0_cb,
+                                        in1_cb,
+                                        in0_index,
+                                        in1_index,
+                                        dst_index,
+                                        transpose,
+                                        subblock_w,
+                                        subblock_h,
+                                        in0_block_w);
+                                    in0_index++;
+                                    in1_index += N;
+                                }
+                                tile_regs_commit();
+
+                                tile_regs_wait();
+                                uint32_t dst_idx = 0;
+                                uint32_t out_col_offset = in1_subblock * subblock_w;
+                                for (uint32_t r = 0; r < subblock_h; r++) {
+                                    uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
+                                    for (uint32_t c = 0; c < subblock_w; c++) {
+                                        pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                                        dst_idx++;
+                                    }
+                                }
+                                tile_regs_release();
+                                in1_index_offset += subblock_w;
+                            }
+                            in0_index_offset += subblock_h * in0_block_w;
+                        }
+                        cb_pop_front(in1_cb, K * N);
+                        // DPRINT_PACK({
+                        //     DPRINT << " output_num_tiles: " << output_num_tiles << ENDL();
+                        //     // [INFO] print out the mask tiles in its data format
+                        //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                        //         DPRINT << TileSlice(
+                        //                       out_cb,
+                        //                       0,
+                        //                       SliceRange{
+                        //                           .h0 = iii,
+                        //                           .h1 = (uint8_t)(iii + 1),
+                        //                           .hs = 1,
+                        //                           .w0 = 0,
+                        //                           .w1 = 32,
+                        //                           .ws = 1},
+                        //                       true,
+                        //                       true)
+                        //                << ENDL();
+                        //     }
+                        // });
+                        cb_push_back(out_cb, output_num_tiles);
+                    }
+                    // matmul_blocks(
+                    //     cb_qk_im,
+                    //     cb_v_in,
+                    //     alias_mm2_cur_out,
+                    //     Sq_chunk_t,
+                    //     DHt,
+                    //     Sk_chunk_t,
+                    //     out_num_blocks,
+                    //     out_in0_num_subblocks,
+                    //     out_in1_num_subblocks,
+                    //     out_in0_block_w,
+                    //     out_subblock_h,
+                    //     out_subblock_w,
+                    //     false /*transpose*/);
 
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
                     reconfig_data_format(alias_prev_max, alias_cur_max);

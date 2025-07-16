@@ -48,7 +48,7 @@ def compare_outputs(output, output_standard, seq_start=0, seq_end=None, head_sta
 
 def example_windowed_sdpa():
     # Initialize device
-    device_params = {"trace_region_size": 26015744, "num_command_queues": 1}
+    device_params = {"trace_region_size": 26015744, "num_command_queues": 1, "physical_device_ids": [0]}
     updated_device_params = get_updated_device_params(device_params)
     mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape([1, 1]), **updated_device_params)
 
@@ -65,6 +65,7 @@ def example_windowed_sdpa():
     )
 
     # Create input tensors
+    torch.manual_seed(42)  # For reproducible results
     q = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=torch.bfloat16)
     k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=torch.bfloat16)
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=torch.bfloat16)
@@ -83,15 +84,15 @@ def example_windowed_sdpa():
 
     # Run standard SDPA with explicit mask for comparison
     attention_mask = create_windowed_attention_mask(seq_len, cu_window_seqlens)
-    # print each value in attention_mask using nested for loops with aligned spacing
-    for i in range(attention_mask.shape[0]):
-        for j in range(attention_mask.shape[1]):
-            value = attention_mask[i, j].item()
-            if value == float("-inf"):
-                print("  -inf", end=" ")
-            else:
-                print(f"{value:6.1f}", end=" ")
-        print()
+    # # print each value in attention_mask using nested for loops with aligned spacing
+    # for i in range(attention_mask.shape[0]):
+    #     for j in range(attention_mask.shape[1]):
+    #         value = attention_mask[i, j].item()
+    #         if value == float("-inf"):
+    #             print("  -inf", end=" ")
+    #         else:
+    #             print(f"{value:6.1f}", end=" ")
+    #     print()
     attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Add batch and head dims
     attention_mask_tt = ttnn.from_torch(
         attention_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b
