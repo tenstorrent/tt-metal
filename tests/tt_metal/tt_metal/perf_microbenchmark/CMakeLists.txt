@@ -68,9 +68,14 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
+
     if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
+    if(${TEST_SRC} STREQUAL "dispatch/test_rw_buffer.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+    endif()
+
     if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()
