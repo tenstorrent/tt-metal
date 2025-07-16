@@ -202,12 +202,8 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
-        const uint32_t page_size_in = 0) {
-        this->bank_base_address = bank_base_address_in;
-        this->page_size = page_size_in;
-        this->aligned_page_size =
-            align_power_of_2(page_size_in, interleaved_addr_gen::get_allocator_alignment<IsDram>());
-    }
+        const uint32_t page_size_in = 0) :
+        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
 };
 #endif
 
