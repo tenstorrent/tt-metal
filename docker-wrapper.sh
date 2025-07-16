@@ -2,7 +2,7 @@
 
 set -x
 
-case $VIRTUAL_CONFIG in
+case $(wc -l rankfile) in
     1)
         case $OMPI_COMM_WORLD_LOCAL_RANK in
             0)
@@ -37,4 +37,4 @@ case $VIRTUAL_CONFIG in
         esac
         ;;
 esac
-docker run --rm $device_args -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 ${@:1}
+docker run --rm $device_args --network host -v /home/ansible/actions-runner/_work:/home/ansible/actions-runner/_work -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 ${@:1}
