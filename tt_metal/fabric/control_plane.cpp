@@ -1965,6 +1965,7 @@ void ControlPlane::assign_intermesh_link_directions_to_local_host(const FabricNo
     }
 }
 
+// FIXME: Cleanup needed to remove direction, add G for intermesh links
 void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricNodeId& fabric_node_id) {
     const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
