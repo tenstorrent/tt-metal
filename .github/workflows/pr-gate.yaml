@@ -89,7 +89,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300",
+          "N300-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
@@ -111,7 +111,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300",
+          "N300-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
@@ -149,7 +149,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300",
+          "N300-viommu",
         ]
     uses: ./.github/workflows/sdk-examples.yaml
     with:
@@ -265,6 +265,6 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, clang-tidy-light"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
