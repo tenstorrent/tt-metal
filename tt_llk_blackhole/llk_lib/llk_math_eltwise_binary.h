@@ -42,55 +42,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
     constexpr bool high_fidelity     = (NUM_FIDELITY_PHASES > 0);
     constexpr uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
-    if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2))
-    {
-        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
-
-        if constexpr (eltwise_binary_type == ELWMUL)
-        {
-            if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
-            {
-#pragma GCC unroll 0
-                for (std::uint32_t i = 0; i < 8; i++)
-                {
-                    TT_ZEROACC(ZERO_ACC_MODE, is_fp32_dest_acc_en, 0, ADDR_MOD_1, (math_sync_tile_dst_index << 3) + i);
-                }
-            }
-            else
-            {
-#pragma GCC unroll 0
-                for (std::uint32_t i = 0; i < 4; i++)
-                {
-                    TT_ZEROACC(ZERO_ACC_MODE, is_fp32_dest_acc_en, 0, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + i);
-                }
-            }
-        }
-        else if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)
-        {
-            static_assert(
-                !(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE && (Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)),
-                "Dst clear in DstSync::SyncTile16 or DstSync::SyncTile2 dst sync mode is not supported!");
-            /*
-            if (clear_dest_acc) {
-                if constexpr (is_fp32_dest_acc_en) {
-                    #pragma GCC unroll 0
-                    for(std::uint32_t i = 0; i < 8; i++) {
-                        TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 3) + i);
-                    }
-                } else {
-                    #pragma GCC unroll 0
-                    for(std::uint32_t i = 0; i < 4; i++) {
-                        TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + i);
-                    }
-                }
-            }
-            */
-        }
-    }
-    else
-    {
-        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
-    }
+    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
 
     if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB))
     {

@@ -52,32 +52,22 @@ inline void _llk_pack_dest_section_done_()
     }
 #endif
 
-    constexpr bool clear_dest = (Dst != DstSync::SyncTile16);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
 
-    if constexpr (clear_dest)
+    if constexpr (Dst == DstSync::SyncFull)
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
-
-        if constexpr (Dst == DstSync::SyncFull)
-        {
-            TT_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
-        }
-        else
-        {
-            static_assert((Dst == DstSync::SyncHalf) || (Dst == DstSync::SyncTile2));
-            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, (dest_offset_id) % 2);
-        }
+        TT_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+    }
+    else
+    {
+        static_assert(Dst == DstSync::SyncHalf);
+        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, (dest_offset_id) % 2);
     }
 
-    // Note: we should have already stalled math in non-tile dest modes due to clearing
-    constexpr uint32_t WaitRes = (Dst == DstSync::SyncTile16) ? (p_stall::PACK) : (p_stall::NONE);
-
     // Tell math that it can write again
-    _llk_packer_set_math_semaphore_<WaitRes>();
+    _llk_packer_set_math_semaphore_<p_stall::NONE>();
 
-    constexpr bool flip_dest = ((Dst == DstSync::SyncHalf) || (Dst == DstSync::SyncTile2));
-
-    if constexpr (flip_dest)
+    if constexpr (Dst == DstSync::SyncHalf)
     {
         flip_packer_dest_offset_id();
         select_packer_dest_registers<Dst>();
