@@ -27,6 +27,8 @@ jobs:
         run: ./generate-rankfile.sh "4"
 
       - name: Run tt-smi via mpirun command
+        env:
+          VIRTUAL_CONFIG: "4"
         run: |
           echo "Running mpirun command on multiple hosts"
           mpirun --rankfile rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
@@ -40,5 +42,7 @@ jobs:
           mpirun --rankfile rankfile --tag-output ./a.out
       
       - name: Run mpi allreduce test inside docker
+        env:
+          VIRTUAL_CONFIG: "4"
         run: |
           mpirun --rankfile rankfile --tag-output ./docker-wrapper.sh ./a.out
