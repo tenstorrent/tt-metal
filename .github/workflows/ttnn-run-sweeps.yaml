@@ -21,6 +21,13 @@ on:
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
+          - eltwise.unary_backward.ceil_bw.ceil_bw_sharded
+          - eltwise.unary_backward.softsign_bw.softsign_bw_sharded
+          - eltwise.unary_backward.cosh_bw.cosh_bw_sharded
+          - eltwise.unary_backward.logiteps_bw.logiteps_bw_sharded
+          - eltwise.unary_backward.log2_bw.log2_bw_sharded
+          - eltwise.unary_backward.div_no_nan_bw.div_no_nan_bw_sharded
+          - eltwise.unary_backward.sign_bw.sign_bw_sharded
           - eltwise.unary.cos.cos_sharded
           - eltwise.unary.cosh.cosh_sharded
           - eltwise.unary.deg2rad.deg2rad_sharded
