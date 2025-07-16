@@ -69,17 +69,18 @@ void pairwise_reduce_cb(
         tile_regs_wait();
         cb_reserve_back(cb_intermediate, blk);
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
-            if constexpr (pop_input) {
-                PACK(
-                    auto addr = get_local_cb_interface(cb_intermediate).fifo_wr_ptr +
-                                get_local_cb_interface(cb_intermediate).fifo_wr_tile_ptr - 1);
-                PACK(DPRINT << "TILE: " << (tile + wtr) << ENDL());
-                PACK(DPRINT << "addr: " << addr << ENDL());
-                PACK(DPRINT << "fifo_wr_ptr: " << get_local_cb_interface(cb_intermediate).fifo_wr_ptr << ENDL());
-                PACK(
-                    DPRINT << "fifo_wr_tile_ptr: " << get_local_cb_interface(cb_intermediate).fifo_wr_tile_ptr << ENDL()
-                           << ENDL() << ENDL());
-            }
+            // if constexpr (pop_input) {
+            //     PACK(
+            //         auto addr = get_local_cb_interface(cb_intermediate).fifo_wr_ptr +
+            //                     get_local_cb_interface(cb_intermediate).fifo_wr_tile_ptr - 1);
+            //     PACK(DPRINT << "TILE: " << (tile + wtr) << ENDL());
+            //     PACK(DPRINT << "addr: " << addr << ENDL());
+            //     PACK(DPRINT << "fifo_wr_ptr: " << get_local_cb_interface(cb_intermediate).fifo_wr_ptr << ENDL());
+            //     PACK(
+            //         DPRINT << "fifo_wr_tile_ptr: " << get_local_cb_interface(cb_intermediate).fifo_wr_tile_ptr <<
+            //         ENDL()
+            //                << ENDL() << ENDL());
+            // }
             pack_tile(wtr, cb_intermediate);
         }
         cb_push_back(cb_intermediate, blk);
@@ -88,8 +89,8 @@ void pairwise_reduce_cb(
     if constexpr (pop_input) {
         cb_wait_front(cb_intermediate, cb_length);
         for (uint32_t tile = 0; tile < cb_length; tile++) {
-            DPRINT << "tile: " << tile << ENDL();
-            UNPACK(tt::compute::common::print_full_tile(cb_intermediate, tile, true));
+            // DPRINT << "tile: " << tile << ENDL();
+            // UNPACK(tt::compute::common::print_full_tile(cb_intermediate, tile, true));
         }
     }
     reconfig_data_format(cb_intermediate, cb_intermediate);
