@@ -353,6 +353,7 @@ def all_devices(request, device_params):
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
+# what is this LMAO
 def reset_fabric(fabric_config):
     import ttnn
 
