@@ -48,13 +48,6 @@ jobs:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
 
-      - name: DEBUG output the needful
-        run: |
-          echo ${{ inputs.runner }}
-          echo ${{ contains(inputs.runner, 'viommu') }}
-          echo ${{ (contains(inputs.runner, 'viommu') && '') }}
-          echo ${{ (contains(inputs.runner, 'viommu') && '') || '/dev/hugepages-1G:/dev/hugepages-1G' }}
-
       - name: Install packages
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
