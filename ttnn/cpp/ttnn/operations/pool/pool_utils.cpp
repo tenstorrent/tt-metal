@@ -128,6 +128,42 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     return pconfig;
 }
 
+std::tuple<uint32_t, bool, uint32_t, tt::DataFormat, uint32_t, bool, uint32_t, bool, uint32_t, bool>
+get_factory_parameters(
+    uint32_t num_shards_c, const Tensor& input, uint32_t kernel_h, uint32_t kernel_w, Pool2DType pool_type) {
+    uint32_t multi_buffering_factor = 2;
+    bool split_reader = true;
+
+    const auto& input_shape = input.get_padded_shape();
+
+    auto dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
+    tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
+    uint32_t nbytes = datum_size(data_format);
+
+    uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
+    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+
+    bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
+    const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
+    const uint32_t max_rows_for_reduction =
+        !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+    const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
+    const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
+
+    return std::make_tuple(
+        multi_buffering_factor,
+        split_reader,
+        nbytes,
+        data_format,
+        in_ntiles_c,
+        is_avg_pool,
+        max_rows_for_reduction,
+        is_large_kernel,
+        MAX_TILES_PER_REDUCTION,
+        is_wide_reduction);
+}
+
 uint32_t calculate_L1_usage(
     const Tensor& input,
     uint32_t pad_h,
@@ -144,13 +180,6 @@ uint32_t calculate_L1_usage(
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override) {
-    const auto& input_shape = input.get_padded_shape();
-
-    auto in_dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
-    tt::DataFormat in_df = datatype_to_dataformat_converter(in_dtype);
-    uint32_t in_nbytes = datum_size(in_df);
-    uint32_t out_nbytes = in_nbytes;
-
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -163,44 +192,32 @@ uint32_t calculate_L1_usage(
         num_shards_c = grid_size.x;
     }
 
-    uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
-    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-
-    if (input_shape[3] % num_shards_c != 0) {
-        return std::numeric_limits<uint32_t>::max();
-    }
-    const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
-
-    bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
-    const uint32_t max_rows_for_reduction =
-        !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
-    const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
-    const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
-    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
-
-    if (input_shape[3] < tt::constants::TILE_WIDTH) {
-        TT_FATAL(input_shape[3] == 16, "Error");
-    }
-
-    // CBs
-    uint32_t multi_buffering_factor = 2;
-
-    bool split_reader = true;
-
-    // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_pagesize = tile_size(in_df);
-    uint32_t in_scalar_cb_npages = 1 * multi_buffering_factor;
-    uint32_t in_scalar_cb_size_0 = in_scalar_cb_npages * in_scalar_cb_pagesize;
-    uint32_t in_scalar_cb_size_1 = 0;
+    auto
+        [multi_buffering_factor,
+         split_reader,
+         nbytes,
+         data_format,
+         in_ntiles_c,
+         is_avg_pool,
+         max_rows_for_reduction,
+         is_large_kernel,
+         MAX_TILES_PER_REDUCTION,
+         is_wide_reduction] = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
+
+    // scalar CB as coefficient of reduce
+    uint32_t in_scalar_cb_pagesize = tt::constants::TILE_HW * nbytes;
+    uint32_t in_scalar_cb_npages = multi_buffering_factor;
+    uint32_t in_scalar_cb_size_0 = in_scalar_cb_npages * in_scalar_cb_pagesize;
+    uint32_t in_scalar_cb_size_1 = 0;
 
     if (pool_type == Pool2DType::AVG_POOL2D && split_reader && !one_scalar_per_core) {
         in_scalar_cb_size_1 = in_scalar_cb_npages * in_scalar_cb_pagesize;
     }
 
-    uint32_t clear_value_cb_size = tile_size(in_df);
+    uint32_t clear_value_cb_size = tt::constants::TILE_HW * nbytes;
 
     uint32_t in_cb_sz = 0;
     if (is_wide_reduction) {
@@ -210,7 +227,7 @@ uint32_t calculate_L1_usage(
     }
 
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
-    uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
+    uint32_t in_cb_pagesize = nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = multi_buffering_factor;
     uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
     uint32_t in_cb_config_1_size = 0;
@@ -221,7 +238,7 @@ uint32_t calculate_L1_usage(
 
     // after reduction
     uint32_t out_cb_pagesize =
-        std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * out_nbytes;
+        std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * nbytes;
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * in_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
