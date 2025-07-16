@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "reader_pool2d_sharded_common.hpp"
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -18,6 +17,47 @@
 
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
+
+// Fill an L1 buffer with the given val
+// WARNING: Use with caution as there's no memory protection. Make sure size is within limits
+ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
+    // simplest impl:
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
+    uint32_t value = val | (val << 16);
+    if (ptr[0] != value || unconditionally) {
+        for (uint32_t i = 0; i < n / 2; ++i) {
+            ptr[i] = (value);
+        }
+    }
+
+    return true;
+}
+
+template <uint32_t cb_id, uint32_t clear_value_cb_id>
+FORCE_INLINE void clear_out_tiles() {
+    constexpr uint32_t tile_size = get_tile_size(cb_id);
+    const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
+    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
+    const uint64_t clear_value_addr = get_noc_addr(get_read_ptr(clear_value_cb_id));
+    uint64_t write_addr = get_noc_addr(get_write_ptr(cb_id));
+
+    for (uint32_t i = 0; i < num_tiles * num_pages; ++i) {
+        noc_async_read(clear_value_addr, write_addr, tile_size);
+        write_addr += tile_size;
+    }
+    noc_async_read_barrier();
+}
+
+template <uint32_t clear_value_cb_id, uint32_t num_tiles>
+FORCE_INLINE void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr) {
+    constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
+
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        noc_async_read(clear_value_addr, write_addr, tile_size);
+        write_addr += tile_size;
+    }
+    noc_async_read_barrier();
+}
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
@@ -34,13 +74,14 @@ template <
     bool is_avg_pool,
     bool wide_reduction,
     uint32_t clear_value_cb_id,
-    uint32_t in_cb_ntiles>
+    uint32_t in_cb_ntiles,
+    bool is_large_kernel>
 FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    // average pool requires fp32 accumulation so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles
-    // at a time.
-    const uint32_t MAX_ELE_PER_REDUCTION =
-        is_avg_pool ? 4 * TILE_WIDTH * BYTES_PER_ELEM : 8 * TILE_WIDTH * BYTES_PER_ELEM;
+    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
+    // otherwise we can reduce 8 tiles at a time.
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    constexpr uint32_t MAX_ELE_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_write_inc =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
@@ -170,26 +211,24 @@ void kernel_main() {
     uint32_t scalar_value = 0;
 
     constexpr uint32_t window_size_hw = window_h * window_w;
+    constexpr bool is_large_kernel = (window_h * window_w) > max_rows_for_reduction;
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
     // we only need to initialize the in_cb if we will not fill each multibuffering chunk with max_rows worth of data
-    constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multi_buffering_factor;
+    // constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multi_buffering_factor;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (need_to_initialize_in_cb || is_avg_pool) {
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            cb_push_back(clear_value_cb_id, 1);
-        }
-        if constexpr (reader_id == 1) {
-            cb_wait_front(clear_value_cb_id, 1);
-        }
-        if (!is_avg_pool) {  // for avg pool clear_out_tiles runs in loop, no need to initialize
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
-        }
+    if constexpr (reader_id == 0) {
+        fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+        cb_push_back(clear_value_cb_id, 1);
     }
+    if constexpr (reader_id == 1) {
+        cb_wait_front(clear_value_cb_id, 1);
+    }
+    // TODO we don't always need to initialize the in_cb
+    clear_out_tiles<in_cb_id, clear_value_cb_id>();
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
@@ -265,7 +304,8 @@ void kernel_main() {
                 is_avg_pool,
                 wide_reduction,
                 clear_value_cb_id,
-                in_cb_ntiles>(ind, in_l1_read_base_addr);
+                in_cb_ntiles,
+                is_large_kernel>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -290,6 +330,7 @@ void kernel_main() {
             is_avg_pool,
             wide_reduction,
             clear_value_cb_id,
-            in_cb_ntiles>(0, in_l1_read_base_addr);
+            in_cb_ntiles,
+            is_large_kernel>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()

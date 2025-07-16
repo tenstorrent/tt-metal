@@ -151,7 +151,6 @@ uint32_t calculate_L1_usage(
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = in_nbytes;
 
-    // auto pconfig = input.memory_config();
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -173,15 +172,11 @@ uint32_t calculate_L1_usage(
     const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
-    const bool is_large_kernel =
-        is_partial_tile ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2 : kernel_size_hw > tt::constants::TILE_HEIGHT;
-    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool && is_large_kernel ? 4 : 8;
-    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
-
-    // ToDo: enable 32 sticks per tile for reduction for all cases.
     const uint32_t max_rows_for_reduction =
-        (!is_partial_tile && !is_large_kernel) ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
-    const bool is_blackhole = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
+        !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+    const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
+    const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
@@ -205,14 +200,7 @@ uint32_t calculate_L1_usage(
         in_scalar_cb_size_1 = in_scalar_cb_npages * in_scalar_cb_pagesize;
     }
 
-    uint32_t clear_value_cb_size = 0;
-    const bool avg_pool_on_blackhole = is_blackhole && pool_type == Pool2DType::AVG_POOL2D;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel ||
-        (is_wide_reduction && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0)) {
-        // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
-        // is needed only if we use more then 16 sticks per tile for reduction.
-        clear_value_cb_size = tile_size(in_df);
-    }
+    uint32_t clear_value_cb_size = tile_size(in_df);
 
     uint32_t in_cb_sz = 0;
     if (is_wide_reduction) {
@@ -221,9 +209,7 @@ uint32_t calculate_L1_usage(
         in_cb_sz = in_ntiles_c * tt::constants::TILE_HW;
     }
 
-    uint32_t in_cb_page_padded = tt::round_up(
-        in_cb_sz,
-        tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
+    uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = multi_buffering_factor;
     uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
@@ -234,13 +220,13 @@ uint32_t calculate_L1_usage(
     }
 
     // after reduction
-    uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) *
-                               out_nbytes;  // there is just one row of channels after each reduction (or 1 block
-                                            // of c if its greater than 8 tiles)
+    uint32_t out_cb_pagesize =
+        std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * out_nbytes;
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * in_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
     uint32_t alignment_bytes = 32;
+    const bool is_blackhole = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
     if (is_blackhole) {
         alignment_bytes = 64;
     }
