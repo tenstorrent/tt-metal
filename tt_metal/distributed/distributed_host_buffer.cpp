@@ -20,30 +20,13 @@ DistributedHostBuffer DistributedHostBuffer::create(
     const distributed::MeshShape& global_shape,
     const distributed::MeshShape& local_shape,
     const distributed::MeshCoordinate& local_offset) {
-    TT_FATAL(
-        global_shape.dims() == local_shape.dims(),
-        "Global shape {} and local shape {} must have the same dimensions",
-        global_shape,
-        local_shape);
-    TT_FATAL(
-        global_shape.dims() == local_offset.dims(),
-        "Global shape {} and local offset {} must have the same dimensions",
-        global_shape,
-        local_offset);
+    return DistributedHostBuffer::create(DistributedMeshShape(global_shape, local_shape, local_offset));
+}
 
-    for (size_t dim = 0; dim < global_shape.dims(); ++dim) {
-        TT_FATAL(
-            local_offset[dim] + local_shape[dim] <= global_shape[dim],
-            "Local shape exceeds global shape at dimension {}: {} + {} > {}",
-            dim,
-            local_offset[dim],
-            local_shape[dim],
-            global_shape[dim]);
-    }
+DistributedHostBuffer DistributedHostBuffer::create(const DistributedMeshShape& distributed_mesh_shape) {
     return DistributedHostBuffer(
-        global_shape,
-        local_offset,
-        distributed::MeshContainer<Shard>(local_shape, Shard{.is_populated = false}),
+        distributed_mesh_shape,
+        distributed::MeshContainer<Shard>(distributed_mesh_shape.shape(), Shard{.is_populated = false}),
         /*populated_shards=*/std::set<distributed::MeshCoordinate>{});
 }
 
@@ -51,24 +34,11 @@ DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape
     return DistributedHostBuffer::create(shape, shape, distributed::MeshCoordinate::zero_coordinate(shape.dims()));
 }
 
-std::optional<distributed::MeshCoordinate> DistributedHostBuffer::global_to_local(
-    const distributed::MeshCoordinate& coord) const {
-    const auto& local_shape = local_shards_.shape();
-    tt::stl::SmallVector<uint32_t> local_coord(coord.dims());
-    for (size_t dim = 0; dim < coord.dims(); ++dim) {
-        if (coord[dim] < local_offset_[dim] || coord[dim] >= local_offset_[dim] + local_shape[dim]) {
-            return std::nullopt;
-        }
-        local_coord[dim] = coord[dim] - local_offset_[dim];
-    }
-    return distributed::MeshCoordinate(local_coord);
-}
-
-std::vector<size_t> DistributedHostBuffer::get_populated_local_shard_indices() const {
+std::vector<size_t> DistributedHostBuffer::get_populated_shard_indices() const {
     std::vector<size_t> indices;
-    indices.reserve(local_shards_.values().size());
-    for (size_t i = 0; i < local_shards_.values().size(); ++i) {
-        if (local_shards_.values()[i].is_populated) {
+    indices.reserve(shards_.values().size());
+    for (size_t i = 0; i < shards_.values().size(); ++i) {
+        if (shards_.values()[i].is_populated) {
             indices.push_back(i);
         }
     }
@@ -76,15 +46,8 @@ std::vector<size_t> DistributedHostBuffer::get_populated_local_shard_indices() c
 }
 
 std::optional<HostBuffer> DistributedHostBuffer::get_shard(const distributed::MeshCoordinate& coord) const {
-    TT_FATAL(
-        distributed::MeshCoordinateRange(global_shape_).contains(coord),
-        "Coordinate {} is outside the global shape bounds {}",
-        coord,
-        global_shape_);
-
-    if (auto local_coord_opt = global_to_local(coord);
-        local_coord_opt.has_value() && local_shards_.at(*local_coord_opt).is_populated) {
-        return std::make_optional(local_shards_.at(*local_coord_opt).buffer);
+    if (distributed_mesh_shape_.is_local(coord) && shards_.at(coord).is_populated) {
+        return std::make_optional(shards_.at(coord).buffer);
     } else {
         return std::nullopt;
     }
@@ -92,45 +55,38 @@ std::optional<HostBuffer> DistributedHostBuffer::get_shard(const distributed::Me
 
 void DistributedHostBuffer::emplace_shard(
     const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer) {
-    TT_FATAL(
-        distributed::MeshCoordinateRange(global_shape_).contains(coord),
-        "Coordinate {} is outside the global shape bounds {}",
-        coord,
-        global_shape_);
+    shard_coords_.insert(coord);
 
-    populated_shards_.insert(coord);
-    auto local_coord_opt = global_to_local(coord);
-    if (local_coord_opt.has_value()) {
-        local_shards_.at(*local_coord_opt) = Shard{.buffer = produce_buffer(), .is_populated = true};
+    if (distributed_mesh_shape_.is_local(coord)) {
+        shards_.at(coord) = Shard{.buffer = produce_buffer(), .is_populated = true};
     }
 }
 
 DistributedHostBuffer DistributedHostBuffer::transform(
     const TransformFn& fn, ProcessShardExecutionPolicy policy) const {
-    const std::vector<size_t> indices_to_process = get_populated_local_shard_indices();
-    const auto& local_shards = local_shards_.values();
-    std::vector<Shard> transformed_shards(local_shards.size());
+    const std::vector<size_t> indices_to_process = get_populated_shard_indices();
+    const auto& shards = shards_.values();
+    std::vector<Shard> transformed_shards(shards.size());
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
         std::for_each(indices_to_process.begin(), indices_to_process.end(), [&](size_t i) {
-            transformed_shards[i] = Shard{.buffer = fn(local_shards[i].buffer), .is_populated = true};
+            transformed_shards[i] = Shard{.buffer = fn(shards[i].buffer), .is_populated = true};
         });
     } else {
         tf::Taskflow taskflow;
         taskflow.for_each(indices_to_process.begin(), indices_to_process.end(), [&](size_t i) {
-            transformed_shards[i] = Shard{.buffer = fn(local_shards[i].buffer), .is_populated = true};
+            transformed_shards[i] = Shard{.buffer = fn(shards[i].buffer), .is_populated = true};
         });
         detail::GetExecutor().run(taskflow).wait();
     }
     return DistributedHostBuffer(
-        global_shape_,
-        local_offset_,
-        distributed::MeshContainer<Shard>(local_shards_.shape(), std::move(transformed_shards)),
-        populated_shards_);
+        distributed_mesh_shape_,
+        distributed::MeshContainer<Shard>(shards_.shape(), std::move(transformed_shards)),
+        shard_coords_);
 }
 
 void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy) const {
-    const std::vector<size_t> indices_to_process = get_populated_local_shard_indices();
-    const auto& local_shards = local_shards_.values();
+    const std::vector<size_t> indices_to_process = get_populated_shard_indices();
+    const auto& local_shards = shards_.values();
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
         std::for_each(
             indices_to_process.begin(), indices_to_process.end(), [&](size_t i) { fn(local_shards[i].buffer); });
@@ -142,8 +98,8 @@ void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy
     }
 }
 
-const distributed::MeshShape& DistributedHostBuffer::shape() const { return global_shape_; }
+const distributed::MeshShape& DistributedHostBuffer::shape() const { return distributed_mesh_shape_.shape(); }
 
-const std::set<distributed::MeshCoordinate>& DistributedHostBuffer::shard_coords() const { return populated_shards_; }
+const std::set<distributed::MeshCoordinate>& DistributedHostBuffer::shard_coords() const { return shard_coords_; }
 
 }  // namespace tt::tt_metal

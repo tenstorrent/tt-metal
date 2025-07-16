@@ -39,6 +39,9 @@ public:
     // Returns the shape of the local mesh
     const MeshShape& local_shape() const;
 
+    // Returns the offset of the local mesh
+    const MeshCoordinate& local_offset() const;
+
     // Returns the physical device ID for a given logical coordinate
     int get_physical_device_id(const MeshCoordinate& coord) const;
 
@@ -49,7 +52,7 @@ public:
     MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
 
     // Returns the physical device IDs mapped to a MeshDevice
-    std::vector<int> get_mapped_physical_device_ids(
+    DistributedMeshContainer<int> get_mapped_physical_device_ids(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 

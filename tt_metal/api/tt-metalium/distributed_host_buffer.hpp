@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
+
 #include <tt_stl/span.hpp>
+#include <tt-metalium/distributed_mesh_shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
@@ -33,6 +36,8 @@ public:
         const distributed::MeshShape& global_shape,
         const distributed::MeshShape& local_shape,
         const distributed::MeshCoordinate& local_offset);
+
+    static DistributedHostBuffer create(const DistributedMeshShape& dist_mesh_shape);
 
     // Shorthand for creating a distributed buffer for a single host.
     static DistributedHostBuffer create(const distributed::MeshShape& shape);
@@ -73,8 +78,8 @@ private:
     // Returns `std::nullopt` if the coordinate is out of local bounds.
     std::optional<distributed::MeshCoordinate> global_to_local(const distributed::MeshCoordinate& coord) const;
 
-    // Returns the indices of populated local shards in `local_shards_`.
-    std::vector<size_t> get_populated_local_shard_indices() const;
+    // Returns the indices of populated shards in `shards_`.
+    std::vector<size_t> get_populated_shard_indices() const;
 
     struct Shard {
         HostBuffer buffer;
@@ -82,19 +87,21 @@ private:
     };
 
     DistributedHostBuffer(
-        distributed::MeshShape global_shape,
-        distributed::MeshCoordinate local_offset,
-        distributed::MeshContainer<Shard> local_shards,
+        const DistributedMeshShape& distributed_mesh_shape,
+        distributed::MeshContainer<Shard> shards,
         std::set<distributed::MeshCoordinate> populated_shards) :
-        global_shape_(std::move(global_shape)),
-        local_offset_(std::move(local_offset)),
-        local_shards_(std::move(local_shards)),
-        populated_shards_(std::move(populated_shards)) {}
+        distributed_mesh_shape_(distributed_mesh_shape),
+        shards_(std::move(shards)),
+        shard_coords_(std::move(populated_shards)) {}
 
-    distributed::MeshShape global_shape_;
-    distributed::MeshCoordinate local_offset_;
-    distributed::MeshContainer<Shard> local_shards_;
-    std::set<distributed::MeshCoordinate> populated_shards_;
+    DistributedMeshShape distributed_mesh_shape_;
+
+    // The shards of the buffer.
+    // Remote shards are never materialized, but not all of the local shards are necessarily populated.
+    distributed::MeshContainer<Shard> shards_;
+
+    // Keeps track of global shards that were attempted to be written to.
+    std::set<distributed::MeshCoordinate> shard_coords_;
 };
 
 }  // namespace tt::tt_metal

@@ -14,6 +14,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/distributed_mesh_shape.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 
@@ -103,19 +104,11 @@ public:
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
     // Distributed mesh support
-    // Returns the offset of this host's portion of the mesh within the global distributed mesh.
-    // For single-host meshes, this returns (0, 0).
-    [[nodiscard]] MeshCoordinate local_offset() const;
-
-    // Returns the shape of the mesh portion managed by this host.
-    // For single-host meshes, this equals the global mesh shape.
-    [[nodiscard]] MeshShape local_shape() const;
-
-    // Checks if a global coordinate is managed by this host.
-    // Returns true if the coordinate falls within this host's local mesh bounds.
-    [[nodiscard]] bool is_local_coordinate(const MeshCoordinate& coord) const;
+    // Returns the shape of this mesh device, potentially distributed over multiple hosts.
+    [[nodiscard]] DistributedMeshShape distributed_mesh_shape() const;
 
 private:
+    DistributedMeshShape distributed_mesh_shape_;
     DistributedMeshContainer<IDevice*> devices_;
     std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 

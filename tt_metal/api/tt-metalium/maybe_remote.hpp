@@ -296,4 +296,15 @@ template <typename Container>
     return locals;
 }
 
+template <typename Container>
+auto wrap_locals(const Container& container) {
+    using T = typename Container::value_type;
+    std::vector<MaybeRemote<T>> wrapped;
+    wrapped.reserve(container.size());
+    for (const auto& local : container) {
+        wrapped.push_back(MaybeRemote<T>::local(local));
+    }
+    return wrapped;
+}
+
 }  // namespace tt::tt_metal::distributed
