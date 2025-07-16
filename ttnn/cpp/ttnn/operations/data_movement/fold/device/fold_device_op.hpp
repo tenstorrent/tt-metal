@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "tt-metalium/kernel_types.hpp"
@@ -75,6 +77,13 @@ struct Fold {
             tt::tt_metal::KernelHandle writer_kernel_id;
             tt::tt_metal::KernelHandle reader_kernel_id;
             std::vector<CoreCoord> cores_with_rtargs;
+            std::optional<tt::tt_metal::CBHandle> config_cb;
+            std::optional<uint32_t> batch_size;
+            std::optional<uint32_t> input_height;
+            std::optional<uint32_t> input_width;
+            std::optional<uint32_t> num_cores_total;
+            std::optional<uint32_t> work_per_core;
+            std::optional<CoreRange> all_cores;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

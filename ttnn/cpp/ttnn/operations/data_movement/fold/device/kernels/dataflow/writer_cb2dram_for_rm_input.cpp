@@ -7,47 +7,44 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t batch_size = get_compile_time_arg_val(0);
-    constexpr uint32_t input_width = get_compile_time_arg_val(1);
-    constexpr uint32_t input_height = get_compile_time_arg_val(2);
-    constexpr uint32_t stride_height = get_compile_time_arg_val(3);
-    constexpr uint32_t stride_width = get_compile_time_arg_val(4);
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(6);
-    constexpr bool dst_stick_size_is_power_of_two = get_compile_time_arg_val(7) == 1;
-    constexpr uint32_t dst_log2_stick_size = get_compile_time_arg_val(8);
+    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(2);
+    constexpr bool dst_stick_size_is_power_of_two = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t dst_log2_stick_size = get_compile_time_arg_val(4);
+    constexpr uint32_t aligned_stick_nbytes_l1 = get_compile_time_arg_val(5);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(6);
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t start_input_work = get_arg_val<uint32_t>(1);
     uint32_t end_input_work = get_arg_val<uint32_t>(2);
-
     const auto s_out =
         get_interleaved_addr_gen<true, dst_stick_size_is_power_of_two>(dst_addr, stick_nbytes, dst_log2_stick_size);
-
-    constexpr uint32_t Oh = input_height / stride_height;
-    constexpr uint32_t Ow = input_width / stride_width;
-    constexpr uint32_t patch_size = stride_height * stride_width;
-    constexpr uint32_t input_hw = input_height * input_width;
+    uint32_t config_l1_addr = get_read_ptr(config_cb_id);
+    volatile tt_l1_ptr uint32_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
+    // Handle padding: Write zeros to padding locations
+    // Create a zero buffer
+    uint8_t zero_buffer[stick_nbytes];
+    for (uint32_t i = 0; i < stick_nbytes; i++) {
+        zero_buffer[i] = 0;
+    }
 
     for (uint32_t input_idx = start_input_work; input_idx < end_input_work; input_idx++) {
-        const uint32_t b = input_idx / input_hw;
-        const uint32_t hw = input_idx % input_hw;
-        const uint32_t h = hw / input_width;
-        const uint32_t w = hw % input_width;
+        // Each mapping takes 3 entries: src_idx, dst_idx, is_padding
+        uint32_t mapping_offset = (input_idx - start_input_work) * 2;
+        uint32_t src_index = config_data[mapping_offset];
+        uint32_t dst_index = config_data[mapping_offset + 1];
 
-        const uint32_t oh = h / stride_height;
-        const uint32_t ow = w / stride_width;
-        const uint32_t kh = h % stride_height;
-        const uint32_t kw = w % stride_width;
-
-        int dst_row = (b * Oh + oh) * Ow + ow;
-        int dst_col = (kh * stride_width + kw);
-        int dst_index = dst_row * patch_size + dst_col;
         cb_wait_front(cb_id_in0, 1);
         uint32_t l1_addr = get_read_ptr(cb_id_in0);
-        uint64_t dst_noc_addr = get_noc_addr(dst_index, s_out);
-        noc_async_write(l1_addr, dst_noc_addr, stick_nbytes);
+        for (uint32_t i = 0; i < stride_w; i++) {
+            uint64_t dst_noc_addr = get_noc_addr(dst_index, s_out);
+            noc_async_write(l1_addr, dst_noc_addr, stick_nbytes);
+            dst_index++;
+            l1_addr += aligned_stick_nbytes_l1;
+        }
         noc_async_write_barrier();
         cb_pop_front(cb_id_in0, 1);
     }
+    noc_async_write_barrier();
 }
