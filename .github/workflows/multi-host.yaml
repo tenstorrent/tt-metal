@@ -31,6 +31,8 @@ jobs:
           VIRTUAL_CONFIG: "4"
         run: |
           echo "Running mpirun command on multiple hosts"
+          cat rankfile
+          wc -l rankfile
           mpirun --rankfile rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
 
       - name: Compile mpi allreduce test
