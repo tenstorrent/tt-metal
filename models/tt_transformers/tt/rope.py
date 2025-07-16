@@ -2,16 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+from typing import Optional
+
 import torch
 from torch import nn
 
 import ttnn
-import math
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import gather_cos_sin, get_rot_transformation_mat
 from models.utility_functions import nearest_32
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
-from typing import Optional
+
 
 # Copied from DeepseekV3RotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L114
 class RotaryEmbedding(nn.Module):
@@ -69,6 +71,7 @@ class RotaryEmbedding(nn.Module):
             self.sin_cached[:seq_len].to(dtype=x.dtype),
         )
 
+
 # Copied from DeepseekV3YarnRotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L262
 class YarnRotaryEmbedding(RotaryEmbedding):
     def __init__(
@@ -97,7 +100,6 @@ class YarnRotaryEmbedding(RotaryEmbedding):
     def yarn_find_correction_dim(num_rotations, dim, base=10000, max_position_embeddings=2048):
         return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
 
-
     # Find dim range bounds based on rotations
     @staticmethod
     def yarn_find_correction_range(low_rot, high_rot, dim, base=10000, max_position_embeddings=2048):
@@ -105,13 +107,11 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         high = math.ceil(YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
         return max(low, 0), min(high, dim - 1)  # Clamp values just in case
 
-
     @staticmethod
     def yarn_get_mscale(scale=1.0, mscale=1.0):
         if scale <= 1:
             return 1.0
         return 0.1 * mscale * math.log(scale) + 1.0
-
 
     @staticmethod
     def yarn_linear_ramp_mask(min, max, dim):
@@ -138,7 +138,9 @@ class YarnRotaryEmbedding(RotaryEmbedding):
             self.base,
             self.original_max_position_embeddings,
         )
-        inv_freq_mask = 1.0 - YarnRotaryEmbedding.yarn_linear_ramp_mask(low, high, dim // 2).to(device=device, dtype=torch.float32)
+        inv_freq_mask = 1.0 - YarnRotaryEmbedding.yarn_linear_ramp_mask(low, high, dim // 2).to(
+            device=device, dtype=torch.float32
+        )
         inv_freq = freq_inter * (1 - inv_freq_mask) + freq_extra * inv_freq_mask
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
@@ -161,13 +163,22 @@ class YarnRotaryEmbedding(RotaryEmbedding):
 
 
 class LlamaRotaryEmbedding(RotaryEmbedding):
-    def __init__(self, dim, max_position_embeddings=2048, base=10000, factor=1.0, original_max_position_embeddings=4096, low_freq_factor=1.0, high_freq_factor=4.0, device=None):
+    def __init__(
+        self,
+        dim,
+        max_position_embeddings=2048,
+        base=10000,
+        factor=1.0,
+        original_max_position_embeddings=4096,
+        low_freq_factor=1.0,
+        high_freq_factor=4.0,
+        device=None,
+    ):
         self.scaling_factor = factor
         self.orig_context_len = original_max_position_embeddings
         self.low_freq_factor = low_freq_factor
         self.high_freq_factor = high_freq_factor
         super().__init__(dim, max_position_embeddings, base, device)
-
 
     def apply_scaling(self, freqs):
         # Llama-3.x specific scaling
@@ -183,10 +194,11 @@ class LlamaRotaryEmbedding(RotaryEmbedding):
                 new_freqs.append(freq / self.scaling_factor)
             else:
                 assert low_freq_wavelen != high_freq_wavelen
-                smooth = (self.orig_context_len / wavelen - self.low_freq_factor) / (self.high_freq_factor - self.low_freq_factor)
+                smooth = (self.orig_context_len / wavelen - self.low_freq_factor) / (
+                    self.high_freq_factor - self.low_freq_factor
+                )
                 new_freqs.append((1 - smooth) * freq / self.scaling_factor + smooth * freq)
         return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
-
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
@@ -194,6 +206,9 @@ class LlamaRotaryEmbedding(RotaryEmbedding):
         t = torch.arange(seq_len)
         freqs = self.apply_scaling(freqs)
         freqs = torch.outer(t, freqs).float()
+        cos = torch.cos(freqs)
+        sin = torch.sin(freqs)
+        cos, sin = gather_cos_sin(torch.arange(seq_len // 2), cos, sin)
 
         self.register_buffer("cos_cached", (torch.cos(freqs)).to(dtype), persistent=False)
         self.register_buffer("sin_cached", (torch.sin(freqs)).to(dtype), persistent=False)
@@ -213,12 +228,18 @@ def rotary_embedding_factory(dim, max_position_embeddings=2048, base=10000, rope
             dim=dim,
             max_position_embeddings=max_position_embeddings,
             base=base,
-            **rope_scaling.model_dump(exclude_unset=True)
+            **rope_scaling.model_dump(exclude_unset=True),
         )
 
-def compute_gather_cos_sin(dhead, end, theta, rope_scaling, position_ids):
-    rotary_embedding = rotary_embedding_factory(dim=dhead, max_position_embeddings=end, base=theta, rope_scaling=rope_scaling, device=position_ids.device)
-    return gather_cos_sin(position_ids, rotary_embedding.cos_cached, rotary_embedding.sin_cached)
+
+def compute_gather_cos_sin(dhead, end, theta, rope_scaling):
+    # import pdb; pdb.set_trace()
+    rotary_embedding = rotary_embedding_factory(
+        dim=dhead, max_position_embeddings=end // 2, base=theta, rope_scaling=rope_scaling
+    )
+    # legacy_cos, legacy_sin = precompute_freqs(dhead, end, theta, None, None)
+    # legacy_cos_gathered, legacy_sin_gathered = gather_cos_sin(torch.arange(end // 2), legacy_cos, legacy_sin)
+    return rotary_embedding.cos_cached, rotary_embedding.sin_cached
 
 
 class RotarySetup(LightweightModule):
@@ -229,7 +250,7 @@ class RotarySetup(LightweightModule):
         head_dim: int,
         max_seq_len: int,
         rope_theta: float,
-        rope_scaling: Optional[dict] = None
+        rope_scaling: Optional[dict] = None,
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -246,23 +267,12 @@ class RotarySetup(LightweightModule):
         self.core_grid = device.compute_with_storage_grid_size()
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
-        if rope_type == "yarn":
-            cos_matrix, sin_matrix = compute_gather_cos_sin(
-                dhead=head_dim,
-                end=max_seq_len * 2,
-                theta=rope_theta,
-                rope_scaling=rope_scaling,
-                position_ids=torch.arange(max_seq_len),
-            )
-        else:
-            cos_matrix, sin_matrix = compute_gather_cos_sin(
-                dhead=head_dim,
-                end=max_seq_len * 2,
-                theta=rope_theta,
-                scale_factor=scale_factor,
-                orig_context_len=orig_context_len,
-                position_ids=torch.arange(max_seq_len),
-            )
+        cos_matrix, sin_matrix = compute_gather_cos_sin(
+            dhead=head_dim,
+            end=max_seq_len * 2,
+            theta=rope_theta,
+            rope_scaling=rope_scaling,
+        )
 
         self.cos_matrix = ttnn.from_torch(
             cos_matrix,

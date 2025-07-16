@@ -240,8 +240,8 @@ def test_tt_model_acc(
             mesh_device,
             prefill_lens[0],
             model_args.rope_theta,
-            model_args.rope_scaling_factor,
-            model_args.orig_context_len,
+            model_args.rope_scaling.factor if model_args.rope_scaling else None,
+            model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
         )
 
         prefill_input = model_args.prepare_residual_tensor_prefill(

@@ -35,10 +35,8 @@ from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
 # Import the new Pydantic configuration system
 try:
-    from models.tt_transformers.tt.model_configs import (
-        parse_model_config_from_dict,
-        StandardModelConfig
-    )
+    from models.tt_transformers.tt.model_configs import TTModelConfig, parse_model_config_from_dict
+
     PYDANTIC_CONFIG_AVAILABLE = True
 except ImportError:
     PYDANTIC_CONFIG_AVAILABLE = False
@@ -1393,40 +1391,40 @@ class ModelArgs:
 
     def _set_params_from_dict(self, config, is_hf=False):
         """Set model parameters from configuration dictionary using standardized Pydantic models when available."""
-        
+
         # Use the new Pydantic configuration system if available
         if PYDANTIC_CONFIG_AVAILABLE:
             try:
-                # Parse the raw config using the new standardized system
-                standard_config = parse_model_config_from_dict(config)
-                self._set_params_from_standard_config(standard_config, config, is_hf)
+                # Parse the raw config using the new tt standardized system
+                tt_config = parse_model_config_from_dict(config)
+                self._set_params_from_tt_config(tt_config)
                 return
             except Exception as e:
                 logger.warning(f"Failed to parse config with Pydantic models: {e}")
                 logger.warning("Falling back to legacy configuration parsing")
-        
+
         # Fallback to legacy configuration parsing
         self._set_params_from_dict_legacy(config, is_hf)
 
-    def _set_params_from_standard_config(self, standard_config: "StandardModelConfig", raw_config: dict, is_hf: bool):
+    def _set_params_from_tt_config(self, tt_config: "TTModelConfig"):
         """Set model parameters using the standardized Pydantic configuration."""
-        
+
         # Core model dimensions
-        self.dim = standard_config.dim
-        self.n_heads = standard_config.n_heads
-        self.n_kv_heads = standard_config.n_kv_heads
-        self.n_layers = standard_config.n_layers
+        self.dim = tt_config.dim
+        self.n_heads = tt_config.n_heads
+        self.n_kv_heads = tt_config.n_kv_heads
+        self.n_layers = tt_config.n_layers
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = standard_config.norm_eps
-        self.vocab_size = standard_config.vocab_size
-        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else standard_config.padded_vocab_size
-        self.head_dim = standard_config.head_dim
-        self.max_context_len = standard_config.max_position_embeddings
+        self.norm_eps = tt_config.norm_eps
+        self.vocab_size = tt_config.vocab_size
+        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else tt_config.padded_vocab_size
+        self.head_dim = tt_config.head_dim
+        self.max_context_len = tt_config.max_context_len
 
         # MLP dimensions
-        self.hidden_dim = standard_config.hidden_dim
-        self.ffn_dim_multiplier = standard_config.ffn_dim_multiplier
-        self.multiple_of = standard_config.multiple_of
+        self.hidden_dim = tt_config.hidden_dim
+        self.ffn_dim_multiplier = tt_config.ffn_dim_multiplier
+        self.multiple_of = tt_config.multiple_of
 
         # Model-specific validations
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
@@ -1459,15 +1457,15 @@ class ModelArgs:
                     self.hidden_dim = padded_hidden_dim
 
         # RoPE params
-        self.rope_theta = standard_config.rope_theta
-        
+        self.rope_theta = tt_config.rope_theta
+
         # Handle RoPE scaling
-        self.rope_scaling = standard_config.rope_scaling
+        self.rope_scaling = tt_config.rope_scaling
 
         # Vision params (from raw config since not standardized yet)
-        self.vision_chunk_size = standard_config.vision_chunk_size
-        self.vision_max_num_chunks = standard_config.vision_max_num_chunks
-        self.vision_num_cross_attention_layers = standard_config.vision_num_cross_attention_layers
+        self.vision_chunk_size = tt_config.vision_chunk_size
+        self.vision_max_num_chunks = tt_config.vision_max_num_chunks
+        self.vision_num_cross_attention_layers = tt_config.vision_num_cross_attention_layers
 
         # Vision constants
         self.vision_dim = 1280
