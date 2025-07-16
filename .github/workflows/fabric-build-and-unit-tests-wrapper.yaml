@@ -2,8 +2,6 @@ name: "[post-commit] Fabric unit tests"
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 * * * *" # Run every hour
 
 jobs:
   build-artifact:
