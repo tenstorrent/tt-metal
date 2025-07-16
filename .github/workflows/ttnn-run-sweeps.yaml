@@ -454,6 +454,7 @@ on:
           - eltwise.ternary.addcdiv.addcdiv
           - eltwise.ternary.addcdiv.addcdiv_sharded
           - eltwise.ternary.mac.mac
+          - eltwise.ternary.mac.mac_sharded
           - eltwise.ternary.lerp.lerp
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
