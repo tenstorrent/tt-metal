@@ -17,7 +17,7 @@ from loguru import logger
 
 
 class TtDecoder(nn.Module):
-    def __init__(self, device, state_dict, model_config, batch_size=1, gn_fallback=False):
+    def __init__(self, device, state_dict, model_config, batch_size=1):
         super().__init__()
 
         self.device = device
@@ -33,9 +33,7 @@ class TtDecoder(nn.Module):
 
         num_up_blocks = 4
 
-        self.mid_block = TtUNetMidBlock2D(
-            device, state_dict, "decoder.mid_block", model_config, gn_fallback=gn_fallback
-        )
+        self.mid_block = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block", model_config)
         self.up_blocks = []
         for block_id in range(num_up_blocks):
             self.up_blocks.append(
@@ -46,7 +44,6 @@ class TtDecoder(nn.Module):
                     model_config,
                     has_upsample=block_id < 3,
                     conv_shortcut=block_id > 1,
-                    gn_fallback=gn_fallback,
                 )
             )
 

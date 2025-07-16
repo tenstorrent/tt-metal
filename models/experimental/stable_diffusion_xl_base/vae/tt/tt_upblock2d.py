@@ -9,9 +9,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upsample2d import Tt
 
 
 class TtUpDecoderBlock2D(nn.Module):
-    def __init__(
-        self, device, state_dict, module_path, model_config, has_upsample=False, conv_shortcut=False, gn_fallback=False
-    ):
+    def __init__(self, device, state_dict, module_path, model_config, has_upsample=False, conv_shortcut=False):
         super().__init__()
 
         num_layers = 3
@@ -26,7 +24,6 @@ class TtUpDecoderBlock2D(nn.Module):
                     f"{module_path}.resnets.{i}",
                     model_config,
                     conv_shortcut=conv_shortcut and (i == 0),
-                    gn_fallback=gn_fallback,
                 )
             )
 

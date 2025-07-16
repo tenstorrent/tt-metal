@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import ttnn
 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
@@ -17,11 +15,10 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_
 
 
 class TtResnetBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, model_config, conv_shortcut=False, gn_fallback=False):
+    def __init__(self, device, state_dict, module_path, model_config, conv_shortcut=False):
         super().__init__()
 
         self.device = device
-        self.gn_fallback = gn_fallback
 
         # fixed for ResnetBlock
         self.stride = (1, 1)
@@ -49,27 +46,25 @@ class TtResnetBlock2D(nn.Module):
             conv_weights_3 = state_dict[f"{module_path}.conv_shortcut.weight"].squeeze()
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"]
 
-        # DEVICE CODE: GroupNorm preparation
-        if not self.gn_fallback:
-            core_x, core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
-            self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
+        core_x, core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
+        self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
 
-            self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
-                device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.y
-            )
-            self.input_mask_1 = prepare_gn_mask(
-                self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
-            )
+        self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
+            device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.y
+        )
+        self.input_mask_1 = prepare_gn_mask(
+            self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
+        )
 
-            core_x, core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
-            self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=core_x)
+        core_x, core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
+        self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=core_x)
 
-            self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
-                device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.y
-            )
-            self.input_mask_2 = prepare_gn_mask(
-                self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
-            )
+        self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
+            device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.y
+        )
+        self.input_mask_2 = prepare_gn_mask(
+            self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
+        )
 
         (
             self.compute1_config,
@@ -114,43 +109,19 @@ class TtResnetBlock2D(nn.Module):
     def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape
 
-        # HOST FALLBACK: GroupNorm
-        if self.gn_fallback:
-            hidden_states = ttnn.to_torch(input_tensor)
-            hidden_states = hidden_states.reshape(B, H, W, C)
-            hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
-            hidden_states = F.group_norm(
-                hidden_states,
-                num_groups=self.norm_groups,
-                weight=self.norm_weights_1,
-                bias=self.norm_bias_1,
-                eps=self.norm_eps,
-            )
-            hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
-            hidden_states = hidden_states.reshape(1, 1, B * H * W, C)
-            hidden_states = ttnn.from_torch(
-                hidden_states,
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        # DEVICE CODE: GroupNorm
-        else:
-            hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-            hidden_states = ttnn.group_norm(
-                hidden_states,
-                num_groups=self.norm_groups,
-                input_mask=self.input_mask_1,
-                weight=self.gamma_t_1,
-                bias=self.beta_t_1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                core_grid=self.norm_core_grid_1,
-                epsilon=self.norm_eps,
-                inplace=False,
-                num_out_blocks=self.norm_blocks_1,
-            )
+        hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = ttnn.group_norm(
+            hidden_states,
+            num_groups=self.norm_groups,
+            input_mask=self.input_mask_1,
+            weight=self.gamma_t_1,
+            bias=self.beta_t_1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=self.norm_core_grid_1,
+            epsilon=self.norm_eps,
+            inplace=False,
+            num_out_blocks=self.norm_blocks_1,
+        )
 
         hidden_states = ttnn.silu(hidden_states)
 
@@ -179,43 +150,19 @@ class TtResnetBlock2D(nn.Module):
         )
         C = self.conv1_params["output_channels"]
 
-        # DEVICE CODE: GroupNorm
-        if not self.gn_fallback:
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-            hidden_states = ttnn.group_norm(
-                hidden_states,
-                num_groups=self.norm_groups,
-                input_mask=self.input_mask_2,
-                weight=self.gamma_t_2,
-                bias=self.beta_t_2,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                core_grid=self.norm_core_grid_2,
-                epsilon=self.norm_eps,
-                inplace=False,
-                num_out_blocks=self.norm_blocks_2,
-            )
-
-        # HOST FALLBACK: GroupNorm
-        else:
-            hidden_states = ttnn.to_torch(hidden_states)
-            hidden_states = hidden_states.reshape(B, H, W, C)
-            hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
-            hidden_states = F.group_norm(
-                hidden_states,
-                num_groups=self.norm_groups,
-                weight=self.norm_weights_2,
-                bias=self.norm_bias_2,
-                eps=self.norm_eps,
-            )
-            hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
-            hidden_states = hidden_states.reshape(1, 1, B * H * W, C)
-            hidden_states = ttnn.from_torch(
-                hidden_states,
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = ttnn.group_norm(
+            hidden_states,
+            num_groups=self.norm_groups,
+            input_mask=self.input_mask_2,
+            weight=self.gamma_t_2,
+            bias=self.beta_t_2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=self.norm_core_grid_2,
+            epsilon=self.norm_eps,
+            inplace=False,
+            num_out_blocks=self.norm_blocks_2,
+        )
 
         hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
 
