@@ -773,6 +773,37 @@ def test_bitwise_opt_output(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
+def print_unique_with_inputs(diff_tensor, input_a, input_b, expected, calculated):
+    diff_tensor = diff_tensor.to(torch.float32)
+    input_a = input_a.to(torch.float32)
+    input_b = input_b.to(torch.float32)
+    expected = expected.to(torch.float32)
+    calculated = calculated.to(torch.float32)
+
+    input_b_broadcasted = torch.broadcast_to(input_b, input_a.shape)
+
+    flat_diff = diff_tensor.flatten()
+    flat_input_a = input_a.flatten()
+    flat_input_b = input_b_broadcasted.flatten()
+    flat_expected = expected.flatten()
+    flat_calculated = calculated.flatten()
+
+    unique_vals = torch.unique(flat_diff)
+
+    print("Unique values in DifferenceTensor and one corresponding input pair:")
+
+    for val in unique_vals:
+        indices = torch.nonzero(flat_diff == val, as_tuple=False)
+        if indices.numel() == 0:
+            continue
+        index = indices[0].item()
+        print(f"\nDifference value: {val.item()}")
+        print(f"  InputA at index {index}: {flat_input_a[index].item()}")
+        print(f"  InputB at index {index}: {flat_input_b[index].item()}")
+        print(f"  Expected at index {index}: {flat_expected[index].item()}")
+        print(f"  Calculated at index {index}: {flat_calculated[index].item()}")
+
+
 binary_inplace_fns = {
     "add_",
     "sub_",
@@ -832,10 +863,24 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
     ttnn_op = getattr(ttnn, ttnn_fn)
     lhs, rhs, post = ([getattr(ttnn.UnaryOpType, op) for op in ops] for ops in activations)
     golden_lhs, golden_rhs, golden_post = ((activation_fns[op] for op in ops) for ops in activations)
+
+    def resolve_ops(ops, label):
+        print(f"\n{label} activations:")
+        for op in ops:
+            print(f"  - {op}")
+            yield activation_fns[op]
+
+    golden_lhs, golden_rhs, golden_post = (
+        resolve_ops(ops, label) for ops, label in zip(activations, ["LHS", "RHS", "POST"])
+    )
+
     min, max = (1, 0) if ttnn_fn == "divide_" else (0, 1)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
     torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device, min=min, max=max)
+
+    torch_a = torch_input_tensor_a
+    torch_b = torch_input_tensor_b
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -861,6 +906,11 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
 
     for golden_activation in golden_post:
         torch_output_tensor = golden_activation(torch_output_tensor).bfloat16()
+
+    # print("input_tensor_a_activations",lhs)
+    # print("input_tensor_b_activations",rhs)
+    # print("activations",post)
+    # print()
 
     ttnn_op(
         input_tensor_a,
@@ -889,6 +939,7 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
             else ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
         )
 
+    print_unique_with_inputs(torch_output_tensor - output_tensor, torch_a, torch_b, torch_output_tensor, output_tensor)
     assert compare(output_tensor, torch_output_tensor)
 
 
