@@ -4,6 +4,7 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
