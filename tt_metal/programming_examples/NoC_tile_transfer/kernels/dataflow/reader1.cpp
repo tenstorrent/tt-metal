@@ -32,6 +32,7 @@ void kernel_main() {
     // Indicate readiness for data transfer to core 0
     uint64_t sem_addr = get_noc_addr(core_0_x, core_0_y, semaphore);
     noc_semaphore_inc(sem_addr, 1);
+    noc_async_atomic_barrier();
 
     // Wait until core 0 will finish data transfer
     noc_semaphore_wait(sem_ptr, 1);  // Wait to get tile from core 0

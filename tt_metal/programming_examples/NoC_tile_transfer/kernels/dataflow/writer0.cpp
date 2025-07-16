@@ -42,6 +42,7 @@ void kernel_main() {
 
     // Indicate finish writing to core 1
     noc_semaphore_inc(sem_addr, 1);
+    noc_async_atomic_barrier();
     noc_semaphore_set(sem_ptr, 0);  // Reset semaphore
 
     cb_pop_front(src0_cb_index, one_tile);  // Remove data from local buffer
