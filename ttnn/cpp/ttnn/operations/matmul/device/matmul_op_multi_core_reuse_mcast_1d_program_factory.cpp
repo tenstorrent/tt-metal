@@ -3237,7 +3237,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     // bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/sparse_bmm_large_block_zm_fused_bias_activation.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/sparse_bmm_large_block_zm_fused_mul.cpp",
         all_cores_with_work,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
