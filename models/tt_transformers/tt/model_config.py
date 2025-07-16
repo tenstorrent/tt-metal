@@ -2077,12 +2077,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            # TODO: Generalize for other HF models
-            model_name_env = os.getenv("HF_MODEL")
-            if model_name_env is not None and "mistral" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
