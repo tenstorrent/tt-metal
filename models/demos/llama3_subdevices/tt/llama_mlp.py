@@ -219,14 +219,13 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        use_w1_w3_interleaved = seq_len >= 4096
+        use_w1_w3_interleaved = seq_len >= 4096 or seq_len == 128
         pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
         pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
 
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
-
         w1_out = ttnn.linear(
             x,
             self.w1_interleaved if use_w1_w3_interleaved else self.w1,
