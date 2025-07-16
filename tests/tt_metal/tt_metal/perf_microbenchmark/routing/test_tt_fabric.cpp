@@ -42,7 +42,7 @@ using YamlTestConfigSerializer = tt::tt_fabric::fabric_tests::YamlTestConfigSeri
 using ParsedTestConfig = tt::tt_fabric::fabric_tests::ParsedTestConfig;
 
 using Topology = tt::tt_fabric::Topology;
-using FabricConfig = tt::tt_metal::FabricConfig;
+using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 
 const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
@@ -63,15 +63,23 @@ public:
     void reset_devices();
     void process_traffic_config(TestConfig& config);
     void open_devices(Topology topology, RoutingType routing_type);
+    void initialize_sync_memory();
     void compile_programs();
     void launch_programs();
     void wait_for_prorgams();
     void validate_results();
     void close_devices();
+    void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
+    void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
+    void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
 
 private:
     void add_traffic_config(const TestTrafficConfig& traffic_config);
     void initialize_memory_maps();
+
+    // Track sync cores for each device
+    std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;
+    std::unordered_map<FabricNodeId, std::vector<CoreCoord>> device_local_sync_cores_;
 
     std::shared_ptr<TestFixture> fixture_;
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
@@ -81,6 +89,15 @@ private:
     tt::tt_fabric::fabric_tests::SenderMemoryMap sender_memory_map_;
     tt::tt_fabric::fabric_tests::ReceiverMemoryMap receiver_memory_map_;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies_;
+    bool benchmark_mode_ = false;  // Benchmark mode for current test
+    bool global_sync_ = false;     // Line sync for current test
+    uint32_t global_sync_val_ = 0;
+
+    void reset_local_variables() {
+        benchmark_mode_ = false;
+        global_sync_ = false;
+        global_sync_val_ = 0;
+    }
 };
 
 void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
@@ -187,17 +204,63 @@ void TestContext::setup_devices() {
 
 void TestContext::reset_devices() {
     test_devices_.clear();
+    device_global_sync_cores_.clear();
+    device_local_sync_cores_.clear();
     this->allocator_->reset();
+    reset_local_variables();
 }
 
 void TestContext::open_devices(Topology topology, RoutingType routing_type) {
     fixture_->open_devices(topology, routing_type);
 }
 
+void TestContext::initialize_sync_memory() {
+    if (!global_sync_) {
+        return;  // Only initialize sync memory if line sync is enabled
+    }
+
+    log_info(tt::LogTest, "Initializing sync memory for line sync");
+
+    // Initialize sync memory location with 16 bytes of zeros on all devices
+    uint32_t global_sync_address = this->sender_memory_map_.get_global_sync_address();
+    uint32_t global_sync_memory_size = this->sender_memory_map_.get_global_sync_region_size();
+    uint32_t local_sync_address = this->sender_memory_map_.get_local_sync_address();
+    uint32_t local_sync_memory_size = this->sender_memory_map_.get_local_sync_region_size();
+
+    // clear the global sync cores in device_global_sync_cores_ using zero_out_buffer_on_cores
+    for (const auto& [device_id, global_sync_core] : device_global_sync_cores_) {
+        const auto& device_coord = fixture_->get_device_coord(device_id);
+        std::vector<CoreCoord> cores = {global_sync_core};
+        // zero out the global sync address for global sync core
+        fixture_->zero_out_buffer_on_cores(device_coord, cores, global_sync_address, global_sync_memory_size);
+        // also need to zero out the local sync address for global sync core
+        fixture_->zero_out_buffer_on_cores(device_coord, cores, local_sync_address, global_sync_memory_size);
+    }
+
+    // clear the local sync cores in device_local_sync_cores_ using zero_out_buffer_on_cores
+    for (const auto& [device_id, local_sync_cores] : device_local_sync_cores_) {
+        const auto& device_coord = fixture_->get_device_coord(device_id);
+        fixture_->zero_out_buffer_on_cores(device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
+    }
+
+    log_info(
+        tt::LogTest,
+        "Sync memory initialization complete at address: {} and address: {}",
+        global_sync_address,
+        local_sync_address);
+}
+
 void TestContext::compile_programs() {
     fixture_->setup_workload();
     // TODO: should we be taking const ref?
     for (auto& [coord, test_device] : test_devices_) {
+        test_device.set_benchmark_mode(benchmark_mode_);
+        test_device.set_global_sync(global_sync_);
+        test_device.set_global_sync_val(global_sync_val_);
+
+        auto device_id = test_device.get_node_id();
+        test_device.set_sync_core(device_global_sync_cores_[device_id]);
+
         test_device.create_kernels();
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.num_kernels()) {
@@ -222,8 +285,93 @@ void TestContext::process_traffic_config(TestConfig& config) {
     this->allocator_->allocate_resources(config);
     log_info(tt::LogTest, "Resource allocation complete");
 
+    if (config.global_sync) {
+        // set it only after the test_config is built since it needs set the sync value during expand the high-level
+        // patterns.
+        this->set_global_sync(config.global_sync);
+        this->set_global_sync_val(config.global_sync_val);
+
+        log_info(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
+
+        for (const auto& sync_sender : config.global_sync_configs) {
+            CoreCoord sync_core = sync_sender.core.value();
+            const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
+
+            // Track global sync core for this device
+            device_global_sync_cores_[sync_sender.device] = sync_core;
+
+            // Process each already-split sync pattern for this device
+            for (const auto& sync_pattern : sync_sender.patterns) {
+                // Convert sync pattern to TestTrafficSenderConfig format
+                const auto& dest = sync_pattern.destination.value();
+
+                // Patterns are now already split into single-direction hops
+                const auto& single_direction_hops = dest.hops.value();
+
+                TrafficParameters sync_traffic_parameters = {
+                    .chip_send_type = sync_pattern.ftype.value(),
+                    .noc_send_type = sync_pattern.ntype.value(),
+                    .payload_size_bytes = sync_pattern.size.value(),
+                    .num_packets = sync_pattern.num_packets.value(),
+                    .atomic_inc_val = sync_pattern.atomic_inc_val,
+                    .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
+                    .mcast_start_hops = sync_pattern.mcast_start_hops,
+                    .seed = config.seed,
+                    .topology = config.fabric_setup.topology,
+                    .mesh_shape = this->fixture_->get_mesh_shape(),
+                };
+
+                // For sync patterns, we use a dummy destination core and fixed sync address
+                // The actual sync will be handled by atomic operations
+                CoreCoord dummy_dst_core = {0, 0};                        // Sync doesn't need specific dst core
+                uint32_t sync_address = this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
+                uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(
+                    sync_sender.device, sync_core);  // populate the master coord
+
+                TestTrafficSenderConfig sync_config = {
+                    .parameters = sync_traffic_parameters,
+                    .src_node_id = sync_sender.device,
+                    .dst_node_ids = {},             // Empty for multicast sync
+                    .hops = single_direction_hops,  // Use already single-direction hops
+                    .dst_logical_core = dummy_dst_core,
+                    .target_address = sync_address,
+                    .atomic_inc_address = sync_address,
+                    .dst_noc_encoding = dst_noc_encoding};
+
+                // Add sync config to the master sender on this device
+                this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
+            }
+        }
+
+        // Validate that all sync cores have the same coordinate
+        if (!device_global_sync_cores_.empty()) {
+            CoreCoord reference_sync_core = device_global_sync_cores_.begin()->second;
+            for (const auto& [device_id, sync_core] : device_global_sync_cores_) {
+                if (sync_core.x != reference_sync_core.x || sync_core.y != reference_sync_core.y) {
+                    TT_THROW(
+                        "Global sync requires all devices to use the same sync core coordinate. "
+                        "Device {} uses sync core ({}, {}) but expected ({}, {}) based on first device.",
+                        device_id.chip_id,
+                        sync_core.x,
+                        sync_core.y,
+                        reference_sync_core.x,
+                        reference_sync_core.y);
+                }
+            }
+            log_info(
+                tt::LogTest,
+                "Validated sync core consistency: all {} devices use sync core ({}, {})",
+                device_global_sync_cores_.size(),
+                reference_sync_core.x,
+                reference_sync_core.y);
+        }
+    }
+
     for (const auto& sender : config.senders) {
         for (const auto& pattern : sender.patterns) {
+            // Track local sync core for this device
+            device_local_sync_cores_[sender.device].push_back(sender.core.value());
+
             // The allocator has already filled in all the necessary details.
             // We just need to construct the TrafficConfig and pass it to add_traffic_config.
             const auto& dest = pattern.destination.value();
@@ -340,6 +488,9 @@ int main(int argc, char** argv) {
         log_info(tt::LogTest, "Building tests");
         auto built_tests = builder.build_tests({test_config});
 
+        // Set benchmark mode and line sync for this test group
+        test_context.set_benchmark_mode(test_config.benchmark_mode);
+
         for (auto& built_test : built_tests) {
             log_info(tt::LogTest, "Running Test: {}", built_test.name);
 
@@ -348,6 +499,9 @@ int main(int argc, char** argv) {
 
             test_context.process_traffic_config(built_test);
             log_info(tt::LogTest, "Traffic config processed");
+
+            // Initialize sync memory if line sync is enabled
+            test_context.initialize_sync_memory();
 
             if (dump_built_tests) {
                 YamlTestConfigSerializer::dump({built_test}, output_stream);

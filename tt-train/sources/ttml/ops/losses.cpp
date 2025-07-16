@@ -33,7 +33,7 @@ autograd::TensorPtr mse_loss(
 autograd::TensorPtr cross_entropy_loss(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce) {
     auto loss = ttml::metal::cross_entropy_fw(prediction->get_value(), target->get_value());
-    auto shape = core::create_shape({1, 1, 1, 1});
+    auto shape = ttnn::Shape({1, 1, 1, 1});
     autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));
     ttnn::moreh_mean(
         loss,
