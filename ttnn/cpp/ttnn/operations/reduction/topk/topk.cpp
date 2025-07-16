@@ -38,7 +38,8 @@ std::vector<Tensor> post_topk_transform_tensor(
     const uint32_t adjusted_k,
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config,
-    const CoreRangeSet& sub_core_grids) {
+    const CoreRangeSet& sub_core_grids,
+    const std::optional<Tensor>& indices_tensor = std::nullopt) {
     const auto& input_shape = input_tensor.padded_shape();
     const auto orig_rank = input_shape.rank();
 
@@ -109,6 +110,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const bool sorted,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Tensor>& indices_tensor,
     std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
@@ -146,10 +148,10 @@ std::vector<Tensor> ExecuteTopK::invoke(
     auto output_tensor_vec = tt::tt_metal::operation::run(
         TopK{adjusted_k, -1, largest, sorted, input_memory_config, used_sub_core_grids},
         {padded_tensor},
-        {},
+        {indices_tensor},
         optional_output_tensors.has_value()
             ? reduction_common::tuple_to_vector_optional(optional_output_tensors.value())
-            : std::vector<std::optional<Tensor>>{},
+            : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt},
         queue_id);
 
     return CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
@@ -161,7 +163,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
         adjusted_k,
         original_lshape,
         input_memory_config,
-        used_sub_core_grids);
+        used_sub_core_grids,
+        indices_tensor);
 }
 
 }  // namespace ttnn::operations::reduction

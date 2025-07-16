@@ -19,6 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks topk_single_core_interleaved(
 
 tt::tt_metal::operation::ProgramWithCallbacks topk_multicore_interleaved(
     const Tensor& input_tensor,
+    const std::optional<Tensor>& indices_tensor,
     uint32_t k,
     int8_t dim,
     bool largest,
