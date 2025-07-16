@@ -227,10 +227,8 @@ TEST(Cluster, ReportSystemHealth) {
                     const auto& [connected_chip_unique_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core_to_remote_mmio_device(std::make_tuple(chip_id, eth_core));
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
-                           << connected_chip_unique_id;
-                    if (cluster_type == tt::ClusterType::GALAXY) {
-                        eth_ss << " " << get_ubb_id_str(connected_chip_unique_id);
-                    }
+                           << std::hex << connected_chip_unique_id;
+                    // Cannot use get_ubb_id_str here as connected_chip_unique_id is on other host
                     eth_ss << " " << connected_eth_core.str();
                 }
                 if (read_vec[0] > 0) {
