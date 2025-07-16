@@ -8,6 +8,8 @@ METALIUM_GUIDE.md @davorchap
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
+.github/workflows/tg-deepseek-tests.yaml @yieldthought @avoraTT @kpaigwar @barci2 @tenstorrent/metalium-developers-infra
+.github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @avoraTT @kpaigwar @barci2 @tenstorrent/metalium-developers-infra
 
 /infra/ @tenstorrent/metalium-developers-infra
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
