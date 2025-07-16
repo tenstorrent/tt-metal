@@ -222,6 +222,7 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
     [
         [[2, 64, 64, 2048], 32, 64],
         [[2, 48, 48, 2944], 32, 46],
+        [[2, 48, 48, 2904], 32, 46],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -245,7 +246,7 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED, shard_orientation=orientation
     )
     num_slices = round_up(dims[slice_dim], slice_size) // slice_size
-    padded_channels = round_up(dims[-1], 32)
+    padded_channels = round_up(dims[-1], 32 * cores)
 
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
 
