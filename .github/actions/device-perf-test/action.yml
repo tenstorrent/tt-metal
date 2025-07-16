@@ -20,8 +20,3 @@ runs:
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
-        PYTHONPATH: /work
-        TT_METAL_HOME: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        LOGURU_LEVEL: INFO
-        GITHUB_ACTIONS: true
