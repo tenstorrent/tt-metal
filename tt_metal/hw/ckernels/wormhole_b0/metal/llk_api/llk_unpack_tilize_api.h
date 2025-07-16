@@ -96,9 +96,14 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     WAYPOINT("UPTD");
 }
 
-inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
+inline void llk_unpack_tilize_block(
+    std::uint32_t operand, std::uint32_t block_c_tiles, std::uint32_t input_tile_index = 0) {
+    // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
+    // i.e. input_tile_index % block_c_tiles == 0
+    input_tile_index =
+        input_tile_index % block_c_tiles + (input_tile_index / block_c_tiles) * block_c_tiles * TILE_R_DIM;
     for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
-        llk_unpack_tilize(operand, tile_index, block_c_tiles);
+        llk_unpack_tilize(operand, input_tile_index + tile_index, block_c_tiles);
     }
 }
 
@@ -224,4 +229,47 @@ inline void llk_unpack_tilizeA_B_block(
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
+}
+
+/*************************************************************************
+ * LLK UNPACK FAST TILIZE SRC A
+ *************************************************************************/
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_unpack_fast_tilize_hw_configure(const llk_unpack_A_params_t* unpack_tilize_params) {
+    const uint32_t unpA_operand_id = get_operand_id(unpack_tilize_params->unpA_operand);
+
+    _llk_unpack_fast_tilize_hw_configure_<is_fp32_dest_acc_en>(
+        unpack_src_format[unpA_operand_id], unpack_dst_format[unpA_operand_id]);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_unpack_fast_tilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
+    const llk_unpack_A_params_t unpack_tilize_params = {.unpA_operand = unpA_operand};
+
+    llk_unpack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
+}
+
+inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+
+    _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_unpack_fast_tilize_uninit() {
+    _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
+}
+
+inline void llk_unpack_fast_tilize_block(
+    const std::uint32_t operand,
+    const std::uint32_t tile_index,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units,
+    const std::uint32_t full_dim) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+
+    _llk_unpack_fast_tilize_block_(
+        base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim);
 }

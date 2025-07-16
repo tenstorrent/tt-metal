@@ -340,7 +340,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     }
     this->initialize_active_devices();
     this->wait_for_fabric_router_sync();
-    log_info(tt::LogMetal, "Devices initialized");
+    log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
 void DevicePool::initialize_host(IDevice* dev) const {
@@ -490,7 +490,7 @@ void DevicePool::initialize_active_devices() const {
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         dev->init_command_queue_device();
-        log_info(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
+        log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.

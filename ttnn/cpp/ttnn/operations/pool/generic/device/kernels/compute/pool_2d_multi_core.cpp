@@ -54,24 +54,21 @@ namespace NAMESPACE {
 
 void MAIN {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet.
-    constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
-    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(1);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(2);
-    constexpr uint32_t out_h = get_compile_time_arg_val(3);
-    constexpr uint32_t out_w = get_compile_time_arg_val(4);
+    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
+    constexpr uint32_t window_size_hw = get_compile_time_arg_val(1);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(5);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(2);
 
-    constexpr uint32_t nsticks_per_core = get_compile_time_arg_val(6);
-    constexpr uint32_t in_c = get_compile_time_arg_val(7);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(8);
+    constexpr uint32_t nsticks_per_core = get_compile_time_arg_val(3);
+    constexpr uint32_t in_c = get_compile_time_arg_val(4);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
 
-    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(10);
-    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(12);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(13);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(14);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
+    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
+    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
