@@ -76,8 +76,8 @@ jobs:
           trigger_phrase: "@tt-ai"
           allowed_tools: |
            - Bash(./build_metal.sh --debug)
-           - Bash(gh issue create)
-           - Bash(gh issue edit)
-           - Bash(gh issue close)
-           - Bash(gh issue view)
+           - Bash(gh issue create:*)
+           - Bash(gh issue edit:*)
+           - Bash(gh issue close:*)
+           - Bash(gh issue view:*)
           timeout_minutes: "30"
