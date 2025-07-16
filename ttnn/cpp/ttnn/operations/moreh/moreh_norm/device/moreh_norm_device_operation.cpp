@@ -111,7 +111,6 @@ MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
     const auto input_rank = tensor_args.input.padded_shape().rank();
-    auto INF = std::numeric_limits<float>::infinity();
     if (dim == input_rank - 1) {
         return ProgramFactoryWOther{};
     } else if (dim == input_rank - 2) {
