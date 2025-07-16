@@ -24,7 +24,7 @@ DeviceComputeKernelConfig resolve_compute_kernel_config(
     const auto default_fp32_acc = input_data_format == tt::DataFormat::UInt32 ||
                                   input_data_format == tt::DataFormat::Int32 ||
                                   input_data_format == tt::DataFormat::Float32;
-    const auto default_l1_acc = false;
+    const auto default_l1_acc = true;
     const auto default_dst_full_sync_en = false;
     return init_device_compute_kernel_config(
         arch,
