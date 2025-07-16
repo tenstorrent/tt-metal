@@ -29,7 +29,6 @@ pip install --force-reinstall pip==21.2.4
 
 echo "Setting up virtual env"
 python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-python3 -m pip install setuptools wheel==0.45.1
 
 echo "Installing dev dependencies"
 python3 -m pip install -r $(pwd)/tutorials-dev.txt
