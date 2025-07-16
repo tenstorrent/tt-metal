@@ -18,7 +18,6 @@
 #include <vector>
 #include <memory>
 #include <iostream>
-#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 // Optional: For verbose host-side tile verification prints.
@@ -52,8 +51,6 @@ std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
 
 CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    // distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    // auto& program = mesh_device->mesh_workload().get_programs().at(device_range);
     return CreateCircularBuffer(program, core, CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_size));
 }
 
@@ -156,8 +153,10 @@ void verify_tiles(
 int main(int argc, char **argv) {
 
     ////////// DEVICE SETUP //////////
+    //A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a single object,
+    // maintaining uniform memory and runtime state across all physical devices.
+    //A UnitMesh is a 1x1 MeshDevice that allows users to interface with a single physical device.
     int device_id = 0;
-    // const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(
         device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
@@ -168,6 +167,7 @@ int main(int argc, char **argv) {
     {
         distributed::MeshWorkload workload;
         Program program = CreateProgram();
+        const auto device_coord = distributed::MeshCoordinate(0, 0);
 
         ////////// TENSIX CORE SETUP //////////
         // Define logical sender core and receiver core range (for kernel creation on the host).
@@ -300,7 +300,10 @@ int main(int argc, char **argv) {
 
         ////////// TILE MULTICAST VERIFICATION //////////
         std::vector<bfloat16> received_tiles(num_dests * TILE_HW);
-        distributed::ReadShard(cq, received_tiles, output_dram_buffer, {0, 0});
+
+        //We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1 
+        // When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+        distributed::ReadShard(cq, received_tiles, output_dram_buffer, device_coord);
         bool verbose_verify =
             false;  // if enabled, the original and all multicast-received tiles are printed in full (32x32).
         verify_tiles(identity_tile, received_tiles, num_dests, verbose_verify);
