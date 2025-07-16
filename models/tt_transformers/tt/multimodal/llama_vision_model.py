@@ -355,8 +355,10 @@ class CrossAttentionTransformer(torch.nn.Module):
             self.mesh_device,
             seq_len=S,
             theta=self.configuration.rope_theta,
-            scale_factor=self.configuration.rope_scaling_factor,
-            orig_context_len=self.configuration.orig_context_len,
+            scale_factor=self.configuration.rope_scaling.factor if self.configuration.rope_scaling else None,
+            orig_context_len=self.configuration.rope_scaling.original_max_position_embeddings
+            if self.configuration.rope_scaling
+            else None,
         )
 
         if isinstance(page_table, torch.Tensor):

@@ -242,8 +242,8 @@ def test_cross_attention_transformer_text_inference(
                     mesh_device,
                     seq_len,
                     model_args.rope_theta,
-                    model_args.rope_scaling_factor,
-                    model_args.orig_context_len,
+                    model_args.rope_scaling.factor if model_args.rope_scaling else None,
+                    model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
                 )
                 tt_out = tt_model(
                     tt_h,
@@ -287,8 +287,10 @@ def test_cross_attention_transformer_text_inference(
                 model_args.num_devices,
                 start_pos=cur_pos - 1,
                 theta=model_args.rope_theta,
-                scale_factor=model_args.rope_scaling_factor,
-                orig_context_len=model_args.orig_context_len,
+                scale_factor=model_args.rope_scaling.factor if model_args.rope_scaling else None,
+                orig_context_len=model_args.rope_scaling.original_max_position_embeddings
+                if model_args.rope_scaling
+                else None,
             )
             tt_rope_id = tt_model.rope_setup.get_rot_idxs(position_ids)
             rot_mats = tt_model.rope_setup.get_rot_mats(tt_rope_id)
