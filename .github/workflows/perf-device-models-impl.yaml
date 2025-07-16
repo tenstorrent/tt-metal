@@ -58,35 +58,28 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: non-civ2 tests
+        uses: ./.github/actions/device-perf-test
+        with:
+          test_name: "non-civ2_tests"
+          commands: |
+            pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
+            pytest models/demos/mnist/tests -m models_device_performance_bare_metal
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env: *common_env
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          echo "Running tests that are not yet ported to CIv2"
-          pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
-          pytest models/demos/mnist/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests -m models_device_performance_bare_metal
-
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_non-civ2_tests_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME non-civ2
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: yolov11 tests
+        uses: ./.github/actions/device-perf-test
+        with:
+          test_name: "yolov11_tests"
+          commands: |
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests -m models_device_performance_bare_metal
+            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env: *common_env
-        run: |
-          set -x
-          export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests -m models_device_performance_bare_metal
-          # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal
-
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_yolov11_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov11
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       # - name: stable_diffusion tests
       #   if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
