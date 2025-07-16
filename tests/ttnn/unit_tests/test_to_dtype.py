@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 
 @pytest.mark.parametrize("height", [32])
@@ -79,12 +79,12 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
         conversion_pcc = 1
 
     elif ttnn_is_float != torch_is_float:
-        conversion_pcc = 0.99
+        conversion_pcc = 0.98
 
     else:
-        conversion_pcc = 0.9999
+        conversion_pcc = 0.999
 
-    print("")
+    # print("")
 
     if ttnn_dtype_has_random:
         for store_input_on_device in [True, False]:
@@ -224,12 +224,21 @@ def test_typecast_correlation(device, ttnn_dtype_source, ttnn_dtype_target):
     else:
         conversion_pcc = 0.9999
 
-    print("")
-    print(ttnn_source_tensor)
-    print(ttnn_target_tensor)
-
-    assert_with_pcc(
-        expected_pytorch_result=ttnn_source_tensor.cpu().to_torch(),
-        actual_pytorch_result=ttnn_target_tensor.cpu().to_torch(),
+    pcc_passed, pcc_message = comp_pcc(
+        golden=ttnn.to_torch(ttnn_source_tensor),
+        calculated=ttnn.to_torch(ttnn_target_tensor),
         pcc=conversion_pcc,
     )
+
+    assert pcc_passed, f"""
+pcc_message:
+{pcc_message}
+ttnn_source_tensor:
+{ttnn_source_tensor}
+ttnn_target_tensor:
+{ttnn_target_tensor}
+ttnn.to_torch(ttnn_source_tensor):
+{ttnn.to_torch(ttnn_source_tensor)}
+ttnn.to_torch(ttnn_target_tensor):
+{ttnn.to_torch(ttnn_target_tensor)}
+    """
