@@ -63,17 +63,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     endif()
     string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
-    # Add additional source files for specific tests
-    set(ADDITIONAL_SRCS "")
-    if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
-        set(ADDITIONAL_SRCS "routing/tt_fabric_test_context.cpp")
-    endif()
-
-    add_executable(
-        ${TEST_TARGET}
-        ${TEST_SRC}
-        ${ADDITIONAL_SRCS}
-    )
+    add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
     if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
