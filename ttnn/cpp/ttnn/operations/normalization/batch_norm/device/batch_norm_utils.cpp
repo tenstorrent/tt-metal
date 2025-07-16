@@ -20,7 +20,7 @@ DeviceComputeKernelConfig resolve_compute_kernel_config(
     const auto arch = input.device()->arch();
     const auto input_data_format = datatype_to_dataformat_converter(input.dtype());
     const auto default_math_fidelity = MathFidelity::HiFi4;
-    const auto default_approx_mode = true;
+    const auto default_approx_mode = false;
     const auto default_fp32_acc = input_data_format == tt::DataFormat::UInt32 ||
                                   input_data_format == tt::DataFormat::Int32 ||
                                   input_data_format == tt::DataFormat::Float32;
