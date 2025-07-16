@@ -130,11 +130,11 @@ void kernel_main() {
     // compile time args
     // BF16 value packed in UINT32. For maxpool, value is 1, for avgpool value is 1/kernel_size.
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
+    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(10);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
 
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
 
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
@@ -142,18 +142,18 @@ void kernel_main() {
     constexpr uint32_t BYTES_PER_DATUM = 2;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = TILE_WIDTH * MAX_TILES_PER_REDUCTION * BYTES_PER_DATUM;
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(20);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(25);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(22);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-    constexpr uint32_t stride_w = get_compile_time_arg_val(34);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
