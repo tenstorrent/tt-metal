@@ -114,19 +114,7 @@ void kernel_main() {
                         row_offset += output_tensor_Wt;
                         pages_read_in_row = 0;
                     }
-
-                    uint32_t tile_two_id = tile_id_start + row_offset + pages_read_in_row;
-                    pages_read_in_row++;
-                    if (pages_read_in_row >= input_tensor_Wt) {
-                        row_offset += output_tensor_Wt;
-                        pages_read_in_row = 0;
-                    }
-
-                    uint64_t noc0_dest_noc_addr_tile_one =
-                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                    uint64_t noc0_dest_noc_addr_tile_two =
-                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
+                    
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
                             scatter_write_for_fabric_write_backward(
@@ -294,18 +282,6 @@ void kernel_main() {
                             row_offset += stride_Wt;
                             pages_read_in_row = 0;
                         }
-
-                        uint32_t tile_two_id = tile_id_start + row_offset + pages_read_in_row;
-                        pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
-                            pages_read_in_row = 0;
-                        }
-
-                        uint64_t noc0_dest_noc_addr_tile_one =
-                            get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                        uint64_t noc0_dest_noc_addr_tile_two =
-                            get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                         if (direction == 1) {
                             scatter_write_for_fabric_write_backward(
