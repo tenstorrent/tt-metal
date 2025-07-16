@@ -407,6 +407,31 @@ class MoEGate(nn.Module):
         return topk_idx, topk_weight
 
 
+class DeepseekV3MoE_Experts(nn.Module):
+    """
+    A mixed expert module containing shared experts.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.experts = nn.ModuleList(
+            [
+                DeepseekV3MLP(config, intermediate_size=config.moe_intermediate_size)
+                for i in range(config.n_routed_experts)
+            ]
+        )
+
+    def forward(self, hidden_states):
+        outputs = []
+        for expert in self.experts:
+            outputs.append(expert(hidden_states))
+
+        # returns a tensor of shape (topK_experts, batch_size, seq_len, hidden_size)
+        return torch.cat(outputs, dim=0)
+
+
 class DeepseekV3MoE(nn.Module):
     """
     A mixed expert module containing shared experts.
