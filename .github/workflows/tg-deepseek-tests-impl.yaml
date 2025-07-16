@@ -67,18 +67,18 @@ jobs:
           echo "LOG_METAL: Running DeepSeek unit tests"
           start_time=$(date +%s)
 
-          pip install -U models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests/test_embedding_1d.py --timeout 10; fail+=$?;
-          pytest models/demos/deepseek_v3/tests/test_expert.py --timeout 5; fail+=$?;
-          pytest models/demos/deepseek_v3/tests/test_mla_1d.py --timeout 10; fail+=$?;
-          pytest models/demos/deepseek_v3/tests/test_mlp_1d.py --timeout 5; fail+=$?;
-          pytest models/demos/deepseek_v3/tests/test_rms_norm.py --timeout 5; fail+=$?;
+          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/deepseek_v3/tests/test_embedding_1d.py --timeout 10 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_expert.py --timeout 5 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_mla_1d.py --timeout 10 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_mlp_1d.py --timeout 5 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_rms_norm.py --timeout 5 || fail=1
 
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           echo "LOG_METAL: DeepSeek unit tests took $duration seconds to complete"
 
-          if [[ $fail -ne 0 ]]; then
+          if (( fail )); then
             exit 1
           fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main

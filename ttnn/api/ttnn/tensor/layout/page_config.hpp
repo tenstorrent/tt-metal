@@ -84,6 +84,11 @@ public:
     PageConfig(Layout layout);
     PageConfig(Layout layout, const std::optional<Tile>& tile);
 
+    // Alignment is applied to the tensor shape, to guarantee that it is divisible by page size.
+    // For tile layout, the page size is the tile size, so alignment is also equal to the tile size.
+    // For row major layout, the page size is the width of the tensor, or the width of the shard (for sharded tensors).
+    // So for row major tensors, alignment is either [1] for interleaved tensors or shard width for sharded tensors.
+    // Note: alignment rules are different for logical sharding.
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
