@@ -3077,7 +3077,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)B_B,      // batchB
         // sparsity args
         (std::uint32_t)sparsity_is_dram,
-        (std::uint32_t)2,  // log2 of page size (4 bytes)
+        (std::uint32_t)std::log2(B_B * (uint32_t)sizeof(uint32_t)),  // log2 of page size
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -3125,7 +3125,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)Mt * Nt,  // MtNt
         // sparsity args
         (std::uint32_t)sparsity_is_dram,
-        (std::uint32_t)2,  // log2 of page size (4 bytes)
+        (std::uint32_t)std::log2(B_B * (uint32_t)sizeof(uint32_t)),  // log2 of page size
     };
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
@@ -3287,7 +3287,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
 
     uint32_t sparsity_cb_index = tt::CBIndex::c_6;
-    uint32_t sparsity_cb_size = 32;  // We only need 4 bytes to read one float, rounded up to 32 bytes
+    uint32_t sparsity_cb_size = B_B * sizeof(uint32_t);
     tt_metal::CircularBufferConfig sparsity_cb_config =
         tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index, tt::DataFormat::Float32}})
             .set_page_size(sparsity_cb_index, sparsity_cb_size);
