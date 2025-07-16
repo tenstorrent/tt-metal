@@ -17,6 +17,7 @@ class TtnnConv2D:
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_blk=False,
         dealloc_act=False,
+        act_block_h=None,
     ):
         if is_blk:
             shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -28,6 +29,7 @@ class TtnnConv2D:
         self.padding = conv.padding
         self.stride = conv.stride
         self.groups = conv.groups
+        self.activation_dtype = activation_dtype
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -36,7 +38,6 @@ class TtnnConv2D:
             math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=dealloc_act,
@@ -46,15 +47,14 @@ class TtnnConv2D:
             reshard_if_not_optimal=True,
             activation=activation,
         )
+        if act_block_h is not None:
+            self.conv_config.act_block_h_override = act_block_h
         if conv_pth.bias is not None:
             self.bias = conv_pth.bias
         else:
             self.bias = None
 
         self.weight = conv_pth.weight
-
-        print(self.weight.shape)
-        print(self.bias.shape)
 
     def __call__(self, x):
         input_height = self.conv.input_height
@@ -78,5 +78,6 @@ class TtnnConv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.activation_dtype,
         )
         return x, output_height, output_width
