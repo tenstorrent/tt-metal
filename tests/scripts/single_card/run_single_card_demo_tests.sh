@@ -287,6 +287,11 @@ run_vgg_unet_demo() {
 }
 
 
+run_yolov12x_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings  models/experimental/yolov12x/demo/demo.py --timeout 600
+
+}
 
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly

@@ -22,6 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
+          { name: "yolov12x", runner-label: "N150", performance: false, cmd: run_yolov12x_demo, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "falcon7b", runner-label: "N150", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "llama3", runner-label: "N150", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "vgg", runner-label: "N150", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
@@ -49,6 +50,7 @@ jobs:
           { name: "resnet", runner-label: "N150", performance: true, cmd: run_resnet_stability, owner_id: U0837MYG788}, # Marko Radosavljevic
           { name: "sdxl", runner-label: "N150", performance: false, cmd: run_sdxl_func, owner_id: U0837MYG788}, # Marko Radosavljevic
           { name: "yolov10x", runner-label: "N150", performance: false, cmd: run_yolov10x_demo, owner_id: U056BK5U81E}, # Dalar Vartanians
+          { name: "yolov12x", runner-label: "N300", performance: false, cmd: run_yolov12x_demo, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "vgg", runner-label: "N300", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
