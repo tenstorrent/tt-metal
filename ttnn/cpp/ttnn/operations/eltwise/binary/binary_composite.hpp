@@ -496,6 +496,11 @@ struct ExecuteBitwiseRightShift {
         std::optional<bool> use_legacy = std::nullopt);
 };
 
+struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
+    // Inherits all functionality from ExecuteBitwiseLeftShift
+    // but creates a distinct type for registration
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -546,6 +551,8 @@ constexpr auto bitwise_or = ttnn::register_operation<"ttnn::bitwise_or", operati
 constexpr auto bitwise_xor = ttnn::register_operation<"ttnn::bitwise_xor", operations::binary::ExecuteBitwiseXor>();
 constexpr auto bitwise_left_shift =
     ttnn::register_operation<"ttnn::bitwise_left_shift", operations::binary::ExecuteBitwiseLeftShift>();
+constexpr auto logical_left_shift =
+    ttnn::register_operation<"ttnn::logical_left_shift", operations::binary::ExecuteLogicalLeftShift>();
 constexpr auto bitwise_right_shift =
     ttnn::register_operation<"ttnn::bitwise_right_shift", operations::binary::ExecuteBitwiseRightShift>();
 constexpr auto pow = ttnn::register_operation<"ttnn::pow", operations::binary::ExecutePower>();
