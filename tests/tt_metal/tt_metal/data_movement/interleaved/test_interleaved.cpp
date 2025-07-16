@@ -18,6 +18,7 @@ namespace unit_tests::dm::interleaved_tile {
 // Test config, i.e. test parameters
 struct InterleavedConfig {
     uint32_t test_id = 0;
+    uint32_t num_of_transactions = 0;
     uint32_t num_tiles = 0;
     uint32_t tile_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
@@ -65,6 +66,7 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
 
     // Compile-time arguments for kernels
     vector<uint32_t> reader_compile_args = {
+        (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.num_tiles,
         (uint32_t)test_config.tile_size_bytes,
         (uint32_t)l1_cb_index,
@@ -73,6 +75,7 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
         (uint32_t)sync};
 
     vector<uint32_t> writer_compile_args = {
+        (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.num_tiles,
         (uint32_t)test_config.tile_size_bytes,
         (uint32_t)l1_cb_index,
@@ -173,27 +176,20 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
 
 /* ========== Test case for varying number of tiles; Test id = 61 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileNumbers) {
-    // Physical Constraints
-    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
     // Parameters
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t max_num_tiles =
-        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_tiles = 1; num_tiles <= max_num_tiles; num_tiles *= 2) {
-        if (num_tiles * tile_size_bytes > max_transmittable_bytes) {
-            continue;
-        }
-
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         // Test config
         unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
             .test_id = 61,
+            .num_of_transactions = num_of_transactions,
             .num_tiles = num_tiles,
             .tile_size_bytes = tile_size_bytes,
             .l1_data_format = DataFormat::Float16_b,
@@ -209,8 +205,9 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileNumbers) {
 /* ========== Test case for varying core location; Test id = 62 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileCoreLocations) {
     // Parameters
-    uint32_t num_tiles = 128;
+    uint32_t num_tiles = 16;
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_of_transactions = 16;
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         // Cores
@@ -223,6 +220,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileCoreLocations) {
                 // Test config
                 unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
                     .test_id = 62,
+                    .num_of_transactions = num_of_transactions,
                     .num_tiles = num_tiles,
                     .tile_size_bytes = tile_size_bytes,
                     .l1_data_format = DataFormat::Float16_b,
@@ -237,27 +235,20 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileCoreLocations) {
 
 /* ========== Test noc_async_read_tile kernel only; Test id = 63 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileReadNumbers) {
-    // Physical Constraints
-    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
     // Parameters
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t max_num_tiles =
-        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_tiles = 1; num_tiles <= max_num_tiles; num_tiles *= 2) {
-        if (num_tiles * tile_size_bytes > max_transmittable_bytes) {
-            continue;
-        }
-
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         // Test config
         unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
             .test_id = 63,
+            .num_of_transactions = num_of_transactions,
             .num_tiles = num_tiles,
             .tile_size_bytes = tile_size_bytes,
             .l1_data_format = DataFormat::Float16_b,
@@ -275,27 +266,20 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileReadNumbers) {
 
 /* ========== Test noc_async_write_tile kernel only; Test id = 64 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileWriteNumbers) {
-    // Physical Constraints
-    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
     // Parameters
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t max_num_tiles =
-        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_tiles = 1; num_tiles <= max_num_tiles; num_tiles *= 2) {
-        if (num_tiles * tile_size_bytes > max_transmittable_bytes) {
-            continue;
-        }
-
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         // Test config
         unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
             .test_id = 64,
+            .num_of_transactions = num_of_transactions,
             .num_tiles = num_tiles,
             .tile_size_bytes = tile_size_bytes,
             .l1_data_format = DataFormat::Float16_b,
@@ -313,13 +297,10 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileWriteNumbers) {
 
 /* ========== Directed Ideal Test Case; Test id = 65 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
-    // Physical Constraints
-    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
     // Parameters
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
+    uint32_t num_tiles = 16;
+    uint32_t num_of_transactions = 64;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -328,6 +309,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
     // Test config
     unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
         .test_id = 65,
+        .num_of_transactions = num_of_transactions,
         .num_tiles = num_tiles,
         .tile_size_bytes = tile_size_bytes,
         .l1_data_format = DataFormat::Float16_b,
@@ -343,27 +325,20 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
 
 /* ========== Test case for varying number of tiles using interleaved L1; Test id = 66 ========== */
 TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileNumbers) {
-    // Physical Constraints
-    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
     // Parameters
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t max_num_tiles =
-        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_tiles = 1; num_tiles <= max_num_tiles; num_tiles *= 2) {
-        if (num_tiles * tile_size_bytes > max_transmittable_bytes) {
-            continue;
-        }
-
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         // Test config
         unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
             .test_id = 66,
+            .num_of_transactions = num_of_transactions,
             .num_tiles = num_tiles,
             .tile_size_bytes = tile_size_bytes,
             .l1_data_format = DataFormat::Float16_b,
@@ -380,8 +355,9 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileNumbers) {
 /* ========== Test case for varying core location; Test id = 67 ========== */
 TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileCoreLocations) {
     // Parameters
-    uint32_t num_tiles = 128;
+    uint32_t num_tiles = 16;
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_of_transactions = 16;
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         // Cores
@@ -394,6 +370,7 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileCoreLocations) {
                 // Test config
                 unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
                     .test_id = 67,
+                    .num_of_transactions = 16,
                     .num_tiles = num_tiles,
                     .tile_size_bytes = tile_size_bytes,
                     .l1_data_format = DataFormat::Float16_b,
@@ -409,27 +386,20 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileCoreLocations) {
 
 /* ========== Test noc_async_read_tile only; Test id = 68 ========== */
 TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileReadNumbers) {
-    // Physical Constraints
-    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
     // Parameters
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t max_num_tiles =
-        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_tiles = 1; num_tiles <= max_num_tiles; num_tiles *= 2) {
-        if (num_tiles * tile_size_bytes > max_transmittable_bytes) {
-            continue;
-        }
-
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         // Test config
         unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
             .test_id = 68,
+            .num_of_transactions = num_of_transactions,
             .num_tiles = num_tiles,
             .tile_size_bytes = tile_size_bytes,
             .l1_data_format = DataFormat::Float16_b,
@@ -446,27 +416,20 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileReadNumbers) {
 }
 /* ========== Test noc_async_write_tile only; Test id = 69 ========== */
 TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileWriteNumbers) {
-    // Physical Constraints
-    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
     // Parameters
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t max_num_tiles =
-        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_tiles = 1; num_tiles <= max_num_tiles; num_tiles *= 2) {
-        if (num_tiles * tile_size_bytes > max_transmittable_bytes) {
-            continue;
-        }
-
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         // Test config
         unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
             .test_id = 69,
+            .num_of_transactions = num_of_transactions,
             .num_tiles = num_tiles,
             .tile_size_bytes = tile_size_bytes,
             .l1_data_format = DataFormat::Float16_b,
@@ -484,13 +447,10 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileWriteNumbers) {
 
 /* ========== Directed Ideal Test Case; Test id = 71 ========== */
 TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileDirectedIdeal) {
-    // Physical Constraints
-    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
     // Parameters
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
+    uint32_t num_tiles = 16;
+    uint32_t num_of_transactions = 64;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -499,6 +459,7 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileDirectedIdeal) {
     // Test config
     unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
         .test_id = 71,
+        .num_of_transactions = num_of_transactions,
         .num_tiles = num_tiles,
         .tile_size_bytes = tile_size_bytes,
         .l1_data_format = DataFormat::Float16_b,
