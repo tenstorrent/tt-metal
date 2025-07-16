@@ -8,7 +8,6 @@
 #include <variant>
 #include "helpers.h"
 #include "array_wrapper.h"
-#include "args_location.h"
 #include <cstring>
 
 // Forward declared from dataflow_api.h
@@ -47,6 +46,9 @@ struct DistributionSpec {
     static constexpr bool is_static = shapes_static && bank_coords_static;
     static constexpr bool is_interleaved = IsInterleaved;
     static constexpr bool is_dram_interleaved = IsDramInterleaved;
+    static_assert(
+        !is_dram_interleaved || (is_dram_interleaved && is_interleaved),
+        "DRAM interleaved cannot be true if interleaved is false");
 
     static constexpr auto rank_ct = RankCT;
     static constexpr uint32_t num_banks_ct = NumBanksCT;
@@ -69,32 +71,7 @@ struct DistributionSpec {
         tensor_shape_rt(std::forward<TensorShape>(tensor_shape_arr)),
         shard_shape_rt(std::forward<ShardShape>(shard_shape_arr)),
         bank_coords_rt(std::forward<BankCoords>(bank_coords_arr)) {
-        if constexpr (!has_static_rank) {
-            // Rank is not known at compile time, use runtime rank
-            rank_rt = tensor_shape_rt.size();
-        }
-        if constexpr (!has_static_num_banks) {
-            // Number of banks is not known at compile time, use runtime number of banks
-            num_banks_rt = bank_coords_rt.size();
-        }
-        if constexpr (!has_static_rank) {
-            shard_grid_rt = Shape(shard_grid_rt_buf.value, rank());
-            shard_grid_strides_rt = Shape(shard_grid_strides_rt_buf.value, rank());
-
-            tensor_strides_rt = Shape(tensor_strides_rt_buf.value, rank());
-            shard_strides_rt = Shape(shard_strides_rt_buf.value, rank());
-        }
-        if constexpr (!tensor_shape_static) {
-            // If tensor shape is not static, we need to compute strides and volume at runtime
-            compute_strides_volume_rt(tensor_shape(), tensor_strides_rt, tensor_volume_rt);
-        }
-        if constexpr (!shard_shape_static) {
-            // If shard shape is not static, we need to compute strides and volume at runtime
-            compute_strides_volume_rt(shard_shape(), shard_strides_rt, shard_volume_rt);
-        }
-        if constexpr (!shapes_static) {
-            compute_shard_grid_and_strides_rt(tensor_shape(), shard_shape());
-        }
+        init_runtime_values();
     }
 
     /**
@@ -167,32 +144,7 @@ struct DistributionSpec {
             }
         }
 
-        if constexpr (!has_static_rank) {
-            // Rank is not known at compile time, use runtime rank
-            rank_rt = tensor_shape_rt.size();
-        }
-        if constexpr (!has_static_num_banks) {
-            // Number of banks is not known at compile time, use runtime number of banks
-            num_banks_rt = bank_coords_rt.size();
-        }
-        if constexpr (!has_static_rank) {
-            shard_grid_rt = Shape(shard_grid_rt_buf.value, rank);
-            shard_grid_strides_rt = Shape(shard_grid_strides_rt_buf.value, rank);
-
-            tensor_strides_rt = Shape(tensor_strides_rt_buf.value, rank);
-            shard_strides_rt = Shape(shard_strides_rt_buf.value, rank);
-        }
-        if constexpr (!tensor_shape_static) {
-            // If tensor shape is not static, we need to compute strides and volume at runtime
-            compute_strides_volume_rt(tensor_shape(), tensor_strides_rt, tensor_volume_rt);
-        }
-        if constexpr (!shard_shape_static) {
-            // If shard shape is not static, we need to compute strides and volume at runtime
-            compute_strides_volume_rt(shard_shape(), shard_strides_rt, shard_volume_rt);
-        }
-        if constexpr (!shapes_static) {
-            compute_shard_grid_and_strides_rt(tensor_shape(), shard_shape());
-        }
+        init_runtime_values();
     }
 
 // Helper macro to avoid code duplication in getters
@@ -303,6 +255,35 @@ private:
         }
         // Check that the number of shards is greater than or equal to the number of banks
         ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks());
+    }
+
+    constexpr void init_runtime_values() {
+        if constexpr (!has_static_rank) {
+            // Rank is not known at compile time, use runtime rank
+            rank_rt = tensor_shape_rt.size();
+        }
+        if constexpr (!has_static_num_banks) {
+            // Number of banks is not known at compile time, use runtime number of banks
+            num_banks_rt = bank_coords_rt.size();
+        }
+        if constexpr (!has_static_rank) {
+            shard_grid_rt = Shape(shard_grid_rt_buf.value, rank());
+            shard_grid_strides_rt = Shape(shard_grid_strides_rt_buf.value, rank());
+
+            tensor_strides_rt = Shape(tensor_strides_rt_buf.value, rank());
+            shard_strides_rt = Shape(shard_strides_rt_buf.value, rank());
+        }
+        if constexpr (!tensor_shape_static) {
+            // If tensor shape is not static, we need to compute strides and volume at runtime
+            compute_strides_volume_rt(tensor_shape(), tensor_strides_rt, tensor_volume_rt);
+        }
+        if constexpr (!shard_shape_static) {
+            // If shard shape is not static, we need to compute strides and volume at runtime
+            compute_strides_volume_rt(shard_shape(), shard_strides_rt, shard_volume_rt);
+        }
+        if constexpr (!shapes_static) {
+            compute_shard_grid_and_strides_rt(tensor_shape(), shard_shape());
+        }
     }
 
     uint32_t rank_rt = 0;

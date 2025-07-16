@@ -5,7 +5,7 @@
 #pragma once
 
 #include <type_traits>
-#include "args_location.h"
+#include "tensor_accessor_args.h"
 #include "array_wrapper.h"
 #include "dspec.h"
 #include "helpers.h"
@@ -181,7 +181,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     TensorShapeWrapper,
     ShardShapeWrapper,
     BankCoordsWrapper,
-    true,
+    /* IsInterleaved */ true,
     IsDramInterleaved>> : public InterleavedAddrGen<IsDramInterleaved> {
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
