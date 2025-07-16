@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
+#include "tt_metal/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
 #include "socket_api.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(3);
     constexpr uint32_t page_size = get_compile_time_arg_val(4);
@@ -20,8 +20,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     fabric_connection.open_start();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
+    auto* socket_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
 
     // Create Socket Interface
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);

@@ -436,13 +436,11 @@ struct NocFusedSenderOperations {
 struct LineSyncConfig {
     LineSyncConfig(WorkerToFabricEdmSender* fabric_connection_handle, const uint32_t line_sync_val) :
         fabric_connection_handle(fabric_connection_handle), line_sync_val(line_sync_val) {
-        packet_header = nullptr;
+        packet_header = PACKET_HEADER_POOL_ALLOC();
     }
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void setup_packet_header(size_t& arg_idx) {
-        packet_header = PACKET_HEADER_POOL_ALLOC();
-
         // setup header fields. 2 rt args for 1D
         ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
             arg_idx, (uint32_t)packet_header, packet_header, fabric_connection_handle);
@@ -520,7 +518,7 @@ struct SenderKernelTrafficConfig {
         metadata(metadata),
         noc_send_type_(static_cast<NocSendType>(0)),
         payload_buffer_(nullptr) {
-        packet_header = nullptr;
+        packet_header = PACKET_HEADER_POOL_ALLOC();
 
         // Initialize function pointers to null (will be set in parse_and_setup_noc_send_type)
         noc_ops_.parse_and_setup = nullptr;
@@ -530,7 +528,6 @@ struct SenderKernelTrafficConfig {
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void parse_and_setup_chip_send_type(size_t& arg_idx) {
         ChipSendType chip_send_type = static_cast<ChipSendType>(get_arg_val<uint32_t>(arg_idx++));
-        packet_header = PACKET_HEADER_POOL_ALLOC();
         uint32_t packet_header_address = (uint32_t)packet_header;
 
         if (chip_send_type == ChipSendType::CHIP_UNICAST) {
