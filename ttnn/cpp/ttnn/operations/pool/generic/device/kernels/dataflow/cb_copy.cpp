@@ -19,13 +19,23 @@ void kernel_main() {
     constexpr uint32_t in_c = get_compile_time_arg_val(3);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(4);
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(5);
+    constexpr uint32_t out_h = get_compile_time_arg_val(6);
+    constexpr uint32_t out_w = get_compile_time_arg_val(7);
+    constexpr uint32_t is_out_tiled = get_compile_time_arg_val(8);
     constexpr uint32_t BYTES_PER_ELEM = 2;  // bf16
-    // DPRINT << "num_top_left_indexes:" << num_top_left_indexes << ENDL();
-    // DPRINT << "in_c:" << in_c << ENDL();
-    // DPRINT << "in_nblocks_c:" << in_nblocks_c << ENDL();
-    // DPRINT << "in_ntiles_c:" << in_ntiles_c << ENDL();
-    // DPRINT << "out_h:" << out_h << ENDL();
-    // DPRINT << "out_w:" << out_w << ENDL();
+    // for (int i = 0; i<32;i++){
+    //     DPRINT<<"["<<i<<"]"<<ENDL();
+    //     tt::data_movement::common ::print_bf16_pages(get_write_ptr(cb_src)+64*i*BYTES_PER_ELEM, 64, BYTES_PER_ELEM);
+    // }
+    DPRINT << "cb_src:" << cb_src << ENDL();
+    DPRINT << "cb_dst:" << cb_dst << ENDL();
+    DPRINT << "num_top_left_indexes:" << num_top_left_indexes << ENDL();
+    DPRINT << "in_c:" << in_c << ENDL();
+    DPRINT << "in_nblocks_c:" << in_nblocks_c << ENDL();
+    DPRINT << "in_ntiles_c:" << in_ntiles_c << ENDL();
+    DPRINT << "out_h:" << out_h << ENDL();
+    DPRINT << "out_w:" << out_w << ENDL();
+    DPRINT << "is_out_tiled:" << is_out_tiled << ENDL();
 
     constexpr uint32_t face_dim = 16;
     constexpr uint32_t face_size = face_dim * face_dim;  // 256
@@ -69,23 +79,36 @@ void kernel_main() {
         cb_wait_front(cb_src, partial_iter_output_tiles);
         cb_reserve_back(cb_dst, partial_iter_output_tiles);
 
-        // elements within a face are row major
-        // faces within a tile are row major
-        // tiles within a tensor are row major
-        uint32_t face_nhw = i / face_dim;
-        uint32_t intra_face_nhw = i % face_dim;
-        for (uint32_t face_c = 0; face_c < faces_per_row; ++face_c) {
-            uint32_t tile_nhw = face_nhw / tile_face_dim;
-            uint32_t tile_c = face_c / tile_face_dim;
-            uint32_t face_mod_nhw = face_nhw % tile_face_dim;
-            uint32_t face_mod_c = face_c % tile_face_dim;
-            uint32_t tile_offset = (tile_nhw * in_ntiles_c * tile_size + tile_c * tile_size) * BYTES_PER_ELEM;
-            uint32_t face_offset = (face_mod_nhw * face_size * tile_face_dim + face_mod_c * face_size) * BYTES_PER_ELEM;
-            uint32_t intra_face_offset = intra_face_nhw * face_dim * BYTES_PER_ELEM;
+        if constexpr (is_out_tiled) {
+            // elements within a face are row major
+            // faces within a tile are row major
+            // tiles within a tensor are row major
+            uint32_t face_nhw = i / face_dim;
+            uint32_t intra_face_nhw = i % face_dim;
+            for (uint32_t face_c = 0; face_c < faces_per_row; ++face_c) {
+                uint32_t tile_nhw = face_nhw / tile_face_dim;
+                uint32_t tile_c = face_c / tile_face_dim;
+                uint32_t face_mod_nhw = face_nhw % tile_face_dim;
+                uint32_t face_mod_c = face_c % tile_face_dim;
+                uint32_t tile_offset = (tile_nhw * in_ntiles_c * tile_size + tile_c * tile_size) * BYTES_PER_ELEM;
+                uint32_t face_offset =
+                    (face_mod_nhw * face_size * tile_face_dim + face_mod_c * face_size) * BYTES_PER_ELEM;
+                uint32_t intra_face_offset = intra_face_nhw * face_dim * BYTES_PER_ELEM;
+                noc_async_read_one_packet(
+                    get_noc_addr(in_l1_read_addr) + face_c * face_dim * BYTES_PER_ELEM,
+                    out_l1_write_addr_base + tile_offset + face_offset + intra_face_offset,
+                    face_dim * BYTES_PER_ELEM);
+                // DPRINT  <<"["<< i<< "]face_c:" << face_c << ENDL();
+                // tt::data_movement::common ::print_bf16_pages(out_l1_write_addr_base+ tile_offset + face_offset +
+                // intra_face_offset, face_dim, BYTES_PER_ELEM);
+            }
+        } else {
+            uint32_t out_l1_write_addr = get_write_ptr(cb_dst);
             noc_async_read_one_packet(
-                get_noc_addr(in_l1_read_addr) + face_c * face_dim * BYTES_PER_ELEM,
-                out_l1_write_addr_base + tile_offset + face_offset + intra_face_offset,
-                face_dim * BYTES_PER_ELEM);
+                get_noc_addr(in_l1_read_addr),
+                out_l1_write_addr,
+                partial_iter_output_tiles * (in_c == 16 ? 16 : 32) *
+                    BYTES_PER_ELEM);  // TODO: note: change. take care partial block/tiles.
         }
         noc_async_read_barrier();
 
@@ -96,6 +119,6 @@ void kernel_main() {
         // tt::data_movement::common ::print_bf16_pages(out_l1_write_addr_base, 32, 32);
     }
 
-    tt::data_movement::common ::print_bf16_pages(out_l1_write_addr_base, in_c, 32);
+    // tt::data_movement::common ::print_bf16_pages(out_l1_write_addr_base, in_c, 32);
 
 }  // kernel_main()

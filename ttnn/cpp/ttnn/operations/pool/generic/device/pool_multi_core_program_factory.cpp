@@ -261,7 +261,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const MemoryConfig& out_mem_config,
     uint32_t nblocks,
     std::optional<int32_t> divisor_override,
-    uint32_t memory_used) {
+    const Pool2D::operation_attributes_t& op_attr) {
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -650,7 +650,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_nblocks_c,
         in_ntiles_c,
         out_h,
-        out_w};
+        out_w,
+        op_attr.is_out_tiled_};
 
     std::string cb_coppy_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
@@ -671,7 +672,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     //     input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     // uint32_t l1_usage = calculate_L1_usage(
     //     input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
-    // uint32_t output_cb_size = post_allocate_size - memory_used;
+    // uint32_t  = post_allocate_size - op_attr.memory_used_;
 
     // TT_FATAL(
     //     temporary_size + output_cb_size == l1_usage,
@@ -819,7 +820,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         out_mem_config,
         1,
         divisor_override,
-        op_attr.memory_used_);
+        op_attr);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

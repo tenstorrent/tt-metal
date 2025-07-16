@@ -263,6 +263,8 @@ def run_max_pool(
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
 
+    # output_pytorch =  output_pytorch[:][:32][:][:]
+    # golden_pytorch =  golden_pytorch[:][:32][:][:]
     print("ttnn untilized result:")
     print(output_pytorch[0][0])
     print("pytorch result:")
@@ -356,8 +358,8 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        # (2, 2),
-        (3, 3),
+        (2, 2),
+        # (3, 3),
         # (5, 5),
         # (9, 9),
         # (13, 13),
