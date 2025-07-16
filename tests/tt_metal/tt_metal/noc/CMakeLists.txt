@@ -21,12 +21,3 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
-
-install(
-    TARGETS
-        unit_tests_noc
-        DESTINATION
-        ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/unit_cpp_tests/fast_dispatch
-        COMPONENT
-        metalium-cpp-tests
-)
