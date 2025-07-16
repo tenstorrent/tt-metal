@@ -1,5 +1,6 @@
 set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
+    dispatch/test_rw_buffer.cpp
     ethernet/test_ethernet_read_and_send_data.cpp
     ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
@@ -57,8 +58,10 @@ endif()
 foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
     get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
-    # test_rw_buffer have two versions >:/ can we remove one?
+    # test_rw_buffer have three versions >:/ can we remove two?
     if(${TEST_SRC} STREQUAL "old/pcie/test_rw_buffer.cpp")
+        set(TEST_TARGET "test_rw_buffer_old_old")
+    elseif(${TEST_SRC} STREQUAL "3_pcie_transfer/test_rw_buffer.cpp")
         set(TEST_TARGET "test_rw_buffer_old")
     endif()
     string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
