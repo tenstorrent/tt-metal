@@ -273,7 +273,7 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
         # For uint32, test with values that represent the full uint32 range
         # Note: 4294967295 (uint32 max) is represented as -1 in int32 two's complement
         x_torch = torch.tensor(
-            [[99, 3, 100, 1, 72, 0, 22, 12, 1000, 0, -1, 2147483647, -2147483648]], dtype=torch.int32
+            [[99, 3, 100, 1, 72, 0, 5, 22, 12, 1000, 0, -1, 2147483647, -2147483648]], dtype=torch.int32
         )  # uint32 extremes as int32
 
     y_torch = torch.tensor([[1, 2, 31, 4, 5, 0, -20, 1, -3, -25, 0, 1, 31, 30]], dtype=torch.int32)
