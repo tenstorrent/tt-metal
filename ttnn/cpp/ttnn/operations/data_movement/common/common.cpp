@@ -119,7 +119,7 @@ uint32_t get_effective_dram_cores(
     std::map<uint32_t, std::array<float, 2>> dram_bw,
     bool single_noc) {
     int num_cores = (index == 0) ? 64 : 108;
-    auto aggregate_bw = single_noc == 1 ? 150 : 256;
+    auto aggregate_bw = single_noc == 1 ? 150 : 220;
     float achieved_dram_bw = interpolate_transaction_bw(transaction_size, dram_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
     if (effective_cores > num_cores) {
@@ -245,6 +245,7 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
     printf("input is tile %d, sharded %d, dram %d\n", input_is_tiled, input_is_sharded, input_is_dram);
     auto arch = input_tensor.device()->arch();
     int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
+    int total_num_cores = num_cores;
     int index = (arch == tt::ARCH::WORMHOLE_B0) ? 0 : 1;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -257,7 +258,8 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         const auto& input_shard_shape = input_tensor.memory_config().shard_spec().value().shape;
         input_transaction_size = input_is_tiled ? single_tile_size : input_shard_shape[1] * element_size_bytes;
         // can increase transaction size for height-sharded tensors
-        if (!input_is_tiled && input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (!input_is_tiled && !input_is_dram &&
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             uint32_t row_size = input_shard_shape[1] * element_size_bytes;
             uint32_t multi_row_size = input_shard_shape[0] * row_size;
             input_transaction_size = std::min(multi_row_size, 65536u);
@@ -288,7 +290,8 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
     if (output_is_sharded) {
         const auto& output_shard_shape = output_tensor.memory_config().shard_spec().value().shape;
         output_transaction_size = output_is_tiled ? single_tile_size : output_shard_shape[1] * element_size_bytes;
-        if (!output_is_tiled && output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (!output_is_tiled && !output_is_dram &&
+            output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             uint32_t out_row_size = output_shard_shape[1] * element_size_bytes;
             uint32_t out_multi_row_size = output_shard_shape[0] * out_row_size;
             output_transaction_size = std::min(out_multi_row_size, 65536u);
@@ -334,7 +337,8 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
                     (output_tensor.memory_config().shard_spec().value().grid ==
                      input_tensor.memory_config().shard_spec().value().grid);
     printf("is local %d\n", is_local);
-
+    float read_util = 1.0f;
+    float write_util = 1.0f;
     if (!input_is_dram && !output_is_dram) {
         printf("input and output are both l1\n");
         uint32_t input_effective_cores =
@@ -343,12 +347,11 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         uint32_t output_effective_cores =
             get_effective_l1_cores(output_transaction_size, index, true, l1_read_bw, l1_write_bw);
         printf("output effective cores %u\n", output_effective_cores);
-        updated_input_transactions = std::ceil((float)num_read_transactions / (float)input_effective_cores);
-        updated_output_transactions = std::ceil((float)num_write_transactions / (float)output_effective_cores);
-        num_cores = input_effective_cores;
-        if (updated_input_transactions < updated_output_transactions) {
-            num_cores = output_effective_cores;
-        }
+        auto actual_read_cores = std::min(input_effective_cores, num_read_transactions);
+        auto actual_write_cores = std::min(output_effective_cores, num_write_transactions);
+        num_cores = std::min(actual_read_cores, actual_write_cores);
+        read_util = (float)num_cores / (float)input_effective_cores;
+        write_util = (float)num_cores / (float)output_effective_cores;
         printf("num cores %u\n", num_cores);
     } else if (!input_is_dram) {
         printf("only input is l1\n");
@@ -403,13 +406,31 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         dram_bw);
     printf("total read cycles %u\n", total_read_cycles);
     // Use max(read, write) to account for overlap
-    int ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
+    int ideal_dev_clock_cycles = 1;
+    if (input_is_dram && output_is_dram) {
+        // Using the utilization to determine overlap potential
+        float overlap_factor = 1.0f;
+        if (read_util < 0.3f && write_util < 0.3f) {
+            // Both operations have low utilization - can overlap significantly
+            overlap_factor = 0.6f;
+        } else if (read_util < 0.3f || write_util < 0.3f) {
+            // One operation has low utilization - can partially overlap
+            overlap_factor = 0.8f;
+        } else if (read_util > 0.8f && write_util > 0.8f) {
+            // Both operations near peak - minimal overlap
+            overlap_factor = 1.0f;
+        } else {
+            // Moderate utilization - some overlap possible
+            overlap_factor = 0.9f;
+        }
+        printf("overlap factor %f\n", overlap_factor);
+        ideal_dev_clock_cycles = std::ceil((float)(total_read_cycles + total_write_cycles) * (float)overlap_factor);
+    } else {
+        ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
+    }
     int total_compute_cycles = 0;
     if (compute_cycles > 0) {
-        total_compute_cycles = std::ceil((float)compute_cycles / (float)num_cores);
-    }
-    if (input_is_dram && output_is_dram) {
-        ideal_dev_clock_cycles = total_read_cycles + total_write_cycles;
+        total_compute_cycles = std::ceil((float)compute_cycles / (float)total_num_cores);
     }
     return std::max(ideal_dev_clock_cycles, total_compute_cycles);
 }
