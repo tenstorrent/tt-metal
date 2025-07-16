@@ -485,7 +485,7 @@ class Generator:
         )
         return trace_tok_rm
 
-    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True):
+    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True, empty_slots=None):
         logits, read_event = self.model.process_output_decode(tt_logits)
         return logits, read_event
 
