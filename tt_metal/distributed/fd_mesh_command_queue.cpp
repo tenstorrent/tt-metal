@@ -490,7 +490,7 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     }
 #if TTNN_OPERATION_TIMEOUT_SECONDS > 0
     if (thread_exception_ptr_) {
-        TT_THROW("TIMEOUT: potential hang detected, please check the graph capture");
+        TT_THROW("TIMEOUT AFTER {} seconds: potential hang detected", TTNN_OPERATION_TIMEOUT_SECONDS);
     }
 #endif
 }
