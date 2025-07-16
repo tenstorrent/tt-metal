@@ -411,6 +411,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
                 "to "
                 "troubleshoot this: "
                 "https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md",
+                "or increasing the operation timeout by building with ./build_metal.sh --operation-timeout-seconds=X",
                 this->device_id,
                 TTNN_OPERATION_TIMEOUT_SECONDS);
         }
