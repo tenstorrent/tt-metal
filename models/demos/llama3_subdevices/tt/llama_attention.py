@@ -150,6 +150,17 @@ class TtLlamaAttention(LightweightModule):
             ),
             cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
         )
+        self.wqkv_interleaved = ttnn.as_tensor(
+            qkv_cat,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
+            ),
+            cache_file_name=cache_name("wqkv_sharded_2d_dram"),  ## TODO: Fix caching
+        )
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
@@ -175,6 +186,19 @@ class TtLlamaAttention(LightweightModule):
             cache_file_name=cache_name("wo_width_sharded_2d_prefetcher")
             if (self.use_fused_all_gather_matmul or self.TG)
             else cache_name("wo"),
+        )
+        self.wo_interleaved = ttnn.as_tensor(
+            pt_wo,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                mesh_shape=configuration.cluster_shape,
+            ),
+            cache_file_name=cache_name("wo_width_sharded_2d_dram"),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
@@ -415,7 +439,7 @@ class TtLlamaAttention(LightweightModule):
 
         xqkv = ttnn.linear(
             x_11SH,
-            self.wqkv,
+            self.wqkv_interleaved,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
@@ -594,7 +618,7 @@ class TtLlamaAttention(LightweightModule):
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
-            self.wo,
+            self.wo_interleaved,
             compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
