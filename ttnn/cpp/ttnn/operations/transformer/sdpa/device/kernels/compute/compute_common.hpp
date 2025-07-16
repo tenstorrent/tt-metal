@@ -52,6 +52,19 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
     constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
+    // DPRINT_UNPACK({
+    //     DPRINT << " ---- scale_cb (UNPACK) ---- " << ENDL();
+    //     // [INFO] print out the mask tiles in its data format
+    //     for (uint8_t iii = 0; iii < 32; ++iii) {
+    //         DPRINT << TileSlice(
+    //                       scale_cb,
+    //                       0,
+    //                       SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+    //                       true,
+    //                       true)
+    //                << ENDL();
+    //     }
+    // });
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
@@ -185,6 +198,19 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
             tile_regs_wait();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 pack_tile(j, out_cb);
+                // DPRINT_PACK({
+                //     // [INFO] print out the mask tiles in its data format
+                //     for (uint8_t iii = 0; iii < 32; ++iii) {
+                //         DPRINT << TileSlice(
+                //                       out_cb,
+                //                       i * dst_tiles + j,
+                //                       SliceRange{
+                //                           .h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                //                       true,
+                //                       true)
+                //                << ENDL();
+                //     }
+                // });
             }
             tile_regs_release();
         }
@@ -499,6 +525,19 @@ void matmul_blocks(
         in0_index_offset += subblock_h * in0_block_w;
     }
     cb_pop_front(in1_cb, K * N);
+    // DPRINT_PACK({
+    //     DPRINT << " output_num_tiles: " << output_num_tiles << ENDL();
+    //     // [INFO] print out the mask tiles in its data format
+    //     for (uint8_t iii = 0; iii < 32; ++iii) {
+    //         DPRINT << TileSlice(
+    //                       out_cb,
+    //                       0,
+    //                       SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+    //                       true,
+    //                       true)
+    //                << ENDL();
+    //     }
+    // });
     cb_push_back(out_cb, output_num_tiles);
 }
 

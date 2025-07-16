@@ -119,7 +119,17 @@ void kernel_main() {
                 const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
                 uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, out_row_start_tile, 0);
 
+                // DPRINT << " out_chunk_tiles: " << out_chunk_tiles << ENDL();
                 cb_wait_front(cb_out, out_chunk_tiles);
+                // // [INFO] print out the mask tiles in its data format
+                // for (uint8_t iii = 0; iii < 32; ++iii) {
+                //     DPRINT << TileSlice(
+                //                   cb_out,
+                //                   0,
+                //                   SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws =
+                //                   1}, true, true)
+                //            << ENDL();
+                // }
                 barrier_count = 0;
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
                 for (uint32_t row = 0; row < out_row_tile_count; ++row) {
