@@ -410,7 +410,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
                 "TIMEOUT: device {} timeout after {} seconds, potential hang detected, you can use the following tool "
                 "to "
                 "troubleshoot this: "
-                "https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md",
+                "https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md "
                 "or increasing the operation timeout by building with ./build_metal.sh --operation-timeout-seconds=X",
                 this->device_id,
                 TTNN_OPERATION_TIMEOUT_SECONDS);
