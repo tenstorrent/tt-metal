@@ -68,7 +68,11 @@ void kernel_main() {
         nsticks_to_process_on_core =
             (total_nsticks_to_process % 2) ? nsticks_to_process_on_core - 1 : nsticks_to_process_on_core;
     }
-    int32_t accumulated_offset = 0;
+    int32_t accumulated_offset = 0;  // offset used to calculate the position of row in batch
+                                     // every time we encounter a boundary between images, it is increased by
+                                     // in_h (corresponding to height of a single batch) +
+                                     // 2 (corresponding to the 2 skipped padding rows)
+
     for (uint32_t image_row = 0; image_row < in_image_rows_per_core * scale_h; ++image_row) {
         x_coordinate = x_starting_coordinate;
 
@@ -78,7 +82,7 @@ void kernel_main() {
         uint32_t y1 = int(y_coordinate);
         uint32_t y2 = y1 + 1;
 
-        // These two variables represent the indecies of the rows referenced by y1 and y2
+        // These two variables represent the indices of the rows referenced by y1 and y2
         // In the according batch in the input image
         // Value of -1 for either of these corresponds to the top padding row,
         // And value of in_h corresponds to the bottom padding row
