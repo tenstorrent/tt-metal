@@ -66,6 +66,7 @@ protected:
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
+        DispatchFixture::SetUp();
     }
 };
 

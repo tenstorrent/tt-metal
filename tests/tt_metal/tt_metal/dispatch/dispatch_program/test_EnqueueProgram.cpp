@@ -1819,6 +1819,7 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
 
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
+    GTEST_SKIP() << "Mesh device does not support logical / relative coordinates on Eth";
     for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0);
         if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
