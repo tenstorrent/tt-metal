@@ -2,7 +2,7 @@
 
 set -x
 
-case $(wc -l rankfile) in
+case $(wc -l < rankfile) in
     1)
         case $OMPI_COMM_WORLD_LOCAL_RANK in
             0)
