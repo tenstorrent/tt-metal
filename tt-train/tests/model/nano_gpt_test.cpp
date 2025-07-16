@@ -8,10 +8,12 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
+#include "models/distributed/llama.hpp"
 #include "models/llama.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
@@ -22,6 +24,18 @@ class NanoLlamaTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+class NanoLlamaMultiDeviceTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto shape = tt::tt_metal::distributed::MeshShape(1, 2);
+        ttml::autograd::ctx().open_device(shape);
     }
 
     void TearDown() override {
@@ -64,7 +78,11 @@ using DataLoader = ttml::datasets::DataLoader<
 
 // test training with MorehAdamW, nanollama config, memory efficient runner
 // no clip grad norm
-void train_test() {
+void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
+    if (use_tensor_parallel && use_ddp) {
+        throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
+    }
+
     auto config = TrainingConfig();
     config.transformer_config.runner_type = ttml::models::llama::RunnerType::MemoryEfficient;
     config.data_path = std::string(TEST_DATA_DIR) + "/shakespeare.txt";
@@ -116,7 +134,7 @@ void train_test() {
         mask, ttnn::Shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data](std::vector<DatasetSample> &&samples) {
+        [sequence_length, num_heads, device, &cached_data, use_ddp](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -134,20 +152,66 @@ void train_test() {
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                data, ttnn::Shape({batch_size, 1, 1, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
-            auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
-                targets, ttnn::Shape({batch_size * sequence_length}), device));
+
+            auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
+                if (use_ddp) {
+                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+                    auto data_tensor =
+                        ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                            data,
+                            ttnn::Shape({batch_size, 1, 1, sequence_length}),
+                            device,
+                            ttnn::Layout::ROW_MAJOR,
+                            mapper.get()));
+                    auto targets_tensor =
+                        ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                            targets,
+                            ttnn::Shape({batch_size, sequence_length}),
+                            device,
+                            ttnn::Layout::ROW_MAJOR,
+                            mapper.get()));
+                    return {data_tensor, targets_tensor};
+                }
+
+                const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+                auto data_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        data,
+                        ttnn::Shape({batch_size, 1, 1, sequence_length}),
+                        device,
+                        ttnn::Layout::ROW_MAJOR,
+                        mapper.get()));
+                auto targets_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                        targets, ttnn::Shape({batch_size, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
+                return {data_tensor, targets_tensor};
+            };
+
+            auto [data_tensor, targets_tensor] = create_data_and_targets();
             end_timer = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);
             return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
         };
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
-
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    config.transformer_config.vocab_size = (tokenizer->get_vocab_size() + 31) / 32 * 32;
-    auto model = ttml::models::llama::create(config.transformer_config);
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    auto round_up_to_tile = [](uint32_t value, uint32_t tile_size) -> uint32_t {
+        return (value + tile_size - 1) / tile_size * tile_size;
+    };
+    config.transformer_config.vocab_size =
+        round_up_to_tile(tokenizer->get_vocab_size(), (use_tensor_parallel ? num_devices : 1U) * 32U);
+
+    std::shared_ptr<ttml::autograd::ModuleBase> model;
+    if (use_tensor_parallel) {
+        config.transformer_config.num_groups = num_devices;
+        config.transformer_config.num_heads = num_devices * 2;
+        config.transformer_config.embedding_dim = (384U / 3U) * config.transformer_config.num_heads;
+
+        model = ttml::models::distributed::llama::create(config.transformer_config);
+    } else {
+        model = ttml::models::llama::create(config.transformer_config);
+    }
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
@@ -165,6 +229,13 @@ void train_test() {
         auto loss = ttml::ops::nll_loss(output, target);
         auto loss_float = ttml::core::to_vector(loss->get_value())[0];
         loss->backward();
+
+        // synchronize gradients for multi-device case, no-op if single device
+        auto parameters = model->parameters();
+        if (!use_tensor_parallel) {
+            ttml::core::distributed::synchronize_parameters(parameters);
+        }
+
         optimizer->step();
         ttml::autograd::ctx().reset_graph();
         auto global_step = optimizer->get_steps();
@@ -210,9 +281,15 @@ void train_test() {
     EXPECT_NEAR(losses[99], -13.1875, abs_tol);
 }
 
-bool should_run_tests() {
+bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
     return env_var ? true : ENABLE_NIGHTLY_TT_TRAIN_TESTS;
+}
+
+bool should_run_multi_device_tests() {
+    bool enable_nightly = should_run_nightly_tests();
+    bool sufficient_devices = tt::tt_metal::GetNumAvailableDevices() >= 2;
+    return enable_nightly && sufficient_devices;
 }
 
 /*
@@ -225,7 +302,19 @@ If one of these tests fails, it means one (or more) of the following:
 */
 
 TEST_F(NanoLlamaTest, NIGHTLY_Default) {
-    if (should_run_tests()) {
+    if (should_run_nightly_tests()) {
         train_test();
+    }
+}
+
+TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_TensorParallel) {
+    if (should_run_multi_device_tests()) {
+        train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
+    }
+}
+
+TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_DDP) {
+    if (should_run_multi_device_tests()) {
+        train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
     }
 }
