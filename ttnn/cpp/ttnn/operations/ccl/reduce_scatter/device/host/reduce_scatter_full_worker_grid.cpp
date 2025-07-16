@@ -192,7 +192,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
     log_trace(tt::LogOp, "build_reduce_scatter_worker_ct");
 
     auto const& worker_defines = op_config.emit_worker_defines();
-    TT_ASSERT(worker_defines.size() > 0);
+    TT_ASSERT(!worker_defines.empty());
     for (auto const& [key, value] : worker_defines) {
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
     }
@@ -463,10 +463,10 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
     std::vector<uint32_t> num_pages_per_full_chunk(total_num_edm_channels, 0);
 
     for (std::size_t link = 0; link < num_links; link++) {
-        const auto& an_edm_builder = cw_per_link_edm_builders.size() > 0 ? cw_per_link_edm_builders.at(link)
-                                                                         : ccw_per_link_edm_builders.at(link);
+        const auto& an_edm_builder =
+            !cw_per_link_edm_builders.empty() ? cw_per_link_edm_builders.at(link) : ccw_per_link_edm_builders.at(link);
         TT_ASSERT(
-            cw_per_link_edm_builders.size() > 0 || topology_config.ring_index == topology_config.ring_size - 1,
+            !cw_per_link_edm_builders.empty() || topology_config.ring_index == topology_config.ring_size - 1,
             "Internal logic error");
         std::size_t edm_channel_size_in_bytes = an_edm_builder.get_eth_buffer_size_bytes();
         std::size_t num_pages_per_edm_buffer = edm_channel_size_in_bytes / page_size_in_bytes;
@@ -707,7 +707,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     std::vector<ttnn::ccl::EriscDatamoverBuilder> cw_per_link_edm_builders(num_active_cw_edm_links, edm_builder);
     std::vector<ttnn::ccl::EriscDatamoverBuilder> ccw_per_link_edm_builders(num_active_ccw_edm_links, edm_builder);
     TT_ASSERT(
-        cw_per_link_edm_builders.size() > 0 || ccw_per_link_edm_builders.size() > 0,
+        !cw_per_link_edm_builders.empty() || !ccw_per_link_edm_builders.empty(),
         "Internal error. No EDMs were instantiated in reduce scatter.");
 
     std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn =
@@ -766,7 +766,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         is_worker_in_clockwise_direction_fn);
 
     const std::size_t edm_buffer_size_bytes =
-        (cw_per_link_edm_builders.size() > 0 ? cw_per_link_edm_builders.at(0) : ccw_per_link_edm_builders.at(0))
+        (!cw_per_link_edm_builders.empty() ? cw_per_link_edm_builders.at(0) : ccw_per_link_edm_builders.at(0))
             .get_eth_buffer_size_bytes();
     uint32_t cb_num_pages =
         std::min(input_tensor_num_units_per_tensor_slice, (edm_buffer_size_bytes / op_config.get_page_size())) * 2;

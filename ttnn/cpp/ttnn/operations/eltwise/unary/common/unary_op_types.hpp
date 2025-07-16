@@ -123,7 +123,7 @@ struct UnaryWithParam {
     UnaryWithParam(UnaryOpType op_type, float param) : op_type{op_type}, params{param} {}
     UnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
 
-    bool has_parameter() const { return params.size() > 0; }
+    bool has_parameter() const { return !params.empty(); }
 
     static constexpr auto attribute_names = std::forward_as_tuple("op_type", "param");
     auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }

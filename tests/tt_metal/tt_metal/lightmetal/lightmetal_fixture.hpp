@@ -45,7 +45,7 @@ protected:
         trace_region_size_ = trace_region_size;
 
         // If user didn't provide a specific trace bin path, set a default here based on test name
-        if (trace_bin_path == "") {
+        if (trace_bin_path.empty()) {
             const auto test_info = ::testing::UnitTest::GetInstance()->current_test_info();
             auto trace_filename = test_info ? std::string(test_info->name()) + ".bin" : "lightmetal_trace.bin";
             this->trace_bin_path_ = "/tmp/" + trace_filename;

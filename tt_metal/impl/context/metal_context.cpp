@@ -373,7 +373,7 @@ void MetalContext::set_custom_control_plane_mesh_graph(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
 
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
@@ -383,7 +383,7 @@ void MetalContext::set_custom_control_plane_mesh_graph(
 
 void MetalContext::set_default_control_plane_mesh_graph() {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     global_control_plane_.reset();
     this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);

@@ -60,7 +60,7 @@ static void test_sems_across_core_types(
             active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
 
         std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
-        if (eth_cores.size() > 0) {
+        if (!eth_cores.empty()) {
             auto program = tt::tt_metal::CreateProgram();
 
             CoreCoord eth_core = *eth_cores.begin();
@@ -129,7 +129,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
 
     std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
-    if (eth_cores.size() > 0) {
+    if (!eth_cores.empty()) {
         CoreCoord eth_core = *eth_cores.begin();
         CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
@@ -183,7 +183,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
     const auto& eth_cores =
         this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
-    if (eth_cores.size() > 0) {
+    if (!eth_cores.empty()) {
         CoreCoord eth_core = *eth_cores.begin();
         CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(

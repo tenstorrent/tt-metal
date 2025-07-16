@@ -265,7 +265,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
     }
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
 
@@ -371,7 +371,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
 
     // compute
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         auto untilize_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
@@ -524,7 +524,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
 
-    bool has_cliff = core_range_cliff.size() > 0;
+    bool has_cliff = !core_range_cliff.empty();
 
     uint32_t unpadded_row_size_bytes;
 
@@ -583,7 +583,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_w.cpp");
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         auto tilize_kernel_id = CreateKernel(
             program,
             compute_kernel,
@@ -710,7 +710,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         }
     }
 
-    bool has_cliff = core_range_cliff.size() > 0;
+    bool has_cliff = !core_range_cliff.empty();
 
     uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
@@ -771,7 +771,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         auto tilize_kernel_id = CreateKernel(
             program,
             compute_kernel,
