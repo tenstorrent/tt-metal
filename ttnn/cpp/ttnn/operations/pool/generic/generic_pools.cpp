@@ -123,16 +123,13 @@ static Tensor pool2d_invoke(
 
     // update the shard spec to match the output shape
     auto shard_spec = out_memory_config.shard_spec().value();
-    uint32_t output_shard_width_padded =
-        is_out_tiled ? tt::round_up(channels / num_cores_c, tt::constants::TILE_WIDTH)
-                     : tt::round_up(
-                           channels / num_cores_c *
-                               tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype())),
-                           tt::constants::TILE_WIDTH);
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
+    uint32_t output_c = channels;
+    uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * (is_out_tiled ? tt::constants::TILE_WIDTH : 1));
+    uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
         "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}",
