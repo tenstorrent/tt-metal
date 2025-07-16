@@ -600,8 +600,6 @@ def test_graph_capture_without_dtype_json_output(device):
 
 # This test is disabled by default because it will hang the device
 # if you want to experiment with a hanging device, remove the return statement below
-
-
 def test_graph_capture_with_hang_device_operation(device):
     return
     # Create input tensor
@@ -630,7 +628,7 @@ def test_graph_capture_with_hang_device_operation(device):
 
     if failed:
         print(captured_graph)
-        # this is the case for --ttnn-enable-operation-timeout
+        # this is the case for --operation-timeout-seconds
         # the graph should have captured the arguments to the hang operation
         assert (
             captured_graph[1]["arguments"][0]
