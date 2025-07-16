@@ -277,7 +277,10 @@ def collect_pcs_from_riscv(
         assert store is not None, f"Debug bus not found for location {block.location.to_str('logical')}"
         pc_dict = dict()
         for risc_name in block.risc_names:
-            pc_dict[risc_name + "_pc"] = block.get_risc_debug(risc_name).get_pc()
+            risc_debug = block.get_risc_debug(risc_name)
+            if not risc_name == "ncrisc" and not risc_debug.is_halted():
+                risc_debug.halt()
+            pc_dict[risc_name + "_pc"] = risc_debug.get_pc()
         pcs[block.location] = pc_dict
     return pcs
 
@@ -500,6 +503,10 @@ def get_running_ops_table(
                             get_callstack_with_gdb(
                                 ui_state, process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset
                             )
+                            risc_debug = block.get_risc_debug(risc_name)
+                            if risc_debug.is_halted():
+                                risc_debug.cont()
+
             else:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
@@ -732,6 +739,10 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
         process_ids,
     )
 
+    if GDB_EN:
+        # Stop gdb server
+        ui_state.stop_gdb()
+
     # Printing tables if verbose is True
     if VERBOSE or VVERBOSE:
         print()  # Newline after the last PC
@@ -739,10 +750,6 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
             print(tabulate(running_ops_table_tensix, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
         if runinng_ops_table_idle_eth is not None:
             print(tabulate(runinng_ops_table_idle_eth, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
-
-    if GDB_EN:
-        # Stop gdb server
-        ui_state.stop_gdb()
 
     # WIP:
     # # Print callstack for this location using tt_exalens_lib
