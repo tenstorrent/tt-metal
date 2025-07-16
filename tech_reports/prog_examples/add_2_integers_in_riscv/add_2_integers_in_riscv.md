@@ -69,7 +69,7 @@ CircularBufferConfig cb_src1_config = CircularBufferConfig(single_tile_size, {{s
 CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 ```
 
-L1 circular buffers will be used communicate data to and from the compute engine. We create a circular buffer for each of the source vectors. Each core will have its own segment of the source data stored in its corresponding circular buffer.
+L1 circular buffers will be used to communicate data to and from the compute engine. We create a circular buffer for each of the source vectors. Each core will have its own segment of the source data stored in its corresponding circular buffer.
 
 ## Kernel setup
 
@@ -128,7 +128,7 @@ uint32_t* dat1 = (uint32_t*) l1_write_addr_in1;
 
 dat0[0] = dat0[0] + dat1[0];
 
-// Write data from L1 circulr buffer (in0) -> DRAM
+// Write data from L1 circular buffer (in0) -> DRAM
 noc_async_write(l1_write_addr_in0, dst_dram_noc_addr, ublock_size_bytes_0);
 noc_async_write_barrier();
 ```
