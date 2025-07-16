@@ -9,6 +9,7 @@ case $(VIRTUAL_CONFIG) in
                 device_args="--device /dev/tenstorrent/"
                 ;;
         esac
+        ;;
     2)
         case $OMPI_COMM_WORLD_LOCAL_RANK in
             0)
@@ -18,6 +19,7 @@ case $(VIRTUAL_CONFIG) in
                 device_args="--device /dev/tenstorrent/2 --device /dev/tenstorrent/3"
                 ;;
         esac
+        ;;
     4)
         case $OMPI_COMM_WORLD_LOCAL_RANK in
             0)
@@ -33,5 +35,6 @@ case $(VIRTUAL_CONFIG) in
                 device_args="--device /dev/tenstorrent/3"
                 ;;
         esac
+        ;;
 esac
 docker run --rm $device_args -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 ${@:1}
