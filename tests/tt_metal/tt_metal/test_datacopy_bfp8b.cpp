@@ -11,7 +11,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-// //#include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
 #include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <cstring>
