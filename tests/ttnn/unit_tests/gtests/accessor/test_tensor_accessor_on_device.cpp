@@ -39,7 +39,7 @@ struct InputOutputBufferParams {
 };
 
 template <typename T>
-void test_single_core_reshard(
+static void test_single_core_reshard(
     const InputOutputBufferParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
     MemoryConfig input_mem_config = params.input_shard_spec
                                         ? MemoryConfig(params.input_buffer_type, *params.input_shard_spec)
@@ -134,8 +134,8 @@ struct CopyParams {
 };
 
 template <typename T>
-void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, *params.input_shard_spec);
+static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
     TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
