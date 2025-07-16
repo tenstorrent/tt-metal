@@ -28,7 +28,7 @@ from ..tt.parallel_config import StableDiffusionParallelManager
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 15210496}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 20000000}],
     indirect=True,
 )
 def test_sd35_performance(
@@ -123,7 +123,7 @@ def test_sd35_performance(
     profiler = Profiler()
 
     profiler.enable()
-    for i in range(1):
+    for i in range(3):
         print(f"Performance run {i+1}/3...")
 
         # Create timing collector for this run
