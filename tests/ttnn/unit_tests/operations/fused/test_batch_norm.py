@@ -502,16 +502,23 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, device)
         return pccs
 
     # Execute low-accuracy groupnorm
-    config_low = ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=False)
-    torch_tensors_low, tt_tensors_low = do_batch_norm_for_config(config_low)
-    pccs_low = compute_pccs_for_tensors(torch_tensors_low, tt_tensors_low)
+    config_low = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+    )
+    torch_tensors, tt_tensors = do_batch_norm_for_config(config_low)
+    pccs_low = compute_pccs_for_tensors(torch_tensors, tt_tensors)
 
     # Execute high-accuracy groupnorm
-    config_high = ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=True)
-    torch_tensors_high, tt_tensors_high = do_batch_norm_for_config(config_high)
-    pccs_high = compute_pccs_for_tensors(torch_tensors_high, tt_tensors_high)
+    config_high = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+    torch_tensors, tt_tensors = do_batch_norm_for_config(config_high)
+    pccs_high = compute_pccs_for_tensors(torch_tensors, tt_tensors)
 
-    print(f"PCCs low: {pccs_low}, PCCs high: {pccs_high}")
     assert all(
         high > low for high, low in zip(pccs_high, pccs_low)
     ), "High-accuracy config should have higher PCC than low-accuracy config"
