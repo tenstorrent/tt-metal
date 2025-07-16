@@ -53,11 +53,11 @@ ALWI void untilize_init(uint32_t icb) {
  * |------------|--------------|------------------------------------------------------|----------|---------------------------|----------|
  * | Template   | block_ct_dim | The number of tiles stored in DEST at one moment     | uint32_t | 1 to max (see comment)    | False    |
  * | Function   | icb          | The identifier of the circular buffer (CB) for input | uint32_t | 0 to 31                   | True     |
- * | Function   | full_ct_dim  | The width of the block in tiles                      | uint32_t | Divisible by block_ct_dim | True     |
+ * | Function   | full_ct_dim  | Width of a full input in tiles                       | uint32_t | Divisible by block_ct_dim | True     |
  * | Function   | ocb          | The identifier of the circular buffer (CB) for output| uint32_t | 0 to 31                   | True     |
  */
 // clang-format on
-template <int block_ct_dim = 1>
+template <uint32_t block_ct_dim = 1>
 ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
     UNPACK((llk_unpack_untilize(icb, full_ct_dim)));
 
@@ -65,7 +65,7 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
         MATH((llk_math_wait_for_dest_available()));
 
         // Datacopy
-        for (int reg_id = 0; reg_id < block_ct_dim; reg_id++) {
+        for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
             MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id)));
         }
 
@@ -74,7 +74,7 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
         PACK((llk_packer_wait_for_math_done()));
 
         // Datacopy
-        for (int reg_id = 0; reg_id < block_ct_dim; reg_id++) {
+        for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
             PACK((llk_pack<DST_ACCUM_MODE, false, false>(reg_id, ocb)));
         }
 

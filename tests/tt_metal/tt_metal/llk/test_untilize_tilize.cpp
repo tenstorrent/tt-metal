@@ -322,13 +322,12 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     }
     log_info(
         tt::LogTest,
-        "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, ShortInit = "
-        "{}, FastTilize = {}, pass = {}",
+        "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, "
+        "FastTilize = {}, pass = {}",
         test_config.num_tiles_r,
         test_config.num_tiles_c,
         test_config.fp32_dest_acc_en,
         test_config.dst_full_sync_en,
-        test_config.short_init,
         test_config.fast_tilize,
         pass);
     ASSERT_TRUE(pass);
