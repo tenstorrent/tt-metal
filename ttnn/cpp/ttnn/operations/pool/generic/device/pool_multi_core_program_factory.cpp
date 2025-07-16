@@ -31,20 +31,6 @@ struct ScalarInfo {
     uint16_t end;
 };
 
-bool is_pool_op_one_scalar_per_core(
-    const Pool2DType pool_type,
-    bool ceil_mode,
-    uint32_t ceil_h,
-    uint32_t ceil_w,
-    bool count_include_pad,
-    uint32_t pad_h,
-    uint32_t pad_w,
-    std::optional<int32_t> divisor_override) {
-    return pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
-           ((ceil_mode == false || (ceil_h == 0 && ceil_w == 0)) &&
-            (count_include_pad == true || (pad_h == 0 && pad_w == 0)));
-}
-
 // This function generates a vector of elements of type ScalarInfo. It is called once per core and generates the
 // adequate scalars for each output element that core should produce. It should be called only for avg pool operation
 // and only if the divisor_override is NOT set and the idea behind it is to generate config tesnor in cases where one
@@ -259,7 +245,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t dilation_w,
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
-    uint32_t nblocks,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used) {
     // This should allocate a DRAM buffer on the device
@@ -285,30 +270,28 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     const uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
-    const uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     const uint32_t out_ntiles_c =
         (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
 
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
-    // Hardware can do reduction of 8 tiles at a time.
-    // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
+    bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool is_large_kernel =
         is_partial_tile ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2 : kernel_size_hw > tt::constants::TILE_HEIGHT;
+    // For large kernel avg pool, we need to use fp32 accumulation to avoid precision error buildup over multiple
+    // reduction stages, so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles at a time.
+    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool && is_large_kernel ? 4 : 8;
+    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     // TODO: enable 32 sticks per tile for reduction for all cases, we can only support 16 row reductions for
     // partial tiles, and there is currently a bug forcing us to use 16 row reductions for avg pool when there
     // is 1 remainder C tile
     const uint32_t max_rows_for_reduction =
         !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
-    TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
     }
-    const uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
@@ -318,13 +301,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
     const uint32_t ncores_w = grid_size.x;
-
-    // TODO: support generic nblocks
-    TT_FATAL(
-        out_nhw_per_core % nblocks == 0,
-        "number of sticks per core ({}) should be divisible by nblocks ({})",
-        out_nhw_per_core,
-        nblocks);
 
     // CBs
     const uint32_t multi_buffering_factor = 2;
@@ -344,23 +320,18 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     tt::tt_metal::create_cb(in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
-    // For avgpool, instantiate and use this CB, which consists of 1s. We don't want to divide
-    // twice by kernel size for large kernel case.
-    uint32_t in_one_cb_id = 32;
+    const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
+    const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+    bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
+        pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
+
     uint32_t in_scalar_cb_id_1 = 32;
-    if (pool_type == Pool2DType::AVG_POOL2D) {
-        in_one_cb_id = next_cb_index++;
-        const uint32_t in_one_cb_pagesize = tile_size(in_df);
-        const uint32_t in_one_cb_npages = 1;
-        tt::tt_metal::create_cb(in_one_cb_id, program, all_cores, in_one_cb_pagesize, in_one_cb_npages, in_df);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
-        if (split_reader) {
-            in_scalar_cb_id_1 = next_cb_index++;
-            tt::tt_metal::create_cb(
-                in_scalar_cb_id_1, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
-            log_debug(
-                tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_1, in_scalar_cb_pagesize, in_scalar_cb_npages);
-        }
+    if (is_avg_pool && split_reader && !one_scalar_per_core) {
+        in_scalar_cb_id_1 = next_cb_index++;
+        tt::tt_metal::create_cb(
+            in_scalar_cb_id_1, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
+        log_debug(
+            tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_1, in_scalar_cb_pagesize, in_scalar_cb_npages);
     }
 
     uint32_t clear_value_cb_id = 32;
@@ -372,22 +343,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         clear_value_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
-    }
-
-    // CBs for NC/BR/Compute synchornization
-    int32_t sync_cb_id1 = next_cb_index++;
-    tt::tt_metal::create_cb(sync_cb_id1, program, all_cores, 2, 2, tt::DataFormat::UInt16);
-    int32_t sync_cb_id3 = next_cb_index++;
-    tt::tt_metal::create_cb(sync_cb_id3, program, all_cores, 2, 1, tt::DataFormat::UInt16);
-    int32_t sync_cb_id5 = next_cb_index++;
-    tt::tt_metal::create_cb(sync_cb_id5, program, all_cores, 2, 1, tt::DataFormat::UInt16);
-    int32_t sync_cb_id2 = 0;
-    int32_t sync_cb_id4 = 0;
-    if (split_reader) {
-        sync_cb_id2 = next_cb_index++;
-        sync_cb_id4 = next_cb_index++;
-        tt::tt_metal::create_cb(sync_cb_id2, program, all_cores, 2, 2, tt::DataFormat::UInt16);
-        tt::tt_metal::create_cb(sync_cb_id4, program, all_cores, 2, 1, tt::DataFormat::UInt16);
     }
 
     // incoming data is the input cb instead of raw l1/dram addr
@@ -436,7 +391,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     const uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
-    const uint32_t in_cb_npages = multi_buffering_factor * nblocks;
+    const uint32_t in_cb_npages = multi_buffering_factor;
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
@@ -459,39 +414,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, out_df, output.buffer());
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
-    // Invalid index for circular buffer, will report error if not assigned with valid value before creation
-    uint32_t max_pool_partials_cb_id = 32;
-    if (is_large_kernel) {
-        max_pool_partials_cb_id = next_cb_index++;  // max_pool partials
-        const uint32_t max_pool_partials_cb_pagesize = in_cb_pagesize;  // page size is one row
-        const uint32_t max_pool_partials_cb_npages = 1;
-
-        tt::tt_metal::create_cb(
-            max_pool_partials_cb_id,
-            program,
-            all_cores,
-            max_pool_partials_cb_pagesize,
-            max_pool_partials_cb_npages,
-            out_df);
-        log_debug(
-            tt::LogOp,
-            "CB {} :: PS = {}, NP = {}",
-            max_pool_partials_cb_id,
-            max_pool_partials_cb_pagesize,
-            max_pool_partials_cb_npages);
-    }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
     /**
      * Reader Kernel: input rows -> input cb
      */
-    constexpr float one = 1.;
-    const uint32_t bf16_one_u32 = *reinterpret_cast<const uint32_t*>(&one);
-    const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
-    const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
-        pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
-
     CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
     uint32_t config_cb_id = 32;
@@ -545,7 +472,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         split_reader,  // enable split reader
         0,             // split reader id
         bf16_scalar,
-        bf16_one_u32,
         bf16_init_value,
         in_nblocks_c,
         in_cb_sz,
@@ -557,18 +483,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
-        max_pool_partials_cb_id,
-        in_one_cb_id,
         clear_value_cb_id,
         (uint32_t)pool_type,
         one_scalar_per_core,
         config_cb_id,
         multi_buffering_factor,
-        sync_cb_id1,
-        sync_cb_id2,
-        sync_cb_id3,
-        sync_cb_id4,
-        out_cb_id,
         stride_w};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
@@ -601,13 +520,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      * output cb
      */
     std::vector<uint32_t> compute_ct_args = {
-        in_ntiles_hw,
         in_ntiles_c,
         kernel_size_hw,
-        out_h,
-        out_w,
-        split_reader,                // enable split reader
-        out_nhw_per_core / nblocks,  // loop count with blocks
+        split_reader,
+        out_nhw_per_core,
         input_shape[3] / num_shards_c,
         in_nblocks_c,
         max_rows_for_reduction,
@@ -616,18 +532,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
         out_cb_id,
-        max_pool_partials_cb_id,
-        in_one_cb_id,
-        one_scalar_per_core,
-        sync_cb_id1,
-        sync_cb_id2,
-        sync_cb_id3,
-        sync_cb_id4,
-        sync_cb_id5};
+        one_scalar_per_core};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en = false,
+        .fp32_dest_acc_en =
+            is_large_kernel && is_avg_pool,  // for large kernels average pool requires fp32 accumulation to avoid
+                                             // precision error buildup over multiuple reduction stages
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};
@@ -646,7 +557,21 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t post_allocate_size =
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     uint32_t l1_usage = calculate_L1_usage(
-        input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
+        input,
+        pad_h,
+        pad_w,
+        ceil_pad_h,
+        ceil_pad_w,
+        ceil_mode,
+        kernel_size_h,
+        kernel_size_w,
+        out_h,
+        out_w,
+        input.memory_config(),
+        output.memory_config(),
+        pool_type,
+        count_include_pad,
+        divisor_override);
     uint32_t output_cb_size = post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
@@ -686,7 +611,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "pad_w: {}", pad_w);
         log_debug(tt::LogOp, "out_h: {}", out_h);
         log_debug(tt::LogOp, "out_w: {}", out_w);
-        log_debug(tt::LogOp, "out_w_loop_count: {}", out_w_loop_count);
         log_debug(tt::LogOp, "out_c: {}", output_shape[3]);
         log_debug(tt::LogOp, "out_nbytes_c: {}", out_nbytes_c);
         log_debug(tt::LogOp, "in_h: {}", in_h);
@@ -696,7 +620,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "in_nblocks_c: {}", in_nblocks_c);
         log_debug(tt::LogOp, "in_nbytes_c: {}", in_nbytes_c);
         log_debug(tt::LogOp, "out_ntiles_c: {}", out_ntiles_c);
-        log_debug(tt::LogOp, "nblocks: {}", nblocks);
         log_debug(tt::LogOp, "ncores: {}", ncores);
         log_debug(tt::LogOp, "in_nhw_per_core: {}", in_nhw_per_core);
         log_debug(tt::LogOp, "out_nhw_per_core: {}", out_nhw_per_core);
@@ -796,7 +719,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         dilation_w,
         num_shards_c,
         out_mem_config,
-        1,
         divisor_override,
         op_attr.memory_used);
 }
