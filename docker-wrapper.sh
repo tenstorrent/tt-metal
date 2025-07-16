@@ -37,5 +37,8 @@ case $(wc -l < rankfile) in
         esac
         ;;
 esac
-pwd
-docker run --rm $device_args --network host -v /home/ansible/actions-runner/_work:/home/ansible/actions-runner/_work -w $(pwd) -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 ${@:1}
+
+env | grep ^OMPI >> ./environment
+env | grep ^PMIX >> ./environment
+
+docker run --rm $device_args --env-file ./environment --network host -v /home/ansible/actions-runner/_work:/home/ansible/actions-runner/_work -w $(pwd) -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 ${@:1}
