@@ -372,6 +372,7 @@ on:
           - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.logical_and.logical_and_forge
           - eltwise.binary.logical_and.logical_and_sharded
+          - eltwise.binary.nextafter.nextafter
           - eltwise.binary.polyval.polyval
           - eltwise.binary.polyval.polyval_sharded
           - eltwise.binary.remainder.remainder
@@ -396,8 +397,9 @@ on:
           - eltwise.binary.fmod.fmod
           - eltwise.binary.fmod.fmod_unary
           - eltwise.binary.fmod.fmod_unary_sharded
-          - eltwise.binary.floor_divide.floor_divide_pytorch2
           - eltwise.binary.floor_divide.floor_divide
+          - eltwise.binary.floor_divide.floor_divide_unary
+          - eltwise.binary.floor_divide.floor_divide_pytorch2
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp.logaddexp_sharded
           - eltwise.binary.logaddexp2.logaddexp2
