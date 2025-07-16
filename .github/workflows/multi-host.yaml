@@ -23,6 +23,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+      - name: Echo configuration input value
+        run: |
+            echo "Configuration input value is: ${{ inputs.configuration }}"
       - name: Generate the rankfile
         run: ./generate-rankfile.sh ${{ inputs.configuration }}
       - name: Run tt-smi via mpirun command
