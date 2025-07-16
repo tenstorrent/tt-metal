@@ -88,7 +88,7 @@ class LoadImages:
         return math.ceil(self.nf / self.bs)
 
 
-def LetterBox(img, new_shape=(320, 320), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
+def LetterBox(img, new_shape=(320, 320), auto=False, scaleup=True, center=True, stride=32):
     shape = img.shape[:2]
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
@@ -290,14 +290,9 @@ def postprocess(preds, img, orig_imgs, batch, names, conf=0.25, max_det=300):
     return results
 
 
-def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
-    return cv2.imdecode(np.fromfile(filename, np.uint8), flags)
-
-
 def load_coco_class_names():
     url = "https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names"
     path = f"models/demos/yolov4/demo/coco.names"
-    response = requests.get(url)
     try:
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
