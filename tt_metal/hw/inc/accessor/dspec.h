@@ -320,56 +320,47 @@ private:
 /**
  * @brief Helper function to build a DistributionSpec from CTA and CRTA. Parses tensor shape, shard shape,
  * bank coordinates if needed, and passes to DSpec constructor.
- *
- * @tparam Args Structure containing offsets for CTA/CRTA.
- * @return auto DistributionSpec instance built from provided argumnets.
  */
-template <typename ArgsOffsets>
-auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
+template <typename Args>
+auto make_dspec_from_args(const Args& args) {
     // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"
-    using TensorShapeType = typename ArrayWrapperTypeSelectorU32<
-        !ArgsOffsets::tensor_shape_is_crta,
-        ArgsOffsets::TensorShapeCTAOffset,
-        ArgsOffsets::RankCT>::type;
-    using ShardShapeType = typename ArrayWrapperTypeSelectorU32<
-        !ArgsOffsets::shard_shape_is_crta,
-        ArgsOffsets::ShardShapeCTAOffset,
-        ArgsOffsets::RankCT>::type;
+    using TensorShapeType =
+        typename ArrayWrapperTypeSelectorU32<!Args::tensor_shape_is_crta, Args::TensorShapeCTAOffset, Args::RankCT>::
+            type;
+    using ShardShapeType =
+        typename ArrayWrapperTypeSelectorU32<!Args::shard_shape_is_crta, Args::ShardShapeCTAOffset, Args::RankCT>::type;
     using BankCoordsType = typename ArrayWrapperTypeSelectorPackedU16<
-        !ArgsOffsets::bank_coords_is_crta,
-        ArgsOffsets::BankCoordsCTAOffset,
-        ArgsOffsets::NumBanksCT>::type;
+        !Args::bank_coords_is_crta,
+        Args::BankCoordsCTAOffset,
+        Args::NumBanksCT>::type;
 
-    auto rank = args_offsets.get_rank();
-    auto num_banks = args_offsets.get_num_banks();
+    auto rank = args.get_rank();
+    auto num_banks = args.get_num_banks();
 
     static_assert(
-        !ArgsOffsets::rank_is_crta or ArgsOffsets::tensor_shape_is_crta,
+        !Args::rank_is_crta or Args::tensor_shape_is_crta,
         "Tensor shape must be CRTA if rank is not known at compile time!");
     static_assert(
-        !ArgsOffsets::rank_is_crta or ArgsOffsets::shard_shape_is_crta,
+        !Args::rank_is_crta or Args::shard_shape_is_crta,
         "Shard shape must be CRTA if rank is not known at compile time!");
     static_assert(
-        !ArgsOffsets::num_banks_is_crta or ArgsOffsets::bank_coords_is_crta,
+        !Args::num_banks_is_crta or Args::bank_coords_is_crta,
         "Bank coords must be CRTA if num_banks is not known at compile time!");
 
-    constexpr bool is_interleaved = !ArgsOffsets::is_sharded;
+    constexpr bool is_interleaved = !Args::is_sharded;
     return DistributionSpec<
-        ArgsOffsets::RankCT,
-        ArgsOffsets::NumBanksCT,
+        Args::RankCT,
+        Args::NumBanksCT,
         TensorShapeType,
         ShardShapeType,
         BankCoordsType,
         is_interleaved,
-        ArgsOffsets::is_dram>(
+        Args::is_dram>(
         rank,
         num_banks,
-        ArgsOffsets::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args_offsets.tensor_shape_crta_offset())
-                                          : nullptr,
-        ArgsOffsets::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args_offsets.shard_shape_crta_offset())
-                                         : nullptr,
-        ArgsOffsets::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args_offsets.bank_coords_crta_offset())
-                                         : nullptr);
+        Args::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.tensor_shape_crta_offset()) : nullptr,
+        Args::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.shard_shape_crta_offset()) : nullptr,
+        Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr);
 }
 
 }  // namespace tensor_accessor
