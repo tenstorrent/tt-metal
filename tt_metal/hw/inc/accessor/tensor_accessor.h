@@ -166,8 +166,8 @@ public:
 
     FORCE_INLINE
     bool is_local_addr(const uint64_t noc_addr, uint8_t noc = noc_index) const {
-        uint32_t x = NOC_GET_X_FROM_ADDR(noc_addr);
-        uint32_t y = NOC_GET_Y_FROM_ADDR(noc_addr);
+        uint32_t x = NOC_UNICAST_ADDR_X(noc_addr);
+        uint32_t y = NOC_UNICAST_ADDR_Y(noc_addr);
         return is_local_bank(x, y, noc);
     }
 

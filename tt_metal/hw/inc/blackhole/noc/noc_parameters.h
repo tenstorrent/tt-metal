@@ -337,9 +337,6 @@
     ((((uint64_t)(y)) << (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) | (((uint64_t)(x)) << NOC_ADDR_LOCAL_BITS) | \
      ((uint64_t)(addr)))
 
-#define NOC_GET_X_FROM_ADDR(addr) (((addr) >> NOC_ADDR_LOCAL_BITS) & NOC_NODE_ID_MASK)
-#define NOC_GET_Y_FROM_ADDR(addr) (((addr) >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
-
 #define NOC_MULTICAST_ADDR(x_start, y_start, x_end, y_end, addr)                    \
     ((((uint64_t)(x_start)) << (NOC_ADDR_LOCAL_BITS + 2 * NOC_ADDR_NODE_ID_BITS)) | \
      (((uint64_t)(y_start)) << (NOC_ADDR_LOCAL_BITS + 3 * NOC_ADDR_NODE_ID_BITS)) | \

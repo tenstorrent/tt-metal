@@ -45,8 +45,8 @@ uint32_t my_y[1] = {0};
 #define DPRINT_DATA0(x) x
 #define DPRINT_DATA1(x) x
 #define DPRINT_MATH(x) x
-#define NOC_GET_X_FROM_ADDR(addr) addr
-#define NOC_GET_Y_FROM_ADDR(addr) addr
+#define NOC_UNICAST_ADDR_X(addr) addr
+#define NOC_UNICAST_ADDR_Y(addr) addr
 #endif
 
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"
