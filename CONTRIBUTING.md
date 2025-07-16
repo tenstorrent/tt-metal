@@ -114,7 +114,7 @@ To set up pre-commit on your local machine, follow these steps:
    pip install pre-commit
    ```
 
-   *Note:* pre-commit is already installed if you are using the python virtual environment.
+   *Note:* pre-commit is already installed if you are using the Python virtual environment.
 2. **Install the Git Hook Scripts**:
    In your local repository, run the following command to install the pre-commit hooks:
 
@@ -132,7 +132,7 @@ To set up pre-commit on your local machine, follow these steps:
 
 ### Ignoring formatting commits in git blame
 
-In order to ignore specific commits from git blame, we need to configure git to use ignore file when executing the git blame command.
+In order to ignore specific commits from git blame, we need to configure git to use an ignore file when executing the git blame command.
 
 ```bash
 # Set the blame.ignoreRevsFile configuration in your local git config

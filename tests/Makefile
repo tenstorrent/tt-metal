@@ -100,7 +100,7 @@ profiler: $(PROFILER_DIR)/unpack.meta.bin \
 $(PROFILER_DIR)/%.meta.bin: $(ELF_DIR)/%.elf | $(PROFILER_DIR)
 	$(OBJCOPY) -O binary -j .profiler_meta $< $@
 
-# disasseble unpack.elf, math.elf, pack.elf
+# disassemble unpack.elf, math.elf, pack.elf
 $(DIS_DIR)/%.S: $(ELF_DIR)/%.elf | $(DIS_DIR)
 	$(OBJDUMP) -xsD $< > $@
 	$(OBJDUMP) -t $< | sort >> $@

@@ -98,7 +98,7 @@ struct addr_mod_t
         return pack_ysrc.val() | (pack_ydst.val() << 6);
     }
 
-    // List of addresses of src/dest reigsters
+    // List of addresses of src/dest registers
     constexpr static uint32_t addr_mod_src_reg_addr[] = {
         ADDR_MOD_AB_SEC0_SrcAIncr_ADDR32,
         ADDR_MOD_AB_SEC1_SrcAIncr_ADDR32,
@@ -180,7 +180,7 @@ struct addr_mod_pack_t
         return y_src.val() | (y_dst.val() << 6) | (z_src.val() << 12) | (z_dst.val() << 14);
     }
 
-    // List of addresses of src/dest reigsters
+    // List of addresses of src/dest registers
     constexpr static uint32_t addr_mod_pack_reg_addr[] = {
         ADDR_MOD_PACK_SEC0_YsrcIncr_ADDR32, ADDR_MOD_PACK_SEC1_YsrcIncr_ADDR32, ADDR_MOD_PACK_SEC2_YsrcIncr_ADDR32, ADDR_MOD_PACK_SEC3_YsrcIncr_ADDR32};
 

@@ -109,6 +109,6 @@ def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
         res_tensor,
         formats.output_format,
         test_config.get(
-            "L1_to_L1_iterations"  # Needed to calculate accumulated percision loss for fused tests that copy result tensor as input for next runs
+            "L1_to_L1_iterations"  # Needed to calculate accumulated precision loss for fused tests that copy result tensor as input for next runs
         ),
     )
