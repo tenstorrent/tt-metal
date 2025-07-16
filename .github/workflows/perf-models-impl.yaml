@@ -48,7 +48,8 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
-      - name: Run performance regressions
+      - name: Run falcon7b_common tests
+        if: ${{ matrix.model-type == 'llm_javelin' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
@@ -64,7 +65,631 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
           install_wheel: true
-          run_args: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.test-info.arch }} --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
+          run_args: |
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            env pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py falcon7b_common
+      - name: Run qwen tests
+        if: ${{ matrix.model-type == 'llm_javelin' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            env QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py qwen
+      - name: Run mamba tests
+        if: ${{ matrix.model-type == 'llm_javelin' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            env pytest -n auto models/demos/wormhole/mamba/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py mamba
+      - name: Run functional_unet tests
+        if: ${{ matrix.model-type == 'cnn_javelin' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py functional_unet
+      - name: Run stable_diffusion tests
+        if: ${{ matrix.model-type == 'cnn_javelin' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
+            env python3 models/perf/merge_perf_results.py stable_diffusion
+      - name: Run sentence_bert tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/sentence_bert/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py sentence_bert
+      - name: Run resnet50 tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py resnet50
+      - name: Run bert_tiny tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py bert_tiny
+      - name: Run yolov4 tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/perf -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py yolov4
+      - name: Run yolov7 tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov7/tests/ -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py yolov7
+      - name: Run distilbert tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py distilbert
+      - name: Run segformer tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/segformer/tests/test_e2e_performant.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py segformer
+      - name: Run vit tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py vit
+      - name: Run whisper tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/tests/test_performance.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py whisper
+      - name: Run metal_BERT_large_11 tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/metal_BERT_large_11/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py metal_BERT_large_11
+      - name: Run vgg_unet tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py vgg_unet
+      - name: Run yolov9c tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov9c/tests/perf -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py yolov9c
+      - name: Run functional_vanilla_unet tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/test/test_perf_vanilla_unet.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py functional_vanilla_unet
+      - name: Run yolov8s_world tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8s_world/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py yolov8s_world
+      - name: Run mobilenetv2 tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/mobilenetv2/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py mobilenetv2
+      - name: Run ufld_v2 tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py ufld_v2
+      - name: Run yolov8x tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8x/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py yolov8x
+      - name: Run yolov8s tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8s/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py yolov8s
+      - name: Run yolov10 tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/yolov10/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py yolov10
+      - name: Run bert tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py bert
+      - name: Run ttnn_falcon7b tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env pytest -n auto models/demos/ttnn_falcon7b/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py ttnn_falcon7b
+      - name: Run vgg tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py vgg
+      - name: Run convnet_mnist tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env pytest -n auto models/demos/convnet_mnist/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py convnet_mnist
+      - name: Run mnist tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env pytest -n auto models/demos/mnist/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py mnist
+      - name: Run squeezebert tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env pytest -n auto models/demos/squeezebert/tests/test_performance.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py squeezebert
+      - name: Run roberta tests
+        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py roberta
+      - name: Merge Perf Reports
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            export TODAY=$(date +%Y_%m_%d)
+            env python3 -c "from models.perf.merge_perf_results import merge_perf_files, expected_cols; merge_perf_files('Models_Perf_${TODAY}.csv', 'perf', expected_cols)"
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
