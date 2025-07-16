@@ -13,7 +13,7 @@ on:
 jobs:
   call-ai-assistant:
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
       issues: write
       id-token: write
