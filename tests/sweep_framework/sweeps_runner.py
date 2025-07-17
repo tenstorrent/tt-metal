@@ -24,6 +24,7 @@ from framework.sweeps_logger import sweeps_logger as logger
 from sweep_utils.roofline_utils import get_updated_message
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import time
 
 ARCH = os.getenv("ARCH_NAME")
 
@@ -231,14 +232,43 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                         p.join()
                     p = None
                     reset_util.reset()
+                    # pause for 5 seconds
+                    # time.sleep(3)
 
                     # Restart the process for subsequent tests
-                    if len(test_vectors) > 1:
-                        p = Process(target=run, args=(test_module, input_queue, output_queue))
-                        p.start()
+                    # if len(test_vectors) > 1:
+                    #     p = Process(target=run, args=(test_module, input_queue, output_queue))
+                    #     p.start()
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
+                result["original_vector_data"] = original_vector_data
+                result["end_time_ts"] = dt.datetime.now()
+                result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                result["host"] = get_hostname()
+                result["user"] = get_username()
+                suite_pbar.update()
+                results.append(result)
+
+                # Skip all remaining tests in the suite
+                logger.info("Skipping remaining tests in suite due to timeout.")
+                for j in range(i + 1, len(test_vectors)):
+                    remaining_vector = test_vectors[j]
+                    skipped_result = dict()
+                    skipped_result["start_time_ts"] = dt.datetime.now()
+                    skipped_result["original_vector_data"] = remaining_vector.copy()
+                    skipped_result["status"] = TestStatus.NOT_RUN
+                    skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
+                    skipped_result["e2e_perf"] = None
+                    skipped_result["end_time_ts"] = dt.datetime.now()
+                    skipped_result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    skipped_result["host"] = get_hostname()
+                    skipped_result["user"] = get_username()
+                    results.append(skipped_result)
+                    suite_pbar.update()
+
+                # Abort the suite
+                break
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data
@@ -272,9 +302,12 @@ def sanitize_inputs(test_vectors):
     for vector in test_vectors:
         header = dict()
         for field in info_field_names:
-            header[field] = vector.pop(field)
-        vector.pop("timestamp")
-        vector.pop("tag")
+            if field in vector:
+                header[field] = vector.pop(field)
+        if "timestamp" in vector:
+            vector.pop("timestamp")
+        if "tag" in vector:
+            vector.pop("tag")
         header_info.append(header)
     return header_info, test_vectors
 
@@ -574,6 +607,9 @@ def update_run(run_id, end_time_ts, status):
 
 def push_test(run_id, header_info, test_results, test_start_time, test_end_time):
     """Push test result to PostgreSQL database"""
+    if not test_results:
+        logger.info("No test results to push to PostgreSQL database.")
+        return "success"
     pg_config = get_postgres_config(POSTGRES_ENV)
     try:
         conn = psycopg2.connect(**pg_config)
@@ -781,7 +817,6 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
 
     run_end_time = dt.datetime.now()
     update_run(run_id, run_end_time, status)
-    logger.info("Successfully updated run result in PostgreSQL database")
     logger.info(f"Run status: {status}")
 
 
