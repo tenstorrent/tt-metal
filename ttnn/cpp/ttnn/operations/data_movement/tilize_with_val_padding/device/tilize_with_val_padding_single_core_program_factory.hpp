@@ -10,6 +10,8 @@
 
 namespace ttnn::operations::data_movement::detail {
 
+uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value);
+
 tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
 
