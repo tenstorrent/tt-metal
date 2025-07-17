@@ -453,7 +453,9 @@ void test_EnqueueWrap_on_EnqueueReadBuffer(IDevice* device, CommandQueue& cq, co
 }
 
 bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
-    IDevice* device, CommandQueue& cq, const BufferStressTestConfig& config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshCommandQueue& cq,
+    const BufferStressTestConfig& config) {
     srand(config.seed);
 
     vector<vector<uint32_t>> unique_vectors;
@@ -464,25 +466,29 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
             buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count()));
     }
 
-    vector<std::shared_ptr<Buffer>> bufs;
+    vector<std::shared_ptr<distributed::MeshBuffer>> bufs;
     uint32_t start = 0;
 
     for (uint32_t i = 0; i < config.num_iterations; i++) {
         size_t buf_size = unique_vectors[i % unique_vectors.size()].size() * sizeof(uint32_t);
-        tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = buf_size,
-            .page_size = config.page_size,
-            .buffer_type = tt::tt_metal::BufferType::DRAM};
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = config.page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+        const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
         try {
-            bufs.push_back(CreateBuffer(dram_config));
+            bufs.push_back(distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get()));
         } catch (const std::exception& e) {
             log_info(tt::LogTest, "Deallocating on iteration {}", i);
             bufs.clear();
             start = i;
-            bufs = {CreateBuffer(dram_config)};
+            bufs = {distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get())};
         }
-        EnqueueWriteBuffer(cq, bufs[bufs.size() - 1], unique_vectors[i % unique_vectors.size()], false);
+        distributed::WriteShard(
+            cq,
+            bufs[bufs.size() - 1],
+            unique_vectors[i % unique_vectors.size()],
+            distributed::MeshCoordinate(0, 0),
+            false);
+        // EnqueueWriteBuffer(cq, bufs[bufs.size() - 1], unique_vectors[i % unique_vectors.size()], false);
     }
 
     log_info(tt::LogTest, "Comparing {} buffers", bufs.size());
@@ -490,7 +496,8 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
     vector<uint32_t> dst;
     uint32_t idx = start;
     for (const auto& buffer : bufs) {
-        EnqueueReadBuffer(cq, buffer, dst, true);
+        distributed::ReadShard(cq, dst, buffer, distributed::MeshCoordinate(0, 0), true);
+        // EnqueueReadBuffer(cq, buffer, dst, true);
         pass &= dst == unique_vectors[idx % unique_vectors.size()];
         idx++;
     }
@@ -2083,7 +2090,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, StressWrapTest) {
+TEST_F(UnitMeshCQSingleCardBufferFixture, StressWrapTest) {
     if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         log_info(tt::LogTest, "cannot run this test on WH B0");
         GTEST_SKIP();
@@ -2092,9 +2099,9 @@ TEST_F(CommandQueueSingleCardBufferFixture, StressWrapTest) {
 
     BufferStressTestConfig config = {
         .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
-    for (IDevice* device : devices_) {
+    for (const auto& mesh_device : devices_) {
         EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
-            device, device->command_queue(), config));
+            mesh_device, mesh_device->mesh_command_queue(), config));
     }
 }
 
