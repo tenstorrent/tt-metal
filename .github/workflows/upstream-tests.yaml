@@ -28,6 +28,7 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
+      build-umd-tests: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
