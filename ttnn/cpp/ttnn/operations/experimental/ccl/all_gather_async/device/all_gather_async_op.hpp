@@ -91,6 +91,9 @@ struct AllGatherAsync {
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("semaphore", semaphore);
+        attrs.emplace_back("chunks_per_sync", chunks_per_sync);
+        attrs.emplace_back("num_worker_per_link", num_workers_per_link);
+        attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
         return attrs;
     }
 
