@@ -8,8 +8,7 @@ namespace llama_specific {
 
 CoreRangeSet get_custom_cores(uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
-    std::vector<CoreRange> desired_core_range = {
-        CoreRange({5, 3}, {6, 3}), num_workers == 4 ? CoreRange({2, 8}, {3, 8}) : CoreRange({3, 3}, {3, 3})};
+    std::vector<CoreRange> desired_core_range = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
     for (const auto& cr : desired_core_range) {
         auto cores = corerange_to_cores(cr, std::nullopt, row_wise);
         for (const auto& core : cores) {
