@@ -32,7 +32,7 @@ safe_get_noc_addr(uint8_t dest_noc_x, uint8_t dest_noc_y, uint32_t dest_bank_add
         noc_x = NOC_0_X_PHYS_COORD(noc_id, noc_size_x, dest_noc_x);
         noc_y = NOC_0_Y_PHYS_COORD(noc_id, noc_size_y, dest_noc_y);
     }
-    return get_noc_addr((uint32_t)noc_x, (uint32_t)noc_y, dest_bank_addr, noc_id);
+    return get_noc_addr(noc_x, noc_y, dest_bank_addr, noc_id);
 }
 // TODO: COMMONIZE WITH THE ONE IN `ccl_send_writer.cpp`
 FORCE_INLINE std::pair<tt::tt_fabric::WorkerXY, uint32_t> get_noc_address_components(uint64_t noc_addr) {

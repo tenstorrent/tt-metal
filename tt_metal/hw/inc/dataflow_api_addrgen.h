@@ -408,8 +408,12 @@ struct InterleavedPow2AddrGenFast {
  */
 // clang-format on
 template <typename AddrGen>
-FORCE_INLINE uint64_t
-get_noc_addr(const uint32_t id, const AddrGen& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+FORCE_INLINE uint64_t get_noc_addr(
+    const uint32_t id,
+    const AddrGen& addrgen,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index,
+    decltype(addrgen.get_noc_addr())* resolver = nullptr) {
     static_assert(has_get_noc_addr<AddrGen>::value, "AddrGen must have get_noc_addr() method");
     return addrgen.get_noc_addr(id, offset, noc);
 }
