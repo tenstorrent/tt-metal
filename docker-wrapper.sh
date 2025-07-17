@@ -1,17 +1,23 @@
 #!/bin/bash
 
+# Inspired by https://qnib.org/2016/03/31/dssh/index.html
+
 set -x
 
-case $(wc -l < rankfile) in
+# Get container name from first argument
+container_num=$1
+shift
+
+# Determine device mapping based on rankfile and container name
+num_nodes=$(wc -l < rankfile)
+device_args=""
+
+case $num_nodes in
     1)
-        case $OMPI_COMM_WORLD_LOCAL_RANK in
-            0)
-                device_args="--device /dev/tenstorrent/"
-                ;;
-        esac
+        device_args="--device /dev/tenstorrent"
         ;;
     2)
-        case $OMPI_COMM_WORLD_LOCAL_RANK in
+        case $container_num in
             0)
                 device_args="--device /dev/tenstorrent/0 --device /dev/tenstorrent/1"
                 ;;
@@ -21,24 +27,15 @@ case $(wc -l < rankfile) in
         esac
         ;;
     4)
-        case $OMPI_COMM_WORLD_LOCAL_RANK in
-            0)
-                device_args="--device /dev/tenstorrent/0"
-                ;;
-            1)
-                device_args="--device /dev/tenstorrent/1"
-                ;;
-            2)
-                device_args="--device /dev/tenstorrent/2"
-                ;;
-            3)
-                device_args="--device /dev/tenstorrent/3"
-                ;;
-        esac
+        device_args="--device /dev/tenstorrent/$container_num"
         ;;
 esac
 
-env | grep ^OMPI >> ./environment
-env | grep ^PMIX >> ./environment
+# Launch the container with appropriate device mapping
+docker run --rm $device_args \
+    -v $(pwd):$(pwd) \
+    -w $(pwd) \
+    -v /dev/hugepages-1G:/dev/hugepages-1G \
+    ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 \
+    $@
 
-docker run --rm $device_args --env-file ./environment --network host -v /home/ansible/actions-runner/_work:/home/ansible/actions-runner/_work -w $(pwd) -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 ${@:1}
