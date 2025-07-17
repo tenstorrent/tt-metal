@@ -185,7 +185,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     }
 
     if (blocking) {
-        this->finish_locked();
+        this->finish_nolock();
     }
 }
 
@@ -205,7 +205,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     this->read_sharded_buffer(*buffer, host_data);
 }
 
-void MeshCommandQueueBase::enqueue_write_shards_locked(
+void MeshCommandQueueBase::enqueue_write_shards_nolock(
     const std::shared_ptr<MeshBuffer>& buffer,
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
@@ -225,7 +225,7 @@ void MeshCommandQueueBase::enqueue_write_shards_locked(
     dispatch_thread_pool_->wait();
 
     if (blocking) {
-        this->finish_locked();
+        this->finish_nolock();
     }
 }
 
@@ -234,7 +234,7 @@ void MeshCommandQueueBase::enqueue_write_shards(
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
     auto lock = lock_api_function_();
-    this->enqueue_write_shards_locked(mesh_buffer, shard_data_transfers, blocking);
+    this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking);
 }
 
 void MeshCommandQueueBase::enqueue_write(
@@ -252,10 +252,10 @@ void MeshCommandQueueBase::enqueue_write(
         }
     }
 
-    this->enqueue_write_shards_locked(mesh_buffer, shard_data_transfers, blocking);
+    this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking);
 }
 
-void MeshCommandQueueBase::enqueue_read_shards_locked(
+void MeshCommandQueueBase::enqueue_read_shards_nolock(
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& buffer,
     bool blocking) {
@@ -278,7 +278,7 @@ void MeshCommandQueueBase::enqueue_read_shards(
     const std::shared_ptr<MeshBuffer>& mesh_buffer,
     bool blocking) {
     auto lock = lock_api_function_();
-    this->enqueue_read_shards_locked(shard_data_transfers, mesh_buffer, blocking);
+    this->enqueue_read_shards_nolock(shard_data_transfers, mesh_buffer, blocking);
 }
 
 void MeshCommandQueueBase::enqueue_read(
@@ -302,7 +302,7 @@ void MeshCommandQueueBase::enqueue_read(
         }
     }
 
-    this->enqueue_read_shards_locked(shard_data_transfers, buffer, blocking);
+    this->enqueue_read_shards_nolock(shard_data_transfers, buffer, blocking);
 }
 
 }  // namespace tt::tt_metal::distributed

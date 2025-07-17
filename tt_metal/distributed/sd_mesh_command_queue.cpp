@@ -78,7 +78,7 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {}
-void SDMeshCommandQueue::finish_locked(tt::stl::Span<const SubDeviceId>) {}
+void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(bool, uint32_t, const vector_aligned<uint32_t>&) {}
 

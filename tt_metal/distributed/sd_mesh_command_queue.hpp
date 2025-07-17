@@ -24,7 +24,7 @@ protected:
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
-    void finish_locked(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
 public:
     SDMeshCommandQueue(
