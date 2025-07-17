@@ -589,7 +589,7 @@ void generate_sender_worker_kernels(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
-    CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    CreateCircularBuffer(program, worker_core, cb_src0_config);
     auto sender_worker_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/ccl/kernels/fabric_erisc_datamover_sender_worker_reader.cpp",
@@ -661,8 +661,7 @@ bool RunLoopbackTest(
         tt_metal::CircularBufferConfig(
             packet_header_buffer_size, {{packet_header_buffer_cb_id, tt::DataFormat::Float16}})
             .set_page_size(packet_header_buffer_cb_id, page_size);
-    auto packet_header_buffer =
-        tt_metal::CreateCircularBuffer(sender_program, worker_cores.at(0), packet_header_buffer_config);
+    tt_metal::CreateCircularBuffer(sender_program, worker_cores.at(0), packet_header_buffer_config);
     tt_metal::detail::WriteToBuffer(local_output_buffer, all_zeros);
 
     auto local_input_buffer_address = local_input_buffer->address();
@@ -866,13 +865,13 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{first_cb_index, df}})
                 .set_page_size(first_cb_index, page_size);
-        CBHandle cb0 = CreateCircularBuffer(program, worker_core, cb_src0_config);
+        CreateCircularBuffer(program, worker_core, cb_src0_config);
     }
     {
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{second_cb_index, df}})
                 .set_page_size(second_cb_index, page_size);
-        CBHandle cb1 = CreateCircularBuffer(program, worker_core, cb_src1_config);
+        CreateCircularBuffer(program, worker_core, cb_src1_config);
     }
 
     generate_multi_input_test_worker_reader_kernel(
@@ -1145,8 +1144,7 @@ bool RunLineFabricTest(
         tt_metal::CircularBufferConfig(
             packet_header_buffer_size, {{packet_header_buffer_cb_id, tt::DataFormat::Float16}})
             .set_page_size(packet_header_buffer_cb_id, page_size);
-    auto packet_header_buffer =
-        tt_metal::CreateCircularBuffer(programs[0], worker_cores.at(0), packet_header_buffer_config);
+    tt_metal::CreateCircularBuffer(programs[0], worker_cores.at(0), packet_header_buffer_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //   Setup Semaphores and Builders
@@ -1389,7 +1387,6 @@ int TestLoopbackEntrypoint(
 
     std::vector<Program> programs(1);
     std::optional<std::vector<Program>> fabric_programs;
-    auto& sender_program = programs.at(0);
 
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(2);
@@ -1415,14 +1412,14 @@ int TestLoopbackEntrypoint(
     chip_1_edm_builder.set_firmware_context_switch_interval(0);
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
-    auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+    ttnn::ccl::generate_edm_kernel(
         fabric_sender_program,
         sender_device,
         chip_0_edm_builder,
         eth_sender_core,
         DataMovementProcessor::RISCV_0,
         NOC::NOC_0);
-    auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
+    ttnn::ccl::generate_edm_kernel(
         fabric_receiver_program,
         receiver_device,
         chip_1_edm_builder,
@@ -1872,7 +1869,7 @@ bool RunPipelinedWorkersTest(
             tt_metal::CircularBufferConfig(
                 cb_packet_size_in_pages * num_packets_per_cb * page_size_bytes, {{cb_index, data_format}})
                 .set_page_size(cb_index, page_size_bytes);
-        CBHandle sender_workers_cb = CreateCircularBuffer(program, pipeline_stage_worker_cores[stage], cb_config);
+        CreateCircularBuffer(program, pipeline_stage_worker_cores[stage], cb_config);
     }
 
     // Generate the reader semaphores
@@ -2912,12 +2909,12 @@ void Run1DFabricPacketSendTest(
             tt_metal::CircularBufferConfig cb_src0_config =
                 tt_metal::CircularBufferConfig(packet_header_buffer_size, {{packet_header_cb_index, cb_df}})
                     .set_page_size(packet_header_cb_index, packet_header_buffer_size);
-            CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
+            CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
             tt_metal::CircularBufferConfig cb_src1_config =
                 tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                     .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-            CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+            CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
@@ -3558,7 +3555,6 @@ void Run1DFullMeshFabricPacketSendTest(
 
     const bool use_galaxy = num_devices == 32;
     const bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
-    const bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
 
     create_fabric_fixture<FABRIC_DEVICE_FIXTURE>(test_fixture_, use_galaxy);
     auto view = *(test_fixture_->view_);
@@ -3669,13 +3665,12 @@ void Run1DFullMeshFabricPacketSendTest(
                     tt_metal::CircularBufferConfig(
                         packet_header_cb_size_in_headers * packet_header_size_bytes, {{packet_header_cb_index, cb_df}})
                         .set_page_size(packet_header_cb_index, packet_header_size_bytes);
-                CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src0_config);
+                CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src0_config);
 
                 tt_metal::CircularBufferConfig cb_src1_config =
                     tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                         .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-                CBHandle sender_workers_payload_cb =
-                    CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
+                CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
 
                 auto worker_kernel_id = tt_metal::CreateKernel(
                     program,
@@ -3876,7 +3871,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     // static constexpr size_t source_l1_buffer_address = 1000000;
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
-    static constexpr size_t packet_header_cb_size_in_headers = 5;
     size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
@@ -3975,12 +3969,12 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(packet_header_buffer_size, {{packet_header_cb_index, cb_df}})
                 .set_page_size(packet_header_cb_index, packet_header_buffer_size);
-        CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
+        CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                 .set_page_size(source_payload_cb_index, packet_payload_size_bytes);
-        CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+        CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
         std::vector<uint32_t> worker_ct_args = {line_sync, line_sync};
 

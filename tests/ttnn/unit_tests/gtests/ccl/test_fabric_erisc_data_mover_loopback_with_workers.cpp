@@ -1377,7 +1377,7 @@ TEST(EdmFabric, RingDeadlockStabilityTest_RelaxedFabricStrictness) {
     }
     num_devices = {4, 8};
     for (size_t offset = 0; offset < num_devices[1]; offset++) {
-        RunRingDeadlockStabilityTestWithPersistentFabric<Fabric1DRingRelaxedDeviceInitFixture>(
+        [[maybe_unused]] RunRingDeadlockStabilityTestWithPersistentFabric<Fabric1DRingRelaxedDeviceInitFixture>(
             num_mcasts,
             num_links,
             num_devices[0],
