@@ -9,7 +9,7 @@ Checks: >
   -altera-struct-pack-align,
   -altera-unroll-loops,
   -android-cloexec-fopen,
-  -boost-use-ranges,
+  -boost-*,
   -bugprone-assert-side-effect,
   -bugprone-assignment-in-if-condition,
   -bugprone-branch-clone,
