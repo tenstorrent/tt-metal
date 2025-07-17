@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk_op.hpp"
-#include "topk_program_factory.hpp"
+#include "topk_single_core_program_factory.hpp"
+#include "topk_multicore_program_factory.hpp"
 #include "topk_constants.hpp"
 
 using namespace tt::tt_metal;
