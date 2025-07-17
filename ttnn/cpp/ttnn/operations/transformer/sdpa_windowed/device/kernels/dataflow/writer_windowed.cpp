@@ -7,6 +7,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 #include "debug/dprint.h"
+#include "ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -54,14 +55,19 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     // {
     //     cb_reserve_back(cb_identity_scale_in, 1);
-    //     const uint32_t write_addr = get_write_ptr(cb_identity_scale_in);
-    //     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-    //     for (int i = 0; i < get_tile_size(cb_identity_scale_in) / 4; ++i) {
+    //     auto ptr = ArrayView<uint32_t, cb_identity_scale_in, CBAccessType::CB_BACK_RW>();
+
+    //     for (uint32_t i = 0; i < ptr.size(); ++i) {
     //         ptr[i] = 0;
     //     }
-    //     for (int k = 0; k < 4; ++k) {
+    //     // for (uint32_t i = 0; i < ptr.size(); ++i) {
+    //     //     DPRINT << " ptr[" << i << "]: " << ptr[i] << ENDL();
+    //     // }
+    //     // DPRINT << " ptr[num_elements+10]: " << ptr[ptr.size() + 10] << ENDL();
+    //     // ptr[ptr.size() + 10] = 0; // [INFO] out of bounds!
+    //     for (uint32_t k = 0; k < 4; ++k) {
     //         uint32_t idx = k << 7;
-    //         for (int j = 0; j < 8; ++j) {
+    //         for (uint32_t j = 0; j < 8; ++j) {
     //             ptr[idx + j] = identity_scalar_packed;
     //         }
     //     }
