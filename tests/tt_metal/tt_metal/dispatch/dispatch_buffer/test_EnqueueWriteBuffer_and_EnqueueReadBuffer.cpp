@@ -305,7 +305,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     bool pass = true;
     uint32_t num_pages_left = config.num_pages_total;
 
-    std::vector<std::shared_ptr<Buffer>> buffers;
+    std::vector<std::shared_ptr<distributed::MeshBuffer>> buffers;
     std::vector<std::vector<uint32_t>> srcs;
     std::vector<std::vector<uint32_t>> dsts;
     while (num_pages_left) {
@@ -1813,27 +1813,27 @@ namespace stress_tests {
 
 // TODO: Add stress test that vary page size
 
-TEST_F(CommandQueueSingleCardBufferFixture, WritesToRandomBufferTypeAndThenReadsBlocking) {
+TEST_F(UnitMeshCQSingleCardBufferFixture, WritesToRandomBufferTypeAndThenReadsBlocking) {
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
-    for (IDevice* device : devices_) {
-        log_info(tt::LogTest, "Running on Device {}", device->id());
+    for (const auto& mesh_device : devices_) {
+        log_info(tt::LogTest, "Running on Device {}", mesh_device->id());
         EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(
-            device, device->command_queue(), config));
+            mesh_device, mesh_device->mesh_command_queue(), config));
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, WritesToRandomBufferTypeAndThenReadsNonblocking) {
+TEST_F(UnitMeshCQSingleCardBufferFixture, WritesToRandomBufferTypeAndThenReadsNonblocking) {
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
-    for (IDevice* device : devices_) {
-        if (not device->is_mmio_capable()) {
+    for (const auto& mesh_device : devices_) {
+        if (not mesh_device->get_devices()[0]->is_mmio_capable()) {
             continue;
         }
         EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(
-            device, device->command_queue(), config));
+            mesh_device, mesh_device->mesh_command_queue(), config));
     }
 }
 
