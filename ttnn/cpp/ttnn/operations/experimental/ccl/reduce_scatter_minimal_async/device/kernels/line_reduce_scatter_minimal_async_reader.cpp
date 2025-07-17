@@ -239,7 +239,6 @@ void kernel_main() {
                     tiles_read += num_pages_to_read;
 
                     if (chunk_count % chunks_per_sync == 0) {
-                        DeviceZoneScopedN("wait_sem");
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
                     }
@@ -278,7 +277,6 @@ void kernel_main() {
         // Do the final reduction. Synchronize with other direction.
         if constexpr (do_final_reduction) {
             chunk_count = 0;
-            DeviceZoneScopedN("final_reduction");
             bool accumulate_output =
                 false;  // If true, output += intermediate. Otherwise, output = input + intermediate
             constexpr bool use_output_tensor_addrgen = sync_with_other_direction && !is_forward;
@@ -305,8 +303,6 @@ void kernel_main() {
             uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
             uint32_t cb_in0 = cb_input_id;
-
-            DPRINT << "my tiles to read " << tiles_to_read - tiles_read << ENDL();
 
             if (accumulate_output) {
                 input_tile_id_start = b * batch_slice_num_pages;  // output batch offset
