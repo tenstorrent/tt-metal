@@ -4,18 +4,12 @@
 
 #include "debug/assert.h"
 #include "debug/dprint_tile.h"
-#include "debug/dprint.h"
-
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
-
-#define WATCHER_OVERHEAD_OK 1
-
-#define DPRINT_ARRAY_VIEW(x) x
-#else
-#define DPRINT_ARRAY_VIEW(x)
-#endif
 
 enum class CBAccessType : uint8_t { CB_FRONT_RW, CB_BACK_RW, CB_FRONT_RO, CB_BACK_RO };
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
+#define WATCHER_OVERHEAD_OK 1
+#endif
 
 /**
  * @brief ArrayView struct - Type-safe view into circular buffer L1 memory.
@@ -23,8 +17,6 @@ enum class CBAccessType : uint8_t { CB_FRONT_RW, CB_BACK_RW, CB_FRONT_RO, CB_BAC
  * Provides a direct, type-safe view into the L1 memory region pointed to by the front (read pointer)
  * or back (write pointer) of a circular buffer (CB). Read/write access is determined at compile time
  * based on the CBAccessType parameter.
- *
- * @note: for ASSERT to work, `TT_METAL_WATCHER` must be defined.
  *
  * Lifetime:
  *   The lifetime of any one ArrayView must be contained within the lifetime of its surrounding
@@ -93,22 +85,6 @@ struct ArrayView {
 
 #if defined(WATCHER_OVERHEAD_OK)
     uint32_t addr(size_t i) const { return _base_addr + i * sizeof(T); }
-
-    void print() const {
-        auto ptr = _ptr;
-        for (uint32_t i = 0; i < _size; ++i) {
-            DPRINT << DEC() << ptr[i] << " ";
-        }
-        DPRINT << ENDL();
-    }
-
-    void print_hex() const {
-        auto ptr = _ptr;
-        for (uint32_t i = 0; i < _size; ++i) {
-            DPRINT << HEX() << ptr[i] << " ";
-        }
-        DPRINT << ENDL();
-    }
 #endif
 
 private:

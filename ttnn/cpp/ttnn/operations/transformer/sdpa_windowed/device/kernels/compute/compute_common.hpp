@@ -54,7 +54,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     DPRINT_UNPACK({
-        DPRINT << " ---- scale_cb (UNPACK) ---- " << ENDL();
+        DPRINT << " ---- scale_cb (UNPACK) ---- read_addr: " << CB_RD_PTR(scale_cb) << ENDL();
         // [INFO] print out the mask tiles in its data format
         for (uint8_t iii = 0; iii < 32; ++iii) {
             DPRINT << TileSlice(

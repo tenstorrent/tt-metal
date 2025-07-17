@@ -7,18 +7,21 @@
 #include "dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 
+#include "debug/dprint.h"
+
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
 }
 
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    // volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     // Fill tile with zeros
     uint32_t bytes_left = tile_bytes;
     for (;;) {
         uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
+        DPRINT << " fill_zeros_async: write_addr: " << write_addr << " read_size: " << read_size << ENDL();
         noc_async_read(zeros_noc_addr, write_addr, read_size);
         write_addr += read_size;
         bytes_left -= read_size;
@@ -106,6 +109,7 @@ void read_chunk_with_padding(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
+            DPRINT << " read_chunk_with_padding: write_ptr: " << write_ptr << ENDL();
             noc_async_read_tile(start_tile_id, reader, write_ptr);
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
@@ -178,6 +182,8 @@ void read_paged_chunk_with_padding(
 
 template <uint32_t tile_bytes>
 void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
+    DPRINT << "copy_tile: src_addr: " << (noc_read_addr_base + src_tile_id * tile_bytes)
+           << " dst_addr: " << (q_write_ptr_base + dst_tile_id * tile_bytes) << ENDL();
     noc_async_read(
         noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
 }
@@ -188,6 +194,8 @@ void fill_neginf_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t num_mantissas = tt::constants::TILE_HW / 2;
     static_assert(
         tile_bytes == num_exponents + num_mantissas, "tile_bytes must be equal to bfp4 num_exponents + num_mantissas");
+    DPRINT << "tile_bytes: " << tile_bytes << " num_exponents: " << num_exponents << " num_mantissas: " << num_mantissas
+           << ENDL();
 
     uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
@@ -198,6 +206,7 @@ void fill_neginf_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
 
     for (uint32_t i = 0; i < exp_words; i++) {
         ptr[i] = NEG_INF_EXP;
+        DPRINT << "fill_neginf_tile_bfp4: exp: write_addr" << write_addr + i * sizeof(uint32_t) << ENDL();
     }
 
     // Fill the next 512 bytes (128 uint32_t values) with 0xCCCCCCCC for mantissas
@@ -206,6 +215,7 @@ void fill_neginf_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
 
     for (uint32_t i = exp_words; i < exp_words + mant_words; i++) {
         ptr[i] = NEG_INF_MANT;
+        DPRINT << "fill_neginf_tile_bfp4: mant: write_addr" << write_addr + i * sizeof(uint32_t) << ENDL();
     }
 }
 

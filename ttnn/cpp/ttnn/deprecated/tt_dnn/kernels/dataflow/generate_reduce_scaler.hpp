@@ -18,7 +18,7 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     // DPRINT << " zeros_noc_addr: " << zeros_noc_addr << ENDL();
     uint32_t write_addr = get_write_ptr(cb_id);
-    // DPRINT << " write_addr: " << write_addr << ENDL();
+    DPRINT << " scaler write_addr: " << write_addr << ENDL();
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
 
     // Fill tile with zeros

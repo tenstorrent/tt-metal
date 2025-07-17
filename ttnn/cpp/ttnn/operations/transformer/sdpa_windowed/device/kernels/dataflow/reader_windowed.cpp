@@ -7,10 +7,11 @@
 #include "dataflow_common.hpp"
 
 #include "debug/dprint.h"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
 
 template <uint32_t tile_bytes>
 void clear_mantissa_range(
-    volatile tt_l1_ptr uint32_t* uint32_ptr,
+    ArrayView<uint32_t, CBAccessType::CB_BACK_RW> uint32_arr,
     uint32_t face_offset,
     uint32_t row_start_idx,
     uint32_t row_end_idx,
@@ -20,11 +21,14 @@ void clear_mantissa_range(
     uint32_t bf4_datums_per_uint32) {
     uint32_t start_col_group_idx = col_start_idx / bf4_datums_per_uint32;
     uint32_t start_pos_in_group = col_start_idx % bf4_datums_per_uint32;
+    uint32_t end_col_group_idx = col_end_idx / bf4_datums_per_uint32;
+    uint32_t end_pos_in_group = col_end_idx % bf4_datums_per_uint32;
     uint32_t nbits_per_datum = 32 / bf4_datums_per_uint32;
 
     // DPRINT << "row_start_idx: " << row_start_idx << " row_end_idx: " << row_end_idx << ENDL();
     // DPRINT << "col_start_idx: " << col_start_idx << " col_end_idx: " << col_end_idx << ENDL();
     // DPRINT << "start_col_group_idx: " << start_col_group_idx << " start_pos_in_group: " << start_pos_in_group <<
+    // ENDL(); DPRINT << "end_col_group_idx: " << end_col_group_idx << " end_pos_in_group: " << end_pos_in_group <<
     // ENDL(); DPRINT << "nbits_per_datum: " << nbits_per_datum << ENDL();
 
     for (uint32_t row = row_start_idx; row < row_end_idx; row++) {
@@ -32,26 +36,36 @@ void clear_mantissa_range(
 
         // little endian mask to clear the bits after start_pos_in_group to zero
         uint32_t start_mask = ~(0xFFFFFFFF << (start_pos_in_group * nbits_per_datum));
+        // DPRINT << "start_mask: " << HEX() << start_mask << DEC() << ENDL();
 
         // little endian mask to clear the bits before end_pos_in_group to zero
-        uint32_t end_col_group_idx = col_end_idx / bf4_datums_per_uint32;
-        uint32_t end_pos_in_group = col_end_idx % bf4_datums_per_uint32;
-        // DPRINT << "end_col_group_idx: " << end_col_group_idx << " end_pos_in_group: " << end_pos_in_group << ENDL();
         uint32_t end_mask = 0xFFFFFFFF << (end_pos_in_group * nbits_per_datum);
+        // DPRINT << "end_mask: " << HEX() << end_mask << DEC() << ENDL();
 
         if (start_col_group_idx == end_col_group_idx) {
-            uint32_ptr[face_offset + row_offset + start_col_group_idx] &= (start_mask | end_mask);
+            DPRINT << "merged mask to clearing uint32 at write_addr: "
+                   << uint32_arr.addr(face_offset + row_offset + start_col_group_idx) << ENDL();
+            uint32_arr[face_offset + row_offset + start_col_group_idx] &= (start_mask | end_mask);
             continue;
         }
 
         // Clear bits after start position in the first uint32
-        uint32_ptr[face_offset + row_offset + start_col_group_idx] &= start_mask;
+        DPRINT << "start mask to clear uint32 at write_addr: "
+               << uint32_arr.addr(face_offset + row_offset + start_col_group_idx) << ENDL();
+        uint32_arr[face_offset + row_offset + start_col_group_idx] &= start_mask;
         // Set entire uint32s to 0 in the middle
         for (uint32_t col_group_idx = start_col_group_idx + 1; col_group_idx < end_col_group_idx; ++col_group_idx) {
-            uint32_ptr[face_offset + row_offset + col_group_idx] = 0;
+            DPRINT << "middle zero mask to clearing uint32 at write_addr: "
+                   << uint32_arr.addr(face_offset + row_offset + col_group_idx) << ENDL();
+            uint32_arr[face_offset + row_offset + col_group_idx] = 0;
         }
         // Clear bits before end position in the last uint32 (if different from start)
-        uint32_ptr[face_offset + row_offset + end_col_group_idx] &= end_mask;
+        // [INFO] end_pos_in_group == 0 means that the next uint32 is not part of the range to be cleared
+        if (end_pos_in_group > 0) {
+            DPRINT << "end mask to clearing uint32 at write_addr: "
+                   << uint32_arr.addr(face_offset + row_offset + end_col_group_idx) << ENDL();
+            uint32_arr[face_offset + row_offset + end_col_group_idx] &= end_mask;
+        }
     }
 }
 
@@ -73,8 +87,10 @@ inline void fill_diag_subtile_zeros_bfp4(
     constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / bf4_mant_per_uint32;
     constexpr uint32_t uint32_exp_per_face = tt::constants::FACE_HEIGHT / bf4_exp_per_uint32;
 
-    volatile tt_l1_ptr uint32_t* uint32_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+    // uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
+    // DPRINT << "fill_diag_subtile_zeros_bfp4: write_addr: " << write_addr << ENDL();
+    // volatile tt_l1_ptr uint32_t* uint32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    auto uint32_arr = ArrayView<uint32_t, CBAccessType::CB_BACK_RW>(cb_id, tile_id);
 
     // [INFO] Only setting mantissa to 0 is needed to set the whole value to 0
     // Calculate face offsets in uint32 words
@@ -89,15 +105,12 @@ inline void fill_diag_subtile_zeros_bfp4(
     if (row_start_idx < tt::constants::FACE_HEIGHT) {
         // DPRINT << "fill face 0" << ENDL();
         uint32_t local_row_end_idx = std::min(row_end_idx, tt::constants::FACE_HEIGHT);
-
-        uint32_t face_idx = 0;
-        uint32_t face_offset = face_offsets[face_idx];
         uint32_t start_col_idx = row_start_idx;
         uint32_t end_col_idx = std::min(row_end_idx, tt::constants::FACE_WIDTH);
 
         clear_mantissa_range<tile_bytes>(
-            uint32_ptr,
-            face_offset,
+            uint32_arr,
+            face_offsets[0],
             row_start_idx,
             local_row_end_idx,
             start_col_idx,
@@ -108,9 +121,10 @@ inline void fill_diag_subtile_zeros_bfp4(
 
     // fill face 1 and 2
     if (row_start_idx < tt::constants::FACE_HEIGHT && row_end_idx > tt::constants::FACE_HEIGHT) {
+        // todo)) needs to be tested through example_usage.py
         // DPRINT << "fill face 1 and 2" << ENDL();
         clear_mantissa_range<tile_bytes>(
-            uint32_ptr,
+            uint32_arr,
             face_offsets[1],
             row_start_idx,
             tt::constants::FACE_HEIGHT,
@@ -120,7 +134,7 @@ inline void fill_diag_subtile_zeros_bfp4(
             bf4_mant_per_uint32);
 
         clear_mantissa_range<tile_bytes>(
-            uint32_ptr,
+            uint32_arr,
             face_offsets[2],
             0,
             row_end_idx - tt::constants::FACE_HEIGHT,
@@ -136,14 +150,11 @@ inline void fill_diag_subtile_zeros_bfp4(
         uint32_t local_row_start_idx =
             row_start_idx > tt::constants::FACE_HEIGHT ? row_start_idx - tt::constants::FACE_HEIGHT : 0;
         uint32_t local_row_end_idx = row_end_idx - tt::constants::FACE_HEIGHT;
-
-        uint32_t face_idx = 3;
-        uint32_t face_offset = face_offsets[face_idx];
         uint32_t start_col_idx = local_row_start_idx;
         uint32_t end_col_idx = std::min(local_row_end_idx, tt::constants::FACE_WIDTH);
         clear_mantissa_range<tile_bytes>(
-            uint32_ptr,
-            face_offset,
+            uint32_arr,
+            face_offsets[3],
             local_row_start_idx,
             local_row_end_idx,
             start_col_idx,
@@ -233,19 +244,18 @@ void kernel_main() {
     riscv_wait(1000000000);
 
     // load the entire cu_window_seqlens tensor into a circular buffer
-    const uint32_t cb_cu_window_seqlens_ptr = get_write_ptr(cb_cu_window_seqlens_in);
     cb_reserve_back(cb_cu_window_seqlens_in, 1);
-    noc_async_read_tile(0, cu_window_seqlens_reader, cb_cu_window_seqlens_ptr);
+    noc_async_read_tile(0, cu_window_seqlens_reader, get_write_ptr(cb_cu_window_seqlens_in));
     noc_async_read_barrier();  // Wait until tile reads are done todo)) try to remove this barrier
     cb_push_back(cb_cu_window_seqlens_in, 1);
+    auto cb_cu_window_seqlens_ptr = ArrayView<uint32_t, CBAccessType::CB_BACK_RO>(cb_cu_window_seqlens_in);
     auto get_cu_window_seqlens = [&](uint32_t idx) -> uint32_t {
         if constexpr (cu_window_seqlens_data_format == DataFormat::UInt32) {
-            return reinterpret_cast<const uint32_t*>(cb_cu_window_seqlens_ptr)[idx];
+            return cb_cu_window_seqlens_ptr[idx];
         } else if constexpr (cu_window_seqlens_data_format == DataFormat::Int32) {
-            return (uint32_t)reinterpret_cast<const int32_t*>(cb_cu_window_seqlens_ptr)[idx];
+            return (uint32_t)cb_cu_window_seqlens_ptr[idx];
         }
     };
-
     auto get_window_indices = [&](uint32_t local_mask_idx) {
         if (local_mask_idx < cu_window_seqlens_eles) {
             auto low = get_cu_window_seqlens(local_mask_idx);
@@ -263,8 +273,9 @@ void kernel_main() {
     uint32_t mask_windows_low_idx = 0;
     bool found_mask_windows = false;
     // DPRINT << "cu_window_seqlens_eles: " << cu_window_seqlens_eles << ENDL();
+    // [INFO] the first window always starts at 0; all windows are diagonal
+    ASSERT(get_cu_window_seqlens(0) == 0);
     for (uint32_t w = 0; w < cu_window_seqlens_eles - 1; ++w) {
-        // [INFO] the first window always starts at 0; all windows are diagonal
         auto window_start = get_cu_window_seqlens(w);
         auto window_end = get_cu_window_seqlens(w + 1);
         // DPRINT << "w: " << w << " window_start: " << window_start << " window_end: " << window_end << ENDL();
@@ -280,7 +291,7 @@ void kernel_main() {
 
     // DPRINT << "local_q_start: " << local_q_start << " q_chunks_per_core: " << q_chunks_per_core << ENDL();
     // read the q, k, v tensors
-    uint32_t mask_tile_id = 0;
+    // uint32_t mask_tile_id = 0;
     // uint32_t barrier_count = 0;
     uint32_t q_high_idx_in_tiles = Skt;
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
@@ -331,7 +342,7 @@ void kernel_main() {
 
                     // [INFO] Generate windowed attention mask on-the-fly for q_row_tile_count x k_row_tile_count tiles
                     // [INFO] q_chunk_size and k_chunk_size can differ
-                    DPRINT << "  [GENERATE MASK] mask_chunk_tiles: " << mask_chunk_tiles << ENDL();
+                    // DPRINT << "  [GENERATE MASK] mask_chunk_tiles: " << mask_chunk_tiles << ENDL();
                     cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                     uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                     uint64_t noc_write_addr_base = get_noc_addr(mask_write_ptr);
@@ -341,8 +352,8 @@ void kernel_main() {
                     int inf_tile_idx = -1;
 
                     // barrier_count = 0;
-                    mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * Skt /*row_offset*/ +
-                                   k_chunk * Sk_chunk_t /*col_offset*/;
+                    // mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * Skt /*row_offset*/ +
+                    //                k_chunk * Sk_chunk_t /*col_offset*/;
                     for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
                         // [INFO]:
                         // A window is defined by two pairs of indices (window_low_idx, window_low_idx) and
@@ -391,7 +402,7 @@ void kernel_main() {
                                     copy_tile<tile_bytes>(
                                         noc_write_addr_base, mask_write_ptr, zero_tile_idx, in_mask_tile_id);
                                 }
-                                mask_tile_id += 1;
+                                // mask_tile_id += 1;
                                 mask_write_ptr += mask_tile_bytes;
                                 continue;
                             }
@@ -413,7 +424,7 @@ void kernel_main() {
                                 //        mask_tile_id
                                 //        << " found_mask_windows: " << (uint32_t)found_mask_windows << ENDL();
                                 // case: the tile does not cover any window or the window is empty
-                                mask_tile_id += 1;
+                                // mask_tile_id += 1;
                                 mask_write_ptr += mask_tile_bytes;
                                 continue;
                             }
@@ -445,6 +456,9 @@ void kernel_main() {
                                 //            << ENDL();
                                 // });
 
+                                // DPRINT << "filling diag subtile with zeros: mask_tile_id: " << in_mask_tile_id
+                                //        << " q_iter: " << q_iter << " k_chunk: " << k_chunk << "row: " << row
+                                //        << " col: " << col << "nb: " << nb << "nq: " << nq << ENDL();
                                 fill_diag_subtile_zeros_bfp4<tile_bytes>(
                                     cb_mask_in,
                                     in_mask_tile_id,
@@ -483,17 +497,18 @@ void kernel_main() {
                             } while (window_low_idx < window_high_idx && covered_window_q_end_idx < q_end_idx &&
                                      covered_window_k_end_idx < k_end_idx);
 
-                            mask_tile_id += 1;
+                            // mask_tile_id += 1;
                             mask_write_ptr += mask_tile_bytes;
                             // DPRINT << "  [COL ITER] WINDOW tile: in_mask_tile_id: " << in_mask_tile_id
                             //        << " mask_tile_id: " << mask_tile_id << ENDL();
                         }
                         // Strid along columns to get to next row
-                        mask_tile_id -= Sk_chunk_t;
-                        mask_tile_id += Skt;
+                        // mask_tile_id -= Sk_chunk_t;
+                        // mask_tile_id += Skt;
                     }
                     // DPRINT << "  before barrier: mask_tile_id: " << mask_tile_id << ENDL();
                     noc_async_read_barrier();  // todo)) use this to remove the previous barrier on k (q too?)
+                    noc_async_write_barrier();
                     // DPRINT << "  after barrier: mask_tile_id: " << mask_tile_id
                     //        << " mask_chunk_tiles: " << mask_chunk_tiles << ENDL();
                     cb_push_back(cb_mask_in, mask_chunk_tiles);
