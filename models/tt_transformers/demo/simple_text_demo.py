@@ -1052,6 +1052,7 @@ def test_demo_text(
                 # "N300_Qwen2.5-7B": 150,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # T3K targets
                 "T3K_Llama3.1-70B": 181,
+                # "T3K_Qwen2.5-Coder-32B": 180,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
             }
@@ -1066,6 +1067,7 @@ def test_demo_text(
                 # T3K targets
                 "T3K_Llama3.1-70B": 14,
                 "T3K_Qwen2.5-72B": 13,
+                "T3K_Qwen2.5-Coder-32B": 19,
                 "T3K_Qwen3-32B": 20,
             }
 
