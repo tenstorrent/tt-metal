@@ -8,12 +8,16 @@
 
 #include "tt_metal/common/thread_pool.hpp"
 
+#include <mutex>
+#include <functional>
+
 namespace tt::tt_metal::distributed {
 
 class MeshCommandQueueBase : public MeshCommandQueue {
 protected:
     std::shared_ptr<ThreadPool>
         dispatch_thread_pool_;  // Thread pool used to dispatch to the Mesh (used by main thread)
+    std::function<std::lock_guard<std::mutex>()> lock_api_function_;
 
     // Helper functions for reading and writing individual shards
     virtual void write_shard_to_device(
@@ -47,8 +51,14 @@ private:
         bool blocking);
 
 public:
-    MeshCommandQueueBase(MeshDevice* mesh_device, uint32_t id, std::shared_ptr<ThreadPool> dispatch_thread_pool) :
-        MeshCommandQueue(mesh_device, id), dispatch_thread_pool_(std::move(dispatch_thread_pool)) {}
+    MeshCommandQueueBase(
+        MeshDevice* mesh_device,
+        uint32_t id,
+        std::shared_ptr<ThreadPool> dispatch_thread_pool,
+        std::function<std::lock_guard<std::mutex>()> lock_api_function) :
+        MeshCommandQueue(mesh_device, id),
+        dispatch_thread_pool_(std::move(dispatch_thread_pool)),
+        lock_api_function_(std::move(lock_api_function)) {}
 
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,

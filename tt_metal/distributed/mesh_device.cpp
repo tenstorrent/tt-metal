@@ -859,11 +859,17 @@ bool MeshDevice::initialize(
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
-                this, cq_id, dispatch_thread_pool_, reader_thread_pool_, cq_shared_state));
+                this,
+                cq_id,
+                dispatch_thread_pool_,
+                reader_thread_pool_,
+                cq_shared_state,
+                std::bind(&MeshDevice::lock_api, this)));
         }
     } else {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(this, cq_id));
+            mesh_command_queues_.push_back(
+                std::make_unique<SDMeshCommandQueue>(this, cq_id, std::bind(&MeshDevice::lock_api, this)));
         }
     }
     Inspector::mesh_device_initialized(this);

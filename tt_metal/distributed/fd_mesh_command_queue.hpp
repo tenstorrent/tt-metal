@@ -194,7 +194,8 @@ public:
         uint32_t id,
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
-        std::shared_ptr<CQSharedState>& cq_shared_state);
+        std::shared_ptr<CQSharedState>& cq_shared_state,
+        std::function<std::lock_guard<std::mutex>()> lock_api_function);
 
     ~FDMeshCommandQueue() override;
 

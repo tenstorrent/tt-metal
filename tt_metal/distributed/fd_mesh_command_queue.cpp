@@ -72,8 +72,9 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     uint32_t id,
     std::shared_ptr<ThreadPool>& dispatch_thread_pool,
     std::shared_ptr<ThreadPool>& reader_thread_pool,
-    std::shared_ptr<CQSharedState>& cq_shared_state) :
-    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool),
+    std::shared_ptr<CQSharedState>& cq_shared_state,
+    std::function<std::lock_guard<std::mutex>()> lock_api_function) :
+    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, lock_api_function),
     reader_thread_pool_(reader_thread_pool),
     cq_shared_state_(cq_shared_state),
     dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
@@ -183,7 +184,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
@@ -381,7 +382,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
@@ -411,7 +412,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
@@ -452,7 +453,7 @@ void FDMeshCommandQueue::finish_locked(tt::stl::Span<const SubDeviceId> sub_devi
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     this->finish_locked(sub_device_ids);
 }
 
@@ -599,7 +600,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
 
 MeshEvent FDMeshCommandQueue::enqueue_record_event(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
 
     MeshEvent event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
@@ -626,12 +627,12 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_locked(
 
 MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     return this->enqueue_record_event_to_host_locked(sub_device_ids, device_range);
 }
 
 void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for (const auto& coord : sync_event.device_range()) {
@@ -900,7 +901,7 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
 }
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
@@ -943,7 +944,7 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
 }
 
 void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
-    auto lock = mesh_device_->lock_api();
+    auto lock = lock_api_function_();
     trace_dispatch::reset_host_dispatch_state_for_trace(
         mesh_device_->num_sub_devices(),
         cq_shared_state_->worker_launch_message_buffer_state,
