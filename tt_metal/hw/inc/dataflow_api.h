@@ -958,6 +958,7 @@ FORCE_INLINE void noc_async_read_page(
  */
 // clang-format on
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
 FORCE_INLINE void noc_async_read_tile(
     const uint32_t id,
     const InterleavedAddrGen<DRAM>& addrgen,
@@ -977,6 +978,7 @@ FORCE_INLINE void noc_async_read_tile(
  */
 // clang-format on
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
 FORCE_INLINE void noc_async_read_page(
     const uint32_t id,
     const InterleavedAddrGen<DRAM>& addrgen,
@@ -1003,6 +1005,7 @@ FORCE_INLINE void noc_async_read_page(
  */
 // clang-format on
 template <bool DRAM, uint32_t tile_hw>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
 FORCE_INLINE void noc_async_read_tile(
     const uint32_t id,
     const InterleavedAddrGenFast<DRAM, tile_hw>& addrgen,
@@ -1023,6 +1026,7 @@ FORCE_INLINE void noc_async_read_tile(
  */
 // clang-format on
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
 FORCE_INLINE void noc_async_read_page(
     const uint32_t id,
     const InterleavedPow2AddrGenFast<DRAM>& addrgen,
@@ -1092,6 +1096,7 @@ FORCE_INLINE void noc_async_write_page(
  */
 // clang-format on
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
 FORCE_INLINE void noc_async_write_page(
     const uint32_t id,
     const InterleavedAddrGen<DRAM>& addrgen,
@@ -1111,6 +1116,7 @@ FORCE_INLINE void noc_async_write_page(
  * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
  */
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
 FORCE_INLINE void noc_async_write_tile(
     const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
     noc_async_write_page<InterleavedAddrGen<DRAM>>(
@@ -1132,6 +1138,7 @@ FORCE_INLINE void noc_async_write_tile(
  * | tile_hw (template parameter) | Tile height x width | uint32_t  | Any uint32_t number | True     |
  */
 template <bool DRAM, uint32_t tile_hw>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
 FORCE_INLINE void noc_async_write_tile(
     const uint32_t id,
     const InterleavedAddrGenFast<DRAM, tile_hw>& addrgen,
@@ -1159,6 +1166,7 @@ FORCE_INLINE void noc_async_write_tile(
  */
 // clang-format on
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
 FORCE_INLINE void noc_async_write_page(
     const uint32_t id,
     const InterleavedPow2AddrGenFast<DRAM>& addrgen,

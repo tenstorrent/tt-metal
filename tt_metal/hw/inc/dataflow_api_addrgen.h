@@ -414,6 +414,7 @@ FORCE_INLINE uint64_t get_noc_addr(
     uint32_t offset = 0,
     uint8_t noc = noc_index,
     decltype(addrgen.get_noc_addr())* resolver = nullptr) {
+    /* Do not use "resolver" argument. It is added as SFINAE mechanism to correctly resolve calls to this API */
     static_assert(has_get_noc_addr<AddrGen>::value, "AddrGen must have get_noc_addr() method");
     return addrgen.get_noc_addr(id, offset, noc);
 }
@@ -430,6 +431,7 @@ FORCE_INLINE uint64_t get_noc_addr(
  */
 // clang-format on
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> get_noc_addr instead.")]]
 FORCE_INLINE uint64_t
 get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
     return addrgen.get_noc_addr(id, offset, noc);
@@ -447,6 +449,7 @@ get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_
  */
 // clang-format on
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> get_noc_addr instead.")]]
 FORCE_INLINE uint64_t get_noc_addr(
     const uint32_t id, const InterleavedPow2AddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
     return addrgen.get_noc_addr(id, offset, noc);
@@ -464,6 +467,7 @@ FORCE_INLINE uint64_t get_noc_addr(
  */
 // clang-format on
 template <bool DRAM, uint32_t tile_hw>
+[[deprecated("Use <typename AddrGen> get_noc_addr instead.")]]
 FORCE_INLINE uint64_t get_noc_addr(
     const uint32_t id,
     const InterleavedAddrGenFast<DRAM, tile_hw>& addrgen,
@@ -484,6 +488,7 @@ FORCE_INLINE uint64_t get_noc_addr(
  */
 // clang-format on
 template <bool DRAM>
+[[deprecated("Use <typename AddrGen> get_noc_addr instead.")]]
 FORCE_INLINE uint64_t get_noc_addr(
     const uint32_t id, const InterleavedPow2AddrGenFast<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
     return addrgen.get_noc_addr(id, offset, noc);
