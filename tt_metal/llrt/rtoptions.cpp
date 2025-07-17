@@ -236,6 +236,10 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_FORCE_REINIT")) {
         force_context_reinit = true;
     }
+
+    if (getenv("TT_METAL_WATCHER_KEEP_ERRORS")) {
+        watcher_keep_errors = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
