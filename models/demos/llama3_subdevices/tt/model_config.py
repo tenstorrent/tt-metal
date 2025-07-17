@@ -25,7 +25,6 @@ from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
 from enum import Enum, auto
-from tqdm import tqdm
 from dataclasses import dataclass
 from models.demos.llama3_subdevices.tt.load_checkpoints import (
     load_meta_state_dict,
@@ -789,6 +788,8 @@ class TtModelArgs:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
             def w1_w3_prg_config(seq_len, use_interleaved):
+                if seq_len == 128:
+                    return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
@@ -843,6 +844,10 @@ class TtModelArgs:
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
             def w2_prg_config(seq_len):
+                if seq_len == 128:
+                    return self.matmul_1d_config(
+                        128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
+                    )
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if seq_len < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -941,16 +946,24 @@ class TtModelArgs:
 
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = w2_prg_config
 
-            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
-                in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
-                per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= 1024,
+            self.model_config["WO_PREFILL_PROGCFG"] = (
+                lambda seq_len: self.matmul_1d_config(
+                    seq_len, 1024, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=16
+                )
+                if seq_len == 128
+                else (
+                    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                        out_subblock_h=1,  # Must be divisible by per_core_M
+                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                        per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=seq_len <= 1024,
+                    )
+                )
             )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
@@ -979,18 +992,26 @@ class TtModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
-                in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(
-                    1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
-                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= 2048,
+            self.model_config["XQKV_PREFILL_PROGCFG"] = (
+                lambda seq_len: self.matmul_1d_config(
+                    seq_len, 2048, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=16
+                )
+                if seq_len == 128
+                else (
+                    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                        out_subblock_h=1,  # Must be divisible by per_core_M
+                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                        per_core_M=max(
+                            1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                        ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                        per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=seq_len <= 2048,
+                    )
+                )
             )
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
@@ -2547,73 +2568,6 @@ class TtModelArgs:
                     logger.warning(f"Falling back to base model encoding with no chat template")
 
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
-
-
-def load_llama_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
-    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-    assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-    is_chunked = "layers_" in str(checkpoints[0])
-    if is_chunked:
-        checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
-    else:
-        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
-
-    return checkpoint
-
-
-def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
-    checkpoint = {}
-
-    (f"Loading {len(checkpoints)} checkpoint files")
-    for ckpt in tqdm(checkpoints):
-        if n_layers:
-            # Layer range is in the file name, like layers_start-end.pth
-            layer_range = ckpt.stem.split("_")[1]
-            start_layer, end_layer = map(int, layer_range.split("-"))
-            if start_layer > n_layers + start_layer_idx:
-                continue
-            if end_layer < start_layer_idx:
-                continue
-
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        checkpoint.update(loaded_ckpt)
-    return checkpoint
-
-
-def load_sharded_checkpoints(checkpoints, n_layers):
-    checkpoint = {}
-    logger.info(f"Loading {len(checkpoints)} checkpoint files")
-    for ckpt in tqdm(checkpoints):
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        for (
-            key,
-            value,
-        ) in loaded_ckpt.items():
-            if "layers." in key:
-                layer_num = int(key.split("layers.")[1].split(".")[0])
-                if n_layers and layer_num >= n_layers:
-                    continue
-            if key in checkpoint:
-                checkpoint[key] += [value]
-            else:
-                checkpoint[key] = [value]
-        del loaded_ckpt
-
-    # concat checkpoint values
-    for key, value in checkpoint.items():
-        if len(value) == 1 or "norm" in key:
-            checkpoint[key] = value[0]
-        else:
-            if key == "tok_embeddings.weight" or key == "output.weight":
-                assert value[0].shape[1] == 8192  # FIXME: do we need this hardcoded shape?
-                # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
-                checkpoint[key] = torch.cat(value, dim=0)
-            else:
-                # cat_dim is index of the smallest dimension in value[0].shape
-                cat_dim = torch.argmin(torch.tensor(value[0].shape))
-                checkpoint[key] = torch.cat(value, dim=cat_dim)
-
-    return checkpoint
 
 
 def num_to_corerange(x):

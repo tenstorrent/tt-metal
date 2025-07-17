@@ -25,11 +25,6 @@ using namespace tt::tt_metal;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 int main() {
-    // Fast Dispatch = support for async operations. We need it for most applications.
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     bool pass = true;
 
     try {
