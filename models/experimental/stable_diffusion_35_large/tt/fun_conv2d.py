@@ -4,14 +4,13 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 import torch
 import ttnn
 
-from .parallel_config import DiTParallelConfig
-from .utils import from_torch_fast
+from .parallel_config import DiTParallelConfig, StableDiffusionParallelManager
+from .utils import from_torch_fast_2d
 
 
 @dataclass
@@ -32,7 +31,6 @@ class TtConv2dParameters:
         device,
         parallel_config: DiTParallelConfig,
     ) -> TtConv2dParameters:
-        # TODO: Use parallel_config
         weight = state["weight"]
         out_channels, in_c, kh, kw = weight.shape
         weight = torch.permute(weight, (2, 3, 1, 0))
@@ -43,26 +41,32 @@ class TtConv2dParameters:
         else:
             bias = None
 
-        if os.environ["FAKE_DEVICE"] == "T3K":
+        if hidden_dim_padding > 0:
             weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_padding), mode="constant", value=0)
             if not bias == None:
                 bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_padding), mode="constant", value=0)
 
+        weight_dims = [None, None]
+        weight_dims[parallel_config.tensor_parallel.mesh_axis] = 1  # output channels
+        bias_dims = [None, None]
+        bias_dims[parallel_config.tensor_parallel.mesh_axis] = 3  # output channels
         return cls(
-            weight=from_torch_fast(
+            weight=from_torch_fast_2d(
                 weight,
-                dtype=dtype,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=weight_dims,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                shard_dim=-1,
+                dtype=dtype,
             ),
             bias=(
-                from_torch_fast(
+                from_torch_fast_2d(
                     bias.reshape((1, 1, 1, -1)),
-                    dtype=dtype,
+                    mesh_device=device,
+                    mesh_shape=tuple(device.shape),
+                    dims=bias_dims,
                     layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    shard_dim=-1,
+                    dtype=dtype,
                 )
                 if "bias" in state
                 else None
@@ -72,7 +76,9 @@ class TtConv2dParameters:
         )
 
 
-def sd_conv2d(x: ttnn.Tensor, parameters: TtConv2dParameters, parallel_config: DiTParallelConfig) -> ttnn.Tensor:
+def sd_conv2d(
+    x: ttnn.Tensor, parameters: TtConv2dParameters, parallel_manager: StableDiffusionParallelManager
+) -> ttnn.Tensor:
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         x.device().arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
