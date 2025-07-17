@@ -5,12 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
-  contents: write
-  pages: write
-  id-token: write
   packages: write
-  pull-requests: write
 
 jobs:
   build:
@@ -26,29 +21,21 @@ jobs:
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Debug"
           - version: "22.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
-            build-type: "RelWithDebInfo"
-          - version: "22.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
-            build-type: "Release"
-          - version: "22.04"
-            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
-            build-type: "Release"
-          - version: "22.04"
-            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
-            build-type: "Debug"
-          - version: "24.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Release"
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
           - version: "24.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Release"
           - version: "24.04"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
-            build-type: "RelWithDebInfo"
+            build-type: "Release"
     with:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
       publish-artifact: false
       skip-tt-train: true
+      tracy: false
