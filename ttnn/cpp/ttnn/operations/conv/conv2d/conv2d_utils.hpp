@@ -53,6 +53,9 @@ bool is_1d_deptwise_conv(
     uint32_t image_width,
     bool has_bias);
 
+bool is_singlecore_skip_mcast(
+    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
+
 sliding_window::ParallelConfig determine_parallel_config(
     TensorMemoryLayout shard_layout,
     uint32_t batch_size,
