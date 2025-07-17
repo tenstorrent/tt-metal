@@ -1,0 +1,45 @@
+name: Multi-Host Deployment (Physical)
+on:
+  push:
+    branches:
+      - akirby/multi-host-workflow
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Virtual environment configuration'
+        required: true
+        default: "2"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "4"
+
+jobs:
+  deploy:
+    runs-on:
+      - multi-host
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # Rankfile is statically placed at /etc/rankfile
+      # - name: Generate the rankfile
+      #   run: .github/scripts/multihost/virtualized/generate-rankfile.sh "4"
+
+      - name: Run tt-smi via mpirun command
+        run: |
+          echo "Running mpirun command on multiple hosts"
+          mpirun --rankfile /etc/rankfile --tag-output  --mca orte_launch_agent $(pwd)/.github/scripts/multihost/physical/docker-wrapper.sh --mca btl_tcp_if_exclude docker0,lo tt-smi -ls
+
+      - name: Compile mpi allreduce test
+        run: |
+          docker run -v ./:/data -w /data ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 mpicc mpi.c
+      
+      - name: Run mpi allreduce test outside docker
+        run: |
+          mpirun --np 4 --tag-output ./a.out
+      
+      - name: Run mpi allreduce test inside docker
+        run: |
+          mpirun --rankfile /etc/rankfile --tag-output  --mca orte_launch_agent $(pwd)/.github/scripts/multihost/physical/docker-wrapper.sh --mca btl_tcp_if_exclude docker0,lo ./a.out
