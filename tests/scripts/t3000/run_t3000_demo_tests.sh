@@ -252,9 +252,8 @@ run_t3000_sd35large_tests() {
 
   # Run test_model (decode and prefill) for llama3 70B
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  mesh_device=T3K
   sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
-  NO_PROMPT=1 MESH_DEVICE=$mesh_device SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/demo.py  --timeout 600 ; fail+=$?
+  NO_PROMPT=1 SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/fun_demo.py -k "t3k"  --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
