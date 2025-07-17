@@ -11,5 +11,6 @@
 
 void kernel_main() {
     DPRINT << "Test Debug Print: ERISC" << ENDL();
+    asm volatile("ebreak");
     print_test_data();
 }

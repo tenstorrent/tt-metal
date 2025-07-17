@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -17,14 +18,12 @@ namespace operations::conv {
 namespace conv2d {
 
 struct Conv2dConfig {
-    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
-
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
     // prepare_conv_bias needs this to always be set to the same dtype as the weights.
     std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
     // Either "relu" or ""
-    string activation = "";
+    std::string activation = "";
 
     // If user tensor will be deallocated if it's on device.
     bool deallocate_activation = false;
@@ -62,13 +61,6 @@ struct Conv2dConfig {
     // BFLOAT8 is always Tile layout.
     tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;
 
-    // Select between preprocessing weights on device or on host.
-    bool preprocess_weights_on_device = false;
-
-    // If false, only preprocess weights if they are originally located on host.
-    // If true, preprocess weights regarding of original location.
-    bool always_preprocess_weights = false;
-
     // Doubles the size of the CBs for activation.
     // Increased perf, but increased L1 usage.
     bool enable_act_double_buffer = false;
@@ -99,7 +91,6 @@ struct Conv2dConfig {
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
-        "dtype",
         "weights_dtype",
         "activation",
         "deallocate_activation",
@@ -112,7 +103,6 @@ struct Conv2dConfig {
         "core_grid",
         "transpose_shards",
         "output_layout",
-        "preprocess_weights_on_device",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "enable_split_reader",
@@ -121,7 +111,6 @@ struct Conv2dConfig {
         "enable_kernel_stride_folding");
     auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->dtype),
             std::cref(this->weights_dtype),
             std::cref(this->activation),
             std::cref(this->deallocate_activation),
@@ -134,7 +123,6 @@ struct Conv2dConfig {
             std::cref(this->core_grid),
             std::cref(this->transpose_shards),
             std::cref(this->output_layout),
-            std::cref(this->preprocess_weights_on_device),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
@@ -206,7 +194,7 @@ struct OptimizedConvNew {
     const uint32_t output_channels;
     const uint32_t groups;
     bool untilize_out, has_bias;
-    string activation = "";
+    std::string activation = "";
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
@@ -222,7 +210,7 @@ struct OptimizedConvNew {
         uint32_t groups,
         bool untile_out,
         bool has_bias,
-        string activation,
+        std::string activation,
         const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         tt::tt_metal::MemoryConfig memory_config,
@@ -308,7 +296,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const string& activation,
+    const std::string& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
@@ -343,8 +331,10 @@ conv_op_l1_usage calculate_L1_usage(
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     tt::tt_metal::DataType input_datatype,
+    tt::tt_metal::DataType output_datatype,
     bool enable_bias,
-    bool is_1d_depthwise_conv);
+    bool is_1d_depthwise_conv,
+    bool skip_act_cb_create = false);
 
 }  // namespace conv2d
 

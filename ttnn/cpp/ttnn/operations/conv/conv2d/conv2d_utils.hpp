@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <optional>
+#include <string>
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
@@ -52,6 +53,9 @@ bool is_1d_deptwise_conv(
     uint32_t image_width,
     bool has_bias);
 
+bool is_singlecore_skip_mcast(
+    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
+
 sliding_window::ParallelConfig determine_parallel_config(
     TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -93,7 +97,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const string& activation,
+    const std::string& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c);
 
@@ -162,6 +166,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const CoreCoord& compute_grid_size,
     Layout input_layout,
     tt::tt_metal::DataType input_datatype,
+    tt::tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     uint32_t groups,
@@ -190,9 +195,7 @@ ttnn::Tensor fold_tensor(
     T* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor = false);
+    std::array<uint32_t, 4> padding_n4);
 
 struct KernelStrideFoldingResult {
     uint32_t input_height;

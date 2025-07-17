@@ -112,6 +112,7 @@ class TtTransformer(LightweightModule):
             args,
             args.is_galaxy,
             tt_ccl=self.tt_ccl,
+            ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
 
         self.lm_head = LMHead(
@@ -388,11 +389,8 @@ class TtTransformer(LightweightModule):
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
 
-        tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
-
-        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
-
-        return tt_out
+        tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
+        return tt_out_cpu, ttnn.record_event(self.mesh_device, 0)
 
     def ttnn_prefill_forward(
         self,

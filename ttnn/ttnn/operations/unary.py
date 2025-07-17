@@ -71,7 +71,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "softplus": torch.nn.functional.softplus,
             "sigmoid_accurate": torch.sigmoid,
             "asinh": torch.asinh,
-            "atanh": torch.atanh,
             "cbrt": torch_cbrt,
             "cosh": torch.cosh,
             "deg2rad": torch.deg2rad,
@@ -154,7 +153,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.sigmoid_accurate,
     # Other unaries (composite operations - tt_eager dependency)
     ttnn.asinh,
-    ttnn.atanh,
     ttnn.cbrt,
     ttnn.cosh,
     ttnn.deg2rad,
@@ -206,6 +204,20 @@ def _golden_function_acosh(input_tensor_a, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)
+
+
+def _golden_function_atanh(input_tensor_a, *args, **kwargs):
+    import torch
+
+    result = torch.atanh(input_tensor_a)
+    return (
+        result.masked_fill_((input_tensor_a <= -1) | (input_tensor_a >= 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
+    )
+
+
+ttnn.attach_golden_function(ttnn.atanh, golden_function=_golden_function_atanh)
 
 
 def _golden_function_reciprocal(input_tensor_a, *args, device, **kwargs):
@@ -391,6 +403,8 @@ def _golden_function_bitwise_left_shift(input_tensor_a, shift_amt, *args, **kwar
 
 
 ttnn.attach_golden_function(ttnn.bitwise_left_shift, golden_function=_golden_function_bitwise_left_shift)
+
+ttnn.attach_golden_function(ttnn.logical_left_shift, golden_function=_golden_function_bitwise_left_shift)
 
 
 def _golden_function_bitwise_right_shift(input_tensor_a, shift_amt, *args, **kwargs):

@@ -14,6 +14,7 @@ The current version is verified to work with the following models:
 | [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
 | [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
 | [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
+| [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-32B```                          |
 | [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |
 | [Qwen 3 32B](https://huggingface.co/Qwen/Qwen3-32B)                                              | LoudBox / QuietBox          | ```Qwen/Qwen3-32B```                            |
 
@@ -69,6 +70,14 @@ python models/tt_transformers/scripts/repack_weights_70b.py <path_to_checkpoint_
 ```
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
+
+**⚠️ Warning**
+>
+> For Llama3 models, weights downloaded from the `huggingface-cli` via
+>```
+>huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
+>```
+> will be in the same format as a direct download from Meta (i.e. as `consolidated.xx.pth` files). Hence, you will still need to repack your weights and export `LLAMA_DIR` as before. This is contrary to if you downloaded your weights directly from `huggingface`, as those weights will be downloaded as sharded `.safetensors` files.
 
 #### Option 2: download weights from HuggingFace
 
@@ -231,6 +240,11 @@ Using the lt tool (`models/tt_transformers/lt`), the user can also provide multi
 ### Expected performance and accuracy
 
 See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
+Accuracy of the network architectures is measured by exact token matching using teacher forcing method. During inference the previous token is replaced by the ground truth token while the network generates the next token. This allows to avoid accumulating errors when comparisons on a finer level (tokens) assessed in comparison to other known metrics that compare quality and context of the answer. Token accuracy can be reported by passing the argument shown below:
+
+```
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --token_accuracy True
+```
 
 ### Implementation notes
 

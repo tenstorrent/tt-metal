@@ -9,6 +9,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -21,10 +22,8 @@
 #include <optional>
 #include <queue>
 #include <random>
-#include <set>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -169,7 +168,7 @@ struct test_board_t {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::CUSTOM);
 
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         control_plane = &tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -565,7 +564,7 @@ struct test_device_t {
         master_router_idx = 0;
     }
 
-    void create_router_kernels(std::vector<uint32_t>& compile_args, std::map<string, string>& defines) {
+    void create_router_kernels(std::vector<uint32_t>& compile_args, std::map<std::string, std::string>& defines) {
         uint32_t num_routers = router_logical_cores.size();
         std::vector<uint32_t> zero_buf(1, 0);
 
@@ -899,7 +898,7 @@ struct test_traffic_t {
     void create_kernels(
         std::vector<uint32_t>& tx_compile_args,
         std::vector<uint32_t>& rx_compile_args,
-        std::map<string, string>& defines,
+        std::map<std::string, std::string>& defines,
         uint32_t fabric_command,
         uint32_t test_results_address_) {
         CoreCoord tx_core, rx_core;
@@ -1536,7 +1535,7 @@ int main(int argc, char **argv) {
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     uint16_t routing_mode;
     if (!push_mode) {
         defines["FVC_MODE_PULL"] = "";

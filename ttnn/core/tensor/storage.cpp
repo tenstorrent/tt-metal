@@ -11,6 +11,19 @@
 
 namespace tt::tt_metal {
 
+HostStorage::HostStorage(HostBuffer buffer) :
+    distributed_buffer_(DistributedHostBuffer::create(distributed::MeshShape(1, 1))) {
+    distributed_buffer_.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
+}
+HostStorage::HostStorage(DistributedHostBuffer buffer) : distributed_buffer_(std::move(buffer)) {}
+
+const DistributedHostBuffer& HostStorage::buffer() const { return distributed_buffer_; }
+
+HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
+    return HostStorage(
+        distributed_buffer_.transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL));
+}
+
 DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::move(buffer_); }
 
 DeviceStorage::DeviceStorage(
@@ -51,16 +64,5 @@ bool DeviceStorage::is_uniform_storage() const {
     }
     return coords.size() == mesh_buffer->device()->num_devices();
 }
-
-const DistributedHostBuffer& MultiDeviceHostStorage::distributed_buffer() const { return distributed_buffer_; }
-
-MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers) :
-    distributed_buffer_(DistributedHostBuffer::create(tt::tt_metal::distributed::MeshShape(buffers.size()))) {
-    for (size_t i = 0; i < buffers.size(); ++i) {
-        distributed_buffer_.emplace_shard(
-            tt::tt_metal::distributed::MeshCoordinate(i), [&buffers, i]() { return std::move(buffers[i]); });
-    }
-}
-MultiDeviceHostStorage::MultiDeviceHostStorage(DistributedHostBuffer buffer) : distributed_buffer_(std::move(buffer)) {}
 
 }  // namespace tt::tt_metal

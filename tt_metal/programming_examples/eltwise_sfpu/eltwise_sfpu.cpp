@@ -20,10 +20,6 @@ using namespace tt::tt_metal;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 int main() {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     bool pass = true;
 
     try {
@@ -64,14 +60,13 @@ int main() {
         CircularBufferConfig cb_src0_config =
             CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, tile_size_bytes);
-        CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-        constexpr uint32_t num_output_tiles = 2;
         CircularBufferConfig cb_output_config =
             CircularBufferConfig(num_input_tiles * tile_size_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(output_cb_index, tile_size_bytes);
-        CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         // Create the 2 data movement kernels and the compute kernel.
         KernelHandle unary_reader_kernel_id = CreateKernel(

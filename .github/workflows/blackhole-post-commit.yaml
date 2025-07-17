@@ -72,6 +72,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      civ2-matrix: ${{ steps.set-matrix.outputs.civ2-matrix }}
+      civ2-viommu-matrix: ${{ steps.set-matrix.outputs.civ2-viommu-matrix }}
     steps:
       - id: set-matrix
         run: |
@@ -80,10 +82,16 @@ jobs:
               echo "::warning::LLMBox tests are enabled but runner-label is not set to BH-LLMBox. Current value: ${{ inputs.runner-label }}"
             fi
             matrix='["BH-LLMBox"]'
+            civ2_matrix='["BH-LLMBox"]'
+            civ2_viommu_matrix='["BH-LLMBox"]'
           else
             matrix='["P100", "P150"]'
+            civ2_matrix='["P100", "P150b"]'
+            civ2_viommu_matrix='["P100", "P150b-viommu"]'
           fi
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "civ2-matrix=$civ2_matrix" >> $GITHUB_OUTPUT
+          echo "civ2-viommu-matrix=$civ2_viommu_matrix" >> $GITHUB_OUTPUT
 
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -176,11 +184,15 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   blackhole-demo-tests:
-    needs: build-artifact
+    needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -217,7 +229,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -229,7 +241,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

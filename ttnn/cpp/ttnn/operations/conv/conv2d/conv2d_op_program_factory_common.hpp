@@ -68,9 +68,11 @@ std::vector<CBInfo> get_cb_info(
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
+    DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
     bool enable_bias,
-    bool is_1d_depthwise_conv);
+    bool is_1d_depthwise_conv,
+    bool skip_act_cb_create);
 
 // Allocates circular buffers for the Conv2d operation.
 // This function will populate index and handle fields of each CBInfo in the cb_info vector,

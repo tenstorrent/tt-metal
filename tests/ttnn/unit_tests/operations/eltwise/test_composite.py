@@ -21,25 +21,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_atanh_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.atanh(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.atanh)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_composite_cbrt_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
@@ -617,24 +598,6 @@ def test_unary_logical_not_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_frac(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -1e6, 1e6, device)
-    output_tensor = ttnn.frac(input_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.frac)
-    golden_tensor = golden_function(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
         (torch.Size([1, 1, 32, 64])),  # Single core
         (torch.Size([1, 3, 320, 32 * 8])),  # Multi core
     ),
@@ -649,29 +612,6 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device):
 
     output_tensor = ttnn.swiglu(input_tensor, dim)
     golden_tensor = golden_fn(in_data, dim)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "param",
-    {0.45, 7.7, 36.89, 58.4, 97.2},
-)
-def test_unary_hardshrink(input_shapes, param, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.hardshrink(input_tensor, lambd=param)
-    golden_function = ttnn.get_golden_function(ttnn.hardshrink)
-    golden_tensor = golden_function(in_data, lambd=param)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

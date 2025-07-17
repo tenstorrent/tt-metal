@@ -159,6 +159,14 @@ struct Trunc {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Frac {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Ceil {
     static Tensor invoke(
         QueueId queue_id,
@@ -246,6 +254,15 @@ struct Tanhshrink {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Hardshrink {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float lambda = 0.5f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Deg2Rad {
     static Tensor invoke(
         QueueId queue_id,
@@ -314,6 +331,7 @@ REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
 REGISTER_UNARY_OPERATION(asinh, ASINH);
 REGISTER_UNARY_OPERATION(atan, ATAN);
+REGISTER_UNARY_OPERATION(atanh, ATANH);
 REGISTER_UNARY_OPERATION(cos, COS);
 REGISTER_UNARY_OPERATION(acosh, ACOSH);
 REGISTER_UNARY_OPERATION(erfinv, ERFINV);
@@ -353,6 +371,7 @@ REGISTER_UNARY_OPERATION(alt_complex_rotate90, ALT_COMPLEX_ROTATE90);
 REGISTER_UNARY_OPERATION(floor, FLOOR);
 REGISTER_UNARY_OPERATION(ceil, CEIL);
 REGISTER_UNARY_OPERATION(trunc, TRUNC);
+REGISTER_UNARY_OPERATION(frac, FRAC);
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
@@ -376,6 +395,8 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(gt_unary, UNARY_GT);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(lt_unary, UNARY_LT);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(eq_unary, UNARY_EQ);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ge_unary, UNARY_GE);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(le_unary, UNARY_LE);
 
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
@@ -389,6 +410,7 @@ constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::una
 constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
+constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
 constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operations::unary::Deg2Rad>();
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();

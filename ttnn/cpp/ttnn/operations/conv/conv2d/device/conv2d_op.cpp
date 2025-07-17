@@ -62,7 +62,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const string& activation,
+    const std::string& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const MemoryConfig& memory_config,
@@ -276,7 +276,6 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         weights_shape,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
-            .dtype = output_tensor.dtype(),
             .weights_dtype = input_tensor_b.dtype(),
             .shard_layout = this->memory_config.memory_layout(),
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
@@ -284,6 +283,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .enable_weights_double_buffer = enable_weights_double_buffer,
             .enable_split_reader = enable_split_reader},
         input_tensor_a.dtype(),
+        this->dtype,
         has_bias,
         is_1d_deptwise_conv(
             groups,
@@ -291,7 +291,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             output_channels,
             kernel_dims[1],
             sliding_window_config.get_output_shape()[2],
-            has_bias));
+            has_bias),
+        is_singlecore_skip_mcast(parallelization_config, input_tensor_a.memory_config().memory_layout()));
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,

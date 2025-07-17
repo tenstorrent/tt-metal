@@ -19,11 +19,6 @@ using namespace tt::tt_metal;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 int main(int argc, char** argv) {
-    // Fast Dispatch = support for async operations. We need it for most applications.
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     bool pass = true;
 
     // clang-format off
@@ -89,7 +84,7 @@ int main(int argc, char** argv) {
         // The hardware supports up to 16 circular buffers and they all act the same.
         constexpr uint32_t tiles_per_cb = 2;
         tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
-        CBHandle cb_src0 = CreateCircularBuffer(program, core, CircularBufferConfig(
+        CreateCircularBuffer(program, core, CircularBufferConfig(
             /*total_size=*/tiles_per_cb * tile_size_bytes,                    // The total size of the circular buffer in bytes
             /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
             .set_page_size(src0_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
@@ -97,12 +92,12 @@ int main(int argc, char** argv) {
                                                                               // total_size / page_size = tiles_per is the number of
                                                                               // entries in the circular buffer)
         tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
-        CBHandle cb_src1 = CreateCircularBuffer(program, core, CircularBufferConfig(
+        CreateCircularBuffer(program, core, CircularBufferConfig(
             /*total_size=*/tiles_per_cb * tile_size_bytes,
             /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, tile_size_bytes));
         tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
-        CBHandle cb_dst = CreateCircularBuffer(program, core, CircularBufferConfig(
+        CreateCircularBuffer(program, core, CircularBufferConfig(
             /*total_size=*/tiles_per_cb * tile_size_bytes,
             /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(dst_cb_index, tile_size_bytes));

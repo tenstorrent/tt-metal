@@ -191,8 +191,8 @@ class CMakeBuild(build_ext):
                     "Ninja",
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DCMAKE_INSTALL_PREFIX=build_Release",
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    "-DTT_INSTALL=OFF",
+                    "-DBUILD_SHARED_LIBS=ON",
+                    "-DTT_INSTALL=ON",
                     "-DTT_UNITY_BUILDS=ON",
                     "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
                     "-DWITH_PYTHON_BINDINGS=ON",
@@ -274,9 +274,12 @@ class CMakeBuild(build_ext):
         ttnn_cpp_patterns = [
             "ttnn/deprecated/**/kernels/**/*",
             "ttnn/operations/**/kernels/**/*",
+            "ttnn/operations/**/kernels_ng/**/*",
+            "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
+            "ttnn/kernel/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
@@ -291,6 +294,8 @@ class CMakeBuild(build_ext):
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",
+            "fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+            "fabric/impl/kernels/tt_fabric_mux.cpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
             "impl/dispatch/kernels/**/*",

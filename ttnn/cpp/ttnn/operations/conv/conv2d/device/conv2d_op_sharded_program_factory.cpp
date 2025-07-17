@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -76,6 +78,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
     const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
+
+    const bool skip_mcast = is_singlecore_skip_mcast(parallelization_config, a.memory_config().memory_layout());
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
@@ -555,10 +559,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::vector<uint32_t> act_mcast_noc_y;
     if (block_sharded) {
         // 2D mcast
-        if (transpose_mcast) {
+        if (transpose_mcast && !skip_mcast) {
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
             mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
-        } else {
+        } else if (!skip_mcast) {
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
             mcast_receiver_cores = CoreRange(CoreCoord(0, 1), bottom_right_core);
         }
@@ -617,7 +621,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
 
     Conv2dConfig conv_config = Conv2dConfig{
-        .dtype = output.dtype(),
         .weights_dtype = b.dtype(),
         .shard_layout = a.memory_config().memory_layout(),
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
@@ -632,9 +635,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         {filter_h, filter_w},
         conv_config,
         a.dtype(),
+        output.dtype(),
         shard_shape,
         has_bias,
-        is_conv_1d_depthwise_conv);
+        is_conv_1d_depthwise_conv,
+        skip_mcast);
 
     access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
 
@@ -647,11 +652,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
-    string reader_kernel;
-    string compute_kernel =
+    std::string reader_kernel;
+    std::string compute_kernel =
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
-    string writer_mcast_sender_kernel;
-    string writer_mcast_receiver_kernel;
+    std::string writer_mcast_sender_kernel;
+    std::string writer_mcast_receiver_kernel;
 
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
     if (filter_h >= 1 and filter_w >= 1) {
@@ -749,12 +754,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
     };
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
-    std::map<string, string> writer_mcast_sender_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+    std::map<std::string, std::string> writer_mcast_sender_defines;
+    std::map<std::string, std::string> compute_defines;
     if (total_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
+    }
+    if (skip_mcast) {
+        reader_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
@@ -858,7 +866,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles_per_core,
 
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+        skip_mcast ? get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index
+                   : get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,

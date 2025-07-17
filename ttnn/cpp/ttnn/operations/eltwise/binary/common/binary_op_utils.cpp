@@ -30,7 +30,9 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
            (input == UINT16 && output == BFLOAT8_B) || (input == UINT16 && output == BFLOAT16) ||
            (input == UINT16 && output == FLOAT32) || (input == UINT16 && output == UINT32) ||
            (input == UINT32 && output == BFLOAT4_B) || (input == UINT32 && output == BFLOAT8_B) ||
-           (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32);
+           (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32) ||
+           (input == UINT16 && output == INT32) || (input == INT32 && output == UINT16) ||
+           (input == UINT32 && output == UINT16);
 }
 
 std::map<std::string, std::string> get_defines(
@@ -65,10 +67,10 @@ std::map<std::string, std::string> get_defines(
         case BinaryOpType::LT:
             defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst, input_dtype));
             break;
-        case BinaryOpType::GTE:
+        case BinaryOpType::GE:
             defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst, input_dtype));
             break;
-        case BinaryOpType::LTE:
+        case BinaryOpType::LE:
             defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst, input_dtype));
             break;
         case BinaryOpType::EQ:
@@ -267,6 +269,10 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
             op_name = "binary_right_shift_tile";
             break;
+        case BinaryOpType::LOGICAL_RIGHT_SHIFT:
+            new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
+            op_name = "binary_logical_right_shift_tile";
+            break;
         case BinaryOpType::MAXIMUM:
             new_defines.insert({"BINOP_INIT", fmt::format("binary_max_tile_init();")});
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
@@ -363,7 +369,7 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             new_defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
-        case BinaryOpType::GTE:
+        case BinaryOpType::GE:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 op_name = "sub_int32_tile";
             } else {
@@ -371,7 +377,7 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             new_defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
-        case BinaryOpType::LTE:
+        case BinaryOpType::LE:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 op_name = "sub_int32_tile";
             } else {

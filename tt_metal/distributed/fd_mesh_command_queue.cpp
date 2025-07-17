@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -506,17 +506,13 @@ void FDMeshCommandQueue::read_shard_from_device(
             }
         }
     } else {
-        buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
+        buffer_dispatch::BufferReadDispatchParams dispatch_params =
             buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
                 *shard_view, id_, expected_num_workers_completed_);
 
-        buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
-            [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
-            dispatch_params_variant);
-
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            *dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
-        if (dispatch_params->pages_per_txn > 0) {
+            dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
+        if (dispatch_params.pages_per_txn > 0) {
             num_txns_per_device[device]++;
             auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
             read_descriptor_queue.push(
@@ -742,7 +738,6 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
 
 void FDMeshCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
-    auto& sysmem_manager = this->reference_sysmem_manager();
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;

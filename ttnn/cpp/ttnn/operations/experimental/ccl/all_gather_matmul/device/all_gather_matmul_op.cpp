@@ -55,9 +55,7 @@ void AllGatherMatmul::validate(
 
     const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
     if (all_gather_output_tensor_shard_spec.has_value()) {
-        auto const& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
-        auto const& shard_grid_start = shard_grid.start_coord;
-        auto const& shard_grid_end = shard_grid.end_coord;
+        const auto& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
         const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
         TT_FATAL(
             this->all_gather_struct.ring_size == num_all_gather_output_shards,

@@ -45,7 +45,7 @@ jobs:
           {
             name: "Llama Galaxy Perf Unit Tests",
             arch: wormhole_b0,
-            cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
+            cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],

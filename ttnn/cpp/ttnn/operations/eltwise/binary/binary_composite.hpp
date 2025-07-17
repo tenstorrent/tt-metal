@@ -78,17 +78,6 @@ struct ExecuteBinaryCompositeOps {
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsFloat {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        float alpha,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, alpha, memory_config);
-    }
-};
-
-template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteBinaryCompositeOpsIsClose {
     static Tensor invoke(
         const Tensor& input_tensor_a,
@@ -507,6 +496,11 @@ struct ExecuteBitwiseRightShift {
         std::optional<bool> use_legacy = std::nullopt);
 };
 
+struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
+    // Inherits all functionality from ExecuteBitwiseLeftShift
+    // but creates a distinct type for registration
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -524,12 +518,6 @@ constexpr auto atan2 = ttnn::register_operation<
 constexpr auto nextafter = ttnn::register_operation<
     "ttnn::nextafter",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>>();
-constexpr auto addalpha = ttnn::register_operation<
-    "ttnn::addalpha",
-    operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::ADDALPHA>>();
-constexpr auto subalpha = ttnn::register_operation<
-    "ttnn::subalpha",
-    operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::SUBALPHA>>();
 constexpr auto isclose = ttnn::register_operation<
     "ttnn::isclose",
     operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>();
@@ -563,6 +551,8 @@ constexpr auto bitwise_or = ttnn::register_operation<"ttnn::bitwise_or", operati
 constexpr auto bitwise_xor = ttnn::register_operation<"ttnn::bitwise_xor", operations::binary::ExecuteBitwiseXor>();
 constexpr auto bitwise_left_shift =
     ttnn::register_operation<"ttnn::bitwise_left_shift", operations::binary::ExecuteBitwiseLeftShift>();
+constexpr auto logical_left_shift =
+    ttnn::register_operation<"ttnn::logical_left_shift", operations::binary::ExecuteLogicalLeftShift>();
 constexpr auto bitwise_right_shift =
     ttnn::register_operation<"ttnn::bitwise_right_shift", operations::binary::ExecuteBitwiseRightShift>();
 constexpr auto pow = ttnn::register_operation<"ttnn::pow", operations::binary::ExecutePower>();

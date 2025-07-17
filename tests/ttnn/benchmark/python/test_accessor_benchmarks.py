@@ -27,24 +27,25 @@ Make sure that tt-metal is built with profiler enabled, e.g.:
 ./build_metal.sh --release --enable-ccache --build-tests -e -p
 """
 
-# Bits Encoding: [Bank coordinates][Tensor shape][Shard shape][Number of banks][Rank]
+# Bits Encoding: [Bank coordinates][Tensor shape][Shard shape][Number of banks][Rank]01
 # 1 means dynamic, 0 means static
+# Last 01 means that data is in l1 (not dram) and sharded
 ARGS_CONFIGS = [
-    "00000",  # Everything static
-    "00100",  # dynamic tensor shape
-    "01000",  # dynamic shard shape
-    "01100",  # dynamic tensor shape and shard shape
-    "01101",  # static number of banks and banks coordinates
-    "10000",  # dynamic bank coordinates
-    "10010",  # dynamic bank coordinates and number of banks
-    "10100",  # dynamic bank coordinates and tensor shape
-    "10110",  # static rank and shard shape
-    "11000",  # dynamic bank coordinates and shard shape
-    "11010",  # static rank and tensor shape
-    "11100",  # static rank and number of banks
-    "11101",  # static number of banks
-    "11110",  # static rank
-    "11111",  # Everything dynamic
+    "0000001",  # Everything static
+    "0010001",  # dynamic tensor shape
+    "0100001",  # dynamic shard shape
+    "0110001",  # dynamic tensor shape and shard shape
+    "0110101",  # static number of banks and banks coordinates
+    "1000001",  # dynamic bank coordinates
+    "1001001",  # dynamic bank coordinates and number of banks
+    "1010001",  # dynamic bank coordinates and tensor shape
+    "1011001",  # static rank and shard shape
+    "1100001",  # dynamic bank coordinates and shard shape
+    "1101001",  # static rank and tensor shape
+    "1110001",  # static rank and number of banks
+    "1110101",  # static number of banks
+    "1111001",  # static rank
+    "1111101",  # Everything dynamic
 ]
 
 
@@ -88,6 +89,12 @@ def impl_test(gtest_filter, res_dir):
 
 def test_get_noc_addr_page_id():
     impl_test("AccessorTests/AccessorBenchmarks.GetNocAddr/*", res_dir="accessor_get_noc_addr_benchmarks")
+
+
+def test_get_noc_addr_page_coord():
+    impl_test(
+        "AccessorTests/AccessorBenchmarks.GetNocAddrPageCoord/*", res_dir="accessor_get_noc_addr_page_coord_benchmarks"
+    )
 
 
 def test_constructor():

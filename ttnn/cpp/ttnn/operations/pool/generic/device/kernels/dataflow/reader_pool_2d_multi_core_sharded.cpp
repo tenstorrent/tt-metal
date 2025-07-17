@@ -17,7 +17,6 @@ template <
     bool is_wide_reduction,
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
-    uint32_t npages_to_reserve,
     uint32_t MAX_BYTES_PER_REDUCTION,
     bool full_dest_width,
     uint32_t in_nbytes_leftover,
@@ -31,7 +30,7 @@ FORCE_INLINE void read_window_with_top_left_index(
     uint64_t clear_value_addr, uint64_t in_l1_read_base_addr, uint64_t ind) {
     if constexpr (is_wide_reduction) {
         for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
-            cb_reserve_back(in_cb_id, npages_to_reserve);
+            cb_reserve_back(in_cb_id, 1);
             uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
 
             uint32_t read_bytes = MAX_BYTES_PER_REDUCTION;
@@ -53,10 +52,10 @@ FORCE_INLINE void read_window_with_top_left_index(
             }
             noc_async_read_barrier();  // At this line, read is complete.
 
-            cb_push_back(in_cb_id, npages_to_reserve);
+            cb_push_back(in_cb_id, 1);
         }
     } else {
-        cb_reserve_back(in_cb_id, npages_to_reserve);
+        cb_reserve_back(in_cb_id, 1);
         uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
         uint32_t h_multiples = 0;
         for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
@@ -66,7 +65,7 @@ FORCE_INLINE void read_window_with_top_left_index(
             out_l1_write_addr += in_nbytes_c * window_w;
         }
         noc_async_read_barrier();
-        cb_push_back(in_cb_id, npages_to_reserve);
+        cb_push_back(in_cb_id, 1);
     }
 }
 
@@ -131,11 +130,11 @@ void kernel_main() {
     // compile time args
     // BF16 value packed in UINT32. For maxpool, value is 1, for avgpool value is 1/kernel_size.
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
+    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(10);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
 
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
 
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
@@ -143,18 +142,18 @@ void kernel_main() {
     constexpr uint32_t BYTES_PER_DATUM = 2;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = TILE_WIDTH * MAX_TILES_PER_REDUCTION * BYTES_PER_DATUM;
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(20);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(25);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(22);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-    constexpr uint32_t stride_w = get_compile_time_arg_val(31);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
@@ -205,8 +204,6 @@ void kernel_main() {
         scalar_index++;
     }
 
-    constexpr uint32_t npages_to_reserve = 1;
-
     uint32_t segments_counter = 1;
     uint32_t counter = reader_id;
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
@@ -233,7 +230,8 @@ void kernel_main() {
             first_row_value = true;
         }
 
-        for (uint16_t ind = start; ind <= end; ind += 2 * stride_w) {
+        constexpr uint32_t stride_multiple = split_reader ? 2 : 1;
+        for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
             if constexpr (!one_scalar_per_core) {
                 fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader, TILE_WIDTH>(
                     scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
@@ -243,7 +241,6 @@ void kernel_main() {
                 is_wide_reduction,
                 in_nblocks_c,
                 in_cb_id,
-                npages_to_reserve,
                 MAX_BYTES_PER_REDUCTION,
                 full_dest_width,
                 in_nbytes_leftover,
@@ -270,7 +267,6 @@ void kernel_main() {
             is_wide_reduction,
             in_nblocks_c,
             in_cb_id,
-            npages_to_reserve,
             MAX_BYTES_PER_REDUCTION,
             full_dest_width,
             in_nbytes_leftover,

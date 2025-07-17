@@ -157,6 +157,28 @@ struct BinaryOperationSfpu {
         std::optional<bool> use_legacy = std::nullopt);
 };
 
+template <BinaryOpType binary_op_type>
+struct BinaryOperationAddalpha {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& lhs,
+        const Tensor& rhs,
+        float alpha,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
+};
+
+template <BinaryOpType binary_op_type>
+struct BinaryOperationSubalpha {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& lhs,
+        const Tensor& rhs,
+        float alpha,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -180,11 +202,11 @@ constexpr auto eq =
 constexpr auto ne =
     ttnn::register_operation<"ttnn::ne", operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE>>();
 constexpr auto ge =
-    ttnn::register_operation<"ttnn::ge", operations::binary::RelationalBinary<operations::binary::BinaryOpType::GTE>>();
+    ttnn::register_operation<"ttnn::ge", operations::binary::RelationalBinary<operations::binary::BinaryOpType::GE>>();
 constexpr auto gt =
     ttnn::register_operation<"ttnn::gt", operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT>>();
 constexpr auto le =
-    ttnn::register_operation<"ttnn::le", operations::binary::RelationalBinary<operations::binary::BinaryOpType::LTE>>();
+    ttnn::register_operation<"ttnn::le", operations::binary::RelationalBinary<operations::binary::BinaryOpType::LE>>();
 constexpr auto lt =
     ttnn::register_operation<"ttnn::lt", operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT>>();
 constexpr auto logical_and = ttnn::register_operation<
@@ -229,10 +251,10 @@ constexpr auto gt_ = ttnn::register_operation<
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GT>>();
 constexpr auto ge_ = ttnn::register_operation<
     "ttnn::ge_",
-    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GTE>>();
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GE>>();
 constexpr auto le_ = ttnn::register_operation<
     "ttnn::le_",
-    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LTE>>();
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LE>>();
 constexpr auto lt_ = ttnn::register_operation<
     "ttnn::lt_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LT>>();
@@ -257,6 +279,15 @@ constexpr auto rsub_ = ttnn::register_operation<
 constexpr auto bias_gelu_ = ttnn::register_operation<
     "ttnn::bias_gelu_",
     operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::BIAS_GELU>>();
+constexpr auto addalpha = ttnn::register_operation<
+    "ttnn::addalpha",
+    operations::binary::BinaryOperationAddalpha<operations::binary::BinaryOpType::ADDALPHA>>();
+constexpr auto subalpha = ttnn::register_operation<
+    "ttnn::subalpha",
+    operations::binary::BinaryOperationSubalpha<operations::binary::BinaryOpType::SUBALPHA>>();
+constexpr auto logical_right_shift = ttnn::register_operation<
+    "ttnn::logical_right_shift",
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_RIGHT_SHIFT>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& lhs, InputBType rhs) {

@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -75,23 +78,23 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
 
-    std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
+    std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_interleaved_start_id.cpp",
+        "reader_unary_reduce_universal_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
 
