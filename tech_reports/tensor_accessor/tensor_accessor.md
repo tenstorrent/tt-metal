@@ -102,6 +102,17 @@ uint32_t noc_addr = tensor_accessor.get_noc_addr(page_id);
 
 // Get bank ID and offset for a given page
 auto [bank_id, bank_offset] = tensor_accessor.get_bank_and_offset(page_id);
+
+// You can also address pages by nd coordinate (such address calculation is a little bit cheaper)
+std::array<uint32_t, 4> page_coord{0, 1, 2, 3};
+uint32_t noc_addr = tensor_accessor.get_noc_addr(page_coord);   // <- Anything with operator[] should work
+
+// For sharded tensor, you can get address of shards:
+static_assert(args::is_sharded, "Sharded API requires sharded tensor");
+uint32_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_id);
+
+std::array<uint32_t, 4> shard_coord{0, 1, 2, 3};
+uint32_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_coord); // <- Anything with operator[] should work
 ```
 
 Data Transfer
@@ -111,13 +122,22 @@ Data Transfer
 uint32_t l1_write_addr = get_write_ptr(cb_id);  // Address to write to in L1 memory
 auto noc_addr = tensor_accessor.get_noc_addr(page_id);
 noc_async_read(noc_addr, l1_write_addr, page_size);
+// Or something like that:
+noc_async_read_page(page_id, tensor_accessor, l1_write_addr);
 noc_async_read_barrier();  // Wait for read to complete
 
 // write a page to memory
 uint32_t l1_read_addr = get_read_ptr(cb_id);  // Address to read from in L1 memory
 auto noc_addr = tensor_accessor.get_noc_addr(page_id);
 noc_async_write(l1_read_addr, noc_addr, page_size);
+// Or something like that:
+noc_async_write_page(page_id, tensor_accessor, l1_read_addr);
 noc_async_write_barrier();
+
+// Similarly, for sharded tensor, you can read/write the whole shard
+auto shard_noc_addr = tensor_accessor.get_shard_noc_addr(shard_id);
+noc_async_read_shard(shard_id, tensor_accessor, l1_write_addr);
+noc_async_write_shard(shard_id, tensor_accessor, l1_read_addr);
 ```
 
 Distribution Spec Information
@@ -141,6 +161,13 @@ const auto& shard_strides = dspec.shard_strides();
 
 // Note: x=(packed >> 8) & 0xFF, y=packed & 0xFF
 const auto& packed_xy_coords = dspec.packed_xy_coords();
+
+// You can fetch information about locality of data for sharded tensor
+static_assert(args::is_sharded, "Sharded API requires sharded tensor");
+bool is_local = tensor_accessor.is_local_bank(virtual_x, virtual_y);
+bool is_local = tensor_accessor.is_local_addr(noc_addr);
+bool is_local = tensor_accessor.is_local_page(page_id);
+bool is_local = tensor_accessor.is_local_shard(shard_id);
 ```
 
 Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwide `Span<uint32_t>`
