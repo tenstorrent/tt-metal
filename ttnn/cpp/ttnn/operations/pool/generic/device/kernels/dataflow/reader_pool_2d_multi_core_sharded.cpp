@@ -116,7 +116,7 @@ void kernel_main() {
 
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
 
-    // channel size in bytes, multiple of 32
+    // channel size in bytes
     constexpr uint32_t in_aligned_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
@@ -158,8 +158,6 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
-    DPRINT << "in_nbytes_leftover " << in_nbytes_leftover << ENDL();
-    DPRINT << "in_c " << in_c << ENDL();
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
     uint32_t scalar_end = 1;
