@@ -39,23 +39,18 @@ namespace ttnn {
 using namespace ccl;
 
 void fabric_mux_connection_ct_args(
-    const bool is_2d_fabric,
-    const bool terminate_from_kernel,
     const bool is_termination_master,
     const CoreCoord& mux_virtual_core,
-    const uint32_t num_buffers,
-    const uint32_t buffer_size_bytes,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
     uint32_t worker_id,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     std::vector<uint32_t>& writer_ct_args) {
-    writer_ct_args.push_back(is_2d_fabric);
-    writer_ct_args.push_back(terminate_from_kernel);
     writer_ct_args.push_back(is_termination_master);
     writer_ct_args.push_back(mux_virtual_core.x);
     writer_ct_args.push_back(mux_virtual_core.y);
-    writer_ct_args.push_back(num_buffers);
-    writer_ct_args.push_back(buffer_size_bytes);
+    writer_ct_args.push_back(mux_kernel_config.get_num_buffers(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
+    writer_ct_args.push_back(
+        mux_kernel_config.get_buffer_size_bytes(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
     writer_ct_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, worker_id));
     writer_ct_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, worker_id));
     writer_ct_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id));
@@ -299,6 +294,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    const uint32_t l1_unreserved_base_address =
+        sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
@@ -321,12 +319,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
             auto num_full_size_channels = num_workers_per_direction;
             auto num_header_only_channels = 0;
-            uint32_t payload_size_bytes = num_tiles_to_write_per_packet * op_config.get_page_size();
-            size_t buffer_size_bytes_full_size_channel =
-                tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
-            const uint32_t l1_unreserved_base_address =
-                sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-            const size_t mux_base_l1_address = l1_unreserved_base_address;
+            size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
             auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
                 num_full_size_channels,
                 num_header_only_channels,
@@ -464,12 +457,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     chunks_per_sync_val,
                 };
                 fabric_mux_connection_ct_args(
-                    false,  // is_2d_fabric
-                    true,   // terminate_from_kernel
                     worker == 0,
                     mux_virtual_core,
-                    num_buffers_full_size_channels,
-                    buffer_size_bytes_full_size_channel,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     worker,
                     mux_kernel_config,
