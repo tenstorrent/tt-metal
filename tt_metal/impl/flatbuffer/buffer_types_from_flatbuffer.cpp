@@ -127,4 +127,23 @@ std::optional<ShardSpecBuffer> from_flatbuffer(const flatbuffer::ShardSpecBuffer
         {fb_shard_spec->tensor2d_shape_in_pages_h(), fb_shard_spec->tensor2d_shape_in_pages_w()}};
 }
 
+std::optional<BufferDistributionSpec> from_flatbuffer(const flatbuffer::BufferDistributionSpec* fb_dist_spec) {
+    if (!fb_dist_spec) {
+        return std::nullopt;
+    }
+
+    std::vector<CoreCoord> cores;
+    cores.reserve(fb_dist_spec->cores()->size());
+    for (auto entry : *fb_dist_spec->cores()) {
+        cores.push_back(CoreCoord(entry->x(), entry->y()));
+    }
+
+    return BufferDistributionSpec(
+        Shape(tt::stl::SmallVector<uint32_t>(
+            fb_dist_spec->tensor_shape_in_pages()->cbegin(), fb_dist_spec->tensor_shape_in_pages()->cend())),
+        Shape(tt::stl::SmallVector<uint32_t>(
+            fb_dist_spec->shard_shape_in_pages()->cbegin(), fb_dist_spec->shard_shape_in_pages()->cend())),
+        std::move(cores));
+}
+
 }  // namespace tt::tt_metal
