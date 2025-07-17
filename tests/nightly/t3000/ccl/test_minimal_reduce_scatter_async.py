@@ -81,7 +81,6 @@ def run_reduce_scatter_impl(
     if rs_topology == ttnn.Topology.Linear:
         # Line RS requires double-sized input for forward/backward
         intermediate_shape.insert(0, 2)
-    # single_batch_input_shape[0] = 1
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(intermediate_shape),
