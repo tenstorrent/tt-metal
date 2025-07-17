@@ -157,6 +157,9 @@ public:
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
+    template <typename T>
+    [[nodiscard]] T item(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+
     [[nodiscard]] Tensor to_device(
         IDevice* target_device,
         const MemoryConfig& mem_config = MemoryConfig{},
