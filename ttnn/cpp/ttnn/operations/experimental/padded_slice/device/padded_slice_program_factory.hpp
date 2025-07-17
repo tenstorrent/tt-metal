@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
+#include "padded_slice_rm_program_factory.hpp"
+#include "padded_slice_tile_program_factory.hpp"
 
 namespace ttnn::operations::experimental::detail {
 
