@@ -133,6 +133,9 @@ target_sources(
         sort/sort.cpp
         sort/device/sort_device_operation.cpp
         sort/device/sort_program_factory.cpp
+        sort/device/sort_single_row_single_core_program_factory.cpp
+        sort/device/sort_cross_core_data_exchange_program_factory.cpp
+        sort/device/sort_single_row_multi_core_program_factory.cpp
         gather/gather.cpp
         gather/device/gather_device_operation.cpp
         gather/device/gather_program_factory.cpp
