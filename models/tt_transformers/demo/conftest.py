@@ -45,3 +45,10 @@ def pytest_addoption(parser):
         type=bool,
         help="Whether to compute top1 and top5 exact token matching accuracy",
     )
+    parser.addoption(
+        "--stress_test",
+        action="store",
+        default=False,
+        type=bool,
+        help="Run stress test (same decode iteration over a large number of iterations",
+    )
