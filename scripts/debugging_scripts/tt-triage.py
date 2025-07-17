@@ -11,12 +11,12 @@ Usage:
 
 Options:
     -h --help         Show this screen.
-    --dev=<device_id> Specify the device id              [default: all]
-    -v --verbose      Print verbose output.              [default: False]
-    -V --vverbose     Print more verbose output.         [default: False]
-    --halt-on-error   Halt on first error.               [default: False]
-    -g --gdb          Enable getting callstack from GDB. [default: False]
-    --port=<port>     Port for GDB server.               [default: 6767]
+    --dev=<device_id> Specify the device id                        [default: all]
+    -v --verbose      Print verbose output.                        [default: False]
+    -V --vverbose     Print more verbose output.                   [default: False]
+    --halt-on-error   Halt on first error.                         [default: False]
+    -g --gdb          Enable getting callstack from GDB.           [default: False]
+    --port=<port>     Port for GDB server (only if GDB is enabled) [default: 6767]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -48,7 +48,7 @@ VERBOSE = False
 VVERBOSE = False
 context = None
 USE_GDB = False
-PORT = 6767
+PORT = 6767 if USE_GDB else None
 
 try:
     from tabulate import tabulate, TableFormat, Line, DataRow
@@ -547,6 +547,27 @@ def get_running_ops_table(
     return printout_table
 
 
+def extract_callstack_from_gdb(gdb_client, start: str, end: str) -> list[str]:
+    cs = []
+    is_cs = False
+    for line in gdb_client.communicate()[0].splitlines():
+        if start in line:
+            is_cs = True
+        elif end in line:
+            is_cs = False
+        else:
+            if is_cs:
+                if "#" in line:
+                    cs.append(line[line.find("#") :])
+                # Ensure every callstack entry is in one line
+                else:
+                    cs[-1] += " "
+                    cs[-1] += line.strip()
+
+    # Skipping last line since it is message not callstack entry
+    return cs[:-1]
+
+
 def get_callstack_with_gdb(pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None) -> list[str]:
     # Start GDB client
     gdb_client = subprocess.Popen(
@@ -562,36 +583,23 @@ def get_callstack_with_gdb(pid: int, loc, risc_name: str, elf_path: str, kernel_
         f"add-symbol-file {elf_path} {kernel_offset}" if kernel_offset is not None else f"add-symbol-file {elf_path}"
     )
 
+    start_callstack = "CALLSTACK START"
+    end_callstack = "CALLSTACK END"
     gdb_client.stdin.write(
         f"""\
     target extended-remote localhost:{PORT}
     attach {pid}
     {add_symbol_file_cmd}
-    printf "BT START\\n"
+    printf "{start_callstack}\\n"
     backtrace
-    printf "BT END\\n"
+    printf "{end_callstack}\\n"
     detach
     quit
     """
     )
     gdb_client.stdin.flush()
 
-    cs = []
-    is_bt = False
-    for line in gdb_client.communicate()[0].splitlines():
-        if "BT START" in line:
-            is_bt = True
-        elif "BT END" in line:
-            is_bt = False
-        else:
-            if is_bt:
-                if "#" in line:
-                    cs.append(line[line.find("#") :])
-                else:
-                    cs.append(line)
-
-    # Skipping last line since it is message not callstack entry
-    return cs[:-1]
+    return extract_callstack_from_gdb(gdb_client, start_callstack, end_callstack)
 
 
 def get_process_ids(ui_state: UIState):
@@ -767,7 +775,8 @@ def main(argv=None):
     VVERBOSE = args["--vverbose"]
     HALT_ON_ERROR = args["--halt-on-error"]
     USE_GDB = args["--gdb"]
-    PORT = int(args["--port"])
+    if USE_GDB and args["--port"]:
+        PORT = int(args["--port"])
 
     context = init_ttexalens(use_noc1=False)
     device_ids = list(context.devices.keys())
