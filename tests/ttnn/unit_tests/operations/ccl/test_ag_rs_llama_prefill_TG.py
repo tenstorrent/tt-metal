@@ -307,8 +307,7 @@ def run_rs_with_trace(
     ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
         input_tensor,
         dim=dim,
-        persistent_intermediate_buffer=persistent_buffers[1],
-        persistent_output_buffer=persistent_buffers[0],
+        persistent_output_buffers=persistent_buffers,
         multi_device_global_semaphore=from_remote_semaphore_handles,
         num_links=num_links,
         memory_config=output_mem_config,
@@ -327,8 +326,7 @@ def run_rs_with_trace(
             ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
                 input_tensor,
                 dim=dim,
-                persistent_intermediate_buffer=persistent_buffers[1],
-                persistent_output_buffer=persistent_buffers[0],
+                persistent_output_buffers=persistent_buffers,
                 multi_device_global_semaphore=from_remote_semaphore_handles,
                 num_links=num_links,
                 memory_config=output_mem_config,
@@ -482,7 +480,7 @@ def run_reduce_scatter_on_TG(
     tile = (32, 32)
     persistent_buffers = [
         ttnn.from_torch(
-            torch.zeros(per_chip_output_shape),
+            torch.zeros(per_chip_input_shape),
             tile=ttnn.Tile(tile),
             dtype=input_dtype,
             device=mesh_device,
@@ -523,8 +521,7 @@ def run_reduce_scatter_on_TG(
             ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
                 ttnn_tensor,
                 dim=dim,
-                persistent_intermediate_buffer=persistent_buffers[1],
-                persistent_output_buffer=persistent_buffers[0],
+                persistent_output_buffers=persistent_buffers,
                 multi_device_global_semaphore=from_remote_semaphore_handles,
                 num_links=num_links,
                 memory_config=output_mem_config,
@@ -545,14 +542,6 @@ def run_reduce_scatter_on_TG(
     output_tensors_list = torch.chunk(
         tt_output_tensor, num_reduce_scatter_instances, dim=reduce_scatter_instances_concat_dim
     )
-    # Check the tensor addresses
-    persistent_output_tensors = ttnn.get_device_tensors(persistent_buffers[0])
-    output_tensors = ttnn.get_device_tensors(ttnn_tensor_out)
-
-    for persistent_tensor, output_tensor in zip(persistent_output_tensors, output_tensors):
-        assert (
-            persistent_tensor.buffer_address() == output_tensor.buffer_address()
-        ), "Persistent tensor address mismatch"
 
     passed = True
     for i in range(num_reduce_scatter_instances):
