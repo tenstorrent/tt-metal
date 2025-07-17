@@ -822,6 +822,7 @@ void MetalContext::initialize_firmware(
         uint32_t zero = 0;
         cluster_->write_core(
             &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
+        cluster_->l1_barrier(device_id);
     };
 
     switch (core_type) {
@@ -938,10 +939,10 @@ void MetalContext::initialize_firmware(
                     tt_cxy_pair(device_id, virtual_core),
                     jit_build_config.fw_launch_addr);
             } else {
-                cluster_->l1_barrier(device_id);
                 std::vector<uint32_t> enable_data = {1};
                 tt::llrt::write_hex_vec_to_core(
                     device_id, virtual_core, enable_data, get_active_erisc_launch_flag_addr());
+                cluster_->l1_barrier(device_id);
                 // Active ethernet firmware launched immediately. Note, reset_cores (called before this),
                 // enable_fw_flag is set to 0. So we when launch, active_erisc.cc will stall until we set it to 1.
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
