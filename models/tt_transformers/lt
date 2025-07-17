@@ -399,7 +399,12 @@ def main(stdscr):
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
-        {"label": "Model (1b, 3b, 8b, 11b, 70b, q2-7b, q2-72b, q3-32b) [all]", "value": "", "x": 0, "y": 1},
+        {
+            "label": "Model (1b, 3b, 8b, 11b, 70b, q2-7b, q2-72b, q2-coder-32b, q3-32b) [all]",
+            "value": "",
+            "x": 0,
+            "y": 1,
+        },
         {
             "label": f"Device ({list_supported_devices(host_device)}) [all]",
             "value": "",
@@ -514,7 +519,7 @@ def main(stdscr):
                     if current_field == len(input_fields) - 1:
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
-                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b,q2-7b,q2-72b,q3-32b"
+                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b,q2-7b,q2-72b,q2-coder-32b,q3-32b"
                         device_input = input_fields[2]["value"] or list_supported_devices(host_device)
 
                         if command_input == "modules":
@@ -546,6 +551,7 @@ def main(stdscr):
                         # - 70b model on n150/n300 & p150/p300 devices
                         # - 72b model on n150/n300 and p150/p300 devices
                         # - q2-7b on anything other than n300/p300
+                        # - q2-coder-32b on anything other than t3k/p300
                         # - q3-32b on anything other than t3k/p300
                         # - Vision commands on non-vision (11b) models
                         combinations = [
@@ -558,6 +564,7 @@ def main(stdscr):
                                 or (m.startswith("70b") and d in ["n150", "n300", "p150", "p300"])
                                 or (m == "q2-72b" and d in ["n150", "n300", "p150", "p300"])
                                 or (m == "q2-7b" and d in ["n150", "t3k"])
+                                or (m == "q2-coder-32b" and d in ["n150", "n300", "p150"])
                                 or (m == "q3-32b" and d in ["n150", "n300", "p150"])
                                 or ("vision" in c and m not in ["11b", "11b-b"])
                             )
@@ -1147,6 +1154,7 @@ def get_dir(model):
         "70b-r1": os.environ.get("DEEPSEEK_R1_LLAMA_70B_DIR", "/proj_sw/deepseek/DeepSeek-R1-Distill-Llama-70B"),
         "q2-7b": os.environ.get("QWEN_7B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct"),
         "q2-72b": os.environ.get("QWEN_72B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct"),
+        "q2-coder-32b": os.environ.get("QWEN_CODER_32B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-Coder-32B"),
         "q3-32b": os.environ.get("QWEN_32B_DIR", "/proj_sw/user_dev/Qwen/Qwen3-32B"),
     }.get(model.lower(), "")
 
@@ -1410,6 +1418,7 @@ def export_results_to_markdown(output_entries, stdscr):
         "70b-r1": "DeepSeek-R1-Llama-70B",
         "q2-7b": "Qwen2.5-7B",
         "q2-72b": "Qwen2.5-72B",
+        "q2-coder-32b": "Qwen2.5-Coder-32B",
         "q3-32b": "Qwen3-32B",
     }
 
