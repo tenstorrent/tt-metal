@@ -372,8 +372,15 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
 }
 
 void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-    IDevice* device, CommandQueue& cq, BufferStressTestConfigSharded& config, BufferType buftype, bool read_only) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshCommandQueue& cq,
+    BufferStressTestConfigSharded& config,
+    BufferType buftype,
+    bool read_only) {
     srand(config.seed);
+
+    auto device_coord = distributed::MeshCoordinate(0, 0);
+    auto device = mesh_device->get_devices()[0];
 
     for (const bool cq_write : {true, false}) {
         for (const bool cq_read : {true, false}) {
@@ -399,17 +406,24 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                     src.at(i) = i;
                 }
 
-                auto buf = Buffer::create(
-                    device, buf_size, config.page_size(), buftype, BufferShardingArgs(shard_spec, config.mem_config));
+                distributed::DeviceLocalBufferConfig dram_config{
+                    .page_size = config.page_size(), .buffer_type = buftype, .bottom_up = false};
+                const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
+
+                auto buf = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+
+                auto slow_dispatch_buffer =
+                    Buffer::create(device, buf->address(), buf->size(), config.page_size(), buftype);
+
                 vector<uint32_t> src2 = src;
                 if (cq_write) {
-                    EnqueueWriteBuffer(cq, *buf, src2.data(), false);
+                    distributed::WriteShard(cq, buf, src, device_coord, false);
                 } else {
-                    detail::WriteToBuffer(*buf, src);
+                    detail::WriteToBuffer(*slow_dispatch_buffer, src);
                     if (buftype == BufferType::DRAM) {
-                        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+                        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(mesh_device->id());
                     } else {
-                        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+                        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->id());
                     }
                 }
 
@@ -420,9 +434,9 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 vector<uint32_t> res;
                 res.resize(buf_size / sizeof(uint32_t));
                 if (cq_read) {
-                    EnqueueReadBuffer(cq, *buf, res.data(), true);
+                    distributed::ReadShard(cq, res, buf, device_coord, true);
                 } else {
-                    detail::ReadFromBuffer(*buf, res);
+                    detail::ReadFromBuffer(*slow_dispatch_buffer, res);
                 }
                 EXPECT_EQ(src, res);
             }
@@ -1838,10 +1852,10 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, WritesToRandomBufferTypeAndThenReadsNo
 }
 
 // TODO: Split this into separate tests
-TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
+TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
     std::map<std::string, std::vector<std::array<uint32_t, 2>>> test_params;
 
-    for (IDevice* device : devices_) {
+    for (const auto& mesh_device : devices_) {
         // This test hangs on Blackhole A0 when using static VCs through static TLBs and there are large number of
         // reads/writes issued
         //  workaround is to use dynamic VC (implemented in UMD)
@@ -1849,8 +1863,8 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
             test_params = {
                 {"cores",
                  {{1, 1},
-                  {static_cast<uint32_t>(device->compute_with_storage_grid_size().x),
-                   static_cast<uint32_t>(device->compute_with_storage_grid_size().y)}}},
+                  {static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().x),
+                   static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
                 {"num_pages", {{3, 65}}},
                 {"page_shape", {{32, 32}}}};
         } else {
@@ -1862,8 +1876,8 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
                   {5, 3},
                   {3, 5},
                   {5, 5},
-                  {static_cast<uint32_t>(device->compute_with_storage_grid_size().x),
-                   static_cast<uint32_t>(device->compute_with_storage_grid_size().y)}}},
+                  {static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().x),
+                   static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
                 {"num_pages", {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {7, 11}, {3, 65}, {67, 4}, {3, 137}}},
                 {"page_shape", {{32, 32}, {1, 4}, {1, 120}, {1, 1024}, {1, 2048}}}};
         }
@@ -1886,7 +1900,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
                                 tt::LogTest,
                                 "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, "
                                 "num_iterations: {}",
-                                device->id(),
+                                mesh_device->id(),
                                 cores[0],
                                 cores[1],
                                 num_pages[0],
@@ -1896,7 +1910,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
                                 magic_enum::enum_name(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-                                device, device->command_queue(), config, BufferType::L1, false);
+                                mesh_device, mesh_device->mesh_command_queue(), config, BufferType::L1, false);
                         }
                     }
                 }
@@ -1905,14 +1919,14 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
-    for (IDevice* device : devices_) {
+TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
+    for (const auto& mesh_device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
               std::array<uint32_t, 2>{5, 1},
               std::array<uint32_t, 2>{
-                  static_cast<uint32_t>(device->dram_grid_size().x),
-                  static_cast<uint32_t>(device->dram_grid_size().y)}}) {
+                  static_cast<uint32_t>(mesh_device->dram_grid_size().x),
+                  static_cast<uint32_t>(mesh_device->dram_grid_size().y)}}) {
             for (const std::array<uint32_t, 2> num_pages : {
                      std::array<uint32_t, 2>{1, 1},
                      std::array<uint32_t, 2>{2, 1},
@@ -1946,7 +1960,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
                                 tt::LogTest,
                                 "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: "
                                 "{}, num_iterations: {}",
-                                device->id(),
+                                mesh_device->id(),
                                 cores[0],
                                 cores[1],
                                 num_pages[0],
@@ -1956,7 +1970,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
                                 magic_enum::enum_name(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-                                device, device->command_queue(), config, BufferType::DRAM, false);
+                                mesh_device, mesh_device->mesh_command_queue(), config, BufferType::DRAM, false);
                         }
                     }
                 }
@@ -1965,8 +1979,8 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
-    for (IDevice* device : devices_) {
+TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
+    for (const auto& mesh_device : devices_) {
         for (const std::array<uint32_t, 2> cores : {std::array<uint32_t, 2>{1, 1}, std::array<uint32_t, 2>{2, 3}}) {
             for (const std::array<uint32_t, 2> num_pages : {
                      std::array<uint32_t, 2>{1, 1},
@@ -1998,7 +2012,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
                                 tt::LogTest,
                                 "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, "
                                 "num_iterations: {}",
-                                device->id(),
+                                mesh_device->id(),
                                 cores[0],
                                 cores[1],
                                 num_pages[0],
@@ -2008,7 +2022,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
                                 magic_enum::enum_name(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-                                device, device->command_queue(), config, BufferType::L1, true);
+                                mesh_device, mesh_device->mesh_command_queue(), config, BufferType::L1, true);
                         }
                     }
                 }
@@ -2017,8 +2031,8 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
-    for (IDevice* device : devices_) {
+TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
+    for (const auto& mesh_device : devices_) {
         for (const std::array<uint32_t, 2> cores : {std::array<uint32_t, 2>{1, 1}, std::array<uint32_t, 2>{6, 1}}) {
             for (const std::array<uint32_t, 2> num_pages : {
                      std::array<uint32_t, 2>{1, 1},
@@ -2050,7 +2064,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
                                 tt::LogTest,
                                 "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: "
                                 "{}, num_iterations: {}",
-                                device->id(),
+                                mesh_device->id(),
                                 cores[0],
                                 cores[1],
                                 num_pages[0],
@@ -2060,7 +2074,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
                                 magic_enum::enum_name(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-                                device, device->command_queue(), config, BufferType::DRAM, true);
+                                mesh_device, mesh_device->mesh_command_queue(), config, BufferType::DRAM, true);
                         }
                     }
                 }
