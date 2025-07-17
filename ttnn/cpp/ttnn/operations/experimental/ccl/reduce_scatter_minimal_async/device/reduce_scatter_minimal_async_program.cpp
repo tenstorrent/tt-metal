@@ -50,9 +50,8 @@ void append_fabric_mux_connection_ct_args(
     writer_ct_args.push_back(is_termination_master);
     writer_ct_args.push_back(mux_virtual_core.x);
     writer_ct_args.push_back(mux_virtual_core.y);
-    writer_ct_args.push_back(mux_kernel_config.get_num_buffers(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
-    writer_ct_args.push_back(
-        mux_kernel_config.get_buffer_size_bytes(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
+    writer_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));
+    writer_ct_args.push_back(mux_kernel_config.get_buffer_size_bytes(channel_type));
     writer_ct_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, worker_id));
     writer_ct_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, worker_id));
     writer_ct_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id));
