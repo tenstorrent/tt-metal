@@ -11,6 +11,7 @@ from models.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
+from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
 from ttnn.operations.conv2d import get_torch_act_func_from_string
@@ -125,8 +126,6 @@ def run_conv(
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
-    if slice_config and output_dtype != ttnn.bfloat16:
-        pytest.xfail("Conv2d with DRAM Slicing only supports BFloat16 for activation dtype")
 
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -269,11 +268,11 @@ def run_conv(
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
-            weight_tensor=tt_weight_tensor,
+            weight_tensor=d_w,
             in_channels=input_channels,
             out_channels=output_channels,
             device=device,
-            bias_tensor=tt_bias_tensor,
+            bias_tensor=d_b,
             kernel_size=(filter_height, filter_width),
             stride=(stride_h, stride_w),
             padding=(pad_top, pad_bottom, pad_left, pad_right),
@@ -290,6 +289,7 @@ def run_conv(
             return_weights_and_bias=True,
             dtype=output_dtype,
         )
+
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
     # out is in row major layout and NHWC shape
@@ -315,7 +315,7 @@ def run_conv(
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
-        if fp32_accum:
+        if fp32_accum and output_dtype != ttnn.bfloat8_b and input_dtype != ttnn.bfloat8_b:
             threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
         else:
             threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
@@ -679,6 +679,11 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
+@skip_for_blackhole("Not fully tested on Blackhole")
+@pytest.mark.parametrize(
+    "input_dtype, input_layout",
+    [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
@@ -694,25 +699,21 @@ SliceWidth = ttnn.Conv2dSliceWidth
         (56,    64,  1008,   256,   SliceWidth,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
         (64,   128,   992,   992,   SliceWidth,   50,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
         (128,  128,  1024,  1024,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (128,  3,   1024,  1024,  SliceWidth,     7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
+        (128,  3,   1024,  1024,  SliceWidth,     8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
         (16,   512,  128,    128,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
-        (256,  128,  1024,  1024,  SliceWidth,   31,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
+        (256,  128,  1024,  1024,  SliceWidth,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
         (256,  256,  1024,  1024,  SliceWidth,   37,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi  ),
         (256,  256,  512,   512,   SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
         (512,  512,  256,   256,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  256,  512,   512,   SliceWidth,    7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  512,  512,   512,   SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (56,    64,  1008,  1008,  SliceWidth,    5,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  256,  512,   512,   SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  512,  512,   512,   SliceWidth,    10,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (56,    64,  1008,  1008,  SliceWidth,    6,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
      )
     # fmt: on
 )
 @pytest.mark.parametrize(
     "has_bias, fp32_accum, packer_l1_acc",
     [[True, False, False]],
-)
-@pytest.mark.parametrize(
-    "input_dtype, input_layout",
-    [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
 )
 def test_conv_dram(
     device,
@@ -767,6 +768,7 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         input_dtype=input_dtype,
         input_layout=input_layout,
+        output_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
         run_twice=False,
         fast_compare=True,
@@ -2864,6 +2866,9 @@ def test_split_reader_regression(
     shard_layout,
     config_override,
 ):
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     run_conv(
         device,
         torch_tensor_map,
@@ -3061,6 +3066,18 @@ def test_conv2d_model_fruit(
     input_dtype,
     input_layout,
 ):
+
+    if (
+        device.core_grid.y < 8
+        and is_wormhole_b0()
+        and batch == 1
+        and input_channels == 64
+        and output_channels == 128
+        and input_height == 1024
+        and input_width == 128
+    ):
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = act_block_w_div
@@ -3181,6 +3198,10 @@ def test_conv2d_sdxl(
     w_db,
 ):
 
+    # Skip all on N300
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = act_block_w_div
@@ -3251,37 +3272,38 @@ def test_conv2d_sdxl(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, auto_shard, deallocate_activation, split_factor_input_channels, split_factor_output_channels, slice_type, num_slices, act_block_h_override",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, auto_shard, deallocate_activation, slice_type, num_slices, act_block_h_override",
     (
         # 1024x1024 resolution
 
         # VAE
         # kernel 3x3
-        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 32),
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16, 32),
-        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16, 128),
-        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 4, 64),
-        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1, 128),
-        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 2, 32),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 64),
-        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 32),
+        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 8, 32),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 16, 32),
+        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 16, 128),
+        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 4, 64),
+        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, None, 1, 128),
+        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 2, 32),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 8, 64),
+        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 8, 32),
 
         # output_channels 3
-        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16, 512),
+        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 16, 512),
 
         # input_channels 4
-        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1, 256),
+        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, None, 1, 256),
 
         # kernel 1x1
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, None, 1, 0),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, None, 1, 0),
 
         # channels 4
         # Skip specific test case for Blackhole devices
-        (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
+        (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, None, 1, 0),
     ),
 )
 
+@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_conv2d_vae_sdxl(
     device,
@@ -3300,13 +3322,14 @@ def test_conv2d_vae_sdxl(
     dilation,
     auto_shard,
     deallocate_activation,
-    split_factor_input_channels,
-    split_factor_output_channels,
     slice_type,
     num_slices,
     act_block_h_override
 ):
 
+    # Skip all on N300
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
     # Skip specific test case for Blackhole devices
     if is_blackhole() and (batch, input_channels, output_channels, input_height, input_width, weights_dtype) == (1, 4, 4, 128, 128, ttnn.bfloat8_b):
         pytest.skip("Skipping this test case for Blackhole devices due to PCC issue, tracked in ISSUE-24463")
@@ -3320,67 +3343,42 @@ def test_conv2d_vae_sdxl(
         num_slices=num_slices,
     ) if num_slices > 1 and slice_type is not None else None
 
-    if split_factor_input_channels > 1 or split_factor_output_channels > 1:
-        run_conv_with_split(
-            device,
-            torch_tensor_map,
-            ttnn.MathFidelity.LoFi,
-            output_dtype,
-            weights_dtype,
-            batch,
-            output_channels,
-            input_channels,
-            input_height,
-            input_width,
-            kernel[0],
-            kernel[1],
-            stride[0],
-            stride[1],
-            padding,
-            None,
-            shard_layout=None,
-            split_input_channels_factor=split_factor_input_channels,
-            split_output_channels_factor=split_factor_output_channels,
-            auto_shard=True,
-            pcc=0.97,
-            input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
-        )
-    else:
-        run_conv(
-            device=device,
-            torch_tensor_map=torch_tensor_map,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            output_dtype=output_dtype,
-            weights_dtype=weights_dtype,
-            batch_size=batch,
-            output_channels=output_channels,
-            input_channels=input_channels,
-            input_height=input_height,
-            input_width=input_width,
-            filter_height=kernel[0],
-            filter_width=kernel[1],
-            stride_h=stride[0],
-            stride_w=stride[1],
-            padding=padding,
-            config_override=config_override,
-            dilation_h=dilation[0],
-            dilation_w=dilation[1],
-            fp32_accum=False,
-            packer_l1_acc=False,
-            output_layout=ttnn.TILE_LAYOUT,
-            deallocate_activation=deallocate_activation,
-            groups=groups,
-            has_bias=True,
-            shard_layout=None,
-            auto_shard=auto_shard,
-            memory_config=None,
-            input_mesh_mapper=None,
-            weight_mesh_mapper=None,
-            output_mesh_composer=None,
-            enable_split_reader=False,
-            slice_config=slice_config,
-            input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
-        )
+
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        output_dtype=output_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel[0],
+        filter_width=kernel[1],
+        stride_h=stride[0],
+        stride_w=stride[1],
+        padding=padding,
+        config_override=config_override,
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
+        fp32_accum=False,
+        packer_l1_acc=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        deallocate_activation=deallocate_activation,
+        groups=groups,
+        has_bias=True,
+        shard_layout=None,
+        auto_shard=auto_shard,
+        memory_config=None,
+        input_mesh_mapper=None,
+        weight_mesh_mapper=None,
+        output_mesh_composer=None,
+        enable_split_reader=False,
+        slice_config=slice_config,
+        input_layout=ttnn.TILE_LAYOUT,
+    )
 
 
 @pytest.mark.parametrize(
@@ -3472,6 +3470,9 @@ def test_conv_sharded_non_tile(device):
     shard_width = 32
     input_shape = (batch, input_channels, input_height, input_width)
     weights_shape = (output_channels, input_channels, filter, filter)
+
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     torch.manual_seed(0)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)

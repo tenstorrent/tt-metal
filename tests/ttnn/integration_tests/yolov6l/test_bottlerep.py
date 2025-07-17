@@ -18,13 +18,16 @@ def test_yolov6l_bottlerep(device, reset_seeds):
 
     model = model.backbone.ERBlock_2[1].m.conv1
 
-    torch_input = torch.randn(1, 64, 160, 120)
+    torch_input = torch.randn(1, 64, 160, 160)
+    torch_input_1 = torch_input.reshape(
+        1, torch_input.shape[1], 1, torch_input.shape[0] * torch_input.shape[2] * torch_input.shape[3]
+    )
 
     parameters = create_yolov6l_model_parameters(model, torch_input, device)
 
     ttnn_model = TtBottleRep(device, parameters, parameters.model_args)
 
-    input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
+    input_tensor = torch.permute(torch_input_1, (0, 2, 3, 1))
     ttnn_input = ttnn.from_torch(
         input_tensor,
         dtype=ttnn.bfloat16,
@@ -32,10 +35,11 @@ def test_yolov6l_bottlerep(device, reset_seeds):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    output = ttnn_model(ttnn_input)
+    output, out_h, out_w = ttnn_model(ttnn_input)
 
     torch_output = model(torch_input)
 
     output = ttnn.to_torch(output)
+    output = output.reshape(1, out_h, out_w, output.shape[-1])
     output = output.permute(0, 3, 1, 2)
     assert_with_pcc(torch_output, output, pcc=0.99)

@@ -23,9 +23,15 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
+
+    const auto& input_shape = input_tensor.get_padded_shape();
     TT_FATAL(
-        this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-        "Worker cores used by links are parallelizaed over rows");
+        (input_shape[this->dim] / tt::constants::TILE_WIDTH) % this->ring_size == 0,
+        "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number of "
+        "tiles is {} and the ring_size is {}",
+        this->dim,
+        input_shape[this->dim] / tt::constants::TILE_WIDTH,
+        this->ring_size);
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -101,6 +107,7 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
+    // TODO: FIXME!
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
     shape[this->dim] *= this->ring_size;
@@ -218,7 +225,20 @@ Tensor reduce_scatter_minimal_async_impl(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
-    uint32_t num_devices = devices.size();
+
+    // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
+    // Since we don't have a specific coordinate here, we use the maximum possible devices
+    uint32_t num_devices;
+    if (cluster_axis.has_value()) {
+        auto mesh_device = input_tensor.mesh_device();
+        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
+        const auto& mesh_view = mesh_device->get_view();
+        // Use the mesh dimensions to determine the ring size
+        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    } else {
+        num_devices = devices.size();
+    }
+
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;

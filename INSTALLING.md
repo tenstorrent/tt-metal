@@ -21,10 +21,10 @@ Note the current compatibility matrix:
 | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
 | Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
-| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.15 or above      | N/A                            |
-| Wormhole             | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
-| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.2.5 or above, `mesh` config |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.18.0.0 (v80.18.0.0)             | v3.0.12 or above      | N/A                            |
+| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.6.0.fwbundle (v18.6.0)          | v3.0.20 or above      | N/A                            |
+| Wormhole             | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | N/A                            |
+| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | v1.2.5 or above, `mesh` config |
+| Blackhole            | Ubuntu 22.04    | 3.10     | v2.1.0 or above    | fw_pack-18.5.0.fwbundle (v18.5.0)          | v3.0.20 or above      | N/A                            |
 
 #### Install System-level Dependencies
 For Ubuntu users. You can use the script provided in our repo to install build and runtime dependencies along with a working copy of Clang 17.
@@ -39,7 +39,7 @@ For users on other Linux distributions, please consult the `install_dependencies
 
 > [!IMPORTANT]
 >
-> Building with Clang 17 and GCC 12 is supported. Later versions, while not officially supported, should work. For Ubuntu 22.04 users, the default compiler is GCC 11 and Clang 14. Please install a newer compiler to ensure a successful build (the dependency installaion script will install Clang 17 for you).
+> Building with Clang 17 and GCC 12 is supported. Later versions, while not officially supported, should work. For Ubuntu 22.04 users, the default compiler is GCC 11 and Clang 14. Please install a newer compiler to ensure a successful build (the dependency installation script will install Clang 17 for you).
 
 
 ---
@@ -64,7 +64,7 @@ sudo modprobe tenstorrent
 cd ..
 ```
 
-- For more information visit Tenstorrents [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
+- For more information visit Tenstorrent's [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
 
 ---
 
@@ -93,7 +93,7 @@ pip install git+https://github.com/tenstorrent/tt-flash.git
   tt-flash flash --fw-tar $fw_pack
   ```
 
-- For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
+- For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash GitHub Repository](https://github.com/tenstorrent/tt-flash).
 
 ---
 
@@ -148,7 +148,7 @@ Once hardware and system software are installed, verify that the system has been
 
 - [Option 4: From Anaconda](#anaconda)
 
-  Installing from Anaconda can be convienient for ML Developers who prefer that workflow.
+  Installing from Anaconda can be convenient for ML Developers who prefer that workflow.
 
 ---
 
@@ -230,7 +230,7 @@ ninja
 ninja install # Installs to build directory by default, required for Python environment
 ```
 
-#### Step 3. Crate a virtual environment and (optional) documentation.
+#### Step 3. Create a virtual environment and (optional) documentation.
 
 - (recommended) For an out-of-the-box virtual environment to use, execute:
 ```

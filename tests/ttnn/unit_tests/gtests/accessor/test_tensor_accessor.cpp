@@ -30,6 +30,9 @@ template <typename T>
 constexpr T get_common_arg_val(size_t idx);
 
 constexpr uint32_t get_arg_val(int arg_idx);
+namespace tensor_accessor {
+uint64_t get_dram_bank_base_offset(uint32_t base_address, uint32_t bank_id, uint8_t noc);
+}
 
 #define noc_index 0
 #define ASSERT(condition, ...)

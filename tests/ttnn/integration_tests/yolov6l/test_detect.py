@@ -21,9 +21,9 @@ def test_detect(device, reset_seeds):
 
     model = model.detect
 
-    torch_input_0 = torch.randn(1, 128, 80, 60)
-    torch_input_1 = torch.randn(1, 256, 40, 30)
-    torch_input_2 = torch.randn(1, 512, 20, 15)
+    torch_input_0 = torch.randn(1, 128, 80, 80)
+    torch_input_1 = torch.randn(1, 256, 40, 40)
+    torch_input_2 = torch.randn(1, 512, 20, 20)
 
     parameters = create_yolov6l_model_parameters_detect(model, [torch_input_0, torch_input_1, torch_input_2], device)
 

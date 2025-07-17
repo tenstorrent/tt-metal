@@ -109,6 +109,6 @@ class TtTransformer2DModel(nn.Module):
             compute_kernel_config=self.compute_config_out,
         )
 
-        hidden_states = ttnn.add(hidden_states, input_tensor)
+        hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)
 
         return hidden_states

@@ -225,7 +225,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
             tt_fabric::Topology::Mesh;
         static_config_.is_2d_fabric_dynamic =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_config() ==
-            tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
+            tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
     } else {
         static_config_.is_2d_fabric = false;
         static_config_.is_2d_fabric_dynamic = false;
@@ -551,14 +551,6 @@ void PrefetchKernel::ConfigureCore() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
         uint32_t prefetch_q_pcie_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
-        uint32_t completion_q_wr_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-        uint32_t completion_q_rd_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-        uint32_t completion_q0_last_event_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-        uint32_t completion_q1_last_event_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
         std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {
             get_absolute_cq_offset(channel, cq_id_, cq_size) + cq_start};
         detail::WriteToDeviceL1(device_, logical_core_, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, GetCoreType());
