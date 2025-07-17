@@ -64,6 +64,9 @@ set_target_properties(
 )
 
 file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
+file(GLOB_RECURSE TT_LLK_WORMHOLE_HEADERS third_party/tt_llk/tt_llk_wormhole_b0/**/*.h)
+file(GLOB_RECURSE TT_LLK_BLACKHOLE_HEADERS third_party/tt_llk/tt_llk_blackhole/**/*.h)
+
 target_sources(
     jitapi
     INTERFACE
@@ -134,9 +137,11 @@ target_sources(
             kernels/dataflow/writer_unary_1.cpp
             jit_build/genfiles.cpp
             jit_build/genfiles.hpp
+            ${TT_LLK_WORMHOLE_HEADERS}
+            ${TT_LLK_BLACKHOLE_HEADERS}
 )
 
-# tt_llk targets (tt-llk::wormhole_b0 and tt-llk::blackhole) are provided by 
+# tt_llk targets (tt-llk::wormhole_b0 and tt-llk::blackhole) are provided by
 # tt_metal/third_party/tt_llk which is processed via add_subdirectory in the main CMakeLists.txt
 # Link tt_llk targets to jitapi
 target_link_libraries(
