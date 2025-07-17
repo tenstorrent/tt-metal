@@ -79,14 +79,10 @@ int main() {
     // Shard size: total elements per core
     // input_unit_size: size of a page (uint32_t, alignment requirement)
     // shard_width_bytes: width in bytes for each shard
-    // num_units_per_row: number of uint32_t units per row
-    // padded_offset_bytes: alignment for buffer writes
     uint32_t shard_height = M / num_cores;                       // Height per shard (see note below)
     uint32_t shard_width = N;                                    // Width per shard
     uint32_t shard_size = shard_height * shard_width;            // Elements per shard
     constexpr uint32_t input_unit_size = sizeof(uint32_t);       // Page size for buffer (alignment need on core)
-    uint32_t shard_width_bytes = shard_width * data_size;        // Bytes per row
-    uint32_t num_units_per_row = shard_width * input_unit_size;  // Units per row
 
     // Note: Since bfloat16 is 2 bytes and uint32_t is 4 bytes, each page contains 2 bfloat16 values.
     // The division by data_size ensures correct mapping of values to pages.
@@ -125,7 +121,7 @@ int main() {
             .noc = NOC::RISCV_0_default,
             .compile_args = reader_compile_time_args});
 
-    // set runtime arguments for each core
+    // Set the parameters for each core to read its shard of data
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {0, i};
         uint32_t idx_h = i * shard_height;
@@ -142,6 +138,12 @@ int main() {
     // start/finish program and close device
     EnqueueProgram(cq, program, false);
     // Kernel prints to console. No need to print the output here.
+    //
+    // You should see the following output in the console:
+    // 0:(x=0,y=0):BR: Core (0,0): 2 4 6 8
+    // 0:(x=0,y=1):BR: Core (0,1): 10 12 14 16
+    // 0:(x=0,y=2):BR: Core (0,2): 18 20 22 24
+    // 0:(x=0,y=3):BR: Core (0,3): 26 28 30 32
     Finish(cq);
     CloseDevice(device);
     fmt::print("Program finished successfully.\n");

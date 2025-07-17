@@ -17,10 +17,10 @@ using namespace tt::tt_metal;
 int main() {
     char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
-        std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
-                     "the Data Movement kernels."
-                  << std::endl;
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
+        fmt::print(
+            "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of the Data "
+            "Movement kernels.\n");
+        fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
 
     // Initialize Program and Device
@@ -45,7 +45,7 @@ int main() {
     // Configure Program and Start Program Execution on Device
     SetRuntimeArgs(program, void_compute_kernel_id, core, {});
     EnqueueProgram(cq, program, false);
-    printf("Hello, Core {0, 0} on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");
+    fmt::print("Hello, Core (0, 0) on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");
 
     // Wait Until Program Finishes. The kernel will print the following messages:
     // 0:(x=0,y=0):TR0: Hello, I am the UNPACK core running the compute kernel
