@@ -378,7 +378,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (weight_block_w_ntiles <= 8) {
         compute_defines["PACKER_UNTILIZE"] = "1";
     }
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), all_cores.num_cores(), compute_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), all_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
