@@ -48,8 +48,8 @@ void kernel_main() {
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, socket_block_size);
 
-    auto output_addr_gen_args = make_tensor_accessor_args<output_args_cta_idx, output_args_crta_idx>();
-    auto output_addr_gen = make_tensor_accessor_from_args(output_addr_gen_args, output_base_addr, output_page_size);
+    auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
+    auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
 
     // Small pages. We write multiple pages from a single packet.
     uint32_t page_index = 0;

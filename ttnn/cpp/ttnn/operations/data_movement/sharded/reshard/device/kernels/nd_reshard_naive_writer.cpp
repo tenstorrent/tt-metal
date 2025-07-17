@@ -7,7 +7,7 @@
 
 // Simple kernel that copies [start_page, end_page) pages from dst to dst.
 void kernel_main() {
-    auto args_dst = make_tensor_accessor_args<0, 0>();
+    auto args_dst = TensorAccessorArgs<0, 0>();
     constexpr uint32_t base_idx_cta = args_dst.compile_time_args_skip();
     constexpr uint32_t base_idx_crta = args_dst.runtime_args_skip();
 
@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t end_page = get_arg_val<uint32_t>(1);
 
-    auto accessor_dst = make_tensor_accessor_from_args(args_dst, bank_base_address_dst, page_size);
+    auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst, page_size);
 
     constexpr uint32_t one_tile = 1;
     for (uint32_t page_id = start_page; page_id < end_page; ++page_id) {

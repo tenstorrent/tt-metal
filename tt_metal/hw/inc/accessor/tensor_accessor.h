@@ -5,6 +5,7 @@
 #pragma once
 
 #include <type_traits>
+#include "tensor_accessor_args.h"
 #include "array_wrapper.h"
 #include "dspec.h"
 #include "helpers.h"
@@ -58,6 +59,13 @@ public:
     template <typename DSpec_ = DSpec, std::enable_if_t<DSpec_::is_static, int> = 0>
     TensorAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
         bank_base_address(bank_base_address_in), page_size(page_size_in) {}
+
+    template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
+    TensorAccessor(
+        const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
+        const size_t bank_base_address_in,
+        const uint32_t page_size_in = 0) :
+        TensorAccessor(tensor_accessor::make_dspec_from_args(args), bank_base_address_in, page_size_in) {}
 
     constexpr auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -174,57 +182,31 @@ public:
     const uint32_t page_size = 0;
 };
 
-// Factory functions to create TensorAccessor instance
-template <size_t CTA_BASE, size_t CRTA_BASE = 0>
-FORCE_INLINE constexpr auto make_tensor_accessor_args() {
-    return tensor_accessor::ArgsOffsets<CTA_BASE, CRTA_BASE>();
-}
-
-template <size_t CTA_BASE>
-FORCE_INLINE constexpr auto make_tensor_accessor_args(const size_t crta_base) {
-    return tensor_accessor::ArgsOffsets<CTA_BASE>(crta_base);
-}
-
-template <typename ArgsOffsetsT>
-FORCE_INLINE auto make_tensor_accessor_from_args(
-    const ArgsOffsetsT& args, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    if constexpr (ArgsOffsetsT::is_sharded) {
-        auto dspec = tensor_accessor::make_dspec_from_args(args);
-        return TensorAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
-    } else {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        constexpr bool is_dram = ArgsOffsetsT::is_dram;
-        return InterleavedAddrGen<is_dram>{
-            .bank_base_address = bank_base_address_in,
-            .page_size = page_size_in,
-        };
-#else
-        return nullptr;
-#endif
-    }
-}
-
 template <
-    uint32_t RankCT = 0,
-    uint32_t NumBanksCT = 0,
-    typename TensorShapeWrapper = tensor_accessor::ArrayDynamicWrapper,
-    typename ShardShapeWrapper = tensor_accessor::ArrayDynamicWrapper,
-    typename BankCoordsWrapper = tensor_accessor::ArrayDynamicWrapper,
-    bool IsDram = false>
-FORCE_INLINE auto make_tensor_dspec(
-    uint32_t rank_rt = 0,
-    uint32_t num_banks_rt = 0,
-    uint32_t* tensor_shape_ptr = nullptr,
-    uint32_t* shard_shape_ptr = nullptr,
-    uint16_t* bank_coords_ptr = nullptr) {
-    return tensor_accessor::
-        make_dspec<RankCT, NumBanksCT, TensorShapeWrapper, ShardShapeWrapper, BankCoordsWrapper, IsDram>(
-            rank_rt, num_banks_rt, tensor_shape_ptr, shard_shape_ptr, bank_coords_ptr);
-}
+    uint32_t RankCT,
+    uint32_t NumBanksCT,
+    typename TensorShapeWrapper,
+    typename ShardShapeWrapper,
+    typename BankCoordsWrapper,
+    bool IsDram>
+struct TensorAccessor<tensor_accessor::DistributionSpec<
+    RankCT,
+    NumBanksCT,
+    TensorShapeWrapper,
+    ShardShapeWrapper,
+    BankCoordsWrapper,
+    /* IsInterleaved */ true,
+    IsDram>> : public InterleavedAddrGen<IsDram> {
+    template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
+    TensorAccessor(
+        const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
+        const size_t bank_base_address_in,
+        const uint32_t page_size_in = 0) :
+        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+};
+#endif
 
-template <typename DSpec>
-FORCE_INLINE auto make_tensor_accessor_from_dspec(
-    DSpec&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    return TensorAccessor<std::decay_t<decltype(dspec)>>(
-        std::forward<DSpec>(dspec), bank_base_address_in, page_size_in);
-}
+template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
+TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
+    -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;
