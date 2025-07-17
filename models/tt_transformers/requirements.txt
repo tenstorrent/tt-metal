@@ -1,4 +1,3 @@
 git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
 transformers==4.53.0
 protobuf==3.20.0
-pydantic>=2.10.0
