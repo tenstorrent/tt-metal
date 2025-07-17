@@ -3,21 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <stdint.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
-#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -30,7 +26,6 @@
 #include "command_queue.hpp"
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -48,7 +43,6 @@ using std::chrono::microseconds;
 //     --buffer-type <0 for DRAM, 1 for L1>
 //     --transfer-size <size in bytes>
 //     --page-size <size in bytes>
-//     --num-tests <count of tests>
 //     --skip-read (skip EnqueueReadBuffer (D2H) test)
 //     --skip-write (skip EnqueueWriteBuffer (H2D) test)
 //     --device (device ID)
@@ -56,9 +50,17 @@ using std::chrono::microseconds;
 //
 ////////////////////////////////////////////////////////////////////////////////
 
+////////////////////////////////////////////////////////////////////////////////
+// TODO: Benchmark Matrix:
+// Page Size: 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
+// Transfer Size: 32k, 512M
+// Read & Write
+// Device: 0 (local), 1 (remote)
+////////////////////////////////////////////////////////////////////////////////
+
 struct CommandArg {
     tt_metal::BufferType buffer_type;
-    uint32_t transfer_size, page_size, num_tests, device_id;
+    uint32_t transfer_size, page_size, device_id;
     bool skip_read, skip_write, bypass_check;
 };
 
@@ -71,7 +73,6 @@ CommandArg parseCustomArgs(int argc, char** argv) {
 
     args.transfer_size = test_args::get_command_option_uint32(input_args, "--transfer-size", 512 * 1024 * 1024);
     args.page_size = test_args::get_command_option_uint32(input_args, "--page-size", 2048);
-    args.num_tests = test_args::get_command_option_uint32(input_args, "--num-tests", 10);
     args.skip_read = test_args::has_command_option(input_args, "--skip-read");
     args.skip_write = test_args::has_command_option(input_args, "--skip-write");
     args.device_id = test_args::get_command_option_uint32(input_args, "--device", 0);
@@ -141,31 +142,22 @@ int main(int argc, char** argv) {
         args.transfer_size, 1000, std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<std::uint32_t> host_reception_buffer;
 
-    auto config_benchmark = [=](auto* bench) {
-        bench
-            // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
-            // benchmark
-            ->UseRealTime()
-            // TODO: This preseves the original intent from ../3_pcie_transfer/test_rw_buffer.cpp , but might not be
-            // what we want to do
-            ->Repetitions(args.num_tests)
-            ->Iterations(1);
-    };
-
     if (!args.skip_write) {
-        auto benchmark = benchmark::RegisterBenchmark(
+        benchmark::RegisterBenchmark(
             fmt::format("EnqueueWriteBuffer to {} (H2D)", buffer_type_str),
             BM_write,
-            BenchmarkParam{device->command_queue(), device_buffer, host_random_buffer, args.transfer_size});
-        config_benchmark(benchmark);
+            BenchmarkParam{device->command_queue(), device_buffer, host_random_buffer, args.transfer_size})
+            // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
+            // benchmark
+            ->UseRealTime();
     }
 
     if (!args.skip_read) {
-        auto benchmark = benchmark::RegisterBenchmark(
+        benchmark::RegisterBenchmark(
             fmt::format("EnqueueReadBuffer from {} (D2H)", buffer_type_str),
             BM_read,
-            BenchmarkParam{device->command_queue(), device_buffer, host_reception_buffer, args.transfer_size});
-        config_benchmark(benchmark);
+            BenchmarkParam{device->command_queue(), device_buffer, host_reception_buffer, args.transfer_size})
+            ->UseRealTime();
     }
 
     benchmark::RunSpecifiedBenchmarks();
