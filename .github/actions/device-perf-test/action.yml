@@ -9,8 +9,7 @@ runs:
   using: "composite"
   steps:
     - run: |
-        ls /opt/runner/_work/tt-metal/tt-metal/tests/scripts
-        ls ${{ github.workspace }}/tests/scripts/common.py
+        ls ${{ github.workspace }}/tests/scripts
         cd ${{ github.workspace }}
         set -x
         export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
