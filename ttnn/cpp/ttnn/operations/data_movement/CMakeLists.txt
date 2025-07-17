@@ -118,6 +118,10 @@ target_sources(
         tilize/tilize.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_op.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_program_factory.cpp
+        tilize_with_val_padding/device/tilize_with_val_padding_single_core_program_factory.cpp
+        tilize_with_val_padding/device/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
+        tilize_with_val_padding/device/tilize_with_val_padding_multi_core_interleaved_program_factory.cpp
+        tilize_with_val_padding/device/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
         tilize_with_val_padding/tilize_with_val_padding.cpp
         transpose/device/transpose_op.cpp
         transpose/device/transpose_program_factory.cpp
