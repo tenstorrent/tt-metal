@@ -420,7 +420,6 @@ def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
         (-500, 500, -750, 750),
         (-1e3, 1e3, -1e5, 1e5),
         (-450, 450, -1e6, 1e6),
-        # large outputs
         (0, 46340, 0, 46340),
         (0, -46340, 0, 46340),
         # large inputs
@@ -428,7 +427,7 @@ def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
         (-2, 2, -715827882, -1073741823),
         (-2, 2, 715827882, 1073741823),
         (-1, 1, 1073741823, 2147483647),
-        (-1, 1, -2147483647, -1073741823),
+        (-1, 1, -2147483648, -1073741823),
     ],
 )
 def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device):
@@ -439,7 +438,7 @@ def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device):
     else:
         torch_input_tensor_a = torch.linspace(low_a, high_a, num_elements, dtype=torch.int32)
 
-    if high_b in (32, 4, 2, 1):
+    if high_b in (3, 2, 1):
         values_b = torch.arange(low_b, high_b + 1, dtype=torch.int32)
         indices_b = torch.randint(0, len(values_b), (num_elements,))
         torch_input_tensor_b = values_b[indices_b]
@@ -476,7 +475,7 @@ def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device):
 @pytest.mark.parametrize("use_legacy", [True, False])
 def test_binary_mul_int32_edge_cases(use_legacy, device):
     torch_input_tensor_a = torch.tensor(
-        [0, -0, -1, 1, 2147483647, -2147483647, 1073741823, -536870911, 51130563, 131071, -1000, -10000]
+        [0, -0, -1, 1, 2147483647, -2147483647, 1073741823, -536870911, 51130563, 131071, -1000, -10000, -2147483648]
     )
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -486,7 +485,7 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    torch_input_tensor_b = torch.tensor([0, -1, -2147483647, 100000000, 1, 1, -2, 3, -40, 16384, -1000, 10000])
+    torch_input_tensor_b = torch.tensor([0, -1, -2147483647, 100000000, 1, 1, -2, 3, -40, 16384, -1000, 10000, 1])
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=ttnn.int32,
@@ -494,6 +493,10 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    # If the result of two inputs exceeds the int32 range, it wraps around due to overflow.
+    # For example, 2147483647 * 2 outputs -2 instead of 4294967294 because
+    # 4294967294 (decimal) = 0xFFFFFFFE (hex)
+    # Interpreted as int32 (2's complement), 0xFFFFFFFE represents -2.
 
     golden_function = ttnn.get_golden_function(ttnn.mul)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
