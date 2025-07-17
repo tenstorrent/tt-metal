@@ -15,6 +15,7 @@ class TransformerBlock(LightweightModule):
         self,
         args,
         mesh_device,
+        tt_ccl,
         dtype,
         state_dict,
         layer_num,
@@ -27,6 +28,7 @@ class TransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         self.args = args
         self.hidden_size = args.dim
@@ -43,6 +45,7 @@ class TransformerBlock(LightweightModule):
 
         self.attention = Attention(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -54,6 +57,7 @@ class TransformerBlock(LightweightModule):
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -64,6 +68,7 @@ class TransformerBlock(LightweightModule):
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 dim=args.dim,
                 eps=args.norm_eps,
                 state_dict=state_dict,
@@ -78,6 +83,7 @@ class TransformerBlock(LightweightModule):
                 ccl_topology=self.args.ccl_topology(),
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
         self.ff_norm = DistributedNorm(
@@ -134,7 +140,8 @@ class TransformerBlock(LightweightModule):
         )
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
-        ttnn.deallocate(attn_out)
+        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
+            ttnn.deallocate(attn_out)
         if mode == "prefill":
             x.deallocate(True)
 

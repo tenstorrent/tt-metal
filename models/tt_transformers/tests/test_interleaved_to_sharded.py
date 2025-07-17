@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import skip_for_grayskull
 
@@ -23,6 +24,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(mesh_device, reset_seeds):
     model_args = ModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
@@ -40,6 +42,7 @@ def test_decoder_inference(mesh_device, reset_seeds):
     seqlen = 1
     batch = model_args.max_batch_size
 
+    tt_ccl = TT_CCL(mesh_device)
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 
@@ -67,8 +70,14 @@ def test_decoder_inference(mesh_device, reset_seeds):
         )
 
         # Run TT model
-        tt_out = ttnn.all_gather(
-            decode_input, dim=3, num_links=1, topology=model_args.ccl_topology(), memory_config=mem_cfg
+        tt_out = ttnn.experimental.all_gather_async(
+            decode_input,
+            dim=3,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=1,
+            topology=model_args.ccl_topology(),
+            memory_config=mem_cfg,
+            subdevice_id=tt_ccl.worker_sub_device_id,
         )
 
         debug_max = lambda t: ttnn.to_torch(
@@ -76,3 +85,5 @@ def test_decoder_inference(mesh_device, reset_seeds):
         ).max()
         logger.info(f"decode_input max: {debug_max(decode_input)=}, {decode_input.memory_config()=}")
         logger.info(f"tt_out max: {debug_max(tt_out)=}, {tt_out.memory_config()=}")
+
+    tt_ccl.close()

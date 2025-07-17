@@ -8,13 +8,19 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.persistent_buffers import (
+    PersistentBuffersConfiguration,
+    supported_persistent_buffers_configurations,
+)
 from models.tt_transformers.tt.rope import RotarySetup
+from models.utility_functions import is_wormhole_b0
 
 
 class Transformer(LightweightModule):
@@ -39,6 +45,18 @@ class Transformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
+        persistent_buffers_configuration = PersistentBuffersConfiguration(
+            is_wormhole=is_wormhole_b0(),
+            num_devices=self.mesh_device.get_num_devices(),
+            model_name=self.args.base_model_name,
+        )
+        self.tt_ccl = TT_CCL(
+            self.mesh_device,
+            persistent_buffers_configuration
+            if persistent_buffers_configuration in supported_persistent_buffers_configurations
+            else None,
+        )
+
         self.embd = Embedding(
             mesh_device=mesh_device,
             args=args,
@@ -62,6 +80,7 @@ class Transformer(LightweightModule):
             TransformerBlock(
                 args=args,
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 dtype=dtype,
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
@@ -75,6 +94,7 @@ class Transformer(LightweightModule):
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 dim=args.dim,
                 eps=args.norm_eps,
                 state_dict=state_dict,
@@ -89,12 +109,14 @@ class Transformer(LightweightModule):
                 ccl_topology=self.args.ccl_topology(),
             ),
             args,
+            self.tt_ccl,
             args.is_galaxy,
         )
 
         self.lm_head = LMHead(
             args=args,
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             dtype=dtype,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
@@ -320,16 +342,40 @@ class Transformer(LightweightModule):
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
             if self.args.is_galaxy:
-                tt_logits = ttnn.all_gather(
+                ag_memory_config = tt_logits.memory_config()
+                dim = 3
+                cluster_axis = 0
+                ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
+                    tt_logits.shape, tt_logits.dtype, ag_memory_config, dim, cluster_axis
+                )
+                tt_logits = ttnn.experimental.all_gather_async(
                     tt_logits,
-                    dim=3,
+                    persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+                    dim=dim,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=2,
-                    cluster_axis=0,
+                    memory_config=ag_memory_config,
+                    cluster_axis=cluster_axis,
                     mesh_device=self.mesh_device,
                     topology=self.args.ccl_topology(),
+                    subdevice_id=self.tt_ccl.worker_sub_device_id,
                 )
             else:
-                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
+                ag_memory_config = tt_logits.memory_config()
+                dim = 3
+                ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
+                    tt_logits.shape, tt_logits.dtype, ag_memory_config, dim
+                )
+                tt_logits = ttnn.experimental.all_gather_async(
+                    tt_logits,
+                    persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+                    dim=dim,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    memory_config=ag_memory_config,
+                    topology=self.args.ccl_topology(),
+                    subdevice_id=self.tt_ccl.worker_sub_device_id,
+                )
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
@@ -400,3 +446,6 @@ class Transformer(LightweightModule):
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
+
+    def __del__(self):
+        self.tt_ccl.close()

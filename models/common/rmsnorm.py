@@ -39,6 +39,7 @@ class RMSNorm(LightweightModule):
         dim,
         state_dict,
         weight_key,
+        tt_ccl=None,
         layer_num=None,
         state_dict_prefix=None,
         weight_cache_path=None,
@@ -53,6 +54,8 @@ class RMSNorm(LightweightModule):
         ccl_topology=ttnn.Topology.Ring,
     ):
         super().__init__()
+        self.device = device
+        self.tt_ccl = tt_ccl
         self.eps = eps
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
@@ -144,16 +147,25 @@ class RMSNorm(LightweightModule):
     ):
         assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
+        assert self.tt_ccl is not None, "Distributed RMSNorm requires tt_ccl"
 
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
         # AllGather stats
-        tt_stats = ttnn.all_gather(
+        ag_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        dim = 3
+        ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
+            tt_stats.shape, tt_stats.dtype, ag_memory_config, dim
+        )
+        tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
-            dim=3,
+            persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
+            dim=dim,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
             topology=self.ccl_topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ag_memory_config,
+            subdevice_id=self.tt_ccl.worker_sub_device_id,
         )
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
@@ -163,6 +175,7 @@ class RMSNorm(LightweightModule):
             weight=weight,
             compute_kernel_config=compute_kernel_config,
         )
-        tt_stats.deallocate(True)
+        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
+            tt_stats.deallocate(True)
 
         return tt_out
