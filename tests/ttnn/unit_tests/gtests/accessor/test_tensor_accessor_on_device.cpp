@@ -122,16 +122,10 @@ static void test_single_core_reshard(
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
     auto output_tensor_cpu = output_tensor.cpu(true);
+    // Data should be only in the first shard
+    Tensor output_tensor_shard0 = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_shard0.to_vector<T>();
 
-    // Get individual shards
-    std::vector<Tensor> output_tensor_shards = ttnn::distributed::get_device_tensors(output_tensor_cpu);
-
-    // Combine data from all shards
-    std::vector<T> output_vec;
-    for (const auto& shard : output_tensor_shards) {
-        auto shard_vec = shard.to_vector<T>();
-        output_vec.insert(output_vec.end(), shard_vec.begin(), shard_vec.end());
-    }
     EXPECT_EQ(output_vec, src);
 }
 
