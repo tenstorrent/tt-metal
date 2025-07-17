@@ -86,13 +86,6 @@ Tensor optimized_conv_new(
         input_bias_format_params = {
             .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
     }
-    auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    auto arch = is_device_tensor(a)
-                    ? a.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    bool fp32_accum =
-        a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ?
-                                                      // compute_kernel_config.value().fp32_dest_acc_en : false;
     auto optimized_conv_op = OptimizedConvNew(
         sliding_window_config,
         output_channels,
@@ -192,7 +185,6 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                 TensorLayout::fromPaddedShape(
                     dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
         } else if (this->memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
             std::array<uint32_t, 2> shard_shape = {
                 this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
                 this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
@@ -327,8 +319,6 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
-    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
