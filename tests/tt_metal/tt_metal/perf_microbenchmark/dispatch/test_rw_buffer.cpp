@@ -49,7 +49,6 @@ using std::chrono::microseconds;
 //     --transfer-size <size in bytes>
 //     --page-size <size in bytes>
 //     --num-tests <count of tests>
-//     --bypass-check (set to bypass checking performance criteria fulfillment)
 //     --skip-read (skip EnqueueReadBuffer (D2H) test)
 //     --skip-write (skip EnqueueWriteBuffer (H2D) test)
 //     --device (device ID)
@@ -73,7 +72,6 @@ CommandArg parseCustomArgs(int argc, char** argv) {
     args.transfer_size = test_args::get_command_option_uint32(input_args, "--transfer-size", 512 * 1024 * 1024);
     args.page_size = test_args::get_command_option_uint32(input_args, "--page-size", 2048);
     args.num_tests = test_args::get_command_option_uint32(input_args, "--num-tests", 10);
-    args.bypass_check = test_args::has_command_option(input_args, "--bypass-check");
     args.skip_read = test_args::has_command_option(input_args, "--skip-read");
     args.skip_write = test_args::has_command_option(input_args, "--skip-write");
     args.device_id = test_args::get_command_option_uint32(input_args, "--device", 0);
@@ -173,8 +171,6 @@ int main(int argc, char** argv) {
     benchmark::RunSpecifiedBenchmarks();
     tt_metal::CloseDevice(device);
     benchmark::Shutdown();
-
-    // TODO: Verify performance numbers with golden run
 
     return 0;
 }
