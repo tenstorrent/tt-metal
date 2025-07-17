@@ -8,7 +8,6 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
-
 target_sources(
     metalium_firmware
     INTERFACE
