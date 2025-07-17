@@ -65,7 +65,7 @@ set_target_properties(
 
 file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 file(
-    GLOB_RECURSE TT_LLK_HEADERS 
+    GLOB_RECURSE TT_LLK_HEADERS
     third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
     third_party/tt_llk/tt_llk_blackhole/**/*.h
 )
