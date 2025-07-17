@@ -2403,21 +2403,6 @@ void kernel_main() {
     constexpr bool use_posted_writes_for_connection_open = true;
 #endif
 
-    if constexpr (!is_2d_fabric) {
-        // We can check just the first index because all receiver channels are serviced by the same core
-        if constexpr (is_receiver_channel_serviced[0]) {
-            const size_t start = !has_downstream_edm_vc0_buffer_connection;
-            const size_t end = has_downstream_edm_vc1_buffer_connection + 1;
-            for (size_t i = start; i < end; i++) {
-                downstream_edm_noc_interfaces[i]
-                    .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
-                ASSERT(
-                    get_ptr_val(downstream_edm_noc_interfaces[i].worker_credits_stream_id) ==
-                    DOWNSTREAM_SENDER_NUM_BUFFERS);
-            }
-        }
-    }
-
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         // This barrier is here just in case the initialization process of any of the sender/receiver channel
         // implementations require any assumptions about channel contents or anything similar. Without it there
@@ -2508,6 +2493,19 @@ void kernel_main() {
                     *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_free_slots_ptr =
                         0;
                 }
+            }
+        }
+    } else {
+        // We can check just the first index because all receiver channels are serviced by the same core
+        if constexpr (is_receiver_channel_serviced[0]) {
+            const size_t start = !has_downstream_edm_vc0_buffer_connection;
+            const size_t end = has_downstream_edm_vc1_buffer_connection + 1;
+            for (size_t i = start; i < end; i++) {
+                downstream_edm_noc_interfaces[i]
+                    .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
+                ASSERT(
+                    get_ptr_val(downstream_edm_noc_interfaces[i].worker_credits_stream_id) ==
+                    DOWNSTREAM_SENDER_NUM_BUFFERS);
             }
         }
     }
