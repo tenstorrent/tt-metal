@@ -412,7 +412,9 @@ def get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, p
     return launch_msg_rd_ptr, kernel_config_base, kernel_text_offset, watcher_kernel_id
 
 
-def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path):
+def get_running_ops_table(
+    dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path, process_ids
+):
     printout_table = init_running_ops_table(enum_values)
 
     if printout_table is None:
@@ -489,7 +491,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                                     process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset
                                 )
                                 if proc_name != "NCRISC"
-                                else ["GDB callstack for NCRISC is not supported"]
+                                else "GDB callstack for NCRISC is not supported"
                             )
                     # Get callstack using tt-exalens
                     else:
@@ -513,7 +515,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
                             cs = (
                                 get_callstack_with_gdb(process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
                                 if proc_name != "NCRISC"
-                                else ["GDB callstack for NCRISC is not supported"]
+                                else "GDB callstack for NCRISC is not supported"
                             )
                     # Get callstack using tt-exalens
                     else:
@@ -544,9 +546,12 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
             if kernel_name or kernel_config_base or VVERBOSE:
                 printout_table.append(row)
                 if cs:
-                    cs = format_callstack(cs) if not USE_GDB else cs
-                    for line in cs:
-                        printout_table.append(["", "", "", "", "", "", "", line])
+                    if isinstance(cs, str):
+                        printout_table.append(["", "", "", "", "", "", "", cs])
+                    else:
+                        cs = format_callstack(cs)
+                        for line in cs:
+                            printout_table.append(["", "", "", "", "", "", "", line])
 
     return printout_table
 
@@ -573,7 +578,9 @@ def extract_callstack_from_gdb(gdb_client, start: str, end: str) -> list[str]:
     return cs[:-1]
 
 
-def get_callstack_with_gdb(pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None) -> list[str]:
+def get_callstack_with_gdb(
+    pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None
+) -> list[CallstackEntry]:
     # Start GDB client
     gdb_client = subprocess.Popen(
         ["tt-exalens", "--gdb"],
@@ -615,16 +622,19 @@ def get_callstack_with_gdb(pid: int, loc, risc_name: str, elf_path: str, kernel_
         r"(?P<file_path>.*?):(?P<line>\d+)"
     )
 
-    entry = CallstackEntry()
+    cs_entries: list[CallstackEntry] = []
     for line in cs:
+        entry = CallstackEntry()
         match = pattern.match(line)
         if match:
-            entry.pc = match.groupdict()["pc"]
+            entry.pc = int(match.groupdict()["pc"], 16) if match.groupdict()["pc"] is not None else None
             entry.function_name = match.groupdict()["fcn_name"]
             entry.file = match.groupdict()["file_path"]
             entry.line = match.groupdict()["line"]
 
-    return cs
+        cs_entries.append(entry)
+
+    return cs_entries
 
 
 def get_process_ids(ui_state: UIState):
