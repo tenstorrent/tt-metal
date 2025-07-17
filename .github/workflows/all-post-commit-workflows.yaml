@@ -256,7 +256,7 @@ jobs:
           #  publish-artifact: false
           #  skip-tt-train: true
           - version: "24.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Release"
             publish-artifact: false
             skip-tt-train: false
