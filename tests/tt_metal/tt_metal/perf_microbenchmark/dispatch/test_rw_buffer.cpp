@@ -5,6 +5,7 @@
 #include <chrono>
 #include <errno.h>
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <stdint.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
@@ -126,7 +127,7 @@ static void BM_read(benchmark::State& state, const BenchmarkParam& para) {
 int main(int argc, char** argv) {
     CommandArg args = parseArgs(argc, argv);
 
-    if (args.device_id >= tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices()) {
+    if (args.device_id >= MetalContext::instance().get_cluster().number_of_devices()) {
         log_info(LogTest, "Skip! Device id {} is not applicable on this system", args.device_id);
         return 1;
     }
@@ -138,34 +139,52 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    auto buffer_type_str = args.buffer_type == BufferType::DRAM ? "DRAM" : "L1";
+    log_info(
+        LogTest,
+        "Measuring host-to-device and device-to-host bandwidth for "
+        "buffer_type={}, transfer_size={} bytes, page_size={} bytes",
+        buffer_type_str,
+        args.transfer_size,
+        args.page_size);
+
     auto device_buffer = tt_metal::Buffer::create(device, args.transfer_size, args.page_size, args.buffer_type);
     auto host_random_buffer = create_random_vector_of_bfloat16(
         args.transfer_size, 1000, std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<std::uint32_t> host_reception_buffer;
 
+    auto config_benchmark = [=](auto* bench) {
+        bench
+            // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
+            // benchmark
+            ->UseRealTime()
+            // TODO: This preseves the original intent from ../3_pcie_transfer/test_rw_buffer.cpp , but might not be
+            // what we want to do
+            ->Repetitions(args.num_tests)
+            ->Iterations(1);
+    };
+
     if (!args.skip_write) {
-        benchmark::RegisterBenchmark(
-            "Write",
+        auto benchmark = benchmark::RegisterBenchmark(
+            fmt::format("EnqueueWriteBuffer to {} (H2D)", buffer_type_str),
             BM_write,
-            BenchmarkParam{device->command_queue(), device_buffer, host_random_buffer, args.transfer_size})
-            // TODO: do we really want to preserve this? Google Benchmark has it's own mathmatical model of figuring out
-            // how many iterations are needed that might be more useful here.
-            ->Iterations(args.num_tests);
+            BenchmarkParam{device->command_queue(), device_buffer, host_random_buffer, args.transfer_size});
+        config_benchmark(benchmark);
     }
 
     if (!args.skip_read) {
-        benchmark::RegisterBenchmark(
-            "Read",
+        auto benchmark = benchmark::RegisterBenchmark(
+            fmt::format("EnqueueReadBuffer from {} (D2H)", buffer_type_str),
             BM_read,
-            BenchmarkParam{device->command_queue(), device_buffer, host_reception_buffer, args.transfer_size})
-            ->Iterations(args.num_tests);
+            BenchmarkParam{device->command_queue(), device_buffer, host_reception_buffer, args.transfer_size});
+        config_benchmark(benchmark);
     }
 
     benchmark::RunSpecifiedBenchmarks();
     tt_metal::CloseDevice(device);
     benchmark::Shutdown();
 
-    // TODO: Verify performance numbers
+    // TODO: Verify performance numbers with golden run
 
     return 0;
 }
