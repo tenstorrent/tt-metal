@@ -29,9 +29,9 @@ from types import ModuleType
 @dataclass
 class TriageScript:
     data_provider: bool = False
-    state_checker: bool = False
-    module: ModuleType = None
+    disabled: bool = False
     depends: list[str] = []
+    module: ModuleType = None
 
 
 class TTTriageError(Exception):
@@ -61,7 +61,7 @@ def main():
 
         # Check if script has a configuration
         script_config: TriageScript = script_module.triage_config
-        if script_config is None:
+        if script_config is None or script_config.disabled:
             # This script does not have a configuration, which means it is not tt-triage script, skipping...
             continue
         script_config.module = script_module
@@ -92,9 +92,11 @@ def main():
 
         # Check circular dependency
         if deployed_scripts == 0:
-            # If no scripts were deployed, it means there is a circular dependency
+            # If no scripts were deployed, it means there is a circular dependency or disabled script dependency
             remaining_scripts = set(scripts.keys()) - used_scripts
-            print(f"{RED}Circular dependency detected in scripts:{RST} {', '.join(remaining_scripts)}")
+            print(f"{RED}Bad dependency detected in scripts:{RST} {', '.join(remaining_scripts)}")
+            print(f"{RED}  Circular dependency, dependency on disabled or non-existing script is not allowed.{RST}")
+            print(f"{RED}  Please check if all dependencies are met and scripts are enabled.{RST}")
             exit(1)
 
     # TODO: Parse common command line arguments
