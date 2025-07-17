@@ -4,11 +4,12 @@
 
 ## Evaluation Table
 
-| Model        | Resolution | Batch Size | Samples | TTNN Accuracy | Torch Accuracy |
-|--------------|------------|------------|---------|-------------------------------|-------------------------------|
-| ViT          | (224, 224) | 8          | 512     | 81.25%               | 82.23%                 |
-| ResNet50     | (224, 224) | 16         | 512     | 78.52%                 | 75.59%                |
+| Model        | Resolution | Batch Size | Samples | TTNN Accuracy         | Torch Accuracy        |
+|--------------|------------|------------|---------|------------------------|------------------------|
+| ViT          | (224, 224) | 8          | 512     | 81.25%                 | 82.23%                 |
+| ResNet50     | (224, 224) | 16         | 512     | 78.52%                 | 75.59%                 |
 | MobileNetV2  | (224, 224) | 8          | 512     | 68.36%                 | 65.62%                 |
+| Swin_S       | (512, 512) | 1          | 512     | 80.47%                 | 82.23%                 |
 
 ***Note:*** The accuracy is for the selected random samples from the validation dataset.
 
@@ -36,6 +37,12 @@ Where,
  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[8-224-tt_model-device_params0]
  ```
 
+**Swin_S:** <br>
+**_For 512x512,_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_swin_s_image_classification_eval[1-512-tt_model-device_params0]
+ ```
+
 ## To run the test of torch vs ground truth, please follow the following commands:
 
 **Vit:** <br>
@@ -54,4 +61,10 @@ Where,
 **_For 224x224,_**<br>
  ```sh
  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[8-224-torch_model-device_params0]
+ ```
+
+**Swin_S:** <br>
+**_For 512x512,_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_swin_s_image_classification_eval[1-512-torch_model-device_params0]
  ```
