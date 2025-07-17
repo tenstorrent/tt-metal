@@ -889,6 +889,7 @@ def test_conv_ws(
 
     tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
     if tilized_input:
+        tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
         tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
     if auto_shard and (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
@@ -2866,6 +2867,9 @@ def test_split_reader_regression(
     shard_layout,
     config_override,
 ):
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     run_conv(
         device,
         torch_tensor_map,
@@ -3063,6 +3067,18 @@ def test_conv2d_model_fruit(
     input_dtype,
     input_layout,
 ):
+
+    if (
+        device.core_grid.y < 8
+        and is_wormhole_b0()
+        and batch == 1
+        and input_channels == 64
+        and output_channels == 128
+        and input_height == 1024
+        and input_width == 128
+    ):
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = act_block_w_div
@@ -3182,6 +3198,10 @@ def test_conv2d_sdxl(
     act_db,
     w_db,
 ):
+
+    # Skip all on N300
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
@@ -3308,6 +3328,9 @@ def test_conv2d_vae_sdxl(
     act_block_h_override
 ):
 
+    # Skip all on N300
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
     # Skip specific test case for Blackhole devices
     if is_blackhole() and (batch, input_channels, output_channels, input_height, input_width, weights_dtype) == (1, 4, 4, 128, 128, ttnn.bfloat8_b):
         pytest.skip("Skipping this test case for Blackhole devices due to PCC issue, tracked in ISSUE-24463")
@@ -3448,6 +3471,9 @@ def test_conv_sharded_non_tile(device):
     shard_width = 32
     input_shape = (batch, input_channels, input_height, input_width)
     weights_shape = (output_channels, input_channels, filter, filter)
+
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     torch.manual_seed(0)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -3886,3 +3912,51 @@ def test_conv2d_act_dealloc(
         dtype=output_dtype,
     )
     assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, shard_layout",
+    (
+        (32, 32, 8, 8, WS),
+        (16, 16, 8, 4, BS),
+    ),
+)
+@pytest.mark.parametrize(
+    "filter, padding",
+    [
+        [3, (1, 1)],
+    ],
+)
+def test_conv_single_core(
+    device,
+    torch_tensor_map,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    shard_layout,
+    filter,
+    padding,
+):
+
+    run_conv(
+        device = device,
+        torch_tensor_map = torch_tensor_map,
+        math_fidelity = ttnn.MathFidelity.HiFi4,
+        output_dtype = ttnn.bfloat16,
+        weights_dtype = ttnn.bfloat16,
+        batch_size = 1,
+        output_channels = output_channels,
+        input_channels = input_channels,
+        input_height = input_height,
+        input_width = input_width,
+        filter_height=filter,
+        filter_width=filter,
+        stride_h = 1,
+        stride_w = 1,
+        padding = padding,
+        shard_layout=shard_layout,
+        input_dtype=ttnn.bfloat16,
+        config_override = None,
+    )

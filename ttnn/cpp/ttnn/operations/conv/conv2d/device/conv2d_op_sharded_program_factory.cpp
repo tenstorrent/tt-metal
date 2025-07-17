@@ -79,6 +79,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
+    const bool skip_mcast = is_singlecore_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -557,10 +559,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::vector<uint32_t> act_mcast_noc_y;
     if (block_sharded) {
         // 2D mcast
-        if (transpose_mcast) {
+        if (transpose_mcast && !skip_mcast) {
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
             mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
-        } else {
+        } else if (!skip_mcast) {
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
             mcast_receiver_cores = CoreRange(CoreCoord(0, 1), bottom_right_core);
         }
@@ -636,7 +638,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         output.dtype(),
         shard_shape,
         has_bias,
-        is_conv_1d_depthwise_conv);
+        is_conv_1d_depthwise_conv,
+        skip_mcast);
 
     access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
 
@@ -758,6 +761,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (total_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
+    if (skip_mcast) {
+        reader_defines["SKIP_MCAST"] = "1";
+    }
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
         writer_mcast_sender_defines["FUSE_BIAS"] = "1";
@@ -787,7 +793,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (weight_block_w_ntiles <= 8) {
         compute_defines["PACKER_UNTILIZE"] = "1";
     }
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), total_num_cores, compute_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), total_num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
@@ -860,7 +867,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles_per_core,
 
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+        skip_mcast ? get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index
+                   : get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,

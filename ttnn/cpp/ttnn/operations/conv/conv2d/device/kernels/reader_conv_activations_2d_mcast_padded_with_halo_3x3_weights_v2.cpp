@@ -183,7 +183,7 @@ void kernel_main() {
 
         noc_async_read_barrier();
         cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-
+#ifndef SKIP_MCAST
         // Round robin self-mcast and receive tilized act matrix in cb_id_act
         // Compute should function like regular mm
         for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
@@ -251,6 +251,7 @@ void kernel_main() {
             cb_push_back(cb_id_act, act_block_num_tiles);
         }  // act_w_num_outer
         cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
+#endif
     }
     noc_async_write_barrier();
 }
