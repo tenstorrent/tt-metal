@@ -381,7 +381,6 @@ jobs:
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
-            CMAKE_ARGS="-DPYTHON_EXECUTABLE=$(which python)"
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
