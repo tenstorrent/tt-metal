@@ -13,6 +13,7 @@
 #include <utility>
 #include <nlohmann/json.hpp>
 
+#include "fabric_types.hpp"
 #include "tt_cluster.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
@@ -107,8 +108,10 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
         });
     }
 
+    topology_json["cluster_type"] = magic_enum::enum_name(cluster.get_cluster_type());
+
     topology_json["fabric_config"] = magic_enum::enum_name(tt::tt_metal::MetalContext::instance().get_fabric_config());
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != FabricConfig::DISABLED) {
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
         topology_json["routing_planes"] = nlohmann::ordered_json::array();
         topology_json["device_id_to_fabric_node_id"] = nlohmann::ordered_json::object();
         for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {

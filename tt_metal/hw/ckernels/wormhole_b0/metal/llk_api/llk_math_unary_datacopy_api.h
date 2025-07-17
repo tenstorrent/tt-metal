@@ -53,3 +53,27 @@ inline void llk_math_eltwise_unary_datacopy_init(
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(
         transpose_of_faces, within_face_16x16_transpose, num_faces, dst_format);
 }
+
+/*************************************************************************
+ * LLK FAST ELTWISE UNARY DATACOPY
+ *************************************************************************/
+
+inline void llk_math_fast_tilize_init(const std::uint32_t operand, const std::uint32_t unit_dim) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    _llk_math_fast_tilize_init_(unpack_dst_format[operand_id], unit_dim);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_math_fast_tilize_uninit(const std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(unpack_dst_format[operand_id]);
+}
+
+inline void llk_math_fast_tilize_block_(
+    const std::uint32_t dst_index,
+    const std::uint32_t operand,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    _llk_math_fast_tilize_block_(dst_index, unpack_dst_format[operand_id], unit_dim, num_units);
+}

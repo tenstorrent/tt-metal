@@ -13,6 +13,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/utils.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -288,6 +289,9 @@ public:
     // Returns (inclusive) range of coordinates in the container.
     const MeshCoordinateRange& coord_range() const;
 
+    // Returns the number of elements in the container.
+    size_t size() const;
+
     // Accessor methods.
     T& at(const MeshCoordinate& coord);
     const T& at(const MeshCoordinate& coord) const;
@@ -371,6 +375,78 @@ private:
     MeshCoordinateRange coord_range_;
     std::vector<T> values_;
 };
+
+/**
+ * A specialized MeshContainer where some values may be locally present and some are remote.
+ *
+ * This container simplifies the creation and management of distributed mesh structures where some values may be remote
+ * (on other hosts) and some are local. The values are wrapped in MaybeRemote<T> to allow for easy distinction between
+ * local and remote values.
+ *
+ * @tparam T The type of values stored (will be wrapped in MaybeRemote<T>)
+ */
+template <typename T>
+class DistributedMeshContainer : public MeshContainer<MaybeRemote<T>> {
+public:
+    /**
+     * Initialize a distributed mesh container with all remote values.
+     *
+     * @param global_shape The global shape of the mesh
+     */
+    explicit DistributedMeshContainer(const MeshShape& global_shape)
+        : MeshContainer<MaybeRemote<T>>(global_shape, MaybeRemote<T>::remote()) {}
+
+    /**
+     * Populate the local region of the mesh with local values.
+     *
+     * This method iterates through the local coordinates as defined by the
+     * coordinate system and populates them with the provided local values.
+     *
+     * @param coord_sys The distributed coordinate system defining local/global mapping
+     * @param local_values The values to populate in the local region (must match local shape size)
+     */
+    template <typename CoordSystem>
+    void populate_local_region(const CoordSystem& coord_sys, const std::vector<T>& local_values) {
+        TT_FATAL(
+            local_values.size() == this->shape().mesh_size(),
+            "Number of local values {} does not match mesh size {}",
+            local_values.size(),
+            this->shape().mesh_size());
+        size_t idx = 0;
+        for (const auto& local_coord : this->coord_range()) {
+            this->at(local_coord) = MaybeRemote<T>::local(local_values[idx++]);
+        }
+    }
+
+    /**
+     * Get all local values from the container.
+     *
+     * @return A vector containing only the local values
+     */
+    std::vector<T> get_local_values() const {
+        std::vector<T> local_values;
+        local_values.reserve(this->size());
+        for (const auto& it = this->begin(); it != this->end(); ++it) {
+            local_values.push_back(it->value());
+        }
+        return local_values;
+    }
+
+    /**
+     * Check if a global coordinate contains a local value.
+     *
+     * @param coord The global coordinate to check
+     * @return true if the coordinate contains a local value, false if remote
+     */
+    bool is_local_at(const MeshCoordinate& coord) const {
+        return this->at(coord).is_local();
+    }
+};
+
+template <typename T>
+size_t MeshContainer<T>::size() const {
+    return values_.size();
+}
 
 template <typename T>
 MeshContainer<T>::MeshContainer(const MeshShape& shape, const T& fill_value) :

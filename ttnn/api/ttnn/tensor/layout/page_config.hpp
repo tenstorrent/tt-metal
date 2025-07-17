@@ -32,6 +32,9 @@ public:
 
     const Tile& get_tile() const;
 
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+
     bool operator==(const RowMajorPageConfig&) const = default;
     bool operator!=(const RowMajorPageConfig&) const = default;
 
@@ -60,6 +63,9 @@ public:
 
     const Tile& get_tile() const;
 
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+
     bool operator==(const TilePageConfig&) const = default;
     bool operator!=(const TilePageConfig&) const = default;
 
@@ -78,6 +84,11 @@ public:
     PageConfig(Layout layout);
     PageConfig(Layout layout, const std::optional<Tile>& tile);
 
+    // Alignment is applied to the tensor shape, to guarantee that it is divisible by page size.
+    // For tile layout, the page size is the tile size, so alignment is also equal to the tile size.
+    // For row major layout, the page size is the width of the tensor, or the width of the shard (for sharded tensors).
+    // So for row major tensors, alignment is either [1] for interleaved tensors or shard width for sharded tensors.
+    // Note: alignment rules are different for logical sharding.
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
@@ -91,6 +102,15 @@ public:
     Tile get_tile() const;
 
     Layout get_layout() const;
+
+    /// Returns the minimum required alignment for the shard shape.
+    Alignment get_required_shard_shape_alignment() const;
+
+    /// Returns the recommended alignment for the shard shape.
+    /// This takes into account device memory alignment requirements trying to optimize memory usage and read/write
+    /// performance. The exact device alignment requirements are dependent on device architecture and BufferType, so the
+    /// maximum possible alignment is used.
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
 
     bool operator==(const PageConfig&) const = default;
     bool operator!=(const PageConfig&) const = default;

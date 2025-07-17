@@ -45,10 +45,10 @@ TEST_F(AdamWFullTest, AdamWTest) {
     }
 
     auto data_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(features, ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
+        ttml::core::from_vector(features, ttnn::Shape({batch_size, 1, 1, num_features}), device));
 
-    auto targets_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(targets, ttml::core::create_shape({batch_size, 1, 1, 1}), device));
+    auto targets_tensor =
+        ttml::autograd::create_tensor(ttml::core::from_vector(targets, ttnn::Shape({batch_size, 1, 1, 1}), device));
 
     auto model = ttml::modules::LinearLayer(num_features, 1);
     auto adamw_config = ttml::optimizers::AdamWConfig();

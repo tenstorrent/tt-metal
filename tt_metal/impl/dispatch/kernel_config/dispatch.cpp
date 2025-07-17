@@ -31,6 +31,7 @@
 #include "dispatch/system_memory_manager.hpp"
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 using namespace tt::tt_metal;
 
@@ -206,7 +207,7 @@ void DispatchKernel::GenerateStaticConfigs() {
             tt_fabric::Topology::Mesh;
         static_config_.is_2d_fabric_dynamic =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_config() ==
-            tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
+            tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
     } else {
         static_config_.is_2d_fabric = false;
         static_config_.is_2d_fabric_dynamic = false;

@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
-
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -14,7 +13,7 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import NORM_CATEGORIES, round_to_nearest_tile_size
+from models.demos.deepseek_v3.utils.config_helpers import NORM_CATEGORIES
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
@@ -69,15 +68,6 @@ def reference_model(hf_config, request):
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
     "mode, batch, seq_len, norm_category",
     [
         ("decode", 64, 1, "attention_norm"),  # Batch decode with distributed and sharded inputs
@@ -96,8 +86,10 @@ def test_rmsnorm_forward_pass(
     reference_model,
     hf_config,
     temp_dir,
-    mesh_device,
+    galaxy_or_t3k_mesh,
 ):
+    mesh_device = galaxy_or_t3k_mesh
+
     """Test rmsnorm forward pass against reference model."""
     assert norm_category in NORM_CATEGORIES, f"Invalid norm category: {norm_category}"
     is_decoder_norm = norm_category == "attention_norm" or norm_category == "mlp_norm"
@@ -142,7 +134,7 @@ def test_rmsnorm_forward_pass(
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         sharded_memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                round_to_nearest_tile_size(tt_input.shape[0] * tt_input.shape[1] * tt_input.shape[2]),
+                ttnn.core.roundup(tt_input.shape[0] * tt_input.shape[1] * tt_input.shape[2], ttnn.TILE_SIZE),
                 tt_input.shape[3] // shard_core_grid.num_cores,
             ),
             core_grid=shard_core_grid,

@@ -157,6 +157,9 @@ public:
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
+    template <typename T>
+    [[nodiscard]] T item(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+
     [[nodiscard]] Tensor to_device(
         IDevice* target_device,
         const MemoryConfig& mem_config = MemoryConfig{},
@@ -242,8 +245,14 @@ public:
     Buffer* buffer() const;
 
     // Returns device `Storage`.
-    // Throws if the tensor is not allocated on a device.
-    const DeviceStorage& device_storage() const;
+    // Throws if the tensor is not on device.
+    const DeviceStorage& device_storage() const&;
+    const DeviceStorage& device_storage() const&& = delete;  // prevents dangling reference to temporaries.
+
+    // Returns host `Storage`.
+    // Throws if the tensor is not on host.
+    const HostStorage& host_storage() const&;
+    const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.

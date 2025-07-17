@@ -284,12 +284,12 @@ target_sources(
         FILES
             ${blackhole_kernels}
             ${wormhole_kernels}
-            inc/accessor/args_location.h
             inc/accessor/array_wrapper.h
             inc/accessor/const.h
             inc/accessor/dspec.h
             inc/accessor/helpers.h
             inc/accessor/tensor_accessor.h
+            inc/accessor/tensor_accessor_args.h
             inc/atomic_rwptr.h
             inc/bit_utils.h
             inc/blackhole/c_tensix_core.h
@@ -370,14 +370,12 @@ target_link_libraries(hw INTERFACE TT::Metalium::HostDevCommon)
 
 add_subdirectory(firmware)
 
-if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
-    install(
-        TARGETS
-            hw
-        FILE_SET
-        jit_api
-            DESTINATION
-                ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw # FIXME: fix the include paths for jit_build
-            COMPONENT metalium-runtime
-    )
-endif()
+install(
+    TARGETS
+        hw
+    FILE_SET
+    jit_api
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw # FIXME: fix the include paths for jit_build
+        COMPONENT metalium-runtime
+)
