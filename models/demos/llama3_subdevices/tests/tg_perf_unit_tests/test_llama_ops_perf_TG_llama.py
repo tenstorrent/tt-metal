@@ -17,7 +17,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
         ("PagedUpdateCacheDeviceOperation", 4.5, 0.16),
         ("RotaryEmbeddingLlamaFusedQK", 4.15, 0.05),
         ("Embeddings", 3.8, 0.1),
-        ("BinaryDeviceOperation", 3.1, 0.05),
+        ("BinaryDeviceOperation", 2.78, 0.05),
     ],
 )
 def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us, perf_margin):

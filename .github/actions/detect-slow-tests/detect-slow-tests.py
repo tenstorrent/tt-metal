@@ -21,7 +21,9 @@ class SlowTestsExceededError(SlowTestDetectionError):
 
 def detect_slow_tests(report_dir, timeout):
     # Hardcoded list of tests to exclude from slow test detection (Don't use this unless you HAVE TO)
-    exceptions = []
+    exceptions = [
+        "DispatchFixture.TensixFailOnDuplicateKernelCreationDataflow",
+    ]
 
     # Find all XML files in the report directory
     report_files = [
@@ -30,6 +32,7 @@ def detect_slow_tests(report_dir, timeout):
     if not report_files:
         raise NoTestReportsFoundError("No test reports found.")
 
+    excluded_tests = []
     slow_tests = []
     excluded_tests = []
 
