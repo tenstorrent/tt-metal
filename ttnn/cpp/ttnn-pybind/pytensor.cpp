@@ -29,6 +29,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -272,16 +273,17 @@ struct PyTensorHostConversionStrategy {
     bool host_side_conversion = false;
     /// Use this layout to construct the initial tensor -- extra conversion might be done
     /// after the tensor has been moved to device.
-    Layout construct_with_layout = Layout::TILE_LAYOUT;
+    Layout construct_with_layout = Layout::TILE;
     std::optional<DataType> construct_with_data_type = std::nullopt;
     py::object tensor;
 };
 
 PyTensorHostConversionStrategy prepare_conversion_strategy(
-    py::object tensor, std::optional<DataType> dtype, std::optional<Layout> layout bool has_device, ) {
-    PyTensorConversionStrategy res;
+    const py::handle& py_tensor, std::optional<DataType> dtype, std::optional<Layout> layout, bool has_device) {
+    PyTensorHostConversionStrategy res;
     bool HANDLE_FLOAT32_BUG_23405 = true;
     py::object torch = py::module_::import("torch");
+    py::object tensor = py::reinterpret_borrow<pybind11::object>(py_tensor);
 
     auto ttnn_fallback_type_mapping = [&torch](std::optional<DataType> dtype) -> std::optional<py::object> {
         if (!dtype.has_value()) {
@@ -312,27 +314,32 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     };
 
     auto is_torch_missing_data_type = [](std::optional<DataType> dtype) -> bool {
-        return dtype.has_value && (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT4_B ||
-                                   dtype.value() == DataType::UINT32);
+        return dtype.has_value() && (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT4_B ||
+                                     dtype.value() == DataType::UINT32);
     };
 
     if (!has_device && ttnn_fallback_type_mapping(dtype).has_value()) {
+        // Strategy: No Device Fallback
+        // No device, conversion must be performed on the host
         tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
         res.host_side_conversion = true;
         if (is_torch_missing_data_type(dtype)) {
             res.construct_with_data_type = dtype;
         }
-    } else if (ttnn_unsupported_type_mapping(dtype).has_value()) {
+    } else if (ttnn_unsupported_type_mapping(tensor.attr("dtype")).has_value()) {
+        // Strategy: Unsupported Type
+        // ttnn tensor cannot hold the original host data without losses -- need to perform the conversion while on
+        // host.
         if (ttnn_fallback_type_mapping(dtype).has_value()) {
             tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
         } else {
-            tensor = tensor.attr("to")(ttnn_unsupported_type_mapping(dtype));
+            tensor = tensor.attr("to")(ttnn_unsupported_type_mapping(tensor.attr("dtype")));
         }
         res.host_side_conversion = true;
         if (is_torch_missing_data_type(dtype)) {
             res.construct_with_data_type = dtype;
         }
-    } else if (tensor.attr("dtype").equal(torch.attr("uint8")) && dtype && *dtype != DataType::UINT8) {
+    } else if (tensor.attr("dtype").equal(torch.attr("uint8")) && dtype && dtype.value() != DataType::UINT8) {
         tensor = tensor.attr("to")(*ttnn_fallback_type_mapping(dtype));
         res.host_side_conversion = true;
     } else if (
@@ -347,6 +354,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         layout && layout.value() == Layout::ROW_MAJOR &&
         (tensor.attr("dtype").equal(torch.attr("float32")) || tensor.attr("dtype").equal(torch.attr("int32"))) &&
         dtype && dtype.value() == DataType::UINT8) {
+        // Original data is stored in float32 and requires type casting
         tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
         res.host_side_conversion = true;
     } else if (
@@ -354,7 +362,9 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         (dtype.value() == DataType::FLOAT32 && tensor.attr("dtype").equal(torch.attr("float32"))) ||
         (dtype.value() == DataType::BFLOAT16 && tensor.attr("dtype").equal(torch.attr("bfloat16"))) ||
         (dtype.value() == DataType::INT32 && tensor.attr("dtype").equal(torch.attr("int32"))) ||
-        (dtype.value() == DataType::uint8 && tensor.attr("dtype").equal(torch.attr("uint8")))) {
+        (dtype.value() == DataType::UINT8 && tensor.attr("dtype").equal(torch.attr("uint8")))) {
+        // Strategy: No Conversion Needed
+        // No target type specified or target is the same as input, will copy the tensor from source data w/o typecast.
         res.host_side_conversion = true;
         if (is_torch_missing_data_type(dtype)) {
             res.construct_with_data_type = dtype;
@@ -362,6 +372,14 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     } else if (
         HANDLE_FLOAT32_BUG_23405 && layout && layout.value() == Layout::ROW_MAJOR && dtype &&
         dtype.value() == DataType::FLOAT32) {
+        // Strategy: Float32 Bug Workaround
+        // https://github.com/tenstorrent/tt-metal/issues/23405
+        // This condition handles the tensor conversion case where
+        // - input device exists
+        // - type conversion is necessary and is not handled by other edge cases
+        // - the final layout should be a row-major
+        //
+        // Due to the bug linked above this case should also be performed on device, to avoid precision loss
         tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
         res.host_side_conversion = true;
         if (is_torch_missing_data_type(dtype)) {
@@ -372,18 +390,22 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     const auto py_dtype = tensor.attr("dtype");
 
     if (dtype.has_value() && (*dtype == DataType::BFLOAT4_B || *dtype == DataType::BFLOAT8_B)) {
-        res.layout = Layout::TILE_LAYOUT;
+        res.construct_with_layout = Layout::TILE;
     } else if (HANDLE_FLOAT32_BUG_23405 and py_dtype.equal(torch.attr("float32"))) {
         if (dtype && *dtype != DataType::FLOAT32) {
             // Typecast is needed, can't tilize the data on device due to the bug
-            res.layout = Layout::TILE_LAYOUT;
+            res.construct_with_layout = Layout::TILE;
         } else {
-            res.layout = optional_layout.value_or(Layout::ROW_MAJOR);
+            res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         }
+    } else if (!(tensor.attr("dtype").equal(torch.attr("float32")) || tensor.attr("dtype").equal(torch.attr("int32")) ||
+                 tensor.attr("dtype").equal(torch.attr("bfloat16")))) {
+        // can't convert the host data to tiles on device -- must perform tiling on host
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
     } else if (has_device) {
-        res.layout = Layout::ROW_MAJOR;
+        res.construct_with_layout = Layout::ROW_MAJOR;
     } else {
-        res.layout = optional_layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
     }
 
     res.tensor = tensor;
@@ -416,7 +438,7 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     std::optional<PyTensorHostConversionStrategy> strategy;
     if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
-        strategy = prepare_conversion_strategy(py_tensor, optional_data_type, optional_layout, has_device);
+        strategy = prepare_conversion_strategy(py_tensor, optional_data_type, optional_layout, device != nullptr);
     }
 
     auto preprocessed_py_tensor = strategy ? parse_py_tensor(strategy->tensor, strategy->construct_with_data_type)
@@ -466,9 +488,30 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     output = tt::tt_metal::set_tensor_id(output);
 
-    if (output) {
-        GraphTracker::instance().track_function_end(output);
+    if (strategy) {
+        if (strategy->host_side_conversion) {
+            if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout) {
+                output = output.to_layout(optional_layout.value());
+            }
+        } else {
+            if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
+                ZoneScopedN("no-device type conversion");
+                if (output.layout() != Layout::TILE) {
+                    ZoneScopedN("pre-typecast layout conversion");
+                    output = output.to_layout(Layout::TILE);
+                }
+
+                output = ttnn::typecast(output, optional_data_type.value());
+
+                if (optional_layout.has_value() && output.layout() != optional_layout.value()) {
+                    ZoneScopedN("post-typecast layout conversion");
+                    output = output.to_layout(optional_layout.value());
+                }
+            }
+        }
     }
+
+    GraphTracker::instance().track_function_end(output);
     return output;
 }
 

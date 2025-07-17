@@ -271,21 +271,6 @@ def from_torch(
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
-    import torch
-    import inspect
-    import logging
-
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
-    )
-
-    log = logging.getLogger(__name__)
-
-    ttnn.start_tracy_zone("core.py", "from_torch python full zone", inspect.currentframe().f_lineno)
-
-    # print("")
-
     if memory_config is not None and memory_config.is_sharded():
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
@@ -297,196 +282,17 @@ def from_torch(
     if memory_config is not None and device is None:
         raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
-    ttnn_fallback_type_mapping = {
-        ttnn.uint8: torch.uint8,
-        ttnn.uint16: torch.int16,
-        ttnn.int32: torch.int32,
-        ttnn.uint32: torch.int32,
-        ttnn.bfloat4_b: torch.float32,
-        ttnn.bfloat8_b: torch.float32,
-        ttnn.float32: torch.float32,
-        ttnn.bfloat16: torch.bfloat16,
-    }
-
-    ttnn_unsupported_type_mapping = {
-        torch.int64: torch.int32,
-        torch.float16: torch.bfloat16,
-    }
-
-    # See the linked issue below -- once it is fixed, the branches that
-    # explicitly handle this case could be turned off.
-    HANDLE_FLOAT32_BUG_23405 = True
-    # log.info(f"from_torch::input: tensor dtype:{tensor.dtype} target dtype:{dtype} layout:{layout} device:{device}")
-
-    torch_tilizable_data_types = [torch.float32, torch.int32, torch.bfloat16]
-    torch_missing_data_types = [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.uint32]
-
-    # The data has been converted on host and no device-side type cast is necessary
-    host_type_conversion = False
-    # Construct tensor with a specific data type or infer it from passed torch tensor
-    construct_with_dtype = None
-
-    def get_host_construction_layout(tensor: torch.tensor) -> ttnn.Layout:
-        if dtype in [ttnn.bfloat4_b, ttnn.bfloat8_b]:
-            return ttnn.TILE_LAYOUT
-        elif HANDLE_FLOAT32_BUG_23405 and tensor.dtype in [torch.float32]:
-            if dtype and dtype != ttnn.float32:
-                # Typecast needed, can't tilize the data on device due to the bug
-                return ttnn.TILE_LAYOUT
-            else:
-                return layout
-
-        elif tensor.dtype not in torch_tilizable_data_types:
-            # can't convert the host data to tiles on device -- must perform tiling on host
-            return layout
-        elif device:
-            return ttnn.ROW_MAJOR_LAYOUT
-        else:
-            return layout
-
-    # Single decision point - determine all conversion parameters at once
-    if not device and dtype in ttnn_fallback_type_mapping:
-        # Strategy: No Device Fallback
-        # No device, conversion must be performed on the host
-        # log.info(f"Strategy: No Device Fallback")
-        with ttnn.tracy_zone("host-side conversion w/o device"):
-            tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
-        # log.info(f"from_torch::tensor.to no device:\n{tensor} {tensor.dtype} {tensor.shape}")
-
-        host_type_conversion = True
-        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
-
-    elif tensor.dtype in ttnn_unsupported_type_mapping:
-        # Strategy: Unsupported Type
-        # ttnn tensor cannot hold the original host data without losses --
-        # need to perform the conversion while on host.
-        # log.info(f"Strategy: Unsupported Type")
-        with ttnn.tracy_zone("host-side type mapping, type unsupported"):
-            if dtype in ttnn_fallback_type_mapping:
-                tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
-            else:
-                tensor = tensor.to(ttnn_unsupported_type_mapping[tensor.dtype])
-        # log.info(f"from_torch::tensor.to unsupported origin:\n{tensor} {tensor.dtype} {tensor.shape}")
-
-        host_type_conversion = True
-        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
-
-    elif tensor.dtype in [torch.uint8] and dtype and dtype != ttnn.uint8:
-        # Strategy: Uint8 Special
-        # log.info(f"Strategy: Uint8 Special")
-        # log.info(f"tensor.dtype in [torch.uint8] and dtype and dtype != ttnn.uint8")
-        with ttnn.tracy_zone("host-side mapping, uint edge case"):
-            tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
-
-        host_type_conversion = False
-        construct_with_dtype = None
-
-    elif HANDLE_FLOAT32_BUG_23405 and tensor.dtype in [torch.float32] and dtype and dtype != ttnn.float32:
-        # Original data is stored in float32 and requires type casting
-        # log.info(f"HANDLE_FLOAT32_BUG_23405 and tensor.dtype in [torch.float32] and dtype and dtype != ttnn.float32")
-        with ttnn.tracy_zone("host-side conversion float32 bug edge case handling"):
-            tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
-        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
-        host_type_conversion = True
-
-    elif layout == ttnn.ROW_MAJOR_LAYOUT and tensor.dtype in [torch.float32, torch.int32] and dtype == ttnn.uint8:
-        # Strategy: Row Major Uint8 Edge
-        # `to_layout` turns the whole tensor into zeroes when converting float32/int32 to uint8 in row-major layout
-        # log.info(f"Strategy: Row Major Uint8 Edge")
-        # log.info(f"from_torch::layout == ttnn.ROW_MAJOR_LAYOUT and tensor.dtype in [torch.float32, torch.int32] and dtype == ttnn.uint8")
-        with ttnn.tracy_zone("host-side mapping, uint8 edge case"):
-            tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
-
-        host_type_conversion = True
-        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
-
-    elif (
-        dtype == None
-        or (dtype == ttnn.float32 and tensor.dtype == torch.float32)
-        or (dtype == ttnn.bfloat16 and tensor.dtype == torch.bfloat16)
-        or (dtype == ttnn.int32 and tensor.dtype == torch.int32)
-        or (dtype == ttnn.uint8 and tensor.dtype == torch.uint8)
-    ):
-        # Strategy: No Conversion Needed
-        # No target type specified, will copy the tensor from source data w/o typecast.
-        # log.info(f"Strategy: No Conversion Needed")
-        # log.info(f"from_torch::dtype == None or (dtype == ttnn.float32 and tensor.dtype == ttnn.float32)")
-
-        host_type_conversion = True
-        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
-
-    elif HANDLE_FLOAT32_BUG_23405 and layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.float32:
-        # Strategy: Float32 Bug Workaround
-        # https://github.com/tenstorrent/tt-metal/issues/23405
-        # This condition handles the tensor conversion case where
-        # - input device exists
-        # - type conversion is necessary and is not handled by other edge cases
-        # - the final layout should be a row-major
-        #
-        # Due to the bug linked above this case should also be performed on device, to avoid precision loss
-        # log.info(f"Strategy: Float32 Bug Workaround")
-        # log.info(f"from_torch::layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.float32")
-        with ttnn.tracy_zone("host-side mapping float32 bug"):
-            tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
-
-        host_type_conversion = True
-        construct_with_dtype = dtype if dtype in torch_missing_data_types else None
-
-    else:
-        # Strategy: Device Conversion
-        # Type conversion will be performed on device
-        # log.info(f"Strategy: Device Conversion")
-
-        host_type_conversion = False
-        construct_with_dtype = None
-
-    host_construct_layout = get_host_construction_layout(tensor=tensor)
-    with ttnn.tracy_zone("tensor constructor"):
-        ttnn.tracy_message(
-            f"host_construct_layout = {host_construct_layout} construct_with_dtype = {construct_with_dtype} host_type_conversion = {host_type_conversion}"
-        )
-        result = ttnn.Tensor(
-            tensor=tensor,
-            data_type=construct_with_dtype,
-            device=device,
-            layout=host_construct_layout,
-            mem_config=memory_config,
-            tile=tile,
-            cq_id=cq_id,
-            pad_value=pad_value,
-            mesh_mapper=mesh_mapper.unwrap()
-            if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper)
-            else mesh_mapper,
-        )
-
-    # log.info(f"from_torch::result:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
-
-    if host_type_conversion:
-        if device and layout != result.layout:
-            with ttnn.tracy_zone("to_layout conversion"):
-                result = ttnn.to_layout(result, layout)
-
-    else:
-        if dtype and dtype != result.dtype:
-            if result.layout != ttnn.TILE_LAYOUT:
-                with ttnn.tracy_zone("to_layout before typecast"):
-                    result = ttnn.to_layout(result, ttnn.TILE_LAYOUT)
-
-                # log.info(f"from_torch::to_layout before typecast:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
-
-            with ttnn.tracy_zone("typecast"):
-                result = ttnn.typecast(result, dtype=dtype)
-
-            # log.info(f"from_torch::typecast:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
-
-        if layout != result.layout:
-            with ttnn.tracy_zone("to_layout after typecast"):
-                result = ttnn.to_layout(result, layout)
-            # log.info(f"from_torch::to_layout:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
-
-    ttnn.stop_tracy_zone()
-
-    return result
+    return ttnn.Tensor(
+        tensor=tensor,
+        data_type=dtype,
+        device=device,
+        layout=layout,
+        mem_config=memory_config,
+        tile=tile,
+        cq_id=cq_id,
+        pad_value=pad_value,
+        mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+    )
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):
