@@ -69,6 +69,7 @@ process_mcast_in0_program_and_create_override_variables(
     bool math_approx_mode,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t M,
     uint32_t N,
@@ -441,7 +442,8 @@ process_mcast_in0_program_and_create_override_variables(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -914,6 +916,7 @@ process_mcast_in1_program_and_create_override_variables(
     bool math_approx_mode,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t M,
     uint32_t N,
@@ -1223,7 +1226,8 @@ process_mcast_in1_program_and_create_override_variables(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -1607,6 +1611,7 @@ process_gather_in0_program_and_create_override_variables(
     bool packer_l1_acc,
     bool dst_full_sync_en,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t base_cb_index,
     uint32_t B,
     uint32_t M,
@@ -1980,7 +1985,8 @@ process_gather_in0_program_and_create_override_variables(
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -2439,6 +2445,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -2575,6 +2582,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             packer_l1_acc,
             dst_full_sync_en,
             compute_with_storage_grid_size,
+            throttle_level,
             start_cb_index,
             B,
             Mt,
@@ -2614,6 +2622,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             math_approx_mode,
             packer_l1_acc,
             compute_with_storage_grid_size,
+            throttle_level,
             B,
             Mt,
             Nt,
@@ -2655,6 +2664,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             math_approx_mode,
             packer_l1_acc,
             compute_with_storage_grid_size,
+            throttle_level,
             B,
             Mt,
             Nt,
@@ -2723,6 +2733,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             broadcast_batch,
             compute_with_storage_grid_size,
             compute_kernel_config,
+            ttnn::get_throttle_level(compute_kernel_config),
             in0_block_w,
             out_subblock_h,
             out_subblock_w,
@@ -2783,6 +2794,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         broadcast_batch,
         config.compute_with_storage_grid_size,
         compute_kernel_config,
+        ttnn::get_throttle_level(compute_kernel_config),
         config.in0_block_w,
         config.out_subblock_h,
         config.out_subblock_w,

@@ -368,6 +368,7 @@ def test_matmul_2d_host_perf(
                         math_approx_mode=True,
                         fp32_dest_acc_en=False,
                         packer_l1_acc=True,
+                        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
                     )
 
                 if out_sharded:
