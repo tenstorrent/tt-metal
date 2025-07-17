@@ -19,6 +19,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_accessor_args.hpp"
+#include "ttnn/api/ttnn/distributed/api.hpp"
 
 namespace tensor_accessor_device_tests {
 
@@ -117,11 +118,22 @@ static void test_single_core_reshard(
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
     auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
-    auto output_tensor_cpu = output_tensor.cpu();
-    auto output_vec = output_tensor_cpu.template to_vector<T>();
+    // auto output_vec = output_tensor.template to_vector<T>();
+    // Get the tensor from device to host first
+    auto host_tensor = output_tensor.cpu(true);
+
+    // Get individual shards
+    std::vector<Tensor> shards = ttnn::distributed::get_device_tensors(host_tensor);
+
+    // Combine data from all shards
+    std::vector<T> output_vec;
+    for (const auto& shard : shards) {
+        auto shard_vec = shard.to_vector<T>();
+        output_vec.insert(output_vec.end(), shard_vec.begin(), shard_vec.end());
+    }
     EXPECT_EQ(output_vec, src);
 }
 
