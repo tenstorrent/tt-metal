@@ -178,6 +178,7 @@ ALWI void unpack_tilizeA_B_block(
     uint32_t icb0,
     uint32_t icb1,
     uint32_t block,
+
     uint32_t tile_idx_b,
     uint32_t num_faces = 4,
     uint32_t srca_face_r_dim = 16) {
