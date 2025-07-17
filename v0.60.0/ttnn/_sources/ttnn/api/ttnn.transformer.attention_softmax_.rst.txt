@@ -1,0 +1,8 @@
+﻿ttnn.transformer.attention\_softmax\_
+=====================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.attention_softmax_:
+
+.. autodata:: ttnn.transformer.attention_softmax_

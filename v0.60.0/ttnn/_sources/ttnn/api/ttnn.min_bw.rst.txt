@@ -1,0 +1,8 @@
+﻿ttnn.min\_bw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.min_bw:
+
+.. autodata:: ttnn.min_bw
