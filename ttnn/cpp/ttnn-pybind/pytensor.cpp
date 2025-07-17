@@ -1078,6 +1078,7 @@ void pytensor_module(py::module& m_tensor) {
                     case DataType::UINT8: return py::cast(self.item<uint8_t>());
                     case DataType::INVALID: TT_THROW("Unsupported DataType");
                 }
+                TT_THROW("Unreachable");
             },
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.
