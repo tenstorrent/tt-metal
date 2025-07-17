@@ -12,7 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {

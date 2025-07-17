@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
-#include "tt_metal/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
 #include "socket_api.h"
 
