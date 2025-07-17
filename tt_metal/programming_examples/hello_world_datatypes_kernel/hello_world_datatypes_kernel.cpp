@@ -21,10 +21,10 @@ int main() {
 
     char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
-        std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
-                     "the Data Movement kernels."
-                  << std::endl;
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
+        fmt::print(
+            "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of the Data "
+            "Movement kernels.\n");
+        fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
 
     // Initialize Program and Device
@@ -61,11 +61,11 @@ int main() {
     SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
     EnqueueProgram(cq, program, false);
 
-    printf("Hello, Core {0, 0} on Device 0, please handle the data.\n");
+    fmt::print("Hello, Core {{0, 0}} on Device 0, please handle the data.\n");
 
     // Wait Until Program Finishes, Print "Hello World!", and Close Device
     Finish(cq);
-    printf("Thank you, Core {0, 0} on Device 0, for handling the data.\n");
+    fmt::print("Thank you, Core {{0, 0}} on Device 0, for handling the data.\n");
     CloseDevice(device);
 
     return 0;

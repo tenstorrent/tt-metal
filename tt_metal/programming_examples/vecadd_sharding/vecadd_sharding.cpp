@@ -66,15 +66,15 @@ std::string next_arg(int& i, int argc, char** argv) {
 }
 
 void help(std::string_view program_name) {
-    std::cout << "Usage: " << program_name << " [options]\n";
-    std::cout << "This program demonstrates how to add two vectors in sharding mode, "
-                 "using multiple cores and sharded L1 buffers.\n";
-    std::cout << "\n";
-    std::cout << "Options:\n";
-    std::cout << "  --device, -d <device_id>  Specify the device to run the "
-                 "program on. Default is 0.\n";
-    std::cout << "  --sharding_type, -s <sharding>  Specify the sharding type "
-                 "options are height, width, or block. Default is height.\n";
+    fmt::print("Usage: {} [options]\n", program_name);
+    fmt::print(
+        "This program demonstrates how to add two vectors in sharding mode, using multiple cores and sharded L1 "
+        "buffers.\n\n");
+    fmt::print("Options:\n");
+    fmt::print("  --device, -d <device_id>         Specify the device to run the program on. Default is 0.\n");
+    fmt::print(
+        "  --sharding_type, -s <sharding>   Specify the sharding type (options: height, width, block). Default is "
+        "height.\n");
     exit(0);
 }
 

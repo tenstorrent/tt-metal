@@ -76,15 +76,11 @@ std::string next_arg(int& i, int argc, char** argv) {
 }
 
 void help(std::string_view program_name) {
-    std::cout << "Usage: " << program_name << " [options]\n";
-    std::cout << "This program demonstrates how to add two vectors using "
-                 "tt-Metalium.\n";
-    std::cout << "\n";
-    std::cout << "Options:\n";
-    std::cout << "  --device, -d <device_id>  Specify the device to run the "
-                 "program on. Default is 0.\n";
-    std::cout << "  --seed, -s <seed>         Specify the seed for the random "
-                 "number generator. Default is random.\n";
+    fmt::print("Usage: {} [options]\n", program_name);
+    fmt::print("This program demonstrates how to add two vectors using tt-Metalium.\n\n");
+    fmt::print("Options:\n");
+    fmt::print("  --device, -d <device_id>  Specify the device to run the program on. Default is 0.\n");
+    fmt::print("  --seed, -s <seed>         Specify the seed for the random number generator. Default is random.\n");
     exit(0);
 }
 

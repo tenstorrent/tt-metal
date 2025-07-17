@@ -109,9 +109,9 @@ int main() {
         }
     }
     if (!success) {
-        printf("Error: Result does not match expected value!\n");
+        fmt::print("Error: Result does not match expected value!\n");
     } else {
-        printf("Success: Result matches expected value!\n");
+        fmt::print("Success: Result matches expected value!\n");
     }
     CloseDevice(device);
 }
