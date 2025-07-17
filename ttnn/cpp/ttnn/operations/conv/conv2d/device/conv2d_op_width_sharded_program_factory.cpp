@@ -410,7 +410,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             op_trace_metadata, shard_boundaries, stride_w, true, act_block_h_datums, 0);
 
     // create sharded ttnn config tensors
-    tt::tt_metal::DataType indices_tt_dtype = tt::tt_metal::DataType::UINT16;
     Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, parallel_config);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
@@ -532,7 +531,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             .compile_args = weights_kernel_compile_args,
             .defines = writer_defines});
 
-    auto compute_id = CreateKernel(
+    CreateKernel(
         program,
         compute_kernel_path,
         all_cores,

@@ -822,7 +822,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         Conv2dConfig conv_config;
     };
 
-    const bool conv_is_1d = is_1d_conv(kernel_size[1], input_width);
     const bool conv_is_1d_deptwise =
         is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
 

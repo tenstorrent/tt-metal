@@ -150,9 +150,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         input_to_writer_cb_id1 = cb_indices.untilize_out_cb_id1;
         const uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
         const uint32_t untilize_out_cb_num_pages = ENABLE_UNTILIZE_DOUBLE_BUFFERING ? 2 * output_ntiles : output_ntiles;
-        auto untilize_out_cb0 = create_circular_buffer(
+        create_circular_buffer(
             program, all_cores, cb_indices.untilize_out_cb_id0, out_df, untilize_out_cb_num_pages, out_tile_size);
-        auto untilize_out_cb1 = create_circular_buffer(
+        create_circular_buffer(
             program, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
 
         const std::string compute_kernel_name =
