@@ -102,20 +102,15 @@ static Tensor pool2d_invoke(
         // tt::log_debug(tt::LogOp, "auto sharding spec: {}", parallel_config.shard_scheme);
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
-        const uint32_t shard_width = out_memory_config.shard_spec()->shape[1];
+
         uint32_t input_channels_alignment = 8;
         if (input_tensor.memory_config().is_sharded() && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
             input_tensor.layout() == Layout::ROW_MAJOR) {
             const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
-            if (shard_width % tt::constants::TILE_WIDTH == 0) {
-                input_channels_alignment = tt::constants::TILE_WIDTH;
-            } else if (shard_width % 16 == 0) {
-                input_channels_alignment = 16U;
-            } else if (shard_width % 8 == 0) {
-                input_channels_alignment = 8U;
-            } else {
-                input_channels_alignment = tt::constants::TILE_WIDTH;
-            }
+            input_channels_alignment = (shard_width % tt::constants::TILE_WIDTH == 0) ? tt::constants::TILE_WIDTH
+                                       : (shard_width % 16 == 0)                      ? 16U
+                                       : (shard_width % 8 == 0)                       ? 8U
+                                                                                      : tt::constants::TILE_WIDTH;
         }
 
         auto input_tensor_shape = input_tensor.logical_shape();
@@ -126,28 +121,28 @@ static Tensor pool2d_invoke(
             {input_tensor_shape[0],
              input_tensor_shape[1],
              input_tensor_shape[2],
-             tt::round_up(input_tensor_shape[3], input_tensor_width_snapped_to_channels_alignment)});
-        auto input_padded_tensor = input_tensor;
-        input_padded_tensor = input_padded_tensor.reshape(input_tensor_shape, input_padded_shape);
-        log_info(tt::LogOp, "input_padded_tensor shape: {}", input_padded_tensor.logical_shape());
-        input_tensor_sharded = input_padded_tensor;
+             input_tensor_width_snapped_to_channels_alignment});
+
+        input_tensor_sharded = input_tensor.reshape(input_tensor_shape, input_padded_shape);
+        log_info(tt::LogOp, "input_padded_tensor shape: {}", input_tensor_sharded.logical_shape());
 
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
-        input_tensor_sharded = ttnn::to_memory_config(
-            input_tensor_sharded, sharded_mem_config, std::nullopt);  // this converts interleaved to sharded
+        input_tensor_sharded = ttnn::to_memory_config(input_tensor_sharded, sharded_mem_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
+
     } else {
-        // input is already sharded, use it as is
-        const auto shard_grid = out_memory_config.shard_spec().value().grid;
-        const auto shard_scheme = out_memory_config.memory_layout();
-        const auto shard_orientation = out_memory_config.shard_spec().value().orientation;
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
-        TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
-        parallel_config.grid = shard_grid;
-        parallel_config.shard_scheme = shard_scheme;
-        parallel_config.shard_orientation = shard_orientation;
+        // input is already sharded, use it as is
+        TT_FATAL(
+            out_memory_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+            "Only row major orientation is supported.");
+
+        parallel_config.grid = out_memory_config.shard_spec().value().grid;
+        parallel_config.shard_scheme = out_memory_config.memory_layout();
+        parallel_config.shard_orientation = out_memory_config.shard_spec().value().orientation;
+
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
     }
@@ -171,6 +166,7 @@ static Tensor pool2d_invoke(
         output_nhw_padded,
         output_shard_height_padded,
         output_shard_width_padded);
+
     out_memory_config = out_memory_config.with_shard_spec(tt::tt_metal::ShardSpec{
         shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
     sliding_window_config = sliding_window::SlidingWindowConfig{
