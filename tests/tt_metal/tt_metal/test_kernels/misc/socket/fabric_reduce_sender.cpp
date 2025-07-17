@@ -11,7 +11,7 @@ void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t data_size = get_compile_time_arg_val(2);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(3);
 
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender sender_fabric_connection =
