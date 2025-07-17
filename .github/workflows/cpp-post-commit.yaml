@@ -44,6 +44,7 @@ jobs:
           {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
           {name: dispatch, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
+          {name: misc, cmd: "./build/test/tt_metal/unit_tests_misc"},
           {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests"},
           {name: distributed_multiprocess, cmd: "./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh"},
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
