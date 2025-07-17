@@ -8,6 +8,8 @@ METALIUM_GUIDE.md @davorchap
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
+.github/workflows/tg-deepseek-tests.yaml @yieldthought @avoraTT @kpaigwar @barci2 @tenstorrent/metalium-developers-infra
+.github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @avoraTT @kpaigwar @barci2 @tenstorrent/metalium-developers-infra
 
 /infra/ @tenstorrent/metalium-developers-infra
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
@@ -81,7 +83,6 @@ tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @tt-dma @ihamer-tt
 tt_metal/tools/lightmetal_runner @kmabeeTT
 tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark?
 tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT
-tt_metal/tools/tt_gdb/ @tt-dma # I think this is dead code, can we delete it?
 tt_metal/tools/watcher_dump/ @tt-dma @pgkeller
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT
 tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT

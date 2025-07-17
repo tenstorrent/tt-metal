@@ -28,8 +28,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& persistent_intermediate_buffer,
-               ttnn::Tensor& persistent_output_buffer,
+               const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
                const int32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                const uint32_t num_links,
@@ -39,8 +38,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
                 return self(
                     input_tensor,
-                    persistent_intermediate_buffer,
-                    persistent_output_buffer,
+                    persistent_output_buffers,
                     dim,
                     multi_device_global_semaphore,
                     num_links,
@@ -50,8 +48,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                     cluster_axis);
             },
             py::arg("input_tensor"),
-            py::arg("persistent_intermediate_buffer"),
-            py::arg("persistent_output_buffer"),
+            py::arg("persistent_output_buffers") = std::nullopt,
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),

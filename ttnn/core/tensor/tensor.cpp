@@ -13,6 +13,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
 #include "ttnn/tensor/storage.hpp"
 
@@ -358,6 +359,20 @@ std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
     return tensor_impl::decode_tensor_data(data, cpu_tensor.tensor_spec());
 }
 
+template <typename T>
+T Tensor::item(ttnn::QueueId cq_id) const {
+    ZoneScoped;
+    TT_FATAL(
+        this->logical_shape().volume() == 1,
+        "tensor.item() requires tensor to have exactly one element, but got {} elements",
+        this->logical_shape().volume());
+
+    // Use existing infrastructure: to_vector() already handles multi-device and host tensors correctly
+    // by calling cpu() internally when needed
+    auto vector_data = this->to_vector<T>(cq_id);
+    return vector_data[0];
+}
+
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,
@@ -456,6 +471,13 @@ template std::vector<uint8_t> Tensor::to_vector<uint8_t>(ttnn::QueueId cq_id) co
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(ttnn::QueueId cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(ttnn::QueueId cq_id) const;
 
+template float Tensor::item<float>(ttnn::QueueId cq_id) const;
+template bfloat16 Tensor::item<bfloat16>(ttnn::QueueId cq_id) const;
+template int32_t Tensor::item<int32_t>(ttnn::QueueId cq_id) const;
+template uint8_t Tensor::item<uint8_t>(ttnn::QueueId cq_id) const;
+template uint16_t Tensor::item<uint16_t>(ttnn::QueueId cq_id) const;
+template uint32_t Tensor::item<uint32_t>(ttnn::QueueId cq_id) const;
+
 Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device)) {
         return to_device(mesh_device, mem_config, cq_id);
@@ -533,7 +555,10 @@ StorageType Tensor::storage_type() const {
         this->storage());
 }
 
-ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->padded_shape())); }
+ttnn::Shape Tensor::strides() const {
+    auto s = tt::tt_metal::compute_strides(this->padded_shape());
+    return ttnn::Shape(tt::stl::SmallVector<uint32_t>(s.begin(), s.end()));
+}
 
 uint64_t Tensor::logical_volume() const { return logical_shape().volume(); }
 uint64_t Tensor::physical_volume() const { return padded_shape().volume(); }

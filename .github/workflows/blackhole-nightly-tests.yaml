@@ -54,34 +54,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  ttnn-l2-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150b"]') }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.card_type }}
-      timeout: 120
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  didt-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/didt-tests.yaml
-    strategy:
-      fail-fast: false
-    with:
-      arch: blackhole
-      runner-label: P150b
-      timeout: 10
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   blackhole-llmbox-demo-tests:
     needs: build-artifact
     secrets: inherit

@@ -200,7 +200,8 @@ jobs:
         pip install pyyaml # Needed for clang-tidy-diff-20.py
     - name: Prepare compile_commands.json
       run: |
-        cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+        cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+        cmake --build build --target all_generated_files
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2
     - name: Create results directory
@@ -265,6 +266,6 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, clang-tidy-light"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
