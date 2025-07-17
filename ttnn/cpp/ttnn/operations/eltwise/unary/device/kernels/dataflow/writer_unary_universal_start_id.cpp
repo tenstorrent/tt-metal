@@ -10,7 +10,7 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr auto tensor_args = make_tensor_accessor_args<1>();
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_tiles);
@@ -20,7 +20,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-    auto tensor_accessor = make_tensor_accessor_from_args(tensor_args, dst_addr, tile_bytes);
+    auto tensor_accessor = TensorAccessor(tensor_args, dst_addr, tile_bytes);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_tiles;
