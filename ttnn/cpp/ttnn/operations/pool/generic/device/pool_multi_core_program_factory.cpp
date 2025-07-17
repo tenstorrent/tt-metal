@@ -481,8 +481,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
-    std::string reader_kernel_fname;
-    reader_kernel_fname =
+    std::string reader_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
         "reader_pool_2d.cpp";
 
@@ -524,8 +523,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};
-    std::string compute_kernel_fname;
-    compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
+
+    std::string compute_kernel_fname =
+        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
