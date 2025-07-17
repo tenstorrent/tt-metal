@@ -4,7 +4,7 @@
 
 #include "mesh_graph.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <yaml-cpp/yaml.h>
 #include <array>
 #include <fstream>
@@ -14,6 +14,7 @@
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
+#include <tt_stl/caseless_comparison.hpp>
 
 namespace tt {
 enum class ARCH;
@@ -146,7 +147,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
 
     // Parse Chip
     const auto& chip = yaml["ChipSpec"];
-    auto arch = magic_enum::enum_cast<tt::ARCH>(chip["arch"].as<std::string>(), magic_enum::case_insensitive);
+    auto arch = enchantum::cast<tt::ARCH>(chip["arch"].as<std::string>(), ttsl::ascii_caseless_comp);
     TT_FATAL(arch.has_value(), "MeshGraph: Invalid yaml chip arch: {}", chip["arch"].as<std::string>());
 
     std::uint32_t num_eth_ports_per_direction = chip["ethernet_ports"]["N"].as<std::uint32_t>();
@@ -169,7 +170,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             "MeshGraph: Duplicate board name: {}",
             board_name);
         auto fabric_type =
-            magic_enum::enum_cast<FabricType>(board["type"].as<std::string>(), magic_enum::case_insensitive);
+            enchantum::cast<FabricType>(board["type"].as<std::string>(), ttsl::ascii_caseless_comp);
         TT_FATAL(
             fabric_type.has_value(), "MeshGraph: Invalid yaml fabric board type: {}", board["type"].as<std::string>());
 
@@ -355,7 +356,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         MeshId mesh_id{node[0].as<std::uint32_t>()};
         std::string port_string = node[1].as<std::string>();
         RoutingDirection port_direction =
-            magic_enum::enum_cast<RoutingDirection>(port_string.substr(0, 1), magic_enum::case_insensitive).value();
+            enchantum::cast<RoutingDirection>(port_string.substr(0, 1),ttsl::ascii_caseless_comp).value();
         std::uint32_t chan_id = static_cast<uint32_t>(std::stoul(port_string.substr(1, port_string.size() - 1)));
         return {mesh_id, {port_direction, chan_id}};
     };
@@ -378,7 +379,7 @@ void MeshGraph::print_connectivity() const {
             ss << "   D" << chip_id << ": ";
             for (auto [connected_chip_id, edge] : this->intra_mesh_connectivity_[mesh_id_val][chip_id]) {
                 for (int i = 0; i < edge.connected_chip_ids.size(); i++) {
-                    ss << edge.connected_chip_ids[i] << "(" << magic_enum::enum_name(edge.port_direction) << ", "
+                    ss << edge.connected_chip_ids[i] << "(" << enchantum::to_string(edge.port_direction) << ", "
                        << edge.weight << ") ";
                 }
             }
@@ -395,7 +396,7 @@ void MeshGraph::print_connectivity() const {
             for (auto [connected_mesh_id, edge] : this->inter_mesh_connectivity_[mesh_id_val][chip_id]) {
                 for (int i = 0; i < edge.connected_chip_ids.size(); i++) {
                     ss << "M" << *connected_mesh_id << "D" << edge.connected_chip_ids[i] << "("
-                       << magic_enum::enum_name(edge.port_direction) << ", " << edge.weight << ") ";
+                       << enchantum::to_string(edge.port_direction) << ", " << edge.weight << ") ";
                 }
             }
             ss << std::endl;

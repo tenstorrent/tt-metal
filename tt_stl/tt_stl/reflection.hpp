@@ -24,7 +24,9 @@
 
 #include <tt_stl/concepts.hpp>
 #include <nlohmann/json.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
+#include <enchantum/scoped.hpp>
+
 #include <tt_stl/type_name.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -367,9 +369,9 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
     return os;
 }
 
-template <typename T>
-typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std::ostream& os, const T& value) {
-    os << magic_enum::enum_type_name<T>() << "::" << magic_enum::enum_name(value);
+template <enchantum::Enum E>
+std::ostream& operator<<(std::ostream& os, E value) {
+    os << enchantum::scoped::to_string(value);
     return os;
 }
 

@@ -64,7 +64,14 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.1.4)
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7)
+include(FetchContent)
+
+FetchContent_Declare(enchantum 
+GIT_REPOSITORY https://github.com/ZXShady/enchantum 
+GIT_TAG 8ed8888e2ab3dd11313f76943ea6849f8b69a9f6)
+
+FetchContent_MakeAvailable(enchantum)
+
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json

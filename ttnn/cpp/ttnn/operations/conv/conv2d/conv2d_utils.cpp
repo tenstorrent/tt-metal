@@ -1029,7 +1029,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     for (const CBInfo& cb : cb_info) {
         if (!cb.is_globally_allocated) {
             total_CB_size += cb.cb_size_per_core();
-            log_debug(tt::LogOp, "CB: {}, size: {}", magic_enum::enum_name(cb.name), cb.cb_size_per_core());
+            log_debug(tt::LogOp, "CB: {}, size: {}", enchantum::to_string(cb.name), cb.cb_size_per_core());
         }
         if (cb.name == Conv2dCb::OUT) {
             output_size = cb.cb_size_per_core();

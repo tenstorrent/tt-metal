@@ -96,7 +96,7 @@ void write_ttnn_tensor(MsgPackFile& file, std::string_view name, const tt::tt_me
         auto data = data_all_devices.front();
         file.put(std::string(name) + "/data", std::span<const uint32_t>(data.data(), data.size()));
     } else {
-        throw std::runtime_error(fmt::format("Unsupported data type: {}", magic_enum::enum_name(data_type)));
+        throw std::runtime_error(fmt::format("Unsupported data type: {}", enchantum::to_string(data_type)));
     }
 }
 
@@ -124,7 +124,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
         tensor = core::from_vector<uint32_t, tt::tt_metal::DataType::UINT32>(
             data, shape, &ttml::autograd::ctx().get_device(), layout);
     } else {
-        throw std::runtime_error(fmt::format("Unsupported data type: {}", magic_enum::enum_name(data_type)));
+        throw std::runtime_error(fmt::format("Unsupported data type: {}", enchantum::to_string(data_type)));
     }
 }
 

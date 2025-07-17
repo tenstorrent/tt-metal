@@ -14,6 +14,7 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS .
         FILES
+            tt_stl/caseless_comparison.hpp
             tt_stl/aligned_allocator.hpp
             tt_stl/any_range.hpp
             tt_stl/cleanup.hpp
@@ -36,7 +37,7 @@ target_link_libraries(
     tt_stl
     INTERFACE
         Reflect::Reflect
-        magic_enum::magic_enum
+        enchantum::enchantum
         nlohmann_json::nlohmann_json
         span
         small_vector

@@ -9,7 +9,7 @@
 #include <device_pool.hpp>
 #include <host_api.hpp>
 #include <limits>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>

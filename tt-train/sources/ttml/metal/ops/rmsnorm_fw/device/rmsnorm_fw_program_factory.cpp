@@ -313,25 +313,25 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* gamma_buffer = gamma.buffer();
     TT_FATAL(
         gamma_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        magic_enum::enum_name(gamma_buffer->buffer_type()));
+        enchantum::to_string(gamma_buffer->buffer_type()));
 
     auto* output_buffer = output.front().buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        magic_enum::enum_name(output_buffer->buffer_type()));
+        enchantum::to_string(output_buffer->buffer_type()));
 
     auto* rms_output_buffer = output.back().buffer();
     TT_FATAL(
         rms_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "RMS output buffer must be in DRAM. RMS output buffer of type {}",
-        magic_enum::enum_name(rms_output_buffer->buffer_type()));
+        enchantum::to_string(rms_output_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;

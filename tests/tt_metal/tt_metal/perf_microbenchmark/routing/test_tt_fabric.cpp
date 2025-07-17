@@ -15,7 +15,7 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "tt_fabric_test_context.hpp"
 

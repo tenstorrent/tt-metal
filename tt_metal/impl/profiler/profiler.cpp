@@ -9,7 +9,7 @@
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <nlohmann/json.hpp>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
@@ -592,7 +592,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                     riscNumRead,
                                     worker_core.x,
                                     worker_core.y,
-                                    magic_enum::enum_name(CoreType),
+                                    enchantum::to_string(CoreType),
                                     runHostCounterRead,
                                     index);
                                 TT_ASSERT(
@@ -602,7 +602,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                     coreFlatIDRead,
                                     worker_core.x,
                                     worker_core.y,
-                                    magic_enum::enum_name(CoreType),
+                                    enchantum::to_string(CoreType),
                                     runHostCounterRead,
                                     index);
 
@@ -763,7 +763,7 @@ void DeviceProfiler::logPacketData(
                 if (zone_details
                         .zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::PROCESS_CMD)]) {
                     this->current_dispatch_meta_data.cmd_type =
-                        fmt::format("{}", magic_enum::enum_name((CQDispatchCmdId)data));
+                        fmt::format("{}", enchantum::to_string((CQDispatchCmdId)data));
                     metaData["dispatch_command_type"] = this->current_dispatch_meta_data.cmd_type;
                 } else if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(
                                ZoneDetails::ZoneNameKeyword::RUNTIME_HOST_ID_DISPATCH)]) {
@@ -774,13 +774,13 @@ void DeviceProfiler::logPacketData(
                     this->current_dispatch_meta_data.cmd_subtype = fmt::format(
                         "{}{}",
                         data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
-                        magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteType>(
+                        enchantum::to_string(static_cast<CQDispatchCmdPackedWriteType>(
                             (data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
                     metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
                 } else if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(
                                ZoneDetails::ZoneNameKeyword::PACKED_LARGE_DATA_DISPATCH)]) {
                     this->current_dispatch_meta_data.cmd_subtype =
-                        fmt::format("{}", magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
+                        fmt::format("{}", enchantum::to_string(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
                     metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
                 }
 
@@ -884,7 +884,7 @@ void DeviceProfiler::logPacketDataToCSV(
         data,
         run_host_id,
         zone_name,
-        magic_enum::enum_name(packet_type),
+        enchantum::to_string(packet_type),
         source_line,
         source_file,
         metaDataStr);
@@ -917,7 +917,7 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"op_name", opname},
                 {"proc", risc_name},
                 {"zone", zone_name},
-                {"zone_phase", magic_enum::enum_name(zone_phase)},
+                {"zone_phase", enchantum::to_string(zone_phase)},
                 {"sx", core_x},
                 {"sy", core_y},
                 {"timestamp", timestamp},
@@ -938,13 +938,13 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"run_host_id", run_host_id},
                 {"op_name", opname},
                 {"proc", risc_name},
-                {"noc", magic_enum::enum_name(local_noc_event.noc_type)},
+                {"noc", enchantum::to_string(local_noc_event.noc_type)},
                 {"vc", int(local_noc_event.noc_vc)},
                 {"src_device_id", device_id},
                 {"sx", core_x},
                 {"sy", core_y},
                 {"num_bytes", local_noc_event.getNumBytes()},
-                {"type", magic_enum::enum_name(ev_md.noc_xfer_type)},
+                {"type", enchantum::to_string(ev_md.noc_xfer_type)},
                 {"timestamp", timestamp},
             };
 
@@ -980,8 +980,8 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"proc", risc_name},
                 {"sx", core_x},
                 {"sy", core_y},
-                {"type", magic_enum::enum_name(ev_md.noc_xfer_type)},
-                {"routing_fields_type", magic_enum::enum_name(fabric_noc_event.routing_fields_type)},
+                {"type", enchantum::to_string(ev_md.noc_xfer_type)},
+                {"routing_fields_type", enchantum::to_string(fabric_noc_event.routing_fields_type)},
                 {"timestamp", timestamp},
             };
 
@@ -1012,8 +1012,8 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"proc", risc_name},
                 {"sx", core_x},
                 {"sy", core_y},
-                {"type", magic_enum::enum_name(ev_md.noc_xfer_type)},
-                {"routing_fields_type", magic_enum::enum_name(fabric_noc_scatter_event.routing_fields_type)},
+                {"type", enchantum::to_string(ev_md.noc_xfer_type)},
+                {"routing_fields_type", enchantum::to_string(fabric_noc_scatter_event.routing_fields_type)},
                 {"timestamp", timestamp},
             };
 
@@ -1142,7 +1142,7 @@ void DeviceProfiler::serializeJsonNocTraces(
 
             auto routing_fields_type_str = fabric_event.at("routing_fields_type").get<std::string>();
             auto maybe_routing_fields_type =
-                magic_enum::enum_cast<KernelProfilerNocEventMetadata::FabricPacketType>(routing_fields_type_str);
+                enchantum::cast<KernelProfilerNocEventMetadata::FabricPacketType>(routing_fields_type_str);
             if (!maybe_routing_fields_type) {
                 log_error(
                     tt::LogMetal,
@@ -1195,7 +1195,7 @@ void DeviceProfiler::serializeJsonNocTraces(
             modified_write_event["timestamp"] = fabric_event["timestamp"];
 
             // replace original eth core destination with true destination
-            auto noc_xfer_type = magic_enum::enum_cast<KernelProfilerNocEventMetadata::NocEventType>(
+            auto noc_xfer_type = enchantum::cast<KernelProfilerNocEventMetadata::NocEventType>(
                 fabric_event["type"].get<std::string>());
 
             if (!noc_xfer_type.has_value() ||
@@ -1448,7 +1448,7 @@ void DeviceProfiler::dumpResults(
 
     const chip_id_t device_id = device->id();
     const std::string zone_name =
-        fmt::format("{}-{}-{}", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
+        fmt::format("{}-{}-{}", device_id, enchantum::to_string(state), enchantum::to_string(data_source));
     ZoneName(zone_name.c_str(), zone_name.size());
 
     device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);

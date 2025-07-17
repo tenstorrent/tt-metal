@@ -11,7 +11,7 @@
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <kernel.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -93,16 +93,16 @@ DataMovementConfigStatus CheckDataMovementConfig(
         int noc_value;
         switch (programmable_core) {
             case HalProgrammableCoreType::TENSIX:
-                noc_value = magic_enum::enum_integer(std::get<DataMovementConfig>(kernel->config()).noc);
+                noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
             case HalProgrammableCoreType::IDLE_ETH:
-                noc_value = magic_enum::enum_integer(std::get<EthernetConfig>(kernel->config()).noc);
+                noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
                 break;
             default:
                 TT_THROW(
                     "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                    magic_enum::enum_name(programmable_core));
+                    enchantum::to_string(programmable_core));
         }
         local_noc0_usage = noc_value == 0;
         local_noc1_usage = noc_value == 1;
@@ -1058,7 +1058,7 @@ KernelHandle CreateEthernetKernel(
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
-        magic_enum::enum_name(config.processor),
+        enchantum::to_string(config.processor),
         MetalContext::instance().hal().get_processor_classes_count(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),

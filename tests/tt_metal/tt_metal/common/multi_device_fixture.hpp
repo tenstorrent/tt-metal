@@ -137,11 +137,11 @@ protected:
                 config_.mesh_device_types.begin(),
                 config_.mesh_device_types.end(),
                 std::back_inserter(requested_device_types),
-                [](const auto t) { return std::string(magic_enum::enum_name(t)); });
+                [](const auto t) { return std::string(enchantum::to_string(t)); });
             GTEST_SKIP() << fmt::format(
                 "Skipping MeshDevice test suite on a {} machine that does not match any of the configured mesh device "
                 "types {}",
-                magic_enum::enum_name(*mesh_device_type),
+                enchantum::to_string(*mesh_device_type),
                 boost::algorithm::join(requested_device_types, ", "));
         }
 

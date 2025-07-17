@@ -107,9 +107,9 @@ void MetalContext::initialize(
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
     // Need DispatchMemMap for both dispatch core types
     tt_metal::DispatchSettings::initialize(*cluster_);
-    dispatch_mem_map_[magic_enum::enum_integer(CoreType::WORKER)] =
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
-    dispatch_mem_map_[magic_enum::enum_integer(CoreType::ETH)] =
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
     // Initialize debug servers. Attaching individual devices done below
     if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -288,7 +288,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    auto& mem_map = dispatch_mem_map_[magic_enum::enum_integer(core_type)];
+    auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
     TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before intializing it.", core_type);
     return *mem_map;
 }
@@ -883,7 +883,7 @@ void MetalContext::initialize_firmware(
         }
         default:
             TT_THROW(
-                "Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
+                "Unsupported programable core type {} to initialize build states", enchantum::to_string(core_type));
     }
 
     cluster_->write_core(

@@ -5,7 +5,7 @@
 #include "build_env_manager.hpp"
 
 #include <limits.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <math.h>
 #include <tracy/Tracy.hpp>
 #include <bitset>
@@ -194,7 +194,7 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_i
             default:
                 TT_THROW(
                     "Unsupported programable core type {} to initialize build states",
-                    magic_enum::enum_name(core_type));
+                    enchantum::to_string(core_type));
         }
     };
 
@@ -202,10 +202,10 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_i
     uint32_t index = 0;
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-        HalProgrammableCoreType core_type = magic_enum::enum_value<HalProgrammableCoreType>(programmable_core);
+        HalProgrammableCoreType core_type = *enchantum::index_to_enum<HalProgrammableCoreType>(programmable_core);
         uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-            auto compute_proc_class = magic_enum::enum_cast<HalProcessorClassType>(processor_class);
+            auto compute_proc_class = enchantum::cast<HalProcessorClassType>(processor_class);
             bool is_compute_processor =
                 compute_proc_class.has_value() and compute_proc_class.value() == HalProcessorClassType::COMPUTE;
             uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);

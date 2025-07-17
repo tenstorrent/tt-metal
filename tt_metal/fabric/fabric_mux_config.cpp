@@ -9,6 +9,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_fabric {
 
@@ -158,7 +159,7 @@ FabricMuxConfig::FabricMuxConfig(
     } else if (core_type_ == CoreType::IDLE_ETH) {
         hal_core_type = tt_metal::HalProgrammableCoreType::IDLE_ETH;
     } else {
-        TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(core_type));
+        TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(core_type));
     }
 
     core_type_index_ = hal.get_programmable_core_type_index(hal_core_type);
@@ -293,7 +294,7 @@ void FabricMuxConfig::validate_channel_id(FabricMuxChannelType channel_type, uin
     TT_FATAL(
         channel_id < get_num_channels(channel_type),
         "Invalid channel id for channel type: {}. Requested channel id: {} but maximum is {}",
-        magic_enum::enum_name(channel_type),
+        enchantum::to_string(channel_type),
         channel_id,
         get_num_channels(channel_type));
 }

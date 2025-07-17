@@ -6,7 +6,7 @@
 
 #include <tuple>
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <ttnn/operations/data_movement/copy/copy.hpp>
 #include <ttnn/operations/data_movement/permute/permute.hpp>

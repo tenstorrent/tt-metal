@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/program/dispatch.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <mesh_workload.hpp>
 #include <stddef.h>
 #include <string.h>
@@ -110,6 +110,31 @@ enum DispatchWriteOffsets {
     DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE = 2,
     DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 3,
 };
+
+CoreCoord get_sub_device_worker_origin(
+    const tt::tt_metal::IDevice* device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    tt::tt_metal::HalProgrammableCoreType core_type) {
+    const auto grid = device->worker_cores(core_type, sub_device_id);
+    if (grid.empty()) {
+        return {0, 0};
+    }
+    return grid.bounding_box().start_coord;
+}
+
+DispatchWriteOffsets get_dispatch_write_offset(CoreType core_type, bool prefer_zero = false) {
+    switch (core_type) {
+        case CoreType::ETH:
+        case CoreType::ACTIVE_ETH:
+        case CoreType::IDLE_ETH: return DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE;
+        case CoreType::WORKER:
+            return prefer_zero ? DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ZERO
+                               : DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE;
+        default: TT_THROW("Invalid core type get_dispatch_write_offset {}", enchantum::to_string(core_type));
+    }
+}
+
+};  // namespace
 
 uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t programmable_core_type_index,

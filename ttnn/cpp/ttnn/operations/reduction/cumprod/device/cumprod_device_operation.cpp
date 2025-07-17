@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cumprod_device_operation.hpp"
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::reduction {
@@ -44,7 +44,7 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
         input_tensor.storage_type() == StorageType::DEVICE,
         "The ttnn.cumprod operation requires input to be on a Tenstorrent device. "
         "The input tensor is stored on {}.",
-        magic_enum::enum_name(input_tensor.storage_type()));
+        enchantum::to_string(input_tensor.storage_type()));
 
     TT_FATAL(
         input_tensor.buffer() != nullptr,
@@ -56,13 +56,13 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.layout() == Layout::TILE,
         "The provided input tensor has a non-tile layout: {}.",
-        magic_enum::enum_name(input_tensor.layout()));
+        enchantum::to_string(input_tensor.layout()));
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "The ttnn.cumprod operation requires the memory layout of the input tensor to be "
         "interleaved. Instead, it is {}.",
-        magic_enum::enum_name(input_tensor.memory_config().memory_layout()));
+        enchantum::to_string(input_tensor.memory_config().memory_layout()));
 }
 
 void CumprodDeviceOperation::validate_on_program_cache_hit(

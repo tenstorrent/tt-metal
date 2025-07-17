@@ -308,37 +308,37 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     TT_FATAL(
         input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* gamma_buffer = gamma.buffer();
     TT_FATAL(
         gamma_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        magic_enum::enum_name(gamma_buffer->buffer_type()));
+        enchantum::to_string(gamma_buffer->buffer_type()));
 
     auto* rms_buffer = rms.buffer();
     TT_FATAL(
         rms_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "RMS buffer must be in DRAM. RMS buffer of type {}",
-        magic_enum::enum_name(rms_buffer->buffer_type()));
+        enchantum::to_string(rms_buffer->buffer_type()));
 
     auto* dLdout_buffer = dLdout.buffer();
     TT_FATAL(
         dLdout_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
-        magic_enum::enum_name(dLdout_buffer->buffer_type()));
+        enchantum::to_string(dLdout_buffer->buffer_type()));
 
     auto* dL_da_buffer = output[0].buffer();
     TT_FATAL(
         dL_da_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_da buffer must be in DRAM. dL_da buffer of type {}",
-        magic_enum::enum_name(dL_da_buffer->buffer_type()));
+        enchantum::to_string(dL_da_buffer->buffer_type()));
 
     auto* dL_dgamma_components_buffer = output[1].buffer();
     TT_FATAL(
         dL_dgamma_components_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dgamma buffer must be in DRAM. dL_dgamma buffer of type {}",
-        magic_enum::enum_name(dL_dgamma_components_buffer->buffer_type()));
+        enchantum::to_string(dL_dgamma_components_buffer->buffer_type()));
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
