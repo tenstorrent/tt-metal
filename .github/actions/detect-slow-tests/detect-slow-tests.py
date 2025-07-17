@@ -34,7 +34,6 @@ def detect_slow_tests(report_dir, timeout):
 
     excluded_tests = []
     slow_tests = []
-    excluded_tests = []
 
     for report_file in report_files:
         try:
