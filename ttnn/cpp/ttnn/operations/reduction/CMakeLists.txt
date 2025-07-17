@@ -21,7 +21,6 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         argmax/device/argmax_op.cpp
-        argmax/device/argmax_program_factory.cpp
         argmax/device/argmax_single_core_program_factory.cpp
         argmax/device/argmax_multi_core_program_factory.cpp
         argmax/argmax.cpp
