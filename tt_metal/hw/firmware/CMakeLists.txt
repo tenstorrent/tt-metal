@@ -8,6 +8,15 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
+
+# Link with tt_llk targets for header dependencies
+target_link_libraries(
+    metalium_firmware
+    INTERFACE
+        tt-llk::wormhole_b0
+        tt-llk::blackhole
+)
+
 target_sources(
     metalium_firmware
     INTERFACE
