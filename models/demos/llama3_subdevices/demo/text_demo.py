@@ -71,15 +71,13 @@ def load_inputs(user_input, len_per_batch, instruct):
     for i in range(batch):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
+            # TODO This might override the expected input size give in the prompt file
             if "max_length" in user_input[i]:  # Clip the context to the max length provided
-                if user_input[i]["max_length"] > len_per_batch[i]:
-                    context_text = load_and_cache_context(
-                        user_input[i]["context"], cache_dir, max_length=len_per_batch[i]
-                    )
-                else:
-                    context_text = load_and_cache_context(
-                        user_input[i]["context"], cache_dir, max_length=user_input[i]["max_length"]
-                    )
+                context_text = load_and_cache_context(
+                    user_input[i]["context"],
+                    cache_dir,
+                    max_length=(user_input[i]["max_length"]) if batch == 1 else len_per_batch[i],
+                )
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
             if instruct:
@@ -194,7 +192,7 @@ def create_tt_model(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, prefill_profile, num_layers",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -241,7 +239,7 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # apc_test,
+            False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
@@ -258,7 +256,7 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # apc_test,
+            False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
@@ -275,7 +273,7 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # apc_test,
+            False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
@@ -291,13 +289,13 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only,
-            False,  # pcc_check,
+            False,  # apc_test
+            False,  # pcc_check
             True,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # CI Run for PCC check for 1 Layer: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+        (  # APC Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             True,  # instruct mode
@@ -312,7 +310,8 @@ def create_tt_model(
             True,  # apc_test
             True,  # pcc_check
             False,  # prefill-only profile
-            1,  # num layers
+            80,  # num layers
+            False,  # print_outputs
         ),
         (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -339,7 +338,7 @@ def create_tt_model(
         "long-context-batch32",  # max-length for 32 users
         "long-context-32k",  # max-length
         "prefill-profile",  # prefill-only profile run
-        "pcc-1L",  # pcc check for 1L
+        "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-80L",  # pcc check for 80L + teacher forced
     ],
 )
@@ -388,13 +387,11 @@ def test_demo_text(
     mesh_device,
     is_ci_env,
     apc_test,
-    ci_only,
     prefill_profile,
     num_layers,
     pcc_check,
     pcc_decode_len,
     reset_seeds,
-    galaxy_type,
     request,
     galaxy_type,
     print_outputs,
@@ -434,6 +431,7 @@ def test_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
+    print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True  # repeat_batches > 1
@@ -481,15 +479,7 @@ def test_demo_text(
     profiler.start("loading_inputs")
     input_prompts = load_inputs(
         input_prompts,
-        [
-            534,
-            1008,
-            1111 * 4,
-            3333 * 4,
-        ]
-        * 8
-        if batch_size == 32
-        else [15384 * 8],
+        input_lengths,
         instruct,
     )
     profiler.end("loading_inputs")
