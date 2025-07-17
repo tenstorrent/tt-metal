@@ -43,19 +43,11 @@ GREEN = "\033[32m"  # For instructions
 ORANGE = "\033[33m"  # For warnings
 VERBOSE_CLR = "\033[94m"  # For verbose output
 
-# TODO: DELETE THIS
-RST = ""
-BLUE = ""  # For good values
-RED = ""  # For bad values
-GREEN = ""  # For instructions
-ORANGE = ""  # For warnings
-VERBOSE_CLR = ""  # For verbose output
-
 # Global variables for verbosity settings
 VERBOSE = False
 VVERBOSE = False
 context = None
-GDB_EN = False
+USE_GDB = False
 PORT = 6767
 
 try:
@@ -276,9 +268,6 @@ def collect_pcs_from_riscv(
         pc_dict = dict()
         for risc_name in block.risc_names:
             risc_debug = block.get_risc_debug(risc_name)
-            if GDB_EN:
-                if not risc_name == "ncrisc" and not risc_debug.is_halted():
-                    risc_debug.halt()
             pc_dict[risc_name + "_pc"] = risc_debug.get_pc()
         pcs[block.location] = pc_dict
     return pcs
@@ -418,7 +407,7 @@ def get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, p
 
 
 def get_running_ops_table(
-    dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path, ui_state, process_ids
+    dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path, process_ids
 ):
     printout_table = init_running_ops_table(enum_values)
 
@@ -479,24 +468,16 @@ def get_running_ops_table(
                 kernel_path = os.path.realpath(kernel_path)
                 if not os.path.exists(kernel_path):
                     raiseTTTriageError(f"Kernel ELF file {kernel_path} does not exist.")
-                pc = pcs[loc][proc_name.lower() + "_pc"]
+                if proc_name == "NCRISC" and type(dev) == WormholeDevice:
+                    kernel_offset = 0xFFC00000
+                else:
+                    kernel_offset = kernel_config_base + kernel_text_offset
                 if VVERBOSE:
+                    if USE_GDB:
+                        print("Using GDB to obtain callstack. This might take few minutes.")
                     print(f".", end="", flush=True)
-
-                    if fw_elf_path not in elf_cache:
-                        elf_cache[fw_elf_path] = parse_elf(fw_elf_path, context)
-                    if kernel_path not in elf_cache:
-                        elf_cache[kernel_path] = parse_elf(kernel_path, context)
-                    if proc_name == "NCRISC" and type(dev) == WormholeDevice:
-                        kernel_offset = 0xFFC00000
-                    else:
-                        kernel_offset = kernel_config_base + kernel_text_offset
-
-                    cs = top_callstack(
-                        pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
-                    )
-                    # Since we are halting when attaching to process, we can't attach to NCRISC
-                    if GDB_EN:
+                    # Get callstack using GDB
+                    if USE_GDB:
                         pid = process_ids.get(loc, {}).get(risc_name, None)
                         if pid is not None:
                             cs = (
@@ -504,28 +485,40 @@ def get_running_ops_table(
                                     process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset
                                 )
                                 if proc_name != "NCRISC"
-                                else ["GDB does not support callstack for NCRISC"]
+                                else ["GDB callstack for NCRISC is not supported"]
                             )
+                    # Get callstack using tt-exalens
+                    else:
+                        pc = pcs[loc][proc_name.lower() + "_pc"]
 
+                        if fw_elf_path not in elf_cache:
+                            elf_cache[fw_elf_path] = parse_elf(fw_elf_path, context)
+                        if kernel_path not in elf_cache:
+                            elf_cache[kernel_path] = parse_elf(kernel_path, context)
+
+                        cs = top_callstack(
+                            pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
+                        )
             else:
-                pc = pcs[loc][proc_name.lower() + "_pc"]
                 if VVERBOSE:
                     print(f".", end="", flush=True)
-
-                    if fw_elf_path not in elf_cache:
-                        elf_cache[fw_elf_path] = parse_elf(fw_elf_path, context)
-
-                    cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
-
-                    # Since we are halting when attaching to process, we can't attach to NCRISC
-                    if GDB_EN:
+                    # Get callstack using GDB
+                    if USE_GDB:
                         pid = process_ids.get(loc, {}).get(risc_name, None)
                         if pid is not None:
                             cs = (
                                 get_callstack_with_gdb(process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
                                 if proc_name != "NCRISC"
-                                else ["GDB does not support callstack for NCRISC"]
+                                else ["GDB callstack for NCRISC is not supported"]
                             )
+                    # Get callstack using tt-exalens
+                    else:
+                        pc = pcs[loc][proc_name.lower() + "_pc"]
+
+                        if fw_elf_path not in elf_cache:
+                            elf_cache[fw_elf_path] = parse_elf(fw_elf_path, context)
+
+                        cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
 
             if VVERBOSE:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -547,7 +540,7 @@ def get_running_ops_table(
             if kernel_name or kernel_config_base or VVERBOSE:
                 printout_table.append(row)
                 if cs:
-                    cs = format_callstack(cs) if not GDB_EN else cs
+                    cs = format_callstack(cs) if not USE_GDB else cs
                     for line in cs:
                         printout_table.append(["", "", "", "", "", "", "", line])
 
@@ -557,15 +550,11 @@ def get_running_ops_table(
 def get_callstack_with_gdb(pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None) -> list[str]:
     # Start GDB client
     gdb_client = subprocess.Popen(
-        [
-            "../tt-exalens/build/sfpi/compiler/bin/riscv32-tt-elf-gdb",
-            "--quiet",
-        ],  # TODO: Think of a way to get gdb to metal
+        ["tt-exalens", "--gdb"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+        stderr=subprocess.PIPE,
+        text=True,  # ensures strings instead of bytes
     )
 
     # Giving 0 as kernel_offset does not work
@@ -578,24 +567,31 @@ def get_callstack_with_gdb(pid: int, loc, risc_name: str, elf_path: str, kernel_
     target extended-remote localhost:{PORT}
     attach {pid}
     {add_symbol_file_cmd}
+    printf "BT START\\n"
     backtrace
+    printf "BT END\\n"
     detach
+    quit
     """
     )
     gdb_client.stdin.flush()
 
-    # TODO: Find better way to wait for gdb command to finish
-    time.sleep(0.1)
-
-    gdb_client.stdin.write("quit\n")
-    gdb_client.stdin.flush()
-
     cs = []
+    is_bt = False
     for line in gdb_client.communicate()[0].splitlines():
-        if "#" in line:
-            cs.append(line[line.find("#") :])
+        if "BT START" in line:
+            is_bt = True
+        elif "BT END" in line:
+            is_bt = False
+        else:
+            if is_bt:
+                if "#" in line:
+                    cs.append(line[line.find("#") :])
+                else:
+                    cs.append(line)
 
-    return cs
+    # Skipping last line since it is message not callstack entry
+    return cs[:-1]
 
 
 def get_process_ids(ui_state: UIState):
@@ -617,7 +613,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
     title(dump_running_ops.__doc__)
 
     process_ids = None
-    if GDB_EN:
+    if USE_GDB:
         ui_state = UIState(context)
         # Start GDB server
         try:
@@ -714,7 +710,6 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
         brisc_elf,
         pcs_tensix,
         a_kernel_path,
-        ui_state,
         process_ids,
     )
     runinng_ops_table_idle_eth = get_running_ops_table(
@@ -726,11 +721,10 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
         idle_erisc_elf,
         pcs_idle_eth,
         a_kernel_path,
-        ui_state,
         process_ids,
     )
 
-    if GDB_EN:
+    if USE_GDB:
         # Stop gdb server
         ui_state.stop_gdb()
 
@@ -766,13 +760,13 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context:
 
 def main(argv=None):
     """Main function that runs the triage script."""
-    global VERBOSE, VVERBOSE, context, HALT_ON_ERROR, GDB_EN, PORT
+    global VERBOSE, VVERBOSE, context, HALT_ON_ERROR, USE_GDB, PORT
 
     args = docopt(__doc__, argv=argv)
     VERBOSE = args["--verbose"]
     VVERBOSE = args["--vverbose"]
     HALT_ON_ERROR = args["--halt-on-error"]
-    GDB_EN = args["--gdb"]
+    USE_GDB = args["--gdb"]
     PORT = int(args["--port"])
 
     context = init_ttexalens(use_noc1=False)
