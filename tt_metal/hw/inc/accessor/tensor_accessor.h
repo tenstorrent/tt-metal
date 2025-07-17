@@ -87,6 +87,29 @@ public:
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
     }
 
+    // Shard NOC APIs
+    FORCE_INLINE
+    std::uint64_t get_shard_noc_addr(
+        const uint32_t shard_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        PageMapping page_mapping{
+            .bank_id = shard_id % dspec().num_banks(),
+            .bank_page_offset = shard_id / dspec().num_banks() * dspec().shard_volume(),
+        };
+        return get_noc_addr(page_mapping, offset, noc);
+    }
+
+    template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
+    FORCE_INLINE std::uint64_t get_shard_noc_addr(
+        const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        uint32_t shard_id = 0;
+        for (uint32_t i = 0; i < dspec().rank(); ++i) {
+            // Check that shard_coord is within bounds
+            ASSERT(shard_coord[i] < dspec().shard_shape()[i]);
+            shard_id *= dspec().shard_grid_strides()[i];
+        }
+        return get_shard_noc_addr(shard_id, offset, noc);
+    }
+
     // Helpers
     struct PageMapping {
         size_t bank_id;
@@ -143,14 +166,46 @@ public:
         return {bank_id, bank_page_offset};
     }
 
+    // Locality APIs
+    FORCE_INLINE
+    bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y, uint8_t noc = noc_index) const {
+        return virtual_x == my_x[noc] && virtual_y == my_y[noc];
+    }
+
+    FORCE_INLINE
+    bool is_local_addr(const uint64_t noc_addr, uint8_t noc = noc_index) const {
+        uint32_t x = NOC_UNICAST_ADDR_X(noc_addr);
+        uint32_t y = NOC_UNICAST_ADDR_Y(noc_addr);
+        return is_local_bank(x, y, noc);
+    }
+
+    FORCE_INLINE
+    bool is_local_page(const uint32_t page_id, uint8_t noc = noc_index) const {
+        auto page_mapping = get_bank_and_offset(page_id);
+        const auto& packed_xy_coords = dspec().packed_xy_coords();
+        auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
+        return is_local_bank(bank_x, bank_y, noc);
+    }
+
+    FORCE_INLINE
+    bool is_local_shard(const uint32_t shard_id, uint8_t noc = noc_index) const {
+        uint32_t bank_id = shard_id % dspec().num_banks();
+
+        const auto& packed_xy_coords = dspec().packed_xy_coords();
+        auto bank_x = get_bank_x(packed_xy_coords[bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[bank_id]);
+        return is_local_bank(bank_x, bank_y, noc);
+    }
+
 private:
     // NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(
         const PageMapping page_mapping, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         const auto& packed_xy_coords = dspec().packed_xy_coords();
-        auto bank_x = (packed_xy_coords[page_mapping.bank_id] >> 8) & 0xFF;
-        auto bank_y = packed_xy_coords[page_mapping.bank_id] & 0xFF;
+        auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
                                          : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
         return bank_start + bank_base_address + page_mapping.bank_page_offset * page_size + offset;
@@ -176,6 +231,12 @@ private:
 
         return {bank_id, bank_page_offset};
     }
+
+    FORCE_INLINE
+    uint16_t get_bank_x(uint16_t packed_xy_coord) const { return (packed_xy_coord >> 8) & 0xFF; }
+
+    FORCE_INLINE
+    uint16_t get_bank_y(uint16_t packed_xy_coord) const { return packed_xy_coord & 0xFF; }
 
 public:
     const size_t bank_base_address = 0;
