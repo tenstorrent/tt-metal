@@ -70,7 +70,6 @@ void kernel_main() {
         .bank_base_address = in0_tensor_addr, .page_size = in0_single_tile_size_bytes, .data_format = in0_data_format};
 
     constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
-    uint32_t l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
     const InterleavedPow2AddrGenFast<sparsity_is_dram> s_sparsity = {
         .bank_base_address = sparsity_addr, .log_base_2_of_page_size = sparsity_log2_of_pagesize};
 
@@ -92,6 +91,9 @@ void kernel_main() {
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
+
+    cb_reserve_back(cb_id_sparsity, 1);
+    uint32_t l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
 
     for (uint32_t bA = 0; bA < batchA; ++bA) {
         noc_async_read_page(bA, s_sparsity, l1_write_addr_sparsity);
