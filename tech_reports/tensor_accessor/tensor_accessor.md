@@ -58,16 +58,16 @@ constexpr uint32_t base_idx_cta = 0;
 constexpr uint32_t base_idx_crta = 1;
 
 // This object keeps track of the location of arguments for the tensor accessor
-auto args = make_tensor_accessor_args<base_idx_cta, base_idx_crta>();
+auto args = TensorAccessorArgs<base_idx_cta, base_idx_crta>();
 // runtime base index can be a runtime variable too:
-auto args = make_tensor_accessor_args<base_idx_cta>(base_idx_crta);
+auto args = TensorAccessorArgs<base_idx_cta>(base_idx_crta);
 
 constexpr uint32_t new_base_idx_cta = base_idx_cta + args.compile_time_args_skip();
 // new_base_idx_crta might be constexpr if rank and number of banks are static
 uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
 
 // Create a TensorAccessor with runtime page size
-auto tensor_accessor = make_tensor_accessor_from_args(args, bank_base_address, page_size);
+auto tensor_accessor = TensorAccessor(args, bank_base_address, page_size);
 ```
 
 - Manual arguments
@@ -78,8 +78,8 @@ using tensor_shape = tensor_accessor::ArrayStaticWrapper<10, 10>;
 using shard_shape = tensor_accessor::ArrayStaticWrapper<3, 3>;
 // Each number in the bank coordinates represent the coordinates of two banks (x0, y0, x1, y1) compressed into a single uint32_t
 using banks_coords = tensor_accessor::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
-auto dspec = tensor_accessor::make_dspec<2, 16, tensor_shape, shard_shape, banks_coords>();
-auto tensor_accessor = make_tensor_accessor_from_dspec(std::move(dspec), 0, 1024);
+auto dspec = tensor_accessor::DistributionSpec<2, 16, tensor_shape, shard_shape, banks_coords>();
+auto tensor_accessor = TensorAccessor(std::move(dspec), 0, 1024);
 
 // You can also mix constexpr/runtime values:
 uint32_t tensor_shape[2] = {10, 10};
@@ -87,8 +87,8 @@ uint32_t shard_shape[2] = {3, 3};
 using dyn = tensor_accessor::ArrayDynamicWrapper;
 // Each number in the bank coordinates represent the coordinates of two banks (x0, y0, x1, y1) compressed into a single uint32_t
 using banks_coords = tensor_accessor::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
-auto dspec = tensor_accessor::make_dspec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
-auto tensor_accessor = tensor_accessor::make_tensor_accessor_from_dspec(std::move(dspec), 0, 1024);
+auto dspec = tensor_accessor::DistributionSpec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
+auto tensor_accessor = TensorAccessor(std::move(dspec), 0, 1024);
 
 ```
 
