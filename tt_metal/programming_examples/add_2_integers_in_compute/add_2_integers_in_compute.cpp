@@ -136,8 +136,8 @@ int main() {
     src0_vec = create_constant_vector_of_bfloat16(single_tile_size, 14.0f);
     src1_vec = create_constant_vector_of_bfloat16(single_tile_size, 8.0f);
 
-    //We're writing to a shard allocated on Device Coordinate 0, 0, since this is a 1x1 
-    // When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    // We're writing to a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
     distributed::WriteShard(cq, src0_dram_buffer, src0_vec, device_coord);
     distributed::WriteShard(cq, src1_dram_buffer, src1_vec, device_coord);
 
@@ -149,6 +149,7 @@ int main() {
     std::vector<bfloat16> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
+<<<<<<< HEAD
     // compare the results with the expected values.
     bool success = true;
     for (size_t i = 0; i < n_elements_per_tile; ++i) {
@@ -166,3 +167,15 @@ int main() {
     }
     mesh_device->close();
 }
+=======
+    // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    distributed::ReadShard(cq, result_vec, dst_dram_buffer, device_coord);
+
+    printf("Result = %d\n", result_vec[0]);  // 22 = 1102070192
+    printf(
+        "Expected = %d\n",
+        pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfloat16(22.0f), bfloat16(22.0f))));
+    mesh_device.reset();
+}
+>>>>>>> c51ab7ca4d (precommit fix)
