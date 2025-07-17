@@ -171,24 +171,24 @@ void Application() {
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
-            if (!enable_fw_flag[0]) {
+            // While the go signal for kernel execution is not sent, check if the worker was signalled
+            // to reset its launch message read pointer.
+            if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+                // Set the rd_ptr on workers to specified value
+                mailboxes->launch_msg_rd_ptr = 0;
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                    mailboxes->go_message.signal = RUN_MSG_DONE;
+                    // Notify dispatcher that this has been done
+                    internal_::notify_dispatch_core_done(dispatch_addr);
+                }
+            } else if (enable_fw_flag[0] != 1) {
                 internal_::disable_erisc_app();
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 return;
+            } else {
+                service_base_fw();
             }
-
-            // While the go signal for kernel execution is not sent, check if the worker was signalled
-            // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-                // Set the rd_ptr on workers to specified value
-                mailboxes->launch_msg_rd_ptr = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-                mailboxes->go_message.signal = RUN_MSG_DONE;
-                // Notify dispatcher that this has been done
-                internal_::notify_dispatch_core_done(dispatch_addr);
-            }
-
-            service_base_fw();
         }
         WAYPOINT("GD");
 
