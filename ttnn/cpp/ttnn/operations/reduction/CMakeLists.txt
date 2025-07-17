@@ -48,6 +48,8 @@ target_sources(
         topk/device/topk_op.cpp
         topk/topk.cpp
         topk/device/topk_program_factory.cpp
+        topk/device/topk_single_core_program_factory.cpp
+        topk/device/topk_multicore_program_factory.cpp
         reduction_common/reduction_common.cpp
 )
 
