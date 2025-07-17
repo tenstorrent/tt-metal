@@ -21,7 +21,7 @@ parameters = {
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
         [1, 1056, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
         [1, 128, 56, 56, 2, 2, 2, 2, 0, 0, False, True],
-        [1, 32, 7, 7, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 160, 7, 7, 2, 2, 2, 2, 0, 0, False, True],
         [1, 192, 56, 56, 2, 2, 2, 2, 0, 0, False, True],
         [1, 256, 28, 28, 2, 2, 2, 2, 0, 0, False, True],
         [1, 384, 28, 28, 2, 2, 2, 2, 0, 0, False, True],
