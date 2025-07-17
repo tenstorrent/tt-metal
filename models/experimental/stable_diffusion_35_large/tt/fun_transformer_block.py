@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
-from . import utils
 from .fun_attention import sd_joint_attention, TtAttentionParameters
 from .fun_feed_forward import sd_feed_forward, TtFeedForwardParameters
 from .fun_linear import sd_linear, TtLinearParameters
 from .fun_normalization import sd_layer_norm, TtLayerNormParameters
-from .parallel_config import DiTParallelConfig
+from .parallel_config import DiTParallelConfig, StableDiffusionParallelManager
 from .substate import has_substate, substate
+from .utils import unpadded_all_gather_async
 
 if TYPE_CHECKING:
     import torch
@@ -58,6 +58,7 @@ class TtTransformerBlockParameters:
                 device=device,
                 weight_shape=[embedding_dim + hidden_dim_padding],
                 eps=cls.eps,
+                parallel_config=parallel_config,
             )
 
         has_spatial_attn = has_substate(state, "attn2")
@@ -96,6 +97,7 @@ class TtTransformerBlockParameters:
                 num_chunks=spatial_time_embed_chunks,
                 hidden_dim_padding=hidden_dim_padding,
                 unsqueeze_bias=True,
+                parallel_config=parallel_config,
             ),
             prompt_time_embed=TtLinearParameters.from_torch_time_embed(
                 substate(state, "norm1_context.linear"),
@@ -104,12 +106,21 @@ class TtTransformerBlockParameters:
                 num_chunks=prompt_time_embed_chunks,
                 hidden_dim_padding=hidden_dim_padding,
                 unsqueeze_bias=True,
+                parallel_config=parallel_config,
             ),
             spatial_ff=TtFeedForwardParameters.from_torch(
-                substate(state, "ff"), dtype=dtype, device=device, parallel_config=parallel_config
+                substate(state, "ff"),
+                dtype=dtype,
+                device=device,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
             prompt_ff=TtFeedForwardParameters.from_torch(
-                substate(state, "ff_context"), dtype=dtype, device=device, parallel_config=parallel_config
+                substate(state, "ff_context"),
+                dtype=dtype,
+                device=device,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             )
             if has_ff_context
             else None,
@@ -127,7 +138,6 @@ def sd_spatial_attn_block(
     scale: ttnn.Tensor,
     shift: ttnn.Tensor,
 ) -> ttnn.Tensor:
-    # assert self._spatial_attn is not None
     assert parameters.spatial_attn is not None
     scaled = inp * (1 + scale) + shift
     attn, _ = sd_joint_attention(
@@ -135,8 +145,6 @@ def sd_spatial_attn_block(
     )
 
     result = gate * attn
-    ttnn.deallocate(scaled)
-    ttnn.deallocate(attn)
     return result
 
 
@@ -150,47 +158,88 @@ def sd_dual_attn_block(
     spatial_scale: ttnn.Tensor,
     spatial_shift: ttnn.Tensor,
     parameters: TtAttentionParameters,
-    parallel_config: DiTParallelConfig,
+    parallel_manager: StableDiffusionParallelManager,
     num_heads: int,
     N: int,
     L: int,
+    cfg_index: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+    device = spatial.device()
+
     spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
     prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
-    if parallel_config.tensor_parallel.factor > 1:
-        spatial_scaled = utils.all_gather(spatial_scaled, dim=-1)
-        prompt_scaled = utils.all_gather(prompt_scaled, dim=-1)
+    if parallel_manager.is_tensor_parallel:
+        spatial_scaled = ttnn.experimental.all_gather_async(
+            spatial_scaled,
+            dim=3,
+            num_links=parallel_manager.num_links,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_manager.dit_parallel_config.topology,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_buffer"),
+        )
+        prompt_scaled = unpadded_all_gather_async(
+            prompt_scaled,
+            dim=3,
+            num_links=parallel_manager.num_links,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_manager.dit_parallel_config.topology,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "prompt_buffer"),
+        )
+
     spatial_attn, prompt_attn = sd_joint_attention(
         spatial=spatial_scaled,
         prompt=prompt_scaled,
         parameters=parameters,
         num_heads=num_heads,
+        parallel_manager=parallel_manager,
         deallocate=True,
         N=N,
         L=L,
-        parallel_config=parallel_config,
+        cfg_index=cfg_index,
     )
     spatial_attn_scaled = spatial_gate * spatial_attn
     prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
-    ttnn.deallocate(spatial_attn)
-    ttnn.deallocate(prompt_attn)
     return spatial_attn_scaled, prompt_attn_scaled
 
 
 def sd_gated_ff_block(
     inp: ttnn.Tensor,
     parameters: TtFeedForwardParameters,
-    parallel_config: DiTParallelConfig,
+    parallel_manager: StableDiffusionParallelManager,
+    cfg_index: int,
     *,
     gate: ttnn.Tensor,
     scale: ttnn.Tensor,
     shift: ttnn.Tensor,
+    is_spatial: bool = True,
 ) -> ttnn.Tensor:
+    device = inp.device()
+
     scaled = inp * (1 + scale) + shift
-    if parallel_config.tensor_parallel.factor > 1:
-        scaled = utils.all_gather(scaled, dim=-1)
-    result = gate * sd_feed_forward(scaled, parameters, parallel_config=parallel_config)
-    ttnn.deallocate(scaled)
+    if parallel_manager.is_tensor_parallel:
+        buffer_name = "spatial_buffer" if is_spatial else "prompt_buffer"
+        scaled = unpadded_all_gather_async(
+            scaled,
+            dim=3,
+            num_links=parallel_manager.num_links,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_manager.dit_parallel_config.topology,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, buffer_name),
+        )
+    result = gate * sd_feed_forward(
+        scaled,
+        parameters,
+        parallel_manager=parallel_manager,
+        cfg_index=cfg_index,
+        is_spatial=is_spatial,
+    )
+
     return result
 
 
@@ -200,15 +249,15 @@ def sd_transformer_block(  # noqa: PLR0915
     prompt: ttnn.Tensor,
     time_embed: ttnn.Tensor,
     parameters: TtTransformerBlockParameters,
-    parallel_config: DiTParallelConfig,
+    parallel_manager: StableDiffusionParallelManager,
     num_heads: int,
     N: int,
     L: int,
+    cfg_index: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
     t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     spatial_time = sd_linear(t, parameters.spatial_time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     prompt_time = sd_linear(t, parameters.prompt_time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(t)
     if parameters.spatial_attn is not None:
         [
             spatial_shift_dual_attn,
@@ -237,7 +286,6 @@ def sd_transformer_block(  # noqa: PLR0915
 
     context_pre_only = parameters.prompt_ff is None
     if context_pre_only:
-        # print(f"chunking prompt_time for context pre only: {prompt_time.shape}")
         [
             prompt_scale_attn,
             prompt_shift_attn,
@@ -248,7 +296,6 @@ def sd_transformer_block(  # noqa: PLR0915
         prompt_scale_ff = None
         prompt_gate_ff = None
     else:
-        # print(f"not context pre only: {prompt_time.shape}")
         [
             prompt_shift_attn,
             prompt_scale_attn,
@@ -258,8 +305,12 @@ def sd_transformer_block(  # noqa: PLR0915
             prompt_gate_ff,
         ] = chunk_time(prompt_time, 6)
 
-    spatial_normed = sd_layer_norm(spatial, parameters.spatial_norm_1)
-    prompt_normed = sd_layer_norm(prompt, parameters.prompt_norm_1)
+    spatial_normed = sd_layer_norm(
+        spatial, parameters.spatial_norm_1, parallel_manager=parallel_manager, cfg_index=cfg_index, is_spatial=True
+    )
+    prompt_normed = sd_layer_norm(
+        prompt, parameters.prompt_norm_1, parallel_manager=parallel_manager, cfg_index=cfg_index, is_spatial=False
+    )
     spatial_attn, prompt_attn = sd_dual_attn_block(
         spatial=spatial_normed,
         prompt=prompt_normed,
@@ -270,22 +321,13 @@ def sd_transformer_block(  # noqa: PLR0915
         spatial_scale=spatial_scale_dual_attn,
         spatial_shift=spatial_shift_dual_attn,
         parameters=parameters.dual_attn,
-        parallel_config=parallel_config,
+        parallel_manager=parallel_manager,
         num_heads=num_heads,
         N=N,
         L=L,
+        cfg_index=cfg_index,
     )
-    ttnn.deallocate(prompt_normed)
-    ttnn.deallocate(spatial_gate_dual_attn)
-    if prompt_gate_attn is not None:
-        ttnn.deallocate(prompt_gate_attn)
-    ttnn.deallocate(prompt_scale_attn)
-    ttnn.deallocate(prompt_shift_attn)
-    ttnn.deallocate(spatial_scale_dual_attn)
-    ttnn.deallocate(spatial_shift_dual_attn)
-
     spatial += spatial_attn
-    ttnn.deallocate(spatial_attn)
 
     if parameters.spatial_attn is not None:
         assert False, "Not supporting right now on Colman's branch"
@@ -301,25 +343,20 @@ def sd_transformer_block(  # noqa: PLR0915
             scale=spatial_scale_attn,
             shift=spatial_shift_attn,
         )
-        ttnn.deallocate(spatial_normed)
-        ttnn.deallocate(spatial_gate_attn)
-        ttnn.deallocate(spatial_scale_attn)
-        ttnn.deallocate(spatial_shift_attn)
 
-    spatial_normed = sd_layer_norm(spatial, parameters.spatial_norm_2)
+    spatial_normed = sd_layer_norm(
+        spatial, parameters.spatial_norm_2, parallel_manager=parallel_manager, cfg_index=cfg_index, is_spatial=True
+    )
     spatial += sd_gated_ff_block(
         spatial_normed,
         parameters=parameters.spatial_ff,
-        parallel_config=parallel_config,
+        parallel_manager=parallel_manager,
+        cfg_index=cfg_index,
         gate=spatial_gate_ff,
         scale=spatial_scale_ff,
         shift=spatial_shift_ff,
+        is_spatial=True,
     )
-    ttnn.deallocate(spatial_normed)
-    ttnn.deallocate(spatial_gate_ff)
-    ttnn.deallocate(spatial_scale_ff)
-    ttnn.deallocate(spatial_shift_ff)
-
     if context_pre_only:
         return spatial, None
 
@@ -328,21 +365,19 @@ def sd_transformer_block(  # noqa: PLR0915
     assert prompt_gate_ff is not None
 
     prompt += prompt_attn
-    ttnn.deallocate(prompt_attn)
-    prompt_normed = sd_layer_norm(prompt, parameters.prompt_norm_2)
+    prompt_normed = sd_layer_norm(
+        prompt, parameters.prompt_norm_2, parallel_manager=parallel_manager, cfg_index=cfg_index, is_spatial=False
+    )
     prompt += sd_gated_ff_block(
         prompt_normed,
         parameters=parameters.prompt_ff,
-        parallel_config=parallel_config,
+        parallel_manager=parallel_manager,
+        cfg_index=cfg_index,
         gate=prompt_gate_ff,
         scale=prompt_scale_ff,
         shift=prompt_shift_ff,
+        is_spatial=False,
     )
-    ttnn.deallocate(prompt_normed)
-    ttnn.deallocate(prompt_gate_ff)
-    ttnn.deallocate(prompt_scale_ff)
-    ttnn.deallocate(prompt_shift_ff)
-
     return spatial, prompt
 
 
