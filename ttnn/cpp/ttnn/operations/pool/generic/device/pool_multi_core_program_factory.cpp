@@ -287,6 +287,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
     }
+    TT_FATAL(dilation_h == 1 && dilation_w == 1, "Dilation is not yet supported by the maxpool reader");
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
