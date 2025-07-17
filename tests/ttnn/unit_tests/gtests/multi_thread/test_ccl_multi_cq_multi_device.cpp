@@ -63,9 +63,6 @@ protected:
 };
 
 TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
-    const size_t dim = 0;
-    const size_t num_links = 1;
-    constexpr auto layout = Layout::TILE;
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -210,9 +207,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 }
 
 TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
-    const size_t dim = 0;
-    const size_t num_links = 1;
-    constexpr auto layout = Layout::TILE;
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
