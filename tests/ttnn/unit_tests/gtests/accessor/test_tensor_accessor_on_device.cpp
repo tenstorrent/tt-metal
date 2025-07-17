@@ -120,7 +120,8 @@ static void test_single_core_reshard(
     mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
-    auto output_vec = output_tensor.template to_vector<T>();
+    auto output_tensor_cpu = output_tensor.cpu();
+    auto output_vec = output_tensor_cpu.template to_vector<T>();
     EXPECT_EQ(output_vec, src);
 }
 
