@@ -60,13 +60,13 @@ public:
     enum class ShardShapeAlignment {
         /// No shard shape alignment will be performed. If the shard shape is not following the alignment requirements,
         /// an exception will be thrown.
-        None,
+        NONE,
         /// Shard shape will be automatically aligned to the minimum required alignment. The Required alignment may
         /// cause higher memory usage and lower read/write performance for some use cases.
-        Required,
+        REQUIRED,
         /// Shard shape will be automatically aligned to the recommended alignment, trying to achieve optimal
         /// performance and memory usage.
-        Recommended,
+        RECOMMENDED,
     };
     /// Performs arbitrary sharding for TensorSpec using the specified shard shape, grid, shard shape alignment, and
     /// other optional parameters.
