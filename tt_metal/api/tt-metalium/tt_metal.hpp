@@ -31,7 +31,7 @@ class Program;
 
 namespace detail {
 
-bool DispatchStateCheck(bool isFastDispatch);
+bool DispatchStateCheck(bool isFastDispatch, bool force_reset = false);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
