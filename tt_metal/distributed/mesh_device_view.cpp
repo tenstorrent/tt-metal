@@ -253,4 +253,9 @@ MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return extract_
 
 bool MeshDeviceView::fully_local() const { return fully_local_; }
 
+bool MeshDeviceView::is_local(const MeshCoordinate& coord) const {
+    TT_FATAL(contains(coord), "Coordinate {} not found in mesh {}", coord, devices_.shape());
+    return devices_.at(coord).is_local();
+}
+
 }  // namespace tt::tt_metal::distributed

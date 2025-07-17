@@ -273,6 +273,10 @@ public:
     size_t num_cols() const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
+    // Returns true if the coordinate is local to this mesh device.
+    // Throws if the coordinate is out of bounds of this mesh device.
+    bool is_local(const MeshCoordinate& coord) const;
+
     const MeshShape& shape() const;
 
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.

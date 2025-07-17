@@ -453,6 +453,8 @@ size_t MeshDevice::num_cols() const { return view_->num_cols(); }
 
 const MeshShape& MeshDevice::shape() const { return view_->shape(); }
 
+bool MeshDevice::is_local(const MeshCoordinate& coord) const { return view_->is_local(coord); }
+
 std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
     TT_FATAL(view_->fully_local(), "Cannot reshape a mesh that is partially distributed");
 
