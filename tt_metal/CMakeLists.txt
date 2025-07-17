@@ -142,16 +142,6 @@ target_sources(
             ${TT_LLK_HEADERS}
 )
 
-# tt_llk targets (tt-llk::wormhole_b0 and tt-llk::blackhole) are provided by
-# tt_metal/third_party/tt_llk which is processed via add_subdirectory in the main CMakeLists.txt
-# Link tt_llk targets to jitapi
-target_link_libraries(
-    jitapi
-    INTERFACE
-        tt-llk::wormhole_b0
-        tt-llk::blackhole
-)
-
 target_link_libraries(
     tt_metal
     PUBLIC
