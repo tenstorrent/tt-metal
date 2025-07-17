@@ -8,8 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc, tt_dtype_to_torch_dtype
 
 bfloat4_pcc = 0.960
 torch.manual_seed(0)
@@ -47,7 +46,7 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
         assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor)
+    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
 
 
 @pytest.mark.parametrize("height", [4])
@@ -254,7 +253,6 @@ ttnn.to_torch(ttnn_source_tensor):
 ttnn.to_torch(ttnn_target_tensor):
 {ttnn.to_torch(ttnn_target_tensor)}
     """
-    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
 
 
 @pytest.mark.parametrize("height", [32])
