@@ -367,6 +367,9 @@ void send_msg_to_eth_mailbox(
         write_arg(i, args[i]);
     }
 
+    // Barrier to ensure args are written before call
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
     const uint32_t msg = call | msg_val;
     log_debug(
