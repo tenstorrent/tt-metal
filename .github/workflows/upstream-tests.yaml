@@ -193,7 +193,7 @@ jobs:
       - name: Run image
         timeout-minutes: 30
         env:
-          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
   test-bh-image:
     needs:
