@@ -93,26 +93,34 @@ def test_sd35_performance(
     )
 
     # Test prompts
-    prompt = (
-        "An epic, high-definition cinematic shot of a rustic snowy cabin glowing "
-        "warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle "
-        "snow-covered pines and delicate falling snowflakes - captured in a rich, "
-        "atmospheric, wide-angle scene with deep cinematic depth and warmth."
-    )
+    # prompts = (
+    #     "An epic, high-definition cinematic shot of a rustic snowy cabin glowing "
+    #     "warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle "
+    #     "snow-covered pines and delicate falling snowflakes - captured in a rich, "
+    #     "atmospheric, wide-angle scene with deep cinematic depth and warmth."
+    # )
+    prompts = [
+        """A neon-lit alley in a sprawling cyberpunk metropolis at night, rain-slick streets reflecting glowing holograms, dense atmosphere, flying cars in the sky, people in high-tech streetwear — ultra-detailed, cinematic lighting, 4K""",
+        """A colossal whale floating through a desert sky like a blimp, casting a long shadow over sand dunes, people in ancient robes watching in awe, golden hour lighting, dreamlike color palette — surrealism, concept art, Greg Rutkowski style""",
+        """A Roman general standing on a battlefield at dawn, torn red cape blowing in the wind, distant soldiers forming ranks, painterly brushwork in the style of Caravaggio, chiaroscuro lighting, epic composition""",
+        """A tiny, fluffy dragon curled up in a teacup, warm cozy lighting, big expressive eyes, intricate scale patterns, surrounded by books and potions — high detail, Studio Ghibli meets Pixar""",
+    ]
     negative_prompt = ""
 
     # Warmup run (not timed)
     print("Running warmup iteration...")
-    pipeline(
-        prompt_1=[prompt],
-        prompt_2=[prompt],
-        prompt_3=[prompt],
+    images = pipeline(
+        prompt_1=[prompts[0]],
+        prompt_2=[prompts[0]],
+        prompt_3=[prompts[0]],
         negative_prompt_1=[negative_prompt],
         negative_prompt_2=[negative_prompt],
         negative_prompt_3=[negative_prompt],
         num_inference_steps=num_inference_steps,
         seed=0,
+        traced=True,
     )
+    images[0].save(f"sd35_{image_w}_{image_h}_warmup.png")
 
     # Performance measurement runs
     print("Running performance measurement iterations...")
@@ -132,16 +140,17 @@ def test_sd35_performance(
 
         # Run pipeline
         images = pipeline(
-            prompt_1=[prompt],
-            prompt_2=[prompt],
-            prompt_3=[prompt],
+            prompt_1=[prompts[i + 1]],
+            prompt_2=[prompts[i + 1]],
+            prompt_3=[prompts[i + 1]],
             negative_prompt_1=[negative_prompt],
             negative_prompt_2=[negative_prompt],
             negative_prompt_3=[negative_prompt],
             num_inference_steps=num_inference_steps,
             seed=0,
+            traced=True,
         )
-
+        images[0].save(f"sd35_{image_w}_{image_h}_run{i}.png")
         # Collect timing data
         timing_data = timer.get_timing_data()
         all_timings.append(timing_data)

@@ -45,6 +45,7 @@ from .tt.parallel_config import StableDiffusionParallelManager
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 20000000}],
     indirect=True,
 )
+@pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
 def test_sd3(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -60,6 +61,7 @@ def test_sd3(
     num_links,
     no_prompt,
     model_location_generator,
+    traced,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -121,6 +123,7 @@ def test_sd3(
             negative_prompt_3=[negative_prompt],
             num_inference_steps=num_inference_steps,
             seed=0,
+            traced=traced,
         )
         images[0].save(f"sd35_{image_w}_{image_h}.png")
 
@@ -144,6 +147,7 @@ def test_sd3(
                 negative_prompt_3=[negative_prompt],
                 num_inference_steps=num_inference_steps,
                 seed=0,
+                traced=traced,
             )
 
             images[0].save(f"sd35_{image_w}_{image_h}.png")

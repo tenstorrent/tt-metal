@@ -329,6 +329,7 @@ class TtStableDiffusion3Pipeline:
         negative_prompt_3: list[str],
         num_inference_steps: int = 40,
         seed: int | None = None,
+        traced: bool = False,
     ) -> None:
         timer = self.timing_collector
 
@@ -396,14 +397,13 @@ class TtStableDiffusion3Pipeline:
                     else prompt_embeds,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=submesh_device,
+                    device=submesh_device if not traced else None,
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         submesh_device,
                         self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
                         dims=[None, None],
                     ),
                 )
-                tt_prompt_embeds_list.append(tt_prompt_embeds)
 
                 tt_pooled_prompt_embeds = ttnn.from_torch(
                     pooled_prompt_embeds[i].unsqueeze(0)
@@ -411,35 +411,51 @@ class TtStableDiffusion3Pipeline:
                     else pooled_prompt_embeds,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=submesh_device,
+                    device=submesh_device if not traced else None,
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         submesh_device,
                         self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
                         dims=[None, None],
                     ),
                 )
-                tt_pooled_prompt_embeds_list.append(tt_pooled_prompt_embeds)
 
+                shard_latents_dims = [None, None]
+                shard_latents_dims[
+                    self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis
+                ] = 1  # height of latents
                 tt_initial_latents = ttnn.from_torch(
                     latents,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=submesh_device,
+                    device=submesh_device if not traced else None,
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         submesh_device,
                         self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-                        dims=[self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1, None],
+                        dims=shard_latents_dims,
                     ),
                 )
-                latents_step = tt_initial_latents
-                tt_latents_step_list.append(latents_step)
+                if traced:
+                    if self._trace is None:
+                        # Push inputs to device
+                        tt_initial_latents = tt_initial_latents.to(submesh_device)
+                        tt_prompt_embeds = tt_prompt_embeds.to(submesh_device)
+                        tt_pooled_prompt_embeds = tt_pooled_prompt_embeds.to(submesh_device)
+                    else:
+                        # Copy inputs to trace
+                        ttnn.copy_host_to_device_tensor(tt_initial_latents, self._trace[i].spatial_input)
+                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds, self._trace[i].prompt_input)
+                        ttnn.copy_host_to_device_tensor(tt_pooled_prompt_embeds, self._trace[i].pooled_projection_input)
+                        # Ensure trace inputs are passed to function
+                        tt_initial_latents = self._trace[i].spatial_input
+                        tt_prompt_embeds = self._trace[i].prompt_input
+                        tt_pooled_prompt_embeds = self._trace[i].pooled_projection_input
+
+                tt_prompt_embeds_list.append(tt_prompt_embeds)
+                tt_pooled_prompt_embeds_list.append(tt_pooled_prompt_embeds)
+                tt_latents_step_list.append(tt_initial_latents)
 
             logger.info("denoising...")
             denoising_start_time = time.time()
-
-            # ttnn.copy_host_to_device_tensor(tt_prompt_embeds, self._trace.prompt_input)
-            # ttnn.copy_host_to_device_tensor(tt_pooled_prompt_embeds, self._trace.pooled_projection_input)
-            # ttnn.copy_host_to_device_tensor(tt_initial_latents, self._trace.spatial_input_output)
 
             for i, t in enumerate(tqdm.tqdm(timesteps)):
                 with timer.time_step("denoising_step") if timer else nullcontext():
@@ -448,7 +464,13 @@ class TtStableDiffusion3Pipeline:
                     tt_timestep_list = []
                     tt_sigma_difference_list = []
                     for submesh_device in self.parallel_manager.submesh_devices:
-                        tt_timestep = ttnn.full([1, 1], fill_value=t, dtype=ttnn.float32)  # , device=submesh_device)
+                        tt_timestep = ttnn.full(
+                            [1, 1],
+                            fill_value=t,
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=ttnn.float32,
+                            device=submesh_device if not traced else None,
+                        )
                         tt_timestep_list.append(tt_timestep)
 
                         tt_sigma_difference = ttnn.full(
@@ -456,13 +478,9 @@ class TtStableDiffusion3Pipeline:
                             fill_value=sigma_difference,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=ttnn.bfloat16,
-                            device=submesh_device,
+                            device=submesh_device,  # Not used in trace region, can be on device always.
                         )
                         tt_sigma_difference_list.append(tt_sigma_difference)
-
-                        # ttnn.copy_host_to_device_tensor(tt_timestep, self._trace.timestep_input)
-                        # ttnn.copy_host_to_device_tensor(tt_sigma_difference, self._trace.sigma_difference_input)
-                        # self._trace.execute()
 
                     tt_latents_step_list = self._step(
                         timestep=tt_timestep_list,
@@ -474,6 +492,7 @@ class TtStableDiffusion3Pipeline:
                         sigma_difference=tt_sigma_difference_list,
                         prompt_sequence_length=333,
                         spatial_sequence_length=4096,
+                        traced=traced,
                     )
 
             denoising_end_time = time.time()
@@ -483,29 +502,28 @@ class TtStableDiffusion3Pipeline:
             with timer.time_section("vae_decoding") if timer else nullcontext():
                 image_decoding_start_time = time.time()
 
-                # latents = ttnn.to_torch(self._trace.spatial_input_output).to(torch.float32)
+                concat_dims = [None, None]
+                concat_dims[
+                    self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis
+                ] = 1  # height of latents
+                concat_dims[
+                    self.parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis
+                ] = 0  # Push unnecessary concat to 0th dim
                 latents = ttnn.to_torch(
                     tt_latents_step_list[0],
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                         mesh_device=tt_latents_step_list[0].device(),
                         mesh_shape=tuple(tt_latents_step_list[0].device().shape),
-                        dims=[
-                            self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1,
-                            self.parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 1,
-                        ],
+                        dims=concat_dims,
                     ),
                 ).to(torch.float32)[
-                    :,
-                    : tt_latents_step_list[0].shape[-3]
-                    * self.parallel_manager.dit_parallel_config.sequence_parallel.factor,
-                    : tt_latents_step_list[0].shape[-2]
-                    * self.parallel_manager.dit_parallel_config.tensor_parallel.factor,
-                    : tt_latents_step_list[0].shape[-1],
+                    : tt_latents_step_list[0].shape[0],  # Slice out unnecessary concat on TP axis
                 ]
                 latents = (latents.permute([0, 3, 1, 2]) / self._vae_scaling_factor) + self._vae_shift_factor
                 with torch.no_grad():
                     image = self._vae.decoder(latents)
                     image = self._image_processor.postprocess(image, output_type="pt")
+                    print(f"postprocessed image shape: {image.shape}")
                     assert isinstance(image, torch.Tensor)
                 image_decoding_end_time = time.time()
 
@@ -532,104 +550,98 @@ class TtStableDiffusion3Pipeline:
         sigma_difference: List[ttnn.Tensor],  # device tensor
         prompt_sequence_length: int,
         spatial_sequence_length: int,
+        traced: bool,
     ) -> None:
-        if self._trace is None:
+        def inner(latent, prompt, pooled_projection, timestep, parameters, cfg_index):
+            if do_classifier_free_guidance and not self.parallel_manager.is_cfg_parallel:
+                latent_model_input = ttnn.concat([latent, latent])
+            else:
+                latent_model_input = latent
+            noise_pred = sd_transformer(
+                spatial=latent_model_input,
+                prompt=prompt,
+                pooled_projection=pooled_projection,
+                timestep=timestep,
+                parameters=parameters,
+                parallel_manager=self.parallel_manager,
+                num_heads=self.num_heads,
+                N=spatial_sequence_length,
+                L=prompt_sequence_length,
+                cfg_index=cfg_index,
+            )
+
+            noise_pred = _reshape_noise_pred(
+                noise_pred,
+                height=latent.shape[-3] * self.parallel_manager.dit_parallel_config.sequence_parallel.factor,
+                width=latent.shape[-2],
+                patch_size=self.patch_size,
+            )
+            return noise_pred
+
+        if traced and self._trace is None:
             print(f"Tracing...")
             self._trace = [None for _ in self.parallel_manager.submesh_devices]
-            # Compile for tracing
-            try:
-                for submesh_id, submesh_device in enumerate(self.parallel_manager.submesh_devices):
-                    print(f"Tracing submesh {submesh_id}")
-                    # DEBUG: Disabling non-CFG-parallel while I implement tracing
-                    # if do_classifier_free_guidance and not self.parallel_manager.is_cfg_parallel:
-                    #     latent_model_input = ttnn.concat([latents[submesh_id], latents[submesh_id]])
-                    # else:
-                    #     latent_model_input = latents[submesh_id]
-                    latent_model_input = latents[submesh_id]
-                    timestep_device = timestep[submesh_id].to(submesh_device)
+            for submesh_id, submesh_device in enumerate(self.parallel_manager.submesh_devices):
+                print(f"Tracing submesh {submesh_id}")
+                latent_device = latents[submesh_id]  # already on device
+                prompt_device = prompt_embeds[submesh_id]  # already on device
+                pooled_projection_device = pooled_prompt_embeds[submesh_id]  # already on device
+                timestep_device = timestep[submesh_id].to(submesh_device)
 
-                    self._trace[submesh_id] = PipelineTrace(
-                        spatial_input=latent_model_input,
-                        prompt_input=prompt_embeds[submesh_id],
-                        pooled_projection_input=pooled_prompt_embeds[submesh_id],
-                        timestep_input=timestep_device,
-                        latents_output=None,
-                        tid=None,
-                    )
-                    print("compile run")
-                    timestep_model_input = ttnn.to_layout(timestep_device, ttnn.TILE_LAYOUT)
-                    noise_pred = sd_transformer(
-                        spatial=latent_model_input,
-                        prompt=prompt_embeds[submesh_id],
-                        pooled_projection=pooled_prompt_embeds[submesh_id],
-                        timestep=timestep_model_input,
-                        parameters=self.tt_transformer_parameters[submesh_id],
-                        parallel_manager=self.parallel_manager,
-                        num_heads=self.num_heads,
-                        N=spatial_sequence_length,
-                        L=prompt_sequence_length,
-                        cfg_index=submesh_id,
-                    )
+                print("compile run")
+                pred = inner(
+                    latent_device,
+                    prompt_device,
+                    pooled_projection_device,
+                    timestep_device,
+                    self.tt_transformer_parameters[submesh_id],
+                    submesh_id,
+                )
 
-                    noise_pred = _reshape_noise_pred(
-                        noise_pred,
-                        height=latents[0].shape[-3]
-                        * self.parallel_manager.dit_parallel_config.sequence_parallel.factor,
-                        width=latents[0].shape[-2],
-                        patch_size=self.patch_size,
-                    )
+                ttnn.synchronize_device(self.parallel_manager.submesh_devices[0])
+                ttnn.synchronize_device(self.parallel_manager.submesh_devices[1])
 
-                    ttnn.synchronize_device(self.parallel_manager.submesh_devices[0])
-                    ttnn.synchronize_device(self.parallel_manager.submesh_devices[1])
-                    print("done sync after compile")
+                print("begin trace capture")
+                trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+                pred = inner(
+                    latent_device,
+                    prompt_device,
+                    pooled_projection_device,
+                    timestep_device,
+                    self.tt_transformer_parameters[submesh_id],
+                    submesh_id,
+                )
+                ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
+                ttnn.synchronize_device(self.parallel_manager.submesh_devices[0])
+                ttnn.synchronize_device(self.parallel_manager.submesh_devices[1])
+                print("done sync after trace capture")
 
-                    print("begin trace")
-                    trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-
-                    print("to_layout")
-                    timestep_model_input = ttnn.to_layout(timestep_device, ttnn.TILE_LAYOUT)
-                    print("run transformer")
-                    noise_pred = sd_transformer(
-                        spatial=latent_model_input,
-                        prompt=prompt_embeds[submesh_id],
-                        pooled_projection=pooled_prompt_embeds[submesh_id],
-                        timestep=timestep_model_input,
-                        parameters=self.tt_transformer_parameters[submesh_id],
-                        parallel_manager=self.parallel_manager,
-                        num_heads=self.num_heads,
-                        N=spatial_sequence_length,
-                        L=prompt_sequence_length,
-                        cfg_index=submesh_id,
-                    )
-
-                    print("reshape")
-
-                    noise_pred = _reshape_noise_pred(
-                        noise_pred,
-                        height=latents[0].shape[-3]
-                        * self.parallel_manager.dit_parallel_config.sequence_parallel.factor,
-                        width=latents[0].shape[-2],
-                        patch_size=self.patch_size,
-                    )
-
-                    ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-                    ttnn.synchronize_device(self.parallel_manager.submesh_devices[0])
-                    ttnn.synchronize_device(self.parallel_manager.submesh_devices[1])
-                    print("done sync after capture trace")
-                    self._trace[submesh_id].latents_output = noise_pred
-                    self._trace[submesh_id].tid = trace_id
-            except Exception as e:
-                print(f"Error: {e}")
-                breakpoint()
-
-                # noise_pred_list.append(noise_pred)
+                self._trace[submesh_id] = PipelineTrace(
+                    spatial_input=latent_device,
+                    prompt_input=prompt_device,
+                    pooled_projection_input=pooled_projection_device,
+                    timestep_input=timestep_device,
+                    latents_output=pred,
+                    tid=trace_id,
+                )
 
         noise_pred_list = []
-        for submesh_id, submesh_device in enumerate(self.parallel_manager.submesh_devices):
-            print(f"Executing trace {self._trace[submesh_id].tid} on submesh {submesh_id}")
-            ttnn.copy_host_to_device_tensor(timestep[submesh_id], self._trace[submesh_id].timestep_input)
-            ttnn.execute_trace(submesh_device, self._trace[submesh_id].tid, cq_id=0, blocking=False)
-            noise_pred_list.append(self._trace[submesh_id].latents_output)
+        if traced:
+            for submesh_id, submesh_device in enumerate(self.parallel_manager.submesh_devices):
+                ttnn.copy_host_to_device_tensor(timestep[submesh_id], self._trace[submesh_id].timestep_input)
+                ttnn.execute_trace(submesh_device, self._trace[submesh_id].tid, cq_id=0, blocking=False)
+                noise_pred_list.append(self._trace[submesh_id].latents_output)
+        else:
+            for submesh_id, submesh_device in enumerate(self.parallel_manager.submesh_devices):
+                noise_pred = inner(
+                    latents[submesh_id],
+                    prompt_embeds[submesh_id],
+                    pooled_prompt_embeds[submesh_id],
+                    timestep[submesh_id],
+                    self.tt_transformer_parameters[submesh_id],
+                    submesh_id,
+                )
+                noise_pred_list.append(noise_pred)
 
         if do_classifier_free_guidance:
             if not self.parallel_manager.is_cfg_parallel:
@@ -645,7 +657,13 @@ class TtStableDiffusion3Pipeline:
                 cond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[1])[0].cpu(blocking=True)).to(
                     torch.float32
                 )
+
                 torch_noise_pred = uncond + guidance_scale * (cond - uncond)
+
+                shard_latents_dims = [None, None]
+                shard_latents_dims[
+                    self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis
+                ] = 1  # height of latents
                 noise_pred_list[0] = ttnn.from_torch(
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,
@@ -654,9 +672,10 @@ class TtStableDiffusion3Pipeline:
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         self.parallel_manager.submesh_devices[0],
                         self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-                        dims=[self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1, None],
+                        dims=shard_latents_dims,
                     ),
                 )
+
                 noise_pred_list[1] = ttnn.from_torch(
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,
@@ -665,7 +684,7 @@ class TtStableDiffusion3Pipeline:
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         self.parallel_manager.submesh_devices[1],
                         self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-                        dims=[self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1, None],
+                        dims=shard_latents_dims,
                     ),
                 )
 
