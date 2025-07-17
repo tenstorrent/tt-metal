@@ -29,16 +29,16 @@ jobs:
       - name: Run tt-smi via mpirun command
         run: |
           echo "Running mpirun command on multiple hosts"
-          mpirun --rankfile rankfile --tag-output ./docker-wrapper.sh tt-smi -ls
+          mpirun --rankfile rankfile --tag-output  --mca plm_rsh_agent docker-wrapper.sh tt-smi -ls
 
       - name: Compile mpi allreduce test
         run: |
-          docker run -v ./:/data ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 bash -c "cd /data; apt update && apt install -y libopenmpi-dev; mpicc mpi.c"
+          docker run -v ./:/data -w /data ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64 mpicc mpi.c
       
       - name: Run mpi allreduce test outside docker
         run: |
-          mpirun --rankfile rankfile --tag-output ./a.out
+          mpirun --np 4 --tag-output ./a.out
       
       - name: Run mpi allreduce test inside docker
         run: |
-          mpirun --rankfile rankfile --tag-output ./docker-wrapper.sh ./a.out
+          mpirun --rankfile rankfile --tag-output  --mca plm_rsh_agent docker-wrapper.sh ./a.out
