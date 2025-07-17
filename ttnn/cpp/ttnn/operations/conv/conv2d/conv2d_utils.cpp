@@ -407,7 +407,6 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
         }
     }
 
-    auto grid_size = parallel_config.grid.bounding_box().grid_size();
     uint32_t act_c_num_blocks = get_num_cores_channels_from_parallel_config(parallel_config);
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w =
@@ -420,7 +419,6 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     }
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
-    uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntile;
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntile;
     auto [out_subblock_h_ntiles, out_subblock_w_ntiles] = determine_largest_subblock_size(
         act_block_h_ntiles, weight_block_w_ntiles, fp32_accum, act_block_h_ntiles > 1 && split_reader_enabled);

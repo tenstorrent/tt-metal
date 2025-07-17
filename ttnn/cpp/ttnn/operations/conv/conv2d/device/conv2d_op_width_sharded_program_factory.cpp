@@ -115,10 +115,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // parallelization config
     const auto& p_config = parallelization_config;
-    uint32_t num_cores_x = p_config.grid_size.x;
-    uint32_t num_cores_y = p_config.grid_size.y;
-    // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
-    bool weight_width_sliced = p_config.per_core_out_matrix_width_ntile < weight_matrix_width_ntiles;
     uint32_t input_channels_padded = shard_shape[1] * input_num_cores;
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -134,7 +130,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
-    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
@@ -158,7 +153,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     TT_FATAL(act_matrix_shape[0] == 1, "Error");
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
-    uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
 
     // TODO: Move all these TT_FATALs/checks to validate?
 

@@ -872,9 +872,6 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t src_stick_size = input_row_size_bytes;
-    uint32_t dst_stick_size = output_row_size_bytes;
-
     uint32_t max_read_size = 4096;
 
     auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -909,7 +906,7 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index, src0_is_dram};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
@@ -984,7 +981,7 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
                 num_sticks_per_core_group_2,
                 max_read_size);
 
-            for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
+            for (uint32_t i = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
                 SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
                 SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
