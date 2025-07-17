@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -26,7 +26,6 @@ NEW_JSON_FILE_NAME = "sdxl_test_results_with_reset.json"
 READ_JSON_FILE_NAME = RESULTS_FILE_NAME
 
 IMAGES_PATH, IMAGE_NAME_BASE = "output", "output"
-GRAPH_OUT_FOLDER = "plots"
 
 
 @pytest.mark.parametrize(
@@ -105,7 +104,7 @@ def test_accuracy_with_reset(
 
         if reset_bool and current_start + reset_period < start_from + num_prompts:
             if is_galaxy():
-                subprocess.run(["tt-smi", "-r", "/opt/tt_metal_infra/scripts/reset.json"], check=True)
+                subprocess.run(["tt-smi", "-r", "/opt/tt_metal_infra/host-scripts/reset.json"], check=True)
                 subprocess.run(["sleep", "60"], check=True)
             else:
                 subprocess.run(["tt-smi", "-r"], check=True)
