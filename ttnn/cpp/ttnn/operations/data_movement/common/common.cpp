@@ -74,23 +74,20 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
     }
 }
 
-float interpolate_transaction_bw(
+float get_transaction_noc_bw(
     uint32_t transaction_size, const std::map<uint32_t, std::array<float, 2>>& dict, int index) {
-    auto it = dict.lower_bound(transaction_size);
-    if (it == dict.begin()) {
-        return it->second[index];
+    uint32_t lower_pow2 = std::pow(2, std::floor(std::log2(transaction_size)));
+
+    uint32_t upper_pow2 = std::pow(2, std::ceil(std::log2(transaction_size)));
+
+    float lower_bw = dict.lower_bound(lower_pow2)->second[index];
+    float upper_bw = dict.lower_bound(upper_pow2)->second[index];
+
+    if (transaction_size - lower_pow2 < upper_pow2 - transaction_size) {
+        return lower_bw;
+    } else {
+        return upper_bw;
     }
-    if (it == dict.end()) {
-        return std::prev(it)->second[index];
-    }
-    if (it->first == transaction_size) {
-        return it->second[index];
-    }
-    auto upper = it;
-    auto lower = std::prev(it);
-    float bw = lower->second[index] + (upper->second[index] - lower->second[index]) *
-                                          (float(transaction_size - lower->first) / float(upper->first - lower->first));
-    return bw;
 }
 
 uint32_t get_effective_l1_cores(
@@ -103,7 +100,7 @@ uint32_t get_effective_l1_cores(
     int num_cores = (index == 0) ? 64 : 108;
     float max_bw = index == 0 ? 28.0f : 34.0f;
     auto aggregate_bw = max_bw * max_l1_cores;
-    float achieved_l1_bw = interpolate_transaction_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
+    float achieved_l1_bw = get_transaction_noc_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
     if (effective_cores > num_cores) {
         effective_cores = num_cores;
@@ -120,7 +117,7 @@ uint32_t get_effective_dram_cores(
     bool single_noc) {
     int num_cores = (index == 0) ? 64 : 108;
     auto aggregate_bw = single_noc == 1 ? 150 : 220;
-    float achieved_dram_bw = interpolate_transaction_bw(transaction_size, dram_bw, index);
+    float achieved_dram_bw = get_transaction_noc_bw(transaction_size, dram_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
     if (effective_cores > num_cores) {
         effective_cores = num_cores;  // Limit to available cores
@@ -156,7 +153,7 @@ uint32_t get_cycles_for_transaction_size(
     }
 
     transaction_size = std::max(transaction_size, 16u);
-    auto transaction_bw = interpolate_transaction_bw(transaction_size, transaction_type, index);
+    auto transaction_bw = get_transaction_noc_bw(transaction_size, transaction_type, index);
     float device_frequency_hz = index == 0 ? 1e9 : 1.2e9;
     uint32_t cycles = 1;
     if (is_dram) {
@@ -405,22 +402,17 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         l1_write_bw,
         dram_bw);
     printf("total read cycles %u\n", total_read_cycles);
-    // Use max(read, write) to account for overlap
+
     int ideal_dev_clock_cycles = 1;
     if (input_is_dram && output_is_dram) {
-        // Using the utilization to determine overlap potential
         float overlap_factor = 1.0f;
         if (read_util < 0.3f && write_util < 0.3f) {
-            // Both operations have low utilization - can overlap significantly
             overlap_factor = 0.6f;
         } else if (read_util < 0.3f || write_util < 0.3f) {
-            // One operation has low utilization - can partially overlap
             overlap_factor = 0.8f;
         } else if (read_util > 0.8f && write_util > 0.8f) {
-            // Both operations near peak - minimal overlap
             overlap_factor = 1.0f;
         } else {
-            // Moderate utilization - some overlap possible
             overlap_factor = 0.9f;
         }
         printf("overlap factor %f\n", overlap_factor);
@@ -432,6 +424,7 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
     if (compute_cycles > 0) {
         total_compute_cycles = std::ceil((float)compute_cycles / (float)total_num_cores);
     }
+    printf("ideal dev clock cycles %d ", ideal_dev_clock_cycles);
     return std::max(ideal_dev_clock_cycles, total_compute_cycles);
 }
 
