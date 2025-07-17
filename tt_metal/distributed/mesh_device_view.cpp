@@ -249,8 +249,8 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices() const {
-    return extract_locals(devices_.values());
-}
+MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return extract_locals(devices_.values()); }
+
+bool MeshDeviceView::fully_local() const { return fully_local_; }
 
 }  // namespace tt::tt_metal::distributed
