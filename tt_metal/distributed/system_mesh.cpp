@@ -30,9 +30,7 @@ namespace tt::tt_metal::distributed {
 
 class SystemMesh::Impl {
 private:
-    MeshShape global_shape_;
-    MeshShape local_shape_;
-    MeshCoordinate local_offset_;
+    DistributedCoordinateTranslator coordinate_translator_;
 
     DistributedMeshContainer<PhysicalMeshCoordinate> physical_coordinates_;
 
@@ -42,8 +40,6 @@ public:
     Impl();
 
     const MeshShape& shape() const;
-    const MeshShape& local_shape() const;
-    const MeshCoordinate& local_offset() const;
 
     MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
     DistributedMeshContainer<chip_id_t> get_mapped_physical_device_ids(
@@ -67,37 +63,44 @@ MaybeRemoteDeviceId SystemMesh::Impl::get_maybe_remote_device_id(const MeshCoord
 
 // Implementation of public methods
 SystemMesh::Impl::Impl() :
-    global_shape_(MetalContext::instance().get_control_plane().get_physical_mesh_shape(
-        MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0],
-        tt::tt_fabric::MeshScope::GLOBAL)),
-    local_shape_(MetalContext::instance().get_control_plane().get_physical_mesh_shape(
-        MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::LOCAL)),
-    local_offset_(MetalContext::instance().get_control_plane().get_local_mesh_offset()),
-    physical_coordinates_(global_shape_) {
+    coordinate_translator_(
+        MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+            MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0],
+            tt::tt_fabric::MeshScope::GLOBAL),
+        MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+            MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0],
+            tt::tt_fabric::MeshScope::LOCAL),
+        MetalContext::instance().get_control_plane().get_local_mesh_offset()),
+    physical_coordinates_(coordinate_translator_.global_shape()) {
+    log_debug(
+        LogDistributed,
+        "SystemMesh: Global shape: {}, Local shape: {}, Local offset: {}",
+        coordinate_translator_.global_shape(),
+        coordinate_translator_.local_shape(),
+        coordinate_translator_.local_offset());
+
     // Get local physical coordinates
     const auto& local_physical_translation_map = get_system_mesh_coordinate_translation_map();
     TT_FATAL(
-        local_physical_translation_map.shape() == local_shape_,
+        local_physical_translation_map.shape() == coordinate_translator_.local_shape(),
         "Local coordinates shape mismatch: {} != {}",
         local_physical_translation_map.shape(),
-        local_shape_);
-    
-    log_debug(LogDistributed, "SystemMesh: Global shape: {}, Local shape: {}, Local offset: {}", global_shape_, local_coordinates.shape(), local_offset_);
-    log_debug(LogDistributed, "SystemMesh: Populating local region with physical coordinates: {}", ordered_physical_coords);
+        coordinate_translator_.local_shape());
 
-    // Extract physical coordinates in order for populate_local_region
-    DistributedCoordinateTranslator coordinate_translator(global_shape_, local_shape_, local_offset_);
-    std::vector<PhysicalMeshCoordinate> ordered_physical_coords;
-    ordered_physical_coords.reserve(local_physical_translation_map.shape().mesh_size());
-    for (const auto& local_coord : MeshCoordinateRange(local_shape_)) {
-        physical_coordinates_.at(coordinate_translator.local_to_global(local_coord)) =
+    for (const auto& local_coord : MeshCoordinateRange(coordinate_translator_.local_shape())) {
+        const auto global_coord = coordinate_translator_.local_to_global(local_coord);
+        log_debug(
+            LogDistributed,
+            "SystemMesh: Populating global coordinate {} with physical coordinate {} at local coordinate {}",
+            global_coord,
+            local_physical_translation_map.at(local_coord),
+            local_coord);
+        physical_coordinates_.at(global_coord) =
             MaybeRemote<PhysicalMeshCoordinate>::local(local_physical_translation_map.at(local_coord));
     }
 }
 
-const MeshShape& SystemMesh::Impl::shape() const { return global_shape_; }
-const MeshShape& SystemMesh::Impl::local_shape() const { return local_shape_; }
-const MeshCoordinate& SystemMesh::Impl::local_offset() const { return local_offset_; }
+const MeshShape& SystemMesh::Impl::shape() const { return coordinate_translator_.global_shape(); }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
     TT_FATAL(physical_coordinates_.is_local_at(coord), "Coordinate {} is not in the local mesh", coord);
@@ -244,10 +247,6 @@ uint32_t SystemMesh::get_physical_mesh_id(const MeshCoordinate& coord) const {
 }
 
 const MeshShape& SystemMesh::shape() const { return pimpl_->shape(); }
-
-const MeshShape& SystemMesh::local_shape() const { return pimpl_->local_shape(); }
-
-const MeshCoordinate& SystemMesh::local_offset() const { return pimpl_->local_offset(); }
 
 MeshCoordinate SystemMesh::get_global_device_coordinate(int physical_device_id) const {
     return pimpl_->get_global_device_coordinate(physical_device_id);

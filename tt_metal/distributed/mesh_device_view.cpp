@@ -38,7 +38,7 @@ MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
     MeshDeviceView(MeshContainer<IDevice*>(MeshShape(mesh_device.shape()), mesh_device.get_devices())) {}
 
 MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) :
-    MeshDeviceView(MeshContainer<MaybeRemote<IDevice*>>(devices.shape(), wrap_locals(devices.values()))) {}
+    MeshDeviceView(MeshContainer<MaybeRemote<IDevice*>>(devices.shape(), wrap_to_maybe_remote(devices.values()))) {}
 
 MeshDeviceView::MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices) :
     distributed_mesh_shape_(DistributedMeshShape(devices)), devices_(devices.shape()) {

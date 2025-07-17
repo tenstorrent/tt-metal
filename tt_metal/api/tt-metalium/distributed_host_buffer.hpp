@@ -87,18 +87,12 @@ private:
     };
 
     DistributedHostBuffer(
-        const DistributedMeshShape& distributed_mesh_shape,
-        distributed::MeshContainer<Shard> shards,
-        std::set<distributed::MeshCoordinate> populated_shards) :
-        distributed_mesh_shape_(distributed_mesh_shape),
-        shards_(std::move(shards)),
-        shard_coords_(std::move(populated_shards)) {}
-
-    DistributedMeshShape distributed_mesh_shape_;
+        distributed::DistributedMeshContainer<Shard> shards, std::set<distributed::MeshCoordinate> populated_shards) :
+        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)) {}
 
     // The shards of the buffer.
     // Remote shards are never materialized, but not all of the local shards are necessarily populated.
-    distributed::MeshContainer<Shard> shards_;
+    distributed::DistributedMeshContainer<Shard> shards_;
 
     // Keeps track of global shards that were attempted to be written to.
     std::set<distributed::MeshCoordinate> shard_coords_;

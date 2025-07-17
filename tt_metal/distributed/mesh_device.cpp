@@ -129,7 +129,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
     ScopedDevices(
         config.physical_device_ids().empty()
             ? SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset()).values()
-            : wrap_locals(config.physical_device_ids()),
+            : wrap_to_maybe_remote(config.physical_device_ids()),
         l1_small_size,
         trace_region_size,
         num_command_queues,
@@ -262,7 +262,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     auto scoped_devices = std::make_shared<ScopedDevices>(
-        wrap_locals(device_ids),
+        wrap_to_maybe_remote(device_ids),
         l1_small_size,
         trace_region_size,
         num_command_queues,
