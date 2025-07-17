@@ -23,16 +23,16 @@ from models.demos.qwen25_vl.tt.common import (
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
 def get_platform_specific_optimizations(model_name):
     is_72B = "72B" in model_name
-
-    optimizations = ModelOptimizations.performance if is_72B else ModelOptimizations.accuracy
     max_seq_len = 4096 if is_72B else 12288
 
-    return optimizations, max_seq_len
+    performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
+
+    return performance_opt, max_seq_len
 
 
 def initialize_vllm_text_transformer(
@@ -42,7 +42,7 @@ def initialize_vllm_text_transformer(
     max_seq_len,
     n_layers=None,
     dtype=ttnn.bfloat8_b,
-    optimizations=ModelOptimizations.accuracy,
+    optimizations=None,
 ):
     tt_model_args = ModelArgs(
         mesh_device,
@@ -52,7 +52,7 @@ def initialize_vllm_text_transformer(
         max_seq_len=max_seq_len,
     )
     assert tt_model_args.model_name.replace("-", "").endswith(
-        hf_config.name_or_path.replace("-", "")
+        hf_config.name_or_path.split("/")[-1].replace("-", "")
     ), f"The model specified in vLLM ({hf_config.name_or_path}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
     if n_layers is not None:
         tt_model_args.n_layers = n_layers
@@ -137,32 +137,26 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, n_layers=None, n_vision_layers=None, tt_data_parallel=1
-    ):
-        # Enable async mode todo)) remove this when qwen2.5-vl-rebase-main is merged
-        mesh_device.enable_async(True)
-
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
         optimizations, max_seq_len = get_platform_specific_optimizations(hf_config.name_or_path)
         model_args, model, page_table, kv_cache = initialize_vllm_text_transformer(
             hf_config,
             mesh_device,
             max_batch_size,
             max_seq_len=max_seq_len,
-            n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=optimizations,
         )
 
-        config = Ref_Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(model_args.model_name)
-        if n_vision_layers is not None:
-            config.vision_config.depth = n_vision_layers
+        ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
+        config = Ref_Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
+        # config.vision_config.depth = 1 # [INFO] useful for debugging
         reference_model = Ref_Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_args.model_name, config=config, torch_dtype="auto", device_map="auto"
+            ref_model_name, config=config, torch_dtype="auto", device_map="auto"
         )
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         vision_model_args = VisionModelArgs(
-            mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=None),
+            mesh_device,
             max_batch_size=model_args.max_batch_size,
             max_seq_len=model_args.max_seq_len,
             optimizations=optimizations,
@@ -277,11 +271,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             start_pos=start_pos,
             page_table=self.page_table,
             kv_cache=kv_cache,
-            enable_trace=False,  # [INFO] work around tracing bug
+            enable_trace=True,
             read_from_device=read_from_device,
-            argmax_on_device=False,
         )
-
-    # todo)) remove this after qwen2.5-vl-rebase-main is merged
-    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=False):
-        return super().read_decode_output(tt_logits, unpadded_batch, argmax_on_device=is_tokens)

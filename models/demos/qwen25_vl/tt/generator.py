@@ -189,6 +189,10 @@ class Generator:
 
             return logits
 
+    # [INFO] this is called by vLLM
+    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
+        return self._ttt_generator.read_decode_output(tt_out, unpadded_batch, is_tokens)
+
     ## Destructor (used to delete ttnn trace if exists)
 
     def __del__(self):
