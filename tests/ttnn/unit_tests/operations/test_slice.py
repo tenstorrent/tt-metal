@@ -296,6 +296,7 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
         [[2, 256, 256, 64], 64, 2, 4, ttnn.TILE_LAYOUT],
         [[2, 256, 128, 128], 32, 4, 4, ttnn.TILE_LAYOUT],
         [[2, 64, 64, 128], 32, 2, 2, ttnn.TILE_LAYOUT],
+        [[2, 64, 64, 512], 32, 3, 5, ttnn.TILE_LAYOUT],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -311,25 +312,41 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
     ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     num_slices = dims[slice_dim] // slice_size
+
+    padded_channels = round_up(dims[-1], 32 * core_x)
+    padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange((0, 0), (core_x - 1, core_y - 1))])
+    parallel_config = ttnn.SlidingWindowParallelConfig(
+        grid=core_grid, shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED, shard_orientation=orientation
+    )
+
     for i in range(num_slices):
         begins = [0, 0, 0, 0]
         ends = [dims[0], dims[1], dims[2], dims[3]]
         begins[slice_dim] = i * slice_size
-        ends[slice_dim] = (i + 1) * slice_size
+        if i == num_slices - 1:
+            ends[slice_dim] = dims[slice_dim]
+        else:
+            ends[slice_dim] = (i + 1) * slice_size
         this_ttnn_input = ttnn.from_torch(
-            torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
+            padded_torch_input[
+                begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : padded_channels
+            ],
             device=device,
             layout=layout,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         core_grid = ttnn.CoreGrid(x=core_x, y=core_y)
-        memory_config = ttnn.create_sharded_memory_config_(
-            this_ttnn_input.shape, core_grid, ttnn.ShardStrategy.BLOCK, orientation
+
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
+        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            this_ttnn_input.shape,
+            parallel_config,
+            32 if layout == ttnn.TILE_LAYOUT else 1,
         )
-        # x = (i + 1)%num_slices
-        # begins[slice_dim] = (x) * slice_size
-        # ends[slice_dim] = (x + 1) * slice_size
+
         this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
         ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
