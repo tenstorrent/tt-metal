@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstddef>
 #include <optional>
 #include <vector>
 #include "hostdevcommon/kernel_structs.h"
@@ -48,7 +47,7 @@ static Tensor create_fold_mapping_table(
     const uint32_t input_hw = input_height * input_width;
     const uint32_t output_hw = output_height * output_width;
 
-    // Create vector to store mapping entries (src_index, dst_index, is_padding)
+    // Create vector to store mapping entries (src_index, dst_index)
     const uint32_t total_entries = total_elems * 2;
     std::vector<uint32_t> config_vector(total_entries, 0);
     uint32_t entry_idx = 0;
@@ -354,12 +353,11 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
 
     // Setup circular buffers
     uint32_t cb_src0_index = tt::CBIndex::c_0;
-    uint32_t cb_src1_index = tt::CBIndex::c_1;
 
     // Calculate buffer sizes
     uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(cb_data_format);
     // align to DRAM read alignment.
-    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment()) * stride_w;
+    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
 
     log_debug(
         tt::LogOp,
@@ -369,7 +367,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         hal::get_dram_alignment());
 
     int double_buffer = 2;
-    // Create source circular buffer - sized for input work per core
+    // Create source circular buffer
     auto src_cb_config =
         CircularBufferConfig(double_buffer * aligned_stick_nbytes * stride_w, {{cb_src0_index, cb_data_format}})
             .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w);
