@@ -2218,8 +2218,6 @@ void kernel_main() {
         downstream_edm_noc_interfaces;
     populate_local_sender_channel_free_slots_stream_id_ordered_map(
         has_downstream_edm_vc0_buffer_connection, local_sender_channel_free_slots_stream_ids_ordered);
-    constexpr auto worker_sender_channel_id = my_direction;
-    size_t next_available_sender_channel_free_slots_stream_index = 1;
 
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
