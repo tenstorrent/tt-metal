@@ -1446,6 +1446,8 @@ class ModelArgs:
             self.rope_scaling_factor = None
             self.orig_context_len = None
 
+        self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+
         # Vision params (Meta-specific)
         self.vision_chunk_size = config.get("vision_chunk_size", -1)
         self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
