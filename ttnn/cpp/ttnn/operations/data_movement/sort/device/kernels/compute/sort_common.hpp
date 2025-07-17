@@ -207,4 +207,50 @@ void sync_packer_unpacker(uint32_t packer_unpacker_sync_cb_index) {
     cb_wait_front(packer_unpacker_sync_cb_index, ONE_TILE);
     cb_pop_front(packer_unpacker_sync_cb_index, ONE_TILE);
 }
+
+/**
+ * @brief Copies a tile from a source circular buffer (CB) to a destination CB.
+ *
+ * This function acquires tile registers, copies a tile from the specified source CB and tile ID
+ * to a destination register, commits and waits for the operation, then packs the tile into the
+ * destination CB at the specified tile ID. It also handles reconfiguration of the data format
+ * for the destination CB and releases the tile registers after the operation.
+ *
+ * @param last_used_cb_index Last used global circular buffer index.
+ * @param src_cb_index Index of the source circular buffer from which tile will be copied.
+ * @param src_tile_id Index of the tile in the circular buffer.
+ * @param dst_cb_index Index of the destination circular buffer to which tile will be copied.
+ * @param dst_tile_id Index of the tile in the destination circular buffer.
+ */
+void copy_tile_between_cbs(
+    uint32_t& last_used_cb_index,
+    uint32_t src_cb_index,
+    uint32_t src_tile_id,
+    uint32_t dst_cb_index,
+    uint32_t dst_tile_id = 0) {
+    // Constants
+    constexpr uint32_t dest_idx = 0;
+    constexpr uint32_t one_tile = 1;
+
+    // Acquire DST for tile copy
+    tile_regs_acquire();
+
+    // Copy tile to DST register
+    copy_tile_to_dst_init_with_cb_update(src_cb_index, last_used_cb_index);
+    copy_tile(src_cb_index, src_tile_id, dest_idx);
+
+    tile_regs_commit();
+    tile_regs_wait();
+
+    // Pack the tile into the destination circular buffer
+    pack_reconfig_data_format(dst_cb_index);
+    if (dst_tile_id != 0) {
+        pack_tile<true>(dest_idx, dst_cb_index, dst_tile_id);
+    } else {
+        pack_tile(dest_idx, dst_cb_index, 0);  // Append to the end of the CB
+    }
+
+    // Release tile registers
+    tile_regs_release();
+}
 }  // namespace NAMESPACE

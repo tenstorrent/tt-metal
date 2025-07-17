@@ -78,13 +78,12 @@ void MAIN {
         cb_wait_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
 
         // Sort and merge step of bitonic merge sort
-        uint32_t stages = ilog2(Wt);
+        const uint32_t stages = ilog2(Wt);
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
 
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
-                uint16_t pair_id = 0;
                 for (uint32_t i = 0; i < Wt; i++) {
                     uint32_t j = i ^ sub_dist;
 
@@ -98,7 +97,7 @@ void MAIN {
                     // Determine direction for this comparison block
                     const bool ascending_block = ((i >> stage) & 1) == 0;
                     const bool dir = ascending_block == ascending;
-
+                    // ---------- FROM here change
                     if (j >= global_tile_start && j < global_tile_end) {
                         if (j > i) {
                             // Local sorting - both tiles in core memory
@@ -153,40 +152,210 @@ void MAIN {
                             pack_tile<true>(tile_index_high, index_tensor_transposed_cb_index, right_tile_id);
 
                             tile_regs_release();
+                            // TODO ----- TO BE CHECKED
+                            // if (sub == 1 && (i + 1) >= global_tile_end) {
+                            //     // Next tile will be processed by the next core
+                            //     // Pack and send to reader the first pair of tiles
+                            //     cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
+                            //     copy_tile_between_cbs(
+                            //         global_old_cb,
+                            //         index_tensor_transposed_cb_index,
+                            //         0,
+                            //         index_tensor_intermediate_cb_index);
+                            //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            //     cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            //     copy_tile_between_cbs(
+                            //         global_old_cb,
+                            //         input_tensor_transposed_cb_index,
+                            //         0,
+                            //         value_tensor_intermediate_cb_index);
+                            //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            // }
+                            // ----- TOD BE CHECKED -------------
                         }
                     } else {
+                        // Every two tiles we need to pack them and send them to reader
+                        // if this is the first from the pair send both tiles to the reader, then wait for the one tile,
+                        // process it if this is the second from the pair just wait for the tile from the reader,
+                        // process it
+
+                        // --------- DEBUG -------------
+                        // auto number_of_pairs_to_exchange = number_of_tiles_per_core / 2;
+                        // DPRINT << "COMPUTE: number_of_pairs_to_exchange: " << number_of_pairs_to_exchange << ENDL();
+                        // -----------------------------
+
                         const uint32_t tile_id = i - global_tile_start;
                         constexpr uint32_t FIRST_TILE = 0;
 
-                        // Send tiles to other core
-                        tile_regs_acquire();
+                        // ---
+                        // if i == global tile_start
+                        // Send current tile_id
+                        // Send next tile_id
+                        // else if i == global_tile_end
+                        // Don't send anything
+                        // else if i % 2 == 0
+                        // Send current tile_id
+                        // Send for next tile_id from reader
 
-                        // Copy index tiles to DST register for exchange
-                        copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_index, global_old_cb);
-                        copy_tile(index_tensor_transposed_cb_index, tile_id, index_dest_start);
+                        // ---
+                        // // Send tiles to other core
+                        if ((i & 1) == 0) {  // i % 2
+                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+
+                            copy_tile_between_cbs(
+                                global_old_cb,
+                                index_tensor_transposed_cb_index,
+                                tile_id,
+                                index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb,
+                                input_tensor_transposed_cb_index,
+                                tile_id,
+                                value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
+                            copy_tile_between_cbs(
+                                global_old_cb,
+                                index_tensor_transposed_cb_index,
+                                tile_id + 1,
+                                index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb,
+                                input_tensor_transposed_cb_index,
+                                tile_id + 1,
+                                value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                        }
+                        // NEW VERSION
+                        // if ((sub-- != 1) && i == global_tile_end){
+                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         index_tensor_transposed_cb_index,
+                        //         0,
+                        //         index_tensor_intermediate_cb_index);
+                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         input_tensor_transposed_cb_index,
+                        //         0,
+                        //         value_tensor_intermediate_cb_index);
+                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         index_tensor_transposed_cb_index,
+                        //         1,
+                        //         index_tensor_intermediate_cb_index);
+                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         input_tensor_transposed_cb_index,
+                        //         1,
+                        //         value_tensor_intermediate_cb_index);
+                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                        // } else if ((i % 2 == 0) && (i != (global_tile_end - 1))){
+                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         index_tensor_transposed_cb_index,
+                        //         tile_id+2,
+                        //         index_tensor_intermediate_cb_index);
+                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         input_tensor_transposed_cb_index,
+                        //         tile_id+2,
+                        //         value_tensor_intermediate_cb_index);
+                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         index_tensor_transposed_cb_index,
+                        //         tile_id+3,
+                        //         index_tensor_intermediate_cb_index);
+                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         input_tensor_transposed_cb_index,
+                        //         tile_id+3,
+                        //         value_tensor_intermediate_cb_index);
+                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                        // }
+                        // else if(i == global_tile_end) {
+                        //     // Don't send anything
+                        // } else if() {
+                        //     // Send current tile_id
+                        //     // Send for next tile_id from reader
+                        // }
+
+                        // tile_regs_acquire();
+
+                        // // Copy index tiles to DST register for exchange
+
+                        // cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
+                        // copy_tile_between_cbs(
+                        //     global_old_cb,
+                        //     index_tensor_transposed_cb_index,
+                        //     tile_id,
+                        //     index_tensor_intermediate_cb_index);
+                        // cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                        // copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_index, global_old_cb);
+                        // copy_tile(index_tensor_transposed_cb_index, tile_id, index_dest_start);
 
                         // Copy value tiles to DST register for exchange
-                        copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
-                        copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
 
-                        tile_regs_commit();
-                        tile_regs_wait();
+                        // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                        // copy_tile_between_cbs(
+                        //     global_old_cb,
+                        //     input_tensor_transposed_cb_index,
+                        //     tile_id,
+                        //     value_tensor_intermediate_cb_index);
+                        // cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
+                        // copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
+                        // copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
+
+                        // tile_regs_commit();
+                        // tile_regs_wait();
 
                         // Send current index tile reader for exchange
-                        cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
-                        pack_reconfig_data_format(index_tensor_intermediate_cb_index);
-                        pack_tile(index_dest_start, index_tensor_intermediate_cb_index, FIRST_TILE);
-                        cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+                        // cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
+                        // pack_reconfig_data_format(index_tensor_intermediate_cb_index);
+                        // pack_tile(index_dest_start, index_tensor_intermediate_cb_index, FIRST_TILE);
+                        // cb_push_back(index_tensor_intermediate_cb_index, one_tile);
 
                         // Send current value tile reader for exchange
-                        cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                        pack_reconfig_data_format(value_tensor_intermediate_cb_index);
-                        pack_tile(input_dest_start, value_tensor_intermediate_cb_index, FIRST_TILE);
-                        cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                        // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                        // pack_reconfig_data_format(value_tensor_intermediate_cb_index);
+                        // pack_tile(input_dest_start, value_tensor_intermediate_cb_index, FIRST_TILE);
+                        // cb_push_back(value_tensor_intermediate_cb_index, one_tile);
 
-                        tile_regs_release();
-
-                        sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                        // tile_regs_release();
 
                         // Process received tiles from other core
                         tile_regs_acquire();
@@ -199,7 +368,7 @@ void MAIN {
                         copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
                         copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
 
-                        cb_wait_front(index_tensor_peer_cb_index, one_tile);
+                        cb_wait_front(index_tensor_peer_cb_index, one_tile);  // TU CZEKANIE
 
                         // Load new index tile for sorting
                         copy_tile_to_dst_init_with_cb_update(index_tensor_peer_cb_index, global_old_cb);
@@ -208,7 +377,7 @@ void MAIN {
                         cb_pop_front(index_tensor_peer_cb_index, one_tile);
 
                         // Read other tile from writer
-                        cb_wait_front(value_tensor_peer_cb_index, one_tile);
+                        cb_wait_front(value_tensor_peer_cb_index, one_tile);  // TU CZEKANIE
 
                         // Load new value tile for sorting
                         copy_tile_to_dst_init_with_cb_update(value_tensor_peer_cb_index, global_old_cb);
@@ -242,6 +411,7 @@ void MAIN {
 
                         tile_regs_release();
                     }
+                    // --------- TO HERE
                 }  // Wt loop
             }  // sub loop
         }  // stages loop
