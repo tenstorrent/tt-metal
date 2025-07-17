@@ -252,7 +252,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # Long-context 64k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -268,7 +268,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # Long-context 32k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -284,7 +284,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # Long-context 16k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -300,7 +300,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
+        (  # reasoning-1 - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -319,7 +319,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -335,7 +335,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
+        (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -351,7 +351,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # Batch-1 run (Latency) - single user, small prompt
+        (  # DP-4-b1 - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -367,7 +367,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # Batch-1 run (Latency) - single user, small prompt
+        (  # DP-8-b1 - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -383,7 +383,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
+        (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -399,7 +399,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -415,7 +415,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -431,7 +431,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+        (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -447,7 +447,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+        (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -463,7 +463,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
         ),
-        (  # CI stress test batch-1 run - Runs a short prefill (128) and loops the same iteration over 50000 times
+        (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 50000 times
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
