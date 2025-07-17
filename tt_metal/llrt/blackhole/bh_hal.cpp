@@ -109,8 +109,7 @@ void Hal::initialize_bh() {
             // For firmware with base fw, __ldm_data is already offset by base fw.
             // So we need to undo that offset here to get the correct relocation address
             // for copying by the kernel to local memory.
-            if (local_init_addr == MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH ||
-                local_init_addr == MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH) {
+            if (local_init_addr == MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH) {
                 addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
             }
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;

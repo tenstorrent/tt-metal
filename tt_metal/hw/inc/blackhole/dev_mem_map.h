@@ -52,6 +52,8 @@
 
 // Offset by BASE FW
 #define MEM_AERISC_LOCAL_BASE (MEM_LOCAL_BASE + MEM_ERISC_BASE_FW_LOCAL_SIZE)
+// No BASE FW
+#define MEM_SUBORDINATE_AERISC_LOCAL_BASE MEM_LOCAL_BASE
 
 // Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
@@ -229,8 +231,7 @@
 // TODO: These are added here to enable aerisc compilation but are replicated in eth_l1_address_map
 // eth_l1_address_map should be removed in favour of this file
 #define MEM_AERISC_LOCAL_SIZE (MEM_ERISC_LOCAL_SIZE - MEM_ERISC_BASE_FW_LOCAL_SIZE)  // Minus the base FW local usage
-#define MEM_SUBORDINATE_AERISC_LOCAL_SIZE \
-    (MEM_ERISC_LOCAL_SIZE - MEM_ERISC_BASE_FW_LOCAL_SIZE)  // Minus the base FW local usage
+#define MEM_SUBORDINATE_AERISC_LOCAL_SIZE MEM_ERISC_LOCAL_SIZE
 #define MEM_AERISC_MAILBOX_BASE (MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE)
 #define MEM_AERISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
 #define MEM_AERISC_MAILBOX_END (MEM_AERISC_MAILBOX_BASE + MEM_AERISC_MAILBOX_SIZE)
