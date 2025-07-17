@@ -9,7 +9,6 @@ namespace tt::tt_metal::logging {
 // TODO: Figure out how to expose this set_level API to consumers.
 // The idea here is to allow clients to set log level without using environment variables.
 // For instance, they may not want to see info messages at all, but only CRITICAL errors
-// REVERT THIS LINE
 
 /**
  * @brief Logging severity levels
