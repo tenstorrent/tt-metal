@@ -234,9 +234,11 @@ public:
         return (*node_id.mesh_id << 12) | (node_id.chip_id << 8) | (logical_core.x << 4) | (logical_core.y);
     }
 
-    std::vector<FabricNodeId> get_all_node_ids() const override { return local_available_node_ids_; }
+    std::vector<FabricNodeId> get_local_node_ids() const override { return local_available_node_ids_; }
 
     std::vector<FabricNodeId> get_global_node_ids() const override { return global_available_node_ids_; }
+
+    bool is_local_mesh(MeshId mesh_id) const override { return control_plane_ptr_->is_local_mesh(mesh_id); }
 
     uint32_t get_l1_unreserved_base() const override {
         return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(

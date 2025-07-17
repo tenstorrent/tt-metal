@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 
     // If master seed is not provided, initialize it
     if (!master_seed.has_value()) {
-        master_seed = initialize_master_seed();
+        master_seed = test_context.initialize_master_seed();
     }
 
     std::mt19937 gen(master_seed.value());

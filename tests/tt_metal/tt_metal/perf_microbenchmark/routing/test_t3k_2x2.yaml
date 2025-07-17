@@ -19,53 +19,54 @@ Tests:
   # ======================================================================================
   # Test 1: A simple, fully specified unicast test.
   # This demonstrates the most basic configuration.
-  # Note that Mesh Coordinates cannot currently be specified in the YAML, and you must use
-  # FabricNodeId to specify the device. Furthermore, Fabric must be 2D Dynamic.
+  # Note that Mesh Coordinates cannot currently be specified in the YAML for multi-process
+  # tests, and you must use FabricNodeId to specify the device.
+  # Furthermore, Fabric must be 2D Dynamic.
   # ======================================================================================
-  # - name: UnicastWithChipId
-  #   fabric_setup:
-  #     topology: Mesh
-  #     routing_type: Dynamic
-  #   defaults:
-  #     ftype: unicast
-  #     ntype: unicast_write
-  #     size: 1024
-  #     num_packets: 10
-  #   senders:
-  #     - device: [0, 0]
-  #       patterns:
-  #         - destination:
-  #             device: [1, 1]
-  #     - device: [0, 1]
-  #       patterns:
-  #         - destination:
-  #             device: [1, 0]
-  #     - device: [0, 2]
-  #       patterns:
-  #         - destination:
-  #             device: [1, 2]
-  #     - device: [0, 3]
-  #       patterns:
-  #         - destination:
-  #             device: [1, 3]
+  - name: UnicastWithChipId
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 0]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [1, 2]
+      - device: [0, 3]
+        patterns:
+          - destination:
+              device: [1, 3]
 
-  # # ======================================================================================
-  # # Test 2: Parameterized Unicast Test
-  # # See Test 2 in test)_features.yaml for a more detailed explanation on paramtrization
-  # # ======================================================================================
-  # - name: UnicastWithChipId
-  #   fabric_setup:
-  #     topology: Mesh
-  #     routing_type: Dynamic
-  #   parametrization_params:
-  #     size: [512, 1024, 2048]
-  #     num_packets: [50, 100]
-  #     ntype: [unicast_write, atomic_inc]
-  #   defaults:
-  #     ftype: unicast
-  #   patterns:
-  #     - type: all_to_all_unicast
-  #       iterations: 2
+  # ======================================================================================
+  # Test 2: Parameterized Unicast Test
+  # See Test 2 in test)_features.yaml for a more detailed explanation on paramtrization
+  # ======================================================================================
+  - name: UnicastWithChipId
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    parametrization_params:
+      size: [512, 1024, 2048]
+      num_packets: [50, 100]
+      ntype: [unicast_write, atomic_inc]
+    defaults:
+      ftype: unicast
+    patterns:
+      - type: all_to_all_unicast
+        iterations: 2
   # ======================================================================================
   # Test 3: Parameterized Unicast Test
   # ======================================================================================
@@ -79,5 +80,5 @@ Tests:
       size: 2048
       num_packets: 10
     patterns:
-      - type: all_to_all_unicast
+      - type: full_device_random_pairing
         iterations: 1

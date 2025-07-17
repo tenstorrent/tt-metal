@@ -1308,7 +1308,7 @@ private:
 
     void expand_all_to_all_multicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding all_to_all_multicast pattern for test: {}", test.name);
-        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
 
         for (const auto& src_node : devices) {
@@ -1339,7 +1339,7 @@ private:
     void expand_unidirectional_linear_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding unidirectional_linear_multicast pattern for test: {}", test.name);
-        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear_multicast because no devices were found.");
 
         for (const auto& src_node : devices) {
@@ -1365,7 +1365,7 @@ private:
     void expand_full_or_half_ring_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
         log_info(LogTest, "Expanding full_or_half_ring_multicast pattern for test: {}", test.name);
-        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
 
         bool wrap_around_mesh = this->route_manager_.wrap_around_mesh(devices.front());
@@ -1435,7 +1435,7 @@ private:
             test.name,
             static_cast<int>(test.fabric_setup.topology));
 
-        std::vector<FabricNodeId> all_devices = device_info_provider_.get_all_node_ids();
+        std::vector<FabricNodeId> all_devices = device_info_provider_.get_local_node_ids();
         TT_FATAL(!all_devices.empty(), "Cannot expand line sync patterns because no devices were found.");
 
         // Create sync patterns based on topology - returns multiple patterns per device for mcast
