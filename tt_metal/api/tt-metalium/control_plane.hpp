@@ -81,7 +81,11 @@ public:
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 
-    // Return path from device to device in the fabric
+    // Return path from device to device in the fabric.
+    // Constraints:
+    // - src_fabric_node_id must be local to the host on which this ControlPlane is running.
+    // - If dst_fabric_node_id is not local to the current host, the path will end at a local
+    // fabric node routing to the remote cluster.
     std::vector<std::pair<FabricNodeId, chan_id_t>> get_fabric_route(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const;
 
