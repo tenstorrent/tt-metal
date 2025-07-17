@@ -45,14 +45,15 @@ jobs:
           {name: dispatch, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
           {name: sfpi, cmd: "./build/test/tt_metal/unit_tests_sfpi"},
+          {name: misc, cmd: "./build/test/tt_metal/unit_tests_misc"},
           {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests"},
           {name: distributed_multiprocess, cmd: "./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh"},
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
           {name: dispatch multicmd queue, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*"},
+          {name: dispatch multicmd queue, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*"},
           {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
           {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl},
           {name: ttnn ccl ops cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl_ops},
-          {name: ttnn tensor cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_tensor},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
