@@ -6,11 +6,13 @@
 #include <fmt/format.h>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tests/ttnn/unit_tests/gtests/accessor/common.hpp"
 
 #include <string>
 #include <cstdint>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
 #include <ttnn/tensor/tensor_accessor_args.hpp>
@@ -83,22 +85,11 @@ void benchmark_all_args_combinations_single_core(
 
     tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    for (uint8_t i = 0; i < 1 << 5; ++i) {
-        tensor_accessor::ArgsConfig args_loc_cnf(i);
-        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeRank) and
-            (!args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeTensorShape) or
-             !args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeShardShape))) {
-            // If rank is runtime, tensor and shard shapes must also be runtime
-            continue;
-        }
-        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeNumBanks) and
-            !args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeBankCoords)) {
-            // If number of banks is runtime, bank coordinates must also be runtime
-            continue;
-        }
-        auto args_bitmask = args_loc_cnf.raw();
+    auto all_args_combinations = get_all_sharded_args_configs();
+    for (const auto& arg_config : all_args_combinations) {
+        auto args_bitmask = arg_config.raw();
 
-        std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:05b}\"", args_bitmask);
+        std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:07b}\"", args_bitmask);
         log_info(
             tt::LogTest,
             "Creating single-core benchmarking program with the following args config: {}",
@@ -108,7 +99,7 @@ void benchmark_all_args_combinations_single_core(
         constexpr CoreCoord grid = {0, 0};
 
         // Set up sharded accessor compile-time args for reader kernel
-        const auto sharded_accessor_args = TensorAccessorArgs(*input_shard_view, args_loc_cnf);
+        const auto sharded_accessor_args = TensorAccessorArgs(*input_shard_view, arg_config);
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
         // Create reader kernel
@@ -119,11 +110,11 @@ void benchmark_all_args_combinations_single_core(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = sharded_accessor_args.compile_time_args,
+                .compile_args = sharded_accessor_args.get_compile_time_args(),
                 .defines = defines});
 
         // Set up runtime args for reader kernel
-        SetCommonRuntimeArgs(program, reader_kernel_id, sharded_accessor_args.runtime_args);
+        SetCommonRuntimeArgs(program, reader_kernel_id, sharded_accessor_args.get_common_runtime_args());
 
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
@@ -145,6 +136,14 @@ TEST_P(AccessorBenchmarks, GetNocAddr) {
         mesh_device_,
         "accessor_get_noc_addr_benchmarks",
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp");
+}
+
+TEST_P(AccessorBenchmarks, GetNocAddrPageCoord) {
+    benchmark_all_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_get_noc_addr_page_coord_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_coord_benchmark.cpp");
 }
 
 TEST_P(AccessorBenchmarks, Constructor) {

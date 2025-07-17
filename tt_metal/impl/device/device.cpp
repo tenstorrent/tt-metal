@@ -67,7 +67,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
@@ -219,18 +218,11 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
     return std::make_unique<L1BankingAllocator>(config);
 }
 
-void Device::compile_command_queue_programs() {
-    ZoneScoped;
-    auto command_queue_program_ptr = create_and_compile_cq_program(this);
-    this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-}
-
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
 void Device::configure_command_queue_programs() {
     chip_id_t device_id = this->id();
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    IDevice* mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
 
     std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
@@ -299,14 +291,7 @@ void Device::init_command_queue_host() {
 }
 
 void Device::init_command_queue_device() {
-    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
-        detail::EnablePersistentKernelCache();
-        this->compile_command_queue_programs();
-        detail::DisablePersistentKernelCache();
-    } else {
-        this->compile_command_queue_programs();
-    }
-
+    this->command_queue_programs_.push_back(get_compiled_cq_program(this));
     TT_ASSERT(this->command_queue_programs_.size() == 1);
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs_[0];
@@ -328,7 +313,7 @@ void Device::init_command_queue_device() {
     auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
-        watcher_lock = watcher_get_lock();
+        watcher_lock = MetalContext::instance().watcher_server()->get_lock();
     }
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
         for (uint32_t x = 0; x < logical_grid_size().x; x++) {
@@ -425,7 +410,11 @@ bool Device::initialize(
     ZoneScoped;
     // Every initialization call should enable program cache
     this->program_cache_.enable();
-    log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
+    log_debug(
+        tt::LogMetal,
+        "Initializing device {}. Program cache is {}enabled",
+        this->id_,
+        this->program_cache_.is_enabled() ? "" : "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
     this->using_fast_dispatch_ = false;
@@ -465,7 +454,7 @@ bool Device::initialize(
 }
 
 bool Device::close() {
-    log_info(tt::LogMetal, "Closing device {}", this->id_);
+    log_trace(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
@@ -614,30 +603,31 @@ uint32_t Device::num_sub_devices() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
 }
 
-CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
+CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel, NOC noc) const {
     return tt::tt_metal::MetalContext::instance()
         .get_cluster()
         .get_soc_desc(id_)
-        .get_preferred_worker_core_for_dram_view(dram_channel);
+        .get_preferred_worker_core_for_dram_view(dram_channel, noc);
 }
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_logical_core_for_dram_view(
         dram_channel);
 }
 
 uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_dram_channel_from_logical_core(
         logical_core);
 }
 
 uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
-    for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
-        if (soc_desc.get_preferred_worker_core_for_dram_view(channel) == virtual_core) {
-            return channel;
+    uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
+    for (uint32_t noc = 0; noc < num_nocs; noc++) {
+        for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
+            if (soc_desc.get_preferred_worker_core_for_dram_view(channel, noc) == virtual_core) {
+                return channel;
+            }
         }
     }
     TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
@@ -653,6 +643,9 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Sp
 
 CommandQueue& Device::command_queue(size_t cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
+    if (!using_fast_dispatch_) {
+        return *(CommandQueue *)(IDevice *)this;
+    }
     TT_FATAL(cq_id < command_queues_.size(), "cq_id {} is out of range", cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[cq_id];
@@ -777,7 +770,7 @@ void Device::clear_program_cache() {
 }
 
 void Device::disable_and_clear_program_cache() {
-    log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
+    log_trace(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
     if (this->program_cache_.is_enabled()) {
         program_cache_.disable();
     }
@@ -850,7 +843,7 @@ void Device::reset_sub_device_stall_group() {
     sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
 }
 
-std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment() {
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     // Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores
     // as DRAM readers or writers. Returns logical coordinates of optimally placed workers.
     // This function queries Physical Coordinates (only exposed directly to the Device class)
@@ -873,7 +866,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
         for (int i = 0; i < num_dram_banks; ++i) {
-            auto dram_core = dram_core_from_dram_channel(i);
+            auto dram_core = this->dram_core_from_dram_channel(i, noc);
             if (dram_is_virtualized) {
                 tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
                     tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
@@ -901,14 +894,20 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         }
         // Get optimal placement of worker cores interfacing with DRAM Controllers in physical coordinate space
         auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
+
+        const metal_SocDescriptor& soc_desc =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
         // Convert to physical worker coordinates to logical. This gets returned to the user.
-        for (int i = 0; i < physical_worker_cores.size(); ++i) {
-            for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
-                auto core = this->physical_worker_core_from_logical_core(all_worker_cores_logical[j]);
-                if (physical_worker_cores[i] == core) {
-                    this->optimal_dram_bank_to_logical_worker_assignment_.push_back(all_worker_cores_logical[j]);
-                }
-            }
+        for (auto physical_worker_core : physical_worker_cores) {
+            tt::umd::CoreCoord logical_coord_translated =
+                soc_desc.translate_coord_to(physical_worker_core, CoordSystem::PHYSICAL, CoordSystem::LOGICAL);
+            this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
+                CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
+            TT_ASSERT(
+                logical_coord_translated.core_type == CoreType::TENSIX,
+                "Worker dram interface core {} should be a Tensix core, algorithm to place DRAM interfacing workers is "
+                "invalid",
+                logical_coord_translated.str());
         }
     }
     return this->optimal_dram_bank_to_logical_worker_assignment_;

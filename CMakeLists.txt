@@ -128,6 +128,10 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
+# Top-level target to build all generated files
+# Useful for eg: ensuring all files exist before linting
+add_custom_target(all_generated_files)
+
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
@@ -165,7 +169,7 @@ add_compile_options(
     -Wno-deprecated-declarations
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
-    "$<$<OR:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU>>:-Wno-unused-but-set-variable>"
+    -Wno-unused-but-set-variable
     -Wno-unused-function
     -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"

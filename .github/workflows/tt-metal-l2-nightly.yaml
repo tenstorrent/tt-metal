@@ -3,19 +3,6 @@ name: "Nightly tt-metal L2 tests"
 on:
   workflow_dispatch:
     inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - BH
       timeout:
         required: false
         type: number
@@ -32,13 +19,22 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  test:
+  tt-metal-l2-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+          { arch: blackhole, runner-label: P100 },
+          { arch: blackhole, runner-label: P150b },
+        ]
     with:
-      arch: ${{ inputs.arch || 'wormhole_b0' }}
-      runner-label: ${{ inputs.runner-label || 'N150' }}
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
       timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -49,9 +45,16 @@ jobs:
     uses: ./.github/workflows/didt-tests.yaml
     strategy:
       fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+          { arch: blackhole, runner-label: P100 },
+          { arch: blackhole, runner-label: P150b },
+        ]
     with:
-      arch: ${{ inputs.arch || 'wormhole_b0' }}
-      runner-label: ${{ inputs.runner-label || 'N300' }}
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
       timeout: 10
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

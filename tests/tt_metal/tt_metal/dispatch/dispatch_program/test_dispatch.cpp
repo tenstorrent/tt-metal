@@ -57,7 +57,7 @@ static void test_sems_across_core_types(
         }
 
         const auto& eth_cores_unordered =
-            active_eth ? device->get_active_ethernet_cores() : device->get_inactive_ethernet_cores();
+            active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
 
         std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
         if (eth_cores.size() > 0) {
@@ -125,7 +125,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
 
     // TODO: tweak when FD supports idle eth
     const auto& eth_cores_unordered =
-        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
+        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
     std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
@@ -181,7 +181,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
 
     // TODO: tweak when FD supports idle eth
     const auto& eth_cores =
-        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
+        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
@@ -317,6 +317,34 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
         this->RunProgram(device, program);
+    }
+}
+
+TEST_F(DispatchFixture, TensixCircularBufferInitFunction) {
+    for (auto& device : devices_) {
+        for (bool use_assembly : {true, false}) {
+            for (uint32_t mask : {0xffffffffu, 0xaaaaaaaau}) {
+                CoreCoord core{0, 0};
+                Program program;
+                std::map<std::string, std::string> defines;
+                if (!use_assembly) {
+                    defines["DISABLE_CB_ASSEMBLY"] = "1";
+                }
+                KernelHandle kernel = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_init.cpp",
+                    core,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .defines = defines,
+                        .opt_level = KernelBuildOptLevel::O2});
+                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                std::vector<uint32_t> runtime_args{mask, l1_unreserved_base};
+                SetRuntimeArgs(program, kernel, core, runtime_args);
+                this->RunProgram(device, program);
+            }
+        }
     }
 }
 

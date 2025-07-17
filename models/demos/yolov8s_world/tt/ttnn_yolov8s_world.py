@@ -73,7 +73,6 @@ class TtConv:
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat16,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -147,6 +146,7 @@ class TtConv:
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=ttnn.bfloat16,
         )
 
         if self.is_act_false:
@@ -226,13 +226,19 @@ class TtC2f:
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
 
-        self.cv1 = TtConv(
+        self.cv1_a = TtConv(
             device,
-            self.parameters["cv1"],
+            self.parameters["cv1_a"],
             input_params=self.input_params[0],
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
-            block_shard=True,
+        )
+        self.cv1_b = TtConv(
+            device,
+            self.parameters["cv1_b"],
+            input_params=self.input_params[0],
+            deallocate_activation=self.deallocate_activation,
+            output_layout=self.output_layout,
         )
         self.cv2 = TtConv(
             self.device,
@@ -259,16 +265,15 @@ class TtC2f:
                 )
             )
 
-    def __call__(self, x):
-        cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
+    def __call__(self, x, reshard_bottleneck_input=False):
+        cv1_a, _, _ = self.cv1_a(x)
+        cv1_b, _, _ = self.cv1_b(x)
+        if reshard_bottleneck_input:
+            cv1_a = ttnn.to_memory_config(cv1_a, ttnn.L1_MEMORY_CONFIG)
+            cv1_b = ttnn.to_memory_config(cv1_b, ttnn.L1_MEMORY_CONFIG)
 
         # split is not supported by trace, hence using this this
-        y = []
-        y.append(cv1[:, :, :, : cv1.shape[-1] // 2])
-        y.append(cv1[:, :, :, cv1.shape[-1] // 2 :])
-
-        ttnn.deallocate(cv1)
+        y = [cv1_a, cv1_b]
 
         to_tile = True
         for i in range(self.n):
@@ -341,8 +346,6 @@ class TtSPPF:
         for i in range(len(y)):
             ttnn.deallocate(y[i])
 
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x, out_h, out_w = self.cv2(x)
         return x, out_h, out_w
 
@@ -397,7 +400,15 @@ class TtMaxSigmoidAttnBlock:
 
     def __call__(self, x, guide):
         """Forward process."""
-        bs, h, w, _ = x.shape
+        if x.shape[1] == 1:
+            bs, h, w, _ = (
+                x.shape[0],
+                int(math.sqrt(x.shape[2]) // x.shape[0]),
+                int(math.sqrt(x.shape[2]) // x.shape[0]),
+                x.shape[3],
+            )
+        else:
+            bs, h, w, _ = x.shape
 
         guide = self.gl(
             guide,
@@ -430,11 +441,10 @@ class TtMaxSigmoidAttnBlock:
 
         x = ttnn.permute(x, (0, 2, 3, 1))  # nchw->nhwc
         x, _, _ = self.proj_conv(x)
-        x = ttnn.reshape(x, (bs, h, w, self.nh, -1))
-        x = ttnn.permute(x, (0, 3, 4, 1, 2))  # nhwc->nchw
-        aw = ttnn.to_memory_config(
-            aw, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )  # added as we are facing OOM issue in next line.
+
+        x = ttnn.permute(x, (0, 1, 3, 2))  # nhwc->nchw
+        x = ttnn.reshape(x, (bs, self.nh, -1, h, w))
+
         x = x * ttnn.unsqueeze(aw, 2)
         x = ttnn.to_memory_config(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(aw)
@@ -472,9 +482,15 @@ class TtC2fAttn:
         self.input_params = input_params
         self.deallocate_activation = deallocate_activation
         self.c = int(c2 * e)  # hidden channels
-        self.cv1 = TtConv(
+        self.cv1_a = TtConv(
             self.device,
-            self.parameters["cv1"],
+            self.parameters["cv1_a"],
+            input_params=input_params[0],
+            deallocate_activation=self.deallocate_activation,
+        )
+        self.cv1_b = TtConv(
+            self.device,
+            self.parameters["cv1_b"],
             input_params=input_params[0],
             deallocate_activation=self.deallocate_activation,
         )
@@ -500,17 +516,16 @@ class TtC2fAttn:
             self.device, self.parameters["attn"], self.input_params[2], c1=self.c, c2=self.c, gc=gc, ec=ec, nh=nh
         )
 
-    def __call__(self, x, guide):
+    def __call__(self, x, guide, reshard_bottleneck_input=False):
         """Forward pass through C2f layer."""
-        cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
+        cv1_a, _, _ = self.cv1_a(x)
+        cv1_b, _, _ = self.cv1_b(x)
+        if reshard_bottleneck_input:
+            cv1_a = ttnn.to_memory_config(cv1_a, ttnn.L1_MEMORY_CONFIG)
+            cv1_b = ttnn.to_memory_config(cv1_b, ttnn.L1_MEMORY_CONFIG)
 
         # split is not supported by trace, hence using this this
-        y = []
-        y.append(cv1[:, :, :, : cv1.shape[-1] // 2])
-        y.append(cv1[:, :, :, cv1.shape[-1] // 2 :])
-
-        ttnn.deallocate(cv1)
+        y = [cv1_a, cv1_b]
 
         for i in range(self.n):
             z = self.m[i](y[-1])
@@ -604,7 +619,7 @@ class TtImagePoolingAttn:
                         padding=[0, 0],
                         dilation=[1, 1],
                         memory_config=ttnn.L1_MEMORY_CONFIG,
-                        applied_shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                        applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     ),
                     (bs, num_patches, -1),
                 ),
@@ -786,7 +801,6 @@ class TtWorldDetect:
                     input_params=input_params["cv2_params"][i]["input_params"][2],
                     is_act_false=True,
                     conv_alone=True,
-                    reshape_tensor=True,
                 ),
             ]
             for i in range(self.nl)
@@ -810,7 +824,6 @@ class TtWorldDetect:
                     self.parameters["cv3"][i][2],
                     input_params=input_params["cv3_params"][i]["input_params"][2],
                     is_act_false=True,
-                    reshape_tensor=True,
                     conv_alone=True,
                 ),
             ]
@@ -879,14 +892,14 @@ class TtWorldModel:
         ImagePoolingAttn_configs = {"input_params": ((1, 1, 0, 256, 128), (1, 1, 0, 256, 256), (1, 1, 0, 256, 512))}
 
         c2f_configs = {
-            "model.2": {"input_params": ((1, 1, 0, 64, 64), (1, 1, 0, 64, 96), (3, 1, 1, 32, 32))},
-            "model.4": {"input_params": ((1, 1, 0, 128, 128), (1, 1, 0, 128, 256), (3, 1, 1, 64, 64))},
-            "model.6": {"input_params": ((1, 1, 0, 256, 256), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
-            "model.8": {"input_params": ((1, 1, 0, 512, 512), (1, 1, 0, 512, 768), (3, 1, 1, 256, 256))},
-            "model.12": {"input_params": ((1, 1, 0, 256, 768), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
-            "model.15": {"input_params": ((1, 1, 0, 128, 384), (1, 1, 0, 128, 256), (3, 1, 1, 64, 64))},
-            "model.19": {"input_params": ((1, 1, 0, 256, 384), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
-            "model.22": {"input_params": ((1, 1, 0, 512, 768), (1, 1, 0, 512, 1024), (3, 1, 1, 256, 256))},
+            "model.2": {"input_params": ((1, 1, 0, 32, 64), (1, 1, 0, 64, 96), (3, 1, 1, 32, 32))},
+            "model.4": {"input_params": ((1, 1, 0, 64, 128), (1, 1, 0, 128, 256), (3, 1, 1, 64, 64))},
+            "model.6": {"input_params": ((1, 1, 0, 128, 256), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
+            "model.8": {"input_params": ((1, 1, 0, 256, 512), (1, 1, 0, 512, 768), (3, 1, 1, 256, 256))},
+            "model.12": {"input_params": ((1, 1, 0, 128, 768), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
+            "model.15": {"input_params": ((1, 1, 0, 64, 384), (1, 1, 0, 128, 256), (3, 1, 1, 64, 64))},
+            "model.19": {"input_params": ((1, 1, 0, 128, 384), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
+            "model.22": {"input_params": ((1, 1, 0, 256, 768), (1, 1, 0, 512, 1024), (3, 1, 1, 256, 256))},
         }
 
         world_detect_configs = {
@@ -941,202 +954,232 @@ class TtWorldModel:
             },
         }
 
-        self.model = [
-            TtConv(
-                device,
-                parameters["model"][0],
-                input_params=[3, 2, 1, 32, 3],
-                deallocate_activation=True,
-            ),
-            TtConv(
-                device,
-                parameters["model"][1],
-                input_params=[3, 2, 1, 64, 32],
-                deallocate_activation=True,
-            ),
-            TtC2f(
-                device, parameters["model"][2], n=1, shortcut=True, input_params=c2f_configs["model.2"]["input_params"]
-            ),
-            TtConv(
-                device,
-                parameters["model"][3],
-                input_params=[3, 2, 1, 128, 64],
-                deallocate_activation=True,
-            ),
-            TtC2f(
-                device, parameters["model"][4], n=2, shortcut=True, input_params=c2f_configs["model.4"]["input_params"]
-            ),
-            TtConv(
-                device,
-                parameters["model"][5],
-                input_params=[3, 2, 1, 256, 128],
-            ),
-            TtC2f(
-                device, parameters["model"][6], n=2, shortcut=True, input_params=c2f_configs["model.6"]["input_params"]
-            ),
-            TtConv(device, parameters["model"][7], input_params=[3, 2, 1, 512, 256], block_shard=True),
-            TtC2f(
-                device, parameters["model"][8], n=1, shortcut=True, input_params=c2f_configs["model.8"]["input_params"]
-            ),
-            TtSPPF(device, parameters["model"][9], input_params=sppf_configs["input_params"], batch_size=1),
-            ttnn.upsample,
-            ttnn.concat,
-            TtC2fAttn(
-                device,
-                parameters["model"][12],
-                input_params=c2f_configs["model.12"]["input_params"],
-                c1=768,
-                c2=256,
-                n=1,
-                ec=128,
-                nh=4,
-            ),
-            ttnn.upsample,
-            ttnn.concat,
-            TtC2fAttn(
-                device,
-                parameters["model"][15],
-                input_params=c2f_configs["model.15"]["input_params"],
-                c1=384,
-                c2=128,
-                n=1,
-                ec=64,
-                nh=2,
-            ),
-            TtImagePoolingAttn(
-                device,
-                parameters["model"][16],
-                input_params=ImagePoolingAttn_configs["input_params"],
-                ec=256,
-                ch=[128, 256, 512],
-            ),
-            TtConv(
-                device,
-                parameters["model"][17],
-                input_params=[3, 2, 1, 128, 128],
-            ),
-            ttnn.concat,
-            TtC2fAttn(
-                device,
-                parameters["model"][19],
-                input_params=c2f_configs["model.19"]["input_params"],
-                c1=384,
-                c2=256,
-                n=1,
-                ec=128,
-                nh=4,
-            ),
-            TtConv(
-                device,
-                parameters["model"][20],
-                input_params=[3, 2, 1, 256, 256],
-            ),
-            ttnn.concat,
-            TtC2fAttn(
-                device,
-                parameters["model"][22],
-                input_params=c2f_configs["model.22"]["input_params"],
-                c1=768,
-                c2=512,
-                n=1,
-                ec=256,
-                nh=8,
-            ),
-            TtWorldDetect(
-                device,
-                parameters["model"][23],
-                input_params=world_detect_configs,
-                nc=80,
-                embed=512,
-                with_bn=False,
-                ch=[128, 256, 512],
-            ),
-        ]
+        self.conv_0 = TtConv(
+            device,
+            parameters["model"][0],
+            input_params=[3, 2, 1, 32, 3],
+            deallocate_activation=True,
+        )
+        self.conv_1 = TtConv(
+            device,
+            parameters["model"][1],
+            input_params=[3, 2, 1, 64, 32],
+            deallocate_activation=True,
+        )
+        self.c2f_2 = TtC2f(
+            device, parameters["model"][2], n=1, shortcut=True, input_params=c2f_configs["model.2"]["input_params"]
+        )
+        self.conv_3 = TtConv(
+            device,
+            parameters["model"][3],
+            input_params=[3, 2, 1, 128, 64],
+            deallocate_activation=True,
+        )
+        self.c2f_4 = TtC2f(
+            device, parameters["model"][4], n=2, shortcut=True, input_params=c2f_configs["model.4"]["input_params"]
+        )
+        self.conv_5 = TtConv(
+            device,
+            parameters["model"][5],
+            input_params=[3, 2, 1, 256, 128],
+        )
+        self.c2f_6 = TtC2f(
+            device, parameters["model"][6], n=2, shortcut=True, input_params=c2f_configs["model.6"]["input_params"]
+        )
+        self.conv_7 = TtConv(device, parameters["model"][7], input_params=[3, 2, 1, 512, 256], block_shard=True)
+        self.c2f_8 = TtC2f(
+            device, parameters["model"][8], n=1, shortcut=True, input_params=c2f_configs["model.8"]["input_params"]
+        )
+        self.sppf_9 = TtSPPF(device, parameters["model"][9], input_params=sppf_configs["input_params"], batch_size=1)
+
+        self.c2fattn_12 = TtC2fAttn(
+            device,
+            parameters["model"][12],
+            input_params=c2f_configs["model.12"]["input_params"],
+            c1=768,
+            c2=256,
+            n=1,
+            ec=128,
+            nh=4,
+        )
+
+        self.c2fattn_15 = TtC2fAttn(
+            device,
+            parameters["model"][15],
+            input_params=c2f_configs["model.15"]["input_params"],
+            c1=384,
+            c2=128,
+            n=1,
+            ec=64,
+            nh=2,
+        )
+        self.image_pool_16 = TtImagePoolingAttn(
+            device,
+            parameters["model"][16],
+            input_params=ImagePoolingAttn_configs["input_params"],
+            ec=256,
+            ch=[128, 256, 512],
+        )
+        self.conv_17 = TtConv(
+            device,
+            parameters["model"][17],
+            input_params=[3, 2, 1, 128, 128],
+        )
+
+        self.c2fattn_19 = TtC2fAttn(
+            device,
+            parameters["model"][19],
+            input_params=c2f_configs["model.19"]["input_params"],
+            c1=384,
+            c2=256,
+            n=1,
+            ec=128,
+            nh=4,
+        )
+        self.conv_20 = TtConv(
+            device,
+            parameters["model"][20],
+            input_params=[3, 2, 1, 256, 256],
+        )
+
+        self.c2fattn_22 = TtC2fAttn(
+            device,
+            parameters["model"][22],
+            input_params=c2f_configs["model.22"]["input_params"],
+            c1=768,
+            c2=512,
+            n=1,
+            ec=256,
+            nh=8,
+        )
+        self.world_detect_23 = TtWorldDetect(
+            device,
+            parameters["model"][23],
+            input_params=world_detect_configs,
+            nc=80,
+            embed=512,
+            with_bn=False,
+            ch=[128, 256, 512],
+        )
 
     def __call__(self, x, txt_feats=None):  # 4,6,9,12,15,19
         txt_feats = self.txt_feats if txt_feats is None else txt_feats
         ori_txt_feats = txt_feats
-        y, dt, embeddings = [], [], []  # outputs
-        save = [4, 6, 9, 9, 12, 12, 15, 15, 15, 19, 22]
-        f_info = [
-            -1,
-            -1,
-            -1,
-            -1,
-            -1,
-            -1,
-            -1,
-            -1,
-            -1,
-            -1,
-            -1,
-            [-1, 6],
-            -1,
-            -1,
-            [-1, 4],
-            -1,
-            [15, 12, 9],
-            15,
-            [-1, 12],
-            -1,
-            -1,
-            [-1, 9],
-            -1,
-            [15, 19, 22],
-        ]
-        for index, (f, m) in enumerate(zip(f_info, self.model)):  # except the head part
-            if index == 12:
-                ttnn.deallocate(y[6])
-            if index == 15:
-                ttnn.deallocate(y[4])
-            if index == 19:
-                ttnn.deallocate(y[12])
 
-            if f != -1:  # if not from previous layer
-                x = y[f] if isinstance(f, int) else [x if j == -1 else y[j] for j in f]  # from earlier layers
-            if isinstance(m, TtC2fAttn):
-                x, _, _ = m(x, ttnn.clone(txt_feats))
-            elif isinstance(m, TtWorldDetect):
-                x = m(x, ori_txt_feats)
-            elif isinstance(m, TtImagePoolingAttn):
-                txt_feats = m(x, txt_feats)
-            else:
-                if m == ttnn.concat:
-                    for i_1, i in enumerate(x):
-                        x[i_1] = ttnn.sharded_to_interleaved(x[i_1], memory_config=ttnn.L1_MEMORY_CONFIG)
-                        x[i_1] = ttnn.to_layout(x[i_1], layout=ttnn.TILE_LAYOUT)
-                    x = m(x, dim=-1)
-                elif m == ttnn.upsample:
-                    if index == 10:
-                        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-                        x = ttnn.reshape(x, (1, 20, 20, 512))
-                    else:
-                        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-                        x = ttnn.reshape(x, (1, 40, 40, 256))
-                    x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.batch_size = 1
+        conv_0, out_h, out_w = self.conv_0(x)
+        conv_1, out_h, out_w = self.conv_1(conv_0)
 
-                    nhw = x.shape[0] * x.shape[1] * x.shape[2]
-                    num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
-                    core_grid = get_core_grid_from_num_cores(num_cores)
-                    shardspec = ttnn.create_sharded_memory_config_(
-                        x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
-                    )
-                    if x.is_sharded():
-                        x = ttnn.reshard(x, shardspec)
-                    else:
-                        x = ttnn.interleaved_to_sharded(x, shardspec)
+        c2f_2, out_h, out_w = self.c2f_2(conv_1)
+        ttnn.deallocate(conv_1)
+        conv_3, out_h, out_w = self.conv_3(c2f_2)
+        ttnn.deallocate(c2f_2)
 
-                    x = m(x, scale_factor=2)
-                    x = ttnn.reshape(x, (1, 1, -1, x.shape[-1]))
-                else:
-                    x, _, _ = m(x)  # run
+        c2f_4, out_h, out_w = self.c2f_4(conv_3)
+        ttnn.deallocate(conv_3)
 
-            y.append(x if index in save else None)  # save output
+        conv_5, out_h, out_w = self.conv_5(c2f_4)
 
-        ttnn.deallocate(y[15])
-        ttnn.deallocate(y[19])
-        ttnn.deallocate(y[22])
-        return x
+        c2f_6, out_h, out_w = self.c2f_6(conv_5)
+        ttnn.deallocate(conv_5)
+
+        conv_7, out_h, out_w = self.conv_7(c2f_6)
+
+        c2f_8, out_h, out_w = self.c2f_8(conv_7)
+        ttnn.deallocate(conv_7)
+
+        nine, out_h, out_w = self.sppf_9(c2f_8)
+        ttnn.deallocate(c2f_8)
+
+        nine = ttnn.to_memory_config(nine, ttnn.L1_MEMORY_CONFIG)
+        sppf_9 = ttnn.to_layout(nine, ttnn.ROW_MAJOR_LAYOUT)
+        sppf_9 = ttnn.reshape(sppf_9, (self.batch_size, out_h, out_w, sppf_9.shape[-1]))
+        nhw = sppf_9.shape[0] * sppf_9.shape[1] * sppf_9.shape[2]
+        num_cores = determine_num_cores_for_upsample(nhw, sppf_9.shape[2])
+        core_grid = get_core_grid_from_num_cores(num_cores)
+        shardspec = ttnn.create_sharded_memory_config_(
+            sppf_9.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+        )
+        if sppf_9.is_sharded():
+            sppf_9 = ttnn.reshard(sppf_9, shardspec)
+        else:
+            sppf_9 = ttnn.interleaved_to_sharded(sppf_9, shardspec)
+
+        sppf_9 = ttnn.upsample(sppf_9, (2, 2), memory_config=sppf_9.memory_config())
+
+        x = ttnn.reshape(sppf_9, (1, 1, (self.batch_size) * sppf_9.shape[1] * sppf_9.shape[2], sppf_9.shape[-1]))
+
+        x = concat([x, c2f_6], dim=-1, use_sharded_concat=True, skip_s2i=True)
+
+        ttnn.deallocate(c2f_6)
+
+        c2fattn_12, out_h, out_w = self.c2fattn_12(x, ttnn.clone(txt_feats))
+        ttnn.deallocate(x)
+        ttnn.deallocate(sppf_9)
+
+        c2fattn_12 = ttnn.sharded_to_interleaved(c2fattn_12, ttnn.L1_MEMORY_CONFIG)
+        c2fattn_12 = ttnn.to_layout(c2fattn_12, ttnn.ROW_MAJOR_LAYOUT)
+
+        twelve = ttnn.clone(c2fattn_12, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        c2fattn_12 = ttnn.reshape(
+            c2fattn_12, (self.batch_size, out_h, out_w, c2fattn_12.shape[-1]), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        nhw = c2fattn_12.shape[0] * c2fattn_12.shape[1] * c2fattn_12.shape[2]
+        num_cores = determine_num_cores_for_upsample(nhw, c2fattn_12.shape[2])
+        core_grid = get_core_grid_from_num_cores(num_cores)
+        shardspec = ttnn.create_sharded_memory_config_(
+            c2fattn_12.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+        )
+        if c2fattn_12.is_sharded():
+            c2fattn_12 = ttnn.reshard(c2fattn_12, shardspec)
+        else:
+            c2fattn_12 = ttnn.interleaved_to_sharded(c2fattn_12, shardspec)
+
+        c2fattn_12 = ttnn.upsample(c2fattn_12, (2, 2), memory_config=c2fattn_12.memory_config())
+
+        x = ttnn.reshape(
+            c2fattn_12, (1, 1, (self.batch_size) * c2fattn_12.shape[1] * c2fattn_12.shape[2], c2fattn_12.shape[-1])
+        )
+
+        x = concat([x, c2f_4], dim=-1, use_sharded_concat=True, skip_s2i=True)
+        ttnn.deallocate(c2f_4)
+        ttnn.deallocate(c2fattn_12)
+
+        c2fattn_15, out_h, out_w = self.c2fattn_15(x, ttnn.clone(txt_feats))
+        fifteen = ttnn.sharded_to_interleaved(c2fattn_15, ttnn.L1_MEMORY_CONFIG)
+
+        ttnn.deallocate(x)
+
+        txt_feats = self.image_pool_16([c2fattn_15, twelve, nine], txt_feats)
+
+        conv_17, out_h, out_w = self.conv_17(c2fattn_15)
+
+        conv_17 = ttnn.sharded_to_interleaved(conv_17, ttnn.L1_MEMORY_CONFIG)
+        conv_17 = ttnn.to_layout(conv_17, ttnn.ROW_MAJOR_LAYOUT)
+        x = concat([conv_17, twelve], dim=-1, use_sharded_concat=True, skip_s2i=True)
+
+        c2fattn_19, out_h, out_w = self.c2fattn_19(x, ttnn.clone(txt_feats))
+        c2fattn_19 = ttnn.sharded_to_interleaved(c2fattn_19, ttnn.L1_MEMORY_CONFIG)
+
+        nineteen = ttnn.clone(c2fattn_19, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        conv_20, out_h, out_w = self.conv_20(c2fattn_19)
+
+        conv_20 = ttnn.sharded_to_interleaved(conv_20, ttnn.L1_MEMORY_CONFIG)
+
+        x = concat([conv_20, nine], dim=-1, use_sharded_concat=True)
+
+        ttnn.deallocate(nine)
+        ttnn.deallocate(twelve)
+
+        c2fattn_22, out_h, out_w = self.c2fattn_22(x, ttnn.clone(txt_feats))
+
+        world_detect = self.world_detect_23([fifteen, nineteen, c2fattn_22], ori_txt_feats)
+        ttnn.deallocate(fifteen)
+        ttnn.deallocate(nineteen)
+        ttnn.deallocate(c2fattn_22)
+
+        return world_detect
 
 
 class TtYOLOWorld:
@@ -1145,4 +1188,17 @@ class TtYOLOWorld:
         self.model = TtWorldModel(device=device, parameters=parameters)
 
     def __call__(self, x):
+        N, C, H, W = x.shape
+        ## Padding from image channels (3) to min channels (16)
+        min_channels = 16
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = x
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # NCHW -> NHWC
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(x)
+        nhwc = ttnn.reallocate(nhwc)
+        x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
         return self.model(x)

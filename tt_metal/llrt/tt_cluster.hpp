@@ -97,7 +97,7 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
+    Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
     ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
@@ -262,15 +262,17 @@ public:
     void set_internal_routing_info_for_ethernet_cores(
         bool enable_internal_routing, const std::vector<chip_id_t>& target_mmio_devices = {}) const;
 
-    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>
-    get_ethernet_connections() const {
+    const std::
+        unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>&
+        get_ethernet_connections() const {
         return this->cluster_desc_->get_ethernet_connections();
     }
 
     // TODO: unify uint64_t with ChipUID
-    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>
-    get_ethernet_connections_to_remote_mmio_devices() const {
-        return this->cluster_desc_->get_ethernet_connections_to_remote_mmio_devices();
+    const std::
+        unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>&
+        get_ethernet_connections_to_remote_devices() const {
+        return this->cluster_desc_->get_ethernet_connections_to_remote_devices();
     }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
@@ -303,10 +305,10 @@ public:
 
     // Configures ethernet cores for fabric routers depending on whether fabric is enabled
     void configure_ethernet_cores_for_fabric_routers(
-        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
     void initialize_fabric_config(
-        tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
 
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;

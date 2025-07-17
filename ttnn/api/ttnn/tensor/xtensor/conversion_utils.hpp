@@ -42,6 +42,28 @@ public:
     XtensorAdapter(std::vector<T>&& data, std::vector<size_t> shape_vec) :
         data_(std::move(data)), expr_(adapt(tt::stl::make_span(data_), std::move(shape_vec))) {}
 
+    XtensorAdapter(const XtensorAdapter& other) :
+        data_(other.data_), expr_(adapt(tt::stl::make_span(data_), other.expr_.shape())) {}
+
+    XtensorAdapter(XtensorAdapter&& other) noexcept :
+        data_(std::move(other.data_)), expr_(adapt(tt::stl::make_span(data_), other.expr_.shape())) {}
+
+    XtensorAdapter& operator=(const XtensorAdapter& other) {
+        if (this != &other) {
+            data_ = other.data_;
+            expr_ = adapt(tt::stl::make_span(data_), other.expr_.shape());
+        }
+        return *this;
+    }
+
+    XtensorAdapter& operator=(XtensorAdapter&& other) noexcept {
+        if (this != &other) {
+            data_ = std::move(other.data_);
+            expr_ = adapt(tt::stl::make_span(data_), other.expr_.shape());
+        }
+        return *this;
+    }
+
     // Returns a reference to the underlying xtensor expression.
     auto& expr() & { return expr_; }
     const auto& expr() const& { return expr_; }

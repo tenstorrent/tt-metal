@@ -15,14 +15,13 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <functional>
-#include <iostream>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -31,8 +30,6 @@
 #include <set>
 #include <string>
 #include <tuple>
-#include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -1084,7 +1081,7 @@ tt_metal::Program create_program_single_core(
 
     // Create compute kernel
     // Gelu currently has better accuracy when run in approx mode
-    std::map<string, string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
@@ -1223,7 +1220,7 @@ tt_metal::Program create_program(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default});
 
-    std::map<string, string> mm_in1_reader_writer_defines;
+    std::map<std::string, std::string> mm_in1_reader_writer_defines;
     mm_in1_reader_writer_defines["IN1_IS_IDENTITY"] = "1";
     auto mm_in1_reader_writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -1237,7 +1234,7 @@ tt_metal::Program create_program(
 
     // Create compute kernel
     // Gelu currently has better accuracy when run in approx mode
-    std::map<string, string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }

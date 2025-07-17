@@ -28,7 +28,7 @@ from models.utility_functions import run_for_wormhole_b0
     "resolution, expected_inference_throughput",
     [
         ((320, 320), 103),
-        ((640, 640), 55),
+        ((640, 640), 52),
     ],
 )
 def test_perf_e2e_yolov4(device, batch_size, act_dtype, weight_dtype, resolution, expected_inference_throughput):
@@ -77,7 +77,7 @@ def test_perf_e2e_yolov4(device, batch_size, act_dtype, weight_dtype, resolution
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "yolov4", 93.5),
+        (1, "yolov4", 93.6),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

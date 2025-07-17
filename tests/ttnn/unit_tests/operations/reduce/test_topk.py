@@ -66,7 +66,6 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 8192, 3, 50),  # passed
         (1, 1, 64, 64, 2, 32),  # passed
         (1, 1, 64, 64, 2, 64),  # passed
-        (1, 1, 32, 8192, 3, 50),  # passed
         (1, 2048, 1, 64, 1, 32),  # skipped
         (1, 1, 32, 64, 3, 2),  # passed
         (1, 1, 32, 64, 3, 4),  # passed

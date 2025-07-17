@@ -50,6 +50,7 @@ enum class UnaryOpType {
     RELU6,
     ATAN,
     ASINH,
+    ATANH,
     ERF,
     ERFC,
     ISINF,
@@ -72,11 +73,12 @@ enum class UnaryOpType {
     SUB_UNARY_SFPU,
     MUL_UNARY_SFPU,
     DIV_UNARY_SFPU,
-    IDENTITY_UINT32,
     UNARY_NE,
     UNARY_EQ,
     UNARY_GT,
     UNARY_LT,
+    UNARY_GE,
+    UNARY_LE,
     TILED_PROD,
     TYPECAST,
     BITWISE_XOR,
@@ -87,6 +89,7 @@ enum class UnaryOpType {
     FLOOR,
     CEIL,
     TRUNC,
+    FRAC,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,
@@ -100,6 +103,7 @@ enum class UnaryOpType {
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
+    HARDSHRINK,
 };
 
 enum class VecMode {

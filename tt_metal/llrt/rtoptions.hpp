@@ -162,6 +162,10 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
+    // a copy for an intermittent period until the environment variable TT_METAL_ENABLE_ERISC_IRAM is removed
+    // we keep a copy so that when we teardown the fabric (which enables erisc iram internally), we can recover
+    // to the user override (if it existed)
+    std::optional<bool> erisc_iram_enabled_env_var = std::nullopt;
 
     bool fast_dispatch = true;
 
@@ -180,6 +184,10 @@ class RunTimeOptions {
 
     // Force disables using DMA for reads and writes
     bool disable_dma_ops = false;
+
+    // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
+    // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
+    bool force_context_reinit = false;
 
 public:
     RunTimeOptions();
@@ -338,7 +346,8 @@ public:
         }
     }
     inline std::string get_compile_hash_string() const {
-        std::string compile_hash_str = fmt::format("{}_{}", get_watcher_enabled(), get_kernels_early_return());
+        std::string compile_hash_str =
+            fmt::format("{}_{}_{}", get_watcher_enabled(), get_kernels_early_return(), get_erisc_iram_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -405,8 +414,23 @@ public:
     inline bool get_simulator_enabled() const { return simulator_enabled; }
     inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
-    inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
+    inline bool get_erisc_iram_enabled() const {
+        // Disabled when debug tools are enabled due to IRAM size
+        return erisc_iram_enabled && !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+    }
+    inline bool get_erisc_iram_env_var_enabled() const {
+        return erisc_iram_enabled_env_var.has_value() && erisc_iram_enabled_env_var.value();
+    }
+    inline bool get_erisc_iram_env_var_disabled() const {
+        return erisc_iram_enabled_env_var.has_value() && !erisc_iram_enabled_env_var.value();
+    }
     inline bool get_fast_dispatch() const { return fast_dispatch; }
+
+    // Temporary API until all multi-device workloads are ported to run on fabric.
+    // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
+    // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
+    // copy to IRAM can noticeably degrade legacy CCL op performance in those cases.
+    inline void set_erisc_iram_enabled(bool enable) { erisc_iram_enabled = enable; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
@@ -415,6 +439,8 @@ public:
 
     inline bool get_disable_dma_ops() const { return disable_dma_ops; }
     inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+
+    inline bool get_force_context_reinit() const { return force_context_reinit; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

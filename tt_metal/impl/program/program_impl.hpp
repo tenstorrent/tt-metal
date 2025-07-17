@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "jit_build/build.hpp"
 #include "program_command_sequence.hpp"
 
 #include "tt-metalium/buffer.hpp"
@@ -20,6 +21,7 @@
 #include "program_device_map.hpp"              // ProgramTransferInfo
 #include "tt-metalium/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
+#include "tt_metal.hpp"
 
 #include <umd/device/tt_core_coordinates.h>             // CoreType
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -29,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -77,7 +80,7 @@ struct KernelGroup {
         uint32_t programmable_core_type_index,
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
-        uint32_t max_local_cb_end_index,
+        uint32_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges);
 
@@ -129,6 +132,33 @@ struct ProgramOffsetsState {
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
+
+// Internal class for holding a group of programs for parallel compilation.
+class ProgramCompileGroup {
+private:
+    std::unordered_map<IDevice*, std::unique_ptr<Program>> program_device_map_;
+
+public:
+    ProgramCompileGroup() = default;
+
+    ~ProgramCompileGroup();
+
+    // Add a program to the compile group. Throws if the program already exists in the group.
+    void add_program(IDevice* device, std::unique_ptr<Program> program);
+
+    // Compiles all programs in the group
+    void compile_all(bool force_slow_dispatch);
+
+    // Write runtime args for all programs in the group
+    void write_runtime_args(bool force_slow_dispatch);
+
+    // Remove and return a program from the compile group
+    std::unique_ptr<Program> remove_program(IDevice* device);
+
+    void clear();
+
+    bool contains(IDevice* device);
+};
 
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {

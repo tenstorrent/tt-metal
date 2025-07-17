@@ -76,8 +76,39 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     uint32_t num_sender_channels = get_sender_channel_count(topology);
     uint32_t num_downstream_edms = get_downstream_edm_count(topology);
     // Global
-    this->handshake_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base() /* + 1024*/;
-    this->edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
+    size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    this->handshake_addr = next_l1_addr;
+    next_l1_addr += eth_channel_sync_size;
+
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        this->receiver_txq_id = 1;
+    }
+    this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+        this->risc_configs.emplace_back(risc_id);
+    }
+
+    if (this->sender_txq_id != this->receiver_txq_id) {
+        for (size_t i = 0; i < num_sender_channels; i++) {
+            this->to_sender_channel_remote_ack_counter_addrs[i] = next_l1_addr;
+            next_l1_addr += field_size;
+        }
+        for (size_t i = 0; i < num_sender_channels; i++) {
+            this->to_sender_channel_remote_completion_counter_addrs[i] = next_l1_addr;
+            next_l1_addr += field_size;
+        }
+        for (size_t i = 0; i < num_receiver_channels; i++) {
+            this->receiver_channel_remote_ack_counter_addrs[i] = next_l1_addr;
+            next_l1_addr += field_size;
+        }
+        for (size_t i = 0; i < num_receiver_channels; i++) {
+            this->receiver_channel_remote_completion_counter_addrs[i] = next_l1_addr;
+            next_l1_addr += field_size;
+        }
+    }
+
+    this->edm_channel_ack_addr = next_l1_addr;
     this->termination_signal_address =
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
@@ -85,11 +116,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
-    this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
-        this->risc_configs.emplace_back(risc_id);
-    }
 
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;
@@ -396,6 +422,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     FabricEriscDatamoverConfig(topology) {
     this->sender_txq_id = 0;
     this->receiver_txq_id = 0;
+
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->num_used_sender_channels = get_sender_channel_count(topology);
     this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
@@ -649,6 +676,8 @@ void get_runtime_args_for_edm_termination_infos(
     }
 }
 
+// TODO: will be deprecated. currently for ethernet dispatch case
+//       ethernet core need to have same memory mapping as worker
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     size_t sender_worker_flow_control_semaphore_id,
@@ -671,6 +700,88 @@ void append_worker_to_fabric_edm_sender_rt_args(
         connection.edm_worker_location_info_addr,
         connection.buffer_size_bytes,
         connection.buffer_index_semaphore_id,
+        sender_worker_flow_control_semaphore_id,
+        sender_worker_terminate_semaphore_id,
+        sender_worker_buffer_index_semaphore_id};
+    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    std::ranges::copy(values, std::back_inserter(args_out));
+}
+
+void append_worker_to_fabric_edm_sender_rt_args(
+    chan_id_t eth_channel,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out) {
+    TT_FATAL(
+        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
+        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
+
+    const std::vector<uint32_t> values = {
+        eth_channel,
+        sender_worker_flow_control_semaphore_id,
+        sender_worker_terminate_semaphore_id,
+        sender_worker_buffer_index_semaphore_id};
+    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    std::ranges::copy(values, std::back_inserter(args_out));
+}
+
+// TODO: will be deprecated. non device init fabric case
+void append_worker_to_fabric_edm_sender_rt_args(
+    const SenderWorkerAdapterSpec& connection,
+    chip_id_t chip_id,
+    const CoreRangeSet& worker_cores,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out) {
+    TT_FATAL(
+        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
+        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
+
+    chan_id_t eth_channel =
+        tt::tt_metal::MetalContext::instance()
+            .get_cluster()
+            .get_logical_ethernet_core_from_virtual(chip_id, CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
+            .y;
+
+    // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
+    // because this function is called several times for same device which overwrites info written by previous calls
+    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
+    auto& connection_info = fabric_connections.connections[eth_channel];
+    connection_info.edm_direction = connection.edm_direction;
+    connection_info.edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y).to_uint32();
+    connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
+    connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
+    connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
+    connection_info.edm_connection_handshake_addr = connection.edm_connection_handshake_addr;
+    connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
+    connection_info.buffer_size_bytes = connection.buffer_size_bytes;
+    connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
+    // NOTE: valid_connections_mask is not copied to L1 from performance reason
+    //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
+    //       we want to reduce the number of write_core calls
+    fabric_connections.valid_connections_mask |= (1u << eth_channel);
+
+    size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, connections) +
+                               eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t);
+    // Write to Tensix cores
+    std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
+    for (const auto& logical_core : worker_core_coords) {
+        CoreCoord tensix_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                chip_id, logical_core, CoreType::WORKER);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            &connection_info,
+            sizeof(tt::tt_fabric::fabric_connection_info_t),
+            tt_cxy_pair(chip_id, tensix_core),
+            tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) +
+                connection_offset);
+    }
+
+    const std::vector<uint32_t> values = {
+        eth_channel,
         sender_worker_flow_control_semaphore_id,
         sender_worker_terminate_semaphore_id,
         sender_worker_buffer_index_semaphore_id};
@@ -970,6 +1081,23 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);
 
+    bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
+    if (multi_txq_enabled) {
+        for (size_t i = 0; i < num_sender_channels; i++) {
+            ct_args.push_back(config.to_sender_channel_remote_ack_counter_addrs[i]);
+        }
+        for (size_t i = 0; i < num_sender_channels; i++) {
+            ct_args.push_back(config.to_sender_channel_remote_completion_counter_addrs[i]);
+        }
+        for (size_t i = 0; i < num_receiver_channels; i++) {
+            ct_args.push_back(config.receiver_channel_remote_ack_counter_addrs[i]);
+        }
+        for (size_t i = 0; i < num_receiver_channels; i++) {
+            ct_args.push_back(config.receiver_channel_remote_completion_counter_addrs[i]);
+        }
+    }
+
+    ct_args.push_back(0x20c0ffee);
     return ct_args;
 }
 

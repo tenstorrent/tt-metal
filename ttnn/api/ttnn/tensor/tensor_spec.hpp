@@ -31,6 +31,54 @@ public:
 
     Tile tile() const { return tensor_layout_.get_tile(); }
 
+    /// Shards TensorSpec across the specified dimensions.
+    /// This would result in the shard shape to be minimal (typically 1 or tile size) in the sharded dimensions.
+    TensorSpec sharded_across_dims(
+        tt::stl::Span<const int32_t> dims,
+        CoreRangeSet grid,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    /// Shards TensorSpec across all dimensions except for the specified ones.
+    /// This would result in the shard shape to be minimal (typically 1 or tile size) in all dimensions except for the
+    /// specified ones.
+    TensorSpec sharded_across_dims_except(
+        tt::stl::Span<const int32_t> dims,
+        CoreRangeSet grid,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    /// Performs 2D height sharding for TensorSpec.
+    /// This flattens the tensor into a 2D shape and splits it along the height to achieve as close to equal
+    /// distribution as possible, while maintaining just 1 shard per core.
+    TensorSpec height_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    /// Performs 2D width sharding for TensorSpec.
+    /// This flattens the tensor into a 2D shape and splits it along the width to achieve as close to equal distribution
+    /// as possible, while maintaining just 1 shard per core.
+    TensorSpec width_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    /// Performs 2D block sharding for TensorSpec.
+    /// This flattens the tensor into a 2D shape and splits it into 2D contiguous blocks, putting each block onto the
+    /// corresponding core in 2D grid.
+    TensorSpec block_sharded(CoreRange grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+
+    enum class ShardShapeAlignment {
+        /// No shard shape alignment will be performed. If the shard shape is not following the alignment requirements,
+        /// an exception will be thrown.
+        NONE,
+        /// Shard shape will be automatically aligned to the minimum required alignment. The Required alignment may
+        /// cause higher memory usage and lower read/write performance for some use cases.
+        REQUIRED,
+        /// Shard shape will be automatically aligned to the recommended alignment, trying to achieve optimal
+        /// performance and memory usage.
+        RECOMMENDED,
+    };
+    /// Performs arbitrary sharding for TensorSpec using the specified shard shape, grid, shard shape alignment, and
+    /// other optional parameters.
+    TensorSpec sharded(
+        Shape shard_shape,
+        CoreRangeSet grid,
+        ShardShapeAlignment shard_alignment,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR,
+        ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D) const;
+    /// Performs arbitrary sharding for TensorSpec using the specified shard spec and shard shape alignment.
+    TensorSpec sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment shard_alignment) const;
+
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
     BufferShardingArgs compute_buffer_sharding_args() const {
         return tensor_layout_.compute_buffer_sharding_args(logical_shape_);
@@ -39,6 +87,13 @@ public:
         return tensor_layout_.compute_packed_buffer_size_bytes(logical_shape_);
     }
     size_t compute_page_size_bytes() const { return tensor_layout_.compute_page_size_bytes(logical_shape_); }
+
+    size_t compute_consumed_memory_bytes_per_bank(const IDevice& device) const {
+        return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, device);
+    }
+    size_t compute_consumed_memory_bytes_per_bank(size_t page_alignment, size_t num_banks) const {
+        return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, page_alignment, num_banks);
+    }
 
     TensorSpec with_memory_config(MemoryConfig memory_config) const;
 
