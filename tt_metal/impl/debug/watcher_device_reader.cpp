@@ -435,7 +435,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // Whether or not watcher data is available depends on a flag set on the device.
     if (mbox_data->watcher.enable != WatcherEnabled and mbox_data->watcher.enable != WatcherDisabled) {
         TT_THROW(
-            "Watcher read invalid wathcer.enable on {}. Read {}, valid values are {} and {}.",
+            "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
             core_str,
             mbox_data->watcher.enable,
             WatcherEnabled,
