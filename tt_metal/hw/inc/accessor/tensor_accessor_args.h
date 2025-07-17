@@ -14,20 +14,18 @@
 template <typename T>
 T get_common_arg_val(int arg_idx);
 
-namespace tensor_accessor {
+template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET = tensor_accessor::UNKNOWN>
+struct TensorAccessorArgs {
+    static constexpr auto args_config = tensor_accessor::ArgsConfig(
+        static_cast<tensor_accessor::ArgsConfig::Underlying>(get_compile_time_arg_val(CTA_OFFSET)));
 
-template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET = UNKNOWN>
-struct ArgsOffsets {
-    static constexpr auto args_config =
-        ArgsConfig(static_cast<ArgsConfig::Underlying>(get_compile_time_arg_val(CTA_OFFSET)));
-
-    static constexpr bool is_sharded = args_config.test(ArgConfig::Sharded);
-    static constexpr bool is_dram = args_config.test(ArgConfig::IsDram);
-    static constexpr bool rank_is_crta = args_config.test(ArgConfig::RuntimeRank);
-    static constexpr bool num_banks_is_crta = args_config.test(ArgConfig::RuntimeNumBanks);
-    static constexpr bool tensor_shape_is_crta = args_config.test(ArgConfig::RuntimeTensorShape);
-    static constexpr bool shard_shape_is_crta = args_config.test(ArgConfig::RuntimeShardShape);
-    static constexpr bool bank_coords_is_crta = args_config.test(ArgConfig::RuntimeBankCoords);
+    static constexpr bool is_sharded = args_config.test(tensor_accessor::ArgConfig::Sharded);
+    static constexpr bool is_dram = args_config.test(tensor_accessor::ArgConfig::IsDram);
+    static constexpr bool rank_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeRank);
+    static constexpr bool num_banks_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeNumBanks);
+    static constexpr bool tensor_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape);
+    static constexpr bool shard_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeShardShape);
+    static constexpr bool bank_coords_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeBankCoords);
 
     // Impossible to have runtime rank without runtime tensor and shard shapes since then impossible to calculate CTA
     // offsets in compile time
@@ -74,12 +72,12 @@ private:
     uint32_t crta_offset_rt_;
 
 public:
-    constexpr ArgsOffsets() : crta_offset_rt_(0) {}
-    constexpr explicit ArgsOffsets(uint32_t crta_offset) : crta_offset_rt_(crta_offset) {
-        static_assert(CRTA_OFFSET == UNKNOWN, "Do not pass crta_offset when CRTA_OFFSET is known");
+    constexpr TensorAccessorArgs() : crta_offset_rt_(0) {}
+    constexpr explicit TensorAccessorArgs(uint32_t crta_offset) : crta_offset_rt_(crta_offset) {
+        static_assert(CRTA_OFFSET == tensor_accessor::UNKNOWN, "Do not pass crta_offset when CRTA_OFFSET is known");
     }
     constexpr uint32_t crta_offset() const {
-        if constexpr (CRTA_OFFSET != UNKNOWN) {
+        if constexpr (CRTA_OFFSET != tensor_accessor::UNKNOWN) {
             return CRTA_OFFSET;
         } else {
             return crta_offset_rt_;
@@ -141,5 +139,3 @@ public:
         return bank_coords_crta_offset() + (bank_coords_is_crta ? get_physical_num_banks() : 0) - crta_offset();
     }
 };
-
-}  // namespace tensor_accessor
