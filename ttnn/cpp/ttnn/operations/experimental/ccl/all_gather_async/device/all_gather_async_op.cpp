@@ -385,9 +385,9 @@ Tensor all_gather_async_impl(
 
 Tensor all_gather_async_impl(
     const Tensor& input_tensor,
-    Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -414,13 +414,19 @@ Tensor all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
+    TT_FATAL(
+        memory_config.has_value() || persistent_output_buffer.has_value(),
+        "At least one of memory_config or persistent_output_buffer must be provided");
+    MemoryConfig output_memory_config =
+        memory_config.has_value() ? memory_config.value() : persistent_output_buffer.value().memory_config();
+
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync(
                    devices,
                    dim,
                    num_links,
                    num_devices,
-                   memory_config.value_or(input_tensor.memory_config()),
+                   output_memory_config,
                    ccl_topology,
                    multi_device_global_semaphore,
                    sub_device_id,
@@ -462,6 +468,12 @@ Tensor all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
 
+    TT_FATAL(
+        memory_config.has_value() || persistent_output_tensor.has_value(),
+        "At least one of memory_config or persistent_output_tensor must be provided");
+    MemoryConfig output_memory_config =
+        memory_config.has_value() ? memory_config.value() : persistent_output_tensor.value().memory_config();
+
     CoreCoord grid_size = mesh_device.compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
@@ -471,7 +483,7 @@ Tensor all_gather_async_impl(
                    gather_dim,
                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                    num_devices,
-                   memory_config.value_or(input_tensor.memory_config()),
+                   output_memory_config,
                    topology,
                    multi_device_global_semaphore,
                    sub_device_id,
@@ -508,9 +520,9 @@ Tensor all_gather_async(
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
-    Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -521,9 +533,9 @@ Tensor all_gather_async(
 
     return all_gather_async_impl(
         input_tensor,
-        persistent_output_buffer,
         dim,
         multi_device_global_semaphore,
+        persistent_output_buffer,
         num_links,
         memory_config,
         topology,

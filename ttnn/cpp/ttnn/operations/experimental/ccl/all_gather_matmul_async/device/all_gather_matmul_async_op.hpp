@@ -113,10 +113,10 @@ namespace ccl {
 std::vector<Tensor> all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
-    Tensor& persistent_output_buffer,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     CoreCoord all_gather_core_grid_offset,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt,
     const std::optional<const Tensor>& bias = std::nullopt,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,

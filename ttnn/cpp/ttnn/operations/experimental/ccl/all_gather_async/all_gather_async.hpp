@@ -24,9 +24,9 @@ struct ExecuteAllGatherAsync {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        ttnn::Tensor& persistent_output_buffer,
         int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+        const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt,
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,

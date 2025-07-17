@@ -38,16 +38,49 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
-    if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
+    TT_FATAL(
+        output_tensors.size() == 2, "Error, Number of output tensors should be 2 but has {}", output_tensors.size());
+
+    // Intermediate tensor
+    if (output_tensors[0].has_value()) {
+        const auto& intermediate_tensor = output_tensors[0];
+
         TT_FATAL(
-            output_tensors.size() <= 2,
-            "Error, Number of output tensors should be at most 2 but has {}",
-            output_tensors.size());
+            intermediate_tensor.value().storage_type() == StorageType::DEVICE,
+            "Operands to reduce_scatter_minimal need to be on device!");
+        TT_FATAL(
+            intermediate_tensor.value().get_layout() == layout,
+            "Error, Intermediate tensor layout should be same as input tensor layout but has {}",
+            intermediate_tensor.value().get_layout());
+        TT_FATAL(
+            intermediate_tensor.value().get_dtype() == dtype,
+            "Error, Intermediate tensor dtype should be same as input tensor dtype but has {}",
+            intermediate_tensor.value().get_dtype());
+        TT_FATAL(
+            intermediate_tensor.value().get_tensor_spec().page_config() == input_tensor.get_tensor_spec().page_config(),
+            "Error, Intermediate tensor page config should be same as input tensor page config but has {}",
+            intermediate_tensor.value().get_tensor_spec().page_config());
+        TT_FATAL(
+            intermediate_tensor.value().memory_config() == this->intermediate_mem_config,
+            "Error, Intermediate tensor memory config should be same as intermediate_mem_config but has {}",
+            intermediate_tensor.value().memory_config());
+
+        // check the intermediate tensor size
+        auto intermediate_shape = intermediate_tensor.value().get_padded_shape();
+        auto input_shape = input_tensor.get_padded_shape();
+        TT_FATAL(
+            intermediate_shape.size() == input_shape.size(),
+            "Error, Intermediate tensor shape should have same number of dimensions as input tensor but has {}",
+            intermediate_shape.size());
+    }
+
+    // Output tensor
+    if (output_tensors[1].has_value()) {
         const auto& output_tensor = output_tensors.size() == 1 ? output_tensors[0] : output_tensors[1];
 
         TT_FATAL(
             output_tensor.value().storage_type() == StorageType::DEVICE,
-            "Operands to all_gather need to be on device!");
+            "Operands to reduce_scatter_minimal need to be on device!");
         TT_FATAL(
             output_tensor.value().get_layout() == layout,
             "Error, Output tensor layout should be same as input tensor layout but has {}",
@@ -75,10 +108,10 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         for (size_t i = 0; i < input_shape.size(); ++i) {
             if (i == this->dim) {
                 TT_FATAL(
-                    output_shape[i] <= input_shape[i] * this->ring_size,
+                    output_shape[i] == input_shape[i] / this->ring_size,
                     "Error, Output tensor shape at dimension {} should be {} but has {}",
                     i,
-                    input_shape[i] * this->ring_size,
+                    input_shape[i] / this->ring_size,
                     output_shape[i]);
             } else {
                 TT_FATAL(
@@ -109,16 +142,37 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // TODO: FIXME!
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[this->dim] *= this->ring_size;
-    return {TensorSpec(
-        shape,
-        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+    auto input_shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
+
+    auto intermediate_shape = input_shape;
+    intermediate_shape[2] /= input_shape[0];
+
+    auto output_shape = input_shape;
+    output_shape[this->dim] /= this->ring_size;
+
+    return {
+        TensorSpec(
+            intermediate_shape,
+            TensorLayout(
+                input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), intermediate_mem_config)),
+        TensorSpec(
+            output_shape,
+            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
 }
 
 std::vector<Tensor> ReduceScatterMinimalAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
-    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
+    auto tensor_specs = compute_output_specs(input_tensors);
+
+    ttnn::Tensor persistent_intermediate_buffer =
+        optional_output_tensors.at(0).has_value() ? optional_output_tensors.at(0).value()
+                                                  : create_device_tensor(tensor_specs[0], input_tensors.at(0).device());
+
+    ttnn::Tensor persistent_output_buffer = optional_output_tensors.at(1).has_value()
+                                                ? optional_output_tensors.at(1).value()
+                                                : create_device_tensor(tensor_specs[1], input_tensors.at(0).device());
+
+    return {persistent_intermediate_buffer, persistent_output_buffer};
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterMinimalAsync::create_mesh_workload(
@@ -196,6 +250,7 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->dim,
         this->num_links,
         this->ring_size,
+        this->intermediate_mem_config,
         this->output_mem_config,
         this->topology,
         input_shape,
@@ -212,11 +267,12 @@ namespace ccl {
 namespace {
 Tensor reduce_scatter_minimal_async_impl(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
-    Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_intermediate_buffer,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t num_links,
+    const std::optional<MemoryConfig>& intermediate_memory_config,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
@@ -256,13 +312,28 @@ Tensor reduce_scatter_minimal_async_impl(
     std::vector<std::optional<Tensor>> optional_output_tensors = {
         persistent_intermediate_buffer, persistent_output_buffer};
 
+    TT_FATAL(
+        intermediate_memory_config.has_value() || persistent_intermediate_buffer.has_value(),
+        "At least one of intermediate_memory_config or persistent_intermediate_buffer must be provided");
+    TT_FATAL(
+        memory_config.has_value() || persistent_output_buffer.has_value(),
+        "At least one of memory_config or persistent_output_buffer must be provided");
+
+    MemoryConfig intermediate_memory_config_arg = intermediate_memory_config.has_value()
+                                                      ? intermediate_memory_config.value()
+                                                      : persistent_intermediate_buffer.value().memory_config();
+
+    MemoryConfig output_memory_config_arg =
+        memory_config.has_value() ? memory_config.value() : persistent_output_buffer.value().memory_config();
+
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
                    devices,
                    dim,
                    num_links,
                    num_devices,
-                   memory_config.value_or(input_tensor.memory_config()),
+                   intermediate_memory_config_arg,
+                   output_memory_config_arg,
                    ccl_topology,
                    multi_device_global_semaphore,
                    sub_device_id,
@@ -276,11 +347,12 @@ Tensor reduce_scatter_minimal_async_impl(
 
 Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
-    Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_intermediate_buffer,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t num_links,
+    const std::optional<MemoryConfig>& intermediate_memory_config,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
@@ -288,11 +360,12 @@ Tensor reduce_scatter_minimal_async(
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     return reduce_scatter_minimal_async_impl(
         input_tensor,
-        persistent_intermediate_buffer,
-        persistent_output_buffer,
         dim,
         multi_device_global_semaphore,
+        persistent_intermediate_buffer,
+        persistent_output_buffer,
         num_links,
+        intermediate_memory_config,
         memory_config,
         topology,
         sub_device_id,
