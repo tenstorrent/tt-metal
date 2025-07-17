@@ -341,6 +341,7 @@ jobs:
           submodules: recursive
           fetch-depth: 500 # Need enough history for `git describe`
           fetch-tags: true # Need tags for `git describe`
+          ref: ${{ github.ref }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
