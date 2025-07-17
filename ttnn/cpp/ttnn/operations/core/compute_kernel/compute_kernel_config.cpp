@@ -21,7 +21,8 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     bool default_approx_mode,
     bool default_fp32_acc,
     bool default_l1_acc,
-    bool default_dst_full_sync_en) {
+    bool default_dst_full_sync_en,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level) {
     DeviceComputeKernelConfig defaultConfig;
     if (device_kernel_config.has_value()) {
         auto compute_kernel_config = device_kernel_config.value();
@@ -46,12 +47,15 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
                     bool fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                     bool packer_l1_acc = compute_kernel_config.packer_l1_acc;
                     bool dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
+                    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
+                        compute_kernel_config.throttle_level;
                     defaultConfig = WormholeComputeKernelConfig{
                         .math_fidelity = math_fidelity,
                         .math_approx_mode = math_approx_mode,
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .packer_l1_acc = packer_l1_acc,
-                        .dst_full_sync_en = dst_full_sync_en};
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .throttle_level = throttle_level};
                 } else {
                     TT_THROW("arch not supported");
                 }
@@ -68,7 +72,8 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
                 .math_approx_mode = default_approx_mode,
                 .fp32_dest_acc_en = default_fp32_acc,
                 .packer_l1_acc = default_l1_acc,
-                .dst_full_sync_en = default_dst_full_sync_en};
+                .dst_full_sync_en = default_dst_full_sync_en,
+                .throttle_level = default_throttle_level};
         } else {
             TT_THROW("arch not supported");
         }
@@ -124,6 +129,25 @@ MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& c
                 return compute_kernel_config.math_fidelity;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
                 return compute_kernel_config.math_fidelity;
+            } else {
+                TT_THROW("arch not supported");
+            }
+        },
+        compute_kernel_config.value());
+}
+
+ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
+    }
+    return std::visit(
+        [](auto&& compute_kernel_config) -> ttnn::operations::compute_throttle_utils::ThrottleLevel {
+            using T = std::decay_t<decltype(compute_kernel_config)>;
+            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+                return ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
+            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+                return compute_kernel_config.throttle_level;
             } else {
                 TT_THROW("arch not supported");
             }

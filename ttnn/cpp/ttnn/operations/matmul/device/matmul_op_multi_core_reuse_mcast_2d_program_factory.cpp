@@ -35,6 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
     uint32_t out_subblock_h,
@@ -535,7 +536,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), cores.size(), mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), cores.size(), mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), cores.size(), mm_kernel_defines, throttle_level);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -1484,6 +1486,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         Nt,
         Kt,
         bcast_batch,
+        ttnn::get_throttle_level(compute_kernel_config),
         in0_block_w,
         in0_last_ktile_w,
         out_subblock_h,
