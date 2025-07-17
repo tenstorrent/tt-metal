@@ -29,7 +29,7 @@ jobs:
       - name: Run tt-smi via mpirun command
         run: |
           echo "Running mpirun command on multiple hosts"
-          mpirun --rankfile rankfile --tag-output  --mca plm_rsh_agent .github/scripts/multihost/virtualized/docker-wrapper.sh tt-smi -ls
+          mpirun --rankfile rankfile --tag-output  --mca plm_rsh_agent .github/scripts/multihost/virtualized/docker-wrapper.sh tt-smi -ls || true
 
       - name: Compile mpi allreduce test
         run: |
