@@ -8,6 +8,7 @@
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include "dev_mem_map.h"
 #include "debug/assert.h"
+#include "debug/dprint.h"
 
 // Simple packet header pool manager for fabric networking
 // This class manages allocation of packet headers from a fixed pool
@@ -23,7 +24,26 @@ public:
     FORCE_INLINE static void init() { current_offset_ = 0; }
 
     FORCE_INLINE static volatile tt_l1_ptr PACKET_HEADER_TYPE* allocate_header() {
-        ASSERT(current_offset_ + HEADER_SIZE <= POOL_SIZE, "Insufficient space in packet header pool");
+        ASSERT(
+            current_offset_ + HEADER_SIZE <= POOL_SIZE,
+            "=== PACKET HEADER POOL EXHAUSTION ERROR === "
+            "CRITICAL: Insufficient space in packet header pool. "
+            " - Headers Allocated: ",
+            (current_offset_ / HEADER_SIZE),
+            " - Max Headers Capacity: ",
+            (POOL_SIZE / HEADER_SIZE));
+        if (current_offset_ + HEADER_SIZE > POOL_SIZE) {
+            DPRINT << "=== PACKET HEADER POOL EXHAUSTION ERROR ===" << ENDL();
+            DPRINT << "CRITICAL: Insufficient space in packet header pool." << ENDL();
+            DPRINT << "  - Headers Allocated: " << (current_offset_ / HEADER_SIZE) << ENDL();
+            DPRINT << "  - Max Headers Capacity: " << (POOL_SIZE / HEADER_SIZE) << ENDL();
+            DPRINT << "Action: Entering infinite loop to prevent undefined behavior" << ENDL();
+            DPRINT << "Solution: Increase MEM_PACKET_HEADER_POOL_SIZE or reduce header usage" << ENDL();
+            DPRINT << "=================================================" << ENDL();
+            while (1) {
+            }  // hang intentionally
+        }
+
         uint32_t allocated_addr = POOL_BASE + current_offset_;
         current_offset_ += HEADER_SIZE;
         return reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(allocated_addr);

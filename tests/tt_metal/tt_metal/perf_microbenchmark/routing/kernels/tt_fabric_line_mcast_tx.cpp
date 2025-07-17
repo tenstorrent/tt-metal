@@ -12,7 +12,7 @@
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 // clang-format on
 
