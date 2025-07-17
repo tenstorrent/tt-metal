@@ -1163,7 +1163,6 @@ bool RunLineFabricTest(
         local_output_buffer_address,
         dest_is_dram,
         worker_buffer_index_semaphore_id,
-        // packet_header_buffer_cb_id,
         scatter_write);
 
     ////////////////////////////////////////////////////////////////////////////
