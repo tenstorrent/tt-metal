@@ -1085,14 +1085,14 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
                     }
                 }
             }
-            // We want to also add the eth cores that are connected to other chips possibly outside the opened
-            // cluster.
+            // Mark all remaining ethernet cores as idle
             const auto& soc_desc = get_soc_desc(chip_id);
             for (const auto& eth_channel : cluster_desc_->get_active_eth_channels(chip_id)) {
                 auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
-                    this->device_eth_routing_info_.at(chip_id).end()) {
-                    this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
+                // Chip ID is guaranteed to be present in device_eth_routing_info_, since it was populated above
+                auto& routing_info = this->device_eth_routing_info_[chip_id];
+                if (routing_info.find(eth_core) == routing_info.end()) {
+                    routing_info.insert({eth_core, EthRouterMode::IDLE});
                 }
             }
         }
