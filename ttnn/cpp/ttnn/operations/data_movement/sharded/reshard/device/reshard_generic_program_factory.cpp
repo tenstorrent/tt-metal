@@ -12,7 +12,7 @@
 #include <tt-metalium/allocator.hpp>
 
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
-#include "reshard_program_factory.hpp"
+#include "reshard_common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

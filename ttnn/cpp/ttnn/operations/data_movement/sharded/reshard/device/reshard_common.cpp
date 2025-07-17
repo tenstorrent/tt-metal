@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reshard_program_factory.hpp"
+#include "reshard_common.hpp"
 
 #include "reshard_same_width_program_factory.hpp"
 #include "reshard_generic_program_factory.hpp"

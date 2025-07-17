@@ -10,7 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "reshard_program_factory.hpp"
+#include "reshard_common.hpp"
 #include "nd_reshard_program_factory.hpp"
 
 using namespace tt::constants;
