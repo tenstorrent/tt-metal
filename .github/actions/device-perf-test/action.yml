@@ -13,11 +13,12 @@ runs:
       with:
         submodules: recursive
     - run: |
+        pwd
+        ls
         set -x
         export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
 
         export PYTHONPATH=/work
-        cd /work
 
         ${{ inputs.commands }}
 
