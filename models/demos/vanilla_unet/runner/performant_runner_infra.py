@@ -9,8 +9,8 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.experimental.vanilla_unet.reference.unet import UNet
-from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
+from models.demos.vanilla_unet.reference.unet import UNet
+from models.demos.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.integration_tests.vanilla_unet.test_ttnn_unet import create_custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -38,9 +38,9 @@ class VanillaUNetPerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
-        weights_path = "models/experimental/vanilla_unet/unet.pt"
+        weights_path = "models/demos/vanilla_unet/unet.pt"
         if not os.path.exists(weights_path):
-            os.system("bash models/experimental/vanilla_unet/weights_download.sh")
+            os.system("bash models/demos/vanilla_unet/weights_download.sh")
 
         state_dict = torch.load(
             weights_path,
