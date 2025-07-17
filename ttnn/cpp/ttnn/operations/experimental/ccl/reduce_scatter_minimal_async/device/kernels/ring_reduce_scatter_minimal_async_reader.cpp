@@ -131,6 +131,8 @@ void kernel_main() {
                 }
             }
             // DOESN"T FIX
+            uint32_t extra = tiles_to_read - tiles_read;
+            // uint32_t counter = 0;
             while (tiles_read < tiles_to_read) {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
@@ -142,6 +144,12 @@ void kernel_main() {
                 }
 
                 // FIXES
+
+                // Works for % 3 and below for [1, 1, 256, 4096]
+                // if (counter == 0) {
+                //     for (volatile uint32_t y = 0; y < 10000; ++y) { }
+                // }
+                // counter = (counter + 1) % 4;
 
                 cb_reserve_back(cb_in0, tile_granularity);
 
@@ -166,7 +174,6 @@ void kernel_main() {
 
                 if (do_reduce) {
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-
                     // DOESN'T FIX
 
                     cb_reserve_back(cb_intermediate_id, tile_granularity);
@@ -230,6 +237,10 @@ void kernel_main() {
                 }
                 // FIXES
             }
+            // DOESN'T FIX
+            // for (volatile uint32_t y = 0; y < 10000; ++y) { }
+
+            // Aggregating the delays and doing them all here also DOESN'T WORK
 
             // Next slice idx
             if constexpr (direction) {
