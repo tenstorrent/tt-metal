@@ -398,6 +398,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {
                     "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_int32({});", idst)};
+            } else if (input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint32({});", idst)};
             } else {
                 op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
             }
