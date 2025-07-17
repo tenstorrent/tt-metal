@@ -454,7 +454,7 @@ size_t MeshDevice::num_cols() const { return view_->num_cols(); }
 const MeshShape& MeshDevice::shape() const { return view_->shape(); }
 
 std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
-    TT_FATAL(view_->distributed_mesh_shape().fully_local(), "Cannot reshape a mesh that is partially distributed");
+    TT_FATAL(view_->fully_local(), "Cannot reshape a mesh that is partially distributed");
 
     // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
     // The physical connectivity between devices must be preserved when reshaping.
@@ -506,7 +506,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 }
 
 void MeshDevice::reshape(const MeshShape& new_shape) {
-    TT_FATAL(view_->distributed_mesh_shape().fully_local(), "Cannot reshape a mesh that is partially distributed");
+    TT_FATAL(view_->fully_local(), "Cannot reshape a mesh that is partially distributed");
 
     TT_FATAL(
         new_shape.mesh_size() == this->num_devices(),

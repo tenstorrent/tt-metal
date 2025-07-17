@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/distributed_mesh_shape.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -32,7 +31,6 @@ namespace ttnn::distributed {
 namespace {
 
 using ::tt::tt_metal::DistributedHostBuffer;
-using ::tt::tt_metal::DistributedMeshShape;
 using ::tt::tt_metal::distributed::MeshContainer;
 
 // Specifies how a tensor sharded over a specific shape will be distributed to a mesh device
@@ -189,8 +187,8 @@ public:
         const MeshShape& distribution_shape,
         const MeshMapperConfig& config,
         const tt::tt_metal::DistributedTensorConfig& distributed_tensor_config) :
-        distributed_mesh_shape_(mesh_device.get_view().distributed_mesh_shape()),
-        global_range_(distributed_mesh_shape_.shape()),
+        mesh_device_view_(mesh_device.get_view()),
+        global_range_(mesh_device_view_.shape()),
         distribution_mode_(distribution_mode),
         distribution_shape_(distribution_shape),
         config_(config),
@@ -257,7 +255,7 @@ public:
             const TensorSpec tensor_spec(shape, layout);
             auto replicated_buffer = create_host_buffer_from_span<T>(span, buffer_pin, tensor_spec, pad_value);
 
-            auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(distributed_mesh_shape_);
+            auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(mesh_device_view_);
             auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
                 distributed_buffer.emplace_shard(remap_fn(coord), [&b = replicated_buffer]() { return b; });
@@ -332,7 +330,7 @@ private:
         const auto& sharded_xtensor_views, const tt::tt_metal::TensorLayout& layout, T pad_value) const {
         const TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
 
-        auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(distributed_mesh_shape_);
+        auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(mesh_device_view_);
         auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
 
         // Deduplicate processing of replicated buffers, by keeping a cache of already converted buffers.
@@ -369,7 +367,7 @@ private:
     }
 
     // MeshDevice parameters.
-    DistributedMeshShape distributed_mesh_shape_;
+    MeshDeviceView mesh_device_view_;
     MeshCoordinateRange global_range_;
     DistributionMode distribution_mode_ = DistributionMode::ROW_MAJOR;
 

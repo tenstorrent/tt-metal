@@ -5,13 +5,12 @@
 #pragma once
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/distributed_mesh_shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 
 #include <functional>
-#include <unordered_set>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -37,7 +36,8 @@ public:
         const distributed::MeshShape& local_shape,
         const distributed::MeshCoordinate& local_offset);
 
-    static DistributedHostBuffer create(const DistributedMeshShape& dist_mesh_shape);
+    // Creates a multi-host distributed buffer that matches shape and multi-host distribution of the mesh device view.
+    static DistributedHostBuffer create(const distributed::MeshDeviceView& mesh_device_view);
 
     // Shorthand for creating a distributed buffer for a single host.
     static DistributedHostBuffer create(const distributed::MeshShape& shape);

@@ -14,7 +14,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/distributed_mesh_shape.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 
@@ -103,12 +102,11 @@ public:
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
-    // Distributed mesh support
-    // Returns the shape of this mesh device, potentially distributed over multiple hosts.
-    [[nodiscard]] DistributedMeshShape distributed_mesh_shape() const;
+    // Returns true if the view is fully local, i.e. all devices in the view are local.
+    bool fully_local() const;
 
 private:
-    DistributedMeshShape distributed_mesh_shape_;
+    bool fully_local_ = true;
     DistributedMeshContainer<IDevice*> devices_;
     std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 

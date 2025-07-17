@@ -40,18 +40,20 @@ MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
 MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) :
     MeshDeviceView(MeshContainer<MaybeRemote<IDevice*>>(devices.shape(), wrap_to_maybe_remote(devices.values()))) {}
 
-MeshDeviceView::MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices) :
-    distributed_mesh_shape_(DistributedMeshShape(devices)), devices_(devices.shape()) {
+MeshDeviceView::MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices) : devices_(devices.shape()) {
     if (devices_.shape().dims() == 2) {
         shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
     }
 
     // Copy the MaybeRemote values and build coordinate map
+    bool all_local = true;
     for (const auto& [coord, maybe_device] : devices) {
         devices_.at(coord) = maybe_device;
-
+        all_local &= maybe_device.is_local();
         maybe_device.if_local([this, &coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); });
     }
+
+    fully_local_ = all_local;
 }
 
 MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
@@ -250,7 +252,5 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
 MeshDeviceView::DeviceView MeshDeviceView::get_devices() const {
     return extract_locals(devices_.values());
 }
-
-DistributedMeshShape MeshDeviceView::distributed_mesh_shape() const { return distributed_mesh_shape_; }
 
 }  // namespace tt::tt_metal::distributed

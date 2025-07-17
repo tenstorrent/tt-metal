@@ -13,30 +13,49 @@
 #include <taskflow/taskflow.hpp>
 #include <taskflow/algorithm/for_each.hpp>
 #include "common/executor.hpp"
+#include "tt_metal/distributed/distributed_coordinate_translator.hpp"
 
 namespace tt::tt_metal {
-
-DistributedHostBuffer DistributedHostBuffer::create(
-    const distributed::MeshShape& global_shape,
-    const distributed::MeshShape& local_shape,
-    const distributed::MeshCoordinate& local_offset) {
-    return DistributedHostBuffer::create(DistributedMeshShape(global_shape, local_shape, local_offset));
-}
 
 DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape& shape) {
     return DistributedHostBuffer::create(shape, shape, distributed::MeshCoordinate::zero_coordinate(shape.dims()));
 }
 
-DistributedHostBuffer DistributedHostBuffer::create(const DistributedMeshShape& distributed_mesh_shape) {
-    distributed::DistributedMeshContainer<Shard> shards(distributed_mesh_shape.shape());
+DistributedHostBuffer DistributedHostBuffer::create(
+    const distributed::MeshShape& global_shape,
+    const distributed::MeshShape& local_shape,
+    const distributed::MeshCoordinate& local_offset) {
+    DistributedCoordinateTranslator translator(global_shape, local_shape, local_offset);
+    std::vector<distributed::MaybeRemote<Shard>> shards(
+        global_shape.mesh_size(), distributed::MaybeRemote<Shard>::remote());
 
-    for (const auto& coord : distributed::MeshCoordinateRange(distributed_mesh_shape.shape())) {
-        if (distributed_mesh_shape.is_local(coord)) {
-            shards.at(coord) = distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false});
+    int shard_index = 0;
+    for (const auto& coord : distributed::MeshCoordinateRange(global_shape)) {
+        if (translator.is_local(coord)) {
+            shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false});
         }
+        ++shard_index;
     }
 
-    return DistributedHostBuffer(std::move(shards), /*populated_shards=*/std::set<distributed::MeshCoordinate>{});
+    return DistributedHostBuffer(
+        distributed::DistributedMeshContainer<Shard>(global_shape, std::move(shards)), /*populated_shards=*/{});
+}
+
+DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshDeviceView& mesh_device_view) {
+    std::vector<distributed::MaybeRemote<Shard>> shards(
+        mesh_device_view.shape().mesh_size(), distributed::MaybeRemote<Shard>::remote());
+
+    int shard_index = 0;
+    for (auto maybe_device : mesh_device_view) {
+        maybe_device.if_local([&](const auto&) {
+            shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false});
+        });
+        ++shard_index;
+    }
+
+    return DistributedHostBuffer(
+        distributed::DistributedMeshContainer<Shard>(mesh_device_view.shape(), std::move(shards)),
+        /*populated_shards=*/std::set<distributed::MeshCoordinate>{});
 }
 
 std::vector<size_t> DistributedHostBuffer::get_populated_shard_indices() const {
