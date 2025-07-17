@@ -82,8 +82,10 @@ def sd_feed_forward(
         output_buffer_name = "spatial_rs_feed_forward_output" if is_spatial else "prompt_rs_feed_forward_output"
         result = ttnn.experimental.reduce_scatter_minimal_async(
             result,
-            persistent_intermediate_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, intermediate_buffer_name),
-            persistent_output_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, output_buffer_name),
+            persistent_output_buffers=[
+                parallel_manager.get_ping_pong_buffer(cfg_index, intermediate_buffer_name),
+                parallel_manager.get_ping_pong_buffer(cfg_index, output_buffer_name),
+            ],
             dim=3,
             multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(cfg_index),
             num_links=parallel_manager.num_links,
