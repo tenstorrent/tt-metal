@@ -353,5 +353,141 @@ void py_bind_sdpa(py::module& module) {
             py::arg("subdevice_id") = std::nullopt,
             py::arg("ccl_core_grid_offset"),
             py::arg("queue_id") = DefaultQueueId});
+
+    auto mla_doc =
+        R"doc(
+        Causal MLA attention."
+
+        Accepts a `SDPAProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): the input tensor.          [b x nqh x s x dh]
+            input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
+            head_dim_v (uint32_t): the head dimension of V.
+
+        Keyword args:
+            attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
+            is_causal (bool): Defaults to `true`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+            scale (float, optional): Defaults to `None`.
+            program_config (SDPAProgramConfig, optional): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+
+        )doc";
+
+    using MLAOperationType = decltype(ttnn::transformer::flash_mla_prefill);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::flash_mla_prefill,
+        mla_doc,
+        ttnn::pybind_overload_t{
+            [](const MLAOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               std::optional<ttnn::Tensor> attn_mask,
+               bool is_causal,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    attn_mask,
+                    is_causal,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            py::arg("input_tensor_q").noconvert(),
+            py::arg("input_tensor_k").noconvert(),
+            py::arg("head_dim_v").noconvert(),
+            py::kw_only(),
+            py::arg("attn_mask").noconvert() = std::nullopt,
+            py::arg("is_causal").noconvert() = true,
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("memory_config").noconvert() = std::nullopt,
+            py::arg("program_config").noconvert() = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId,
+        });
+
+    auto chunked_mla_doc =
+        R"doc(
+        Chunked causal scaled dot product attention for processing long sequences in chunks.
+        This variant allows processing of sequences longer than the maximum supported length
+        by splitting the input into chunks and maintaining KV cache state.
+        The KV cache is page-based, and the page table tensor is used to map the page indices to the corresponding KV cache indices.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): the input tensor.          [b x nqh x s x dh]
+            input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
+            page_table_tensor (ttnn.Tensor): the page table tensor.  [b x num_pages]
+            chunk_start_idx (int): Absolute position in the sequence where this chunk starts.
+            head_dim_v (uint32_t): the head dimension of V.
+
+        Keyword args:
+            scale (float, optional): Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            program_config (SDPAProgramConfig, optional): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+
+        )doc";
+
+    using MLAChunkedOperationType = decltype(ttnn::transformer::chunked_flash_mla_prefill);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::chunked_flash_mla_prefill,
+        chunked_mla_doc,
+        ttnn::pybind_overload_t{
+            [](const MLAChunkedOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               const ttnn::Tensor& page_table_tensor,
+               int64_t chunk_start_idx,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    page_table_tensor,
+                    chunk_start_idx,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            py::arg("input_tensor_q").noconvert(),
+            py::arg("input_tensor_k").noconvert(),
+            py::arg("head_dim_v").noconvert(),
+            py::arg("page_table_tensor").noconvert(),
+            py::arg("chunk_start_idx"),
+            py::kw_only(),
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("memory_config").noconvert() = std::nullopt,
+            py::arg("program_config").noconvert() = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId,
+        });
 }
 }  // namespace ttnn::operations::transformer

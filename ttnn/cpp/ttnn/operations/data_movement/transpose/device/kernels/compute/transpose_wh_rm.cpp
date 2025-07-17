@@ -30,7 +30,7 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
         cb_push_back(cb_untilize, Ht);
 
         // tilize
-        untilize_init_short(cb_untilize);
+        untilize_init(cb_untilize);
         cb_wait_front(cb_untilize, Ht);
         cb_reserve_back(cb_out, Ht);
         untilize_block(cb_untilize, Ht, cb_out);

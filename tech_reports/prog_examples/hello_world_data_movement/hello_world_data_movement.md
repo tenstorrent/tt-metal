@@ -11,7 +11,7 @@ Then run the following:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/hello_world_datamovement_kernel
+    ./build/programming_examples/metal_example_hello_world_datamovement_kernel
 ```
 
 ## Device setup

@@ -9,8 +9,8 @@ void kernel_main() {
     constexpr uint32_t base_idx_cta = 0;
     constexpr uint32_t base_idx_crta = 0;
 
-    auto args = make_tensor_accessor_args<base_idx_cta, base_idx_crta>();
-    auto sharded_accessor = make_tensor_accessor_from_args(args, 0, 1024);
+    auto args = TensorAccessorArgs<base_idx_cta, base_idx_crta>();
+    auto sharded_accessor = TensorAccessor(args, 0, 1024);
     auto tensor_shape = sharded_accessor.dspec().tensor_shape();
     auto rank = sharded_accessor.dspec().rank();
     auto tensor_w = tensor_shape[rank - 1];
