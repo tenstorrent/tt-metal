@@ -321,7 +321,7 @@ std::vector<T>& get_test_data(size_t n_elements = 128 * 128) {
             } else if constexpr (std::is_integral_v<T>) {
                 data[i] = static_cast<T>(i % (static_cast<size_t>(std::numeric_limits<T>::max()) + 1));
             } else {
-                static_assert(std::is_arithmetic_v<T>, "Unsupported type in get_test_data");
+                data[i] = static_cast<T>(static_cast<float>(i));
             }
         }
 
