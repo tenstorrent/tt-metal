@@ -4,7 +4,9 @@
 
 #pragma once
 
-#include "sort_program_factory.hpp"
+#include "sort_single_row_single_core_program_factory.hpp"
+#include "sort_cross_core_data_exchange_program_factory.hpp"
+#include "sort_single_row_multi_core_program_factory.hpp"
 #include "sort_device_operation_types.hpp"
 
 #include "ttnn/decorators.hpp"
