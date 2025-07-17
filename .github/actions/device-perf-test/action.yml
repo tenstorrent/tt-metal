@@ -16,6 +16,9 @@ runs:
         set -x
         export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
 
+        export PYTHONPATH=/work
+        cd /work
+
         ${{ inputs.commands }}
 
         export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.test_name }}_$(date +%Y_%m_%d).csv
@@ -24,7 +27,3 @@ runs:
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
