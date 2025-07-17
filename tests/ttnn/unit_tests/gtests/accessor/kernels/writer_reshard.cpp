@@ -6,7 +6,7 @@
 #include "accessor/tensor_accessor.h"
 
 void kernel_main() {
-    auto args = make_tensor_accessor_args<0, 0>();
+    auto args = TensorAccessorArgs<0, 0>();
     constexpr uint32_t base_idx_cta = args.compile_time_args_skip();
     uint32_t base_idx_crta = args.runtime_args_skip();
 
@@ -16,7 +16,7 @@ void kernel_main() {
     const uint32_t bank_base_address = get_common_arg_val<uint32_t>(base_idx_crta);
     const uint32_t num_dev_pages = get_common_arg_val<uint32_t>(base_idx_crta + 1);
 
-    auto tensor_accessor = make_tensor_accessor_from_args(args, bank_base_address, page_size);
+    auto tensor_accessor = TensorAccessor(args, bank_base_address, page_size);
     constexpr uint32_t one_tile = 1;
     for (uint32_t i = 0; i < num_dev_pages; ++i) {
         cb_wait_front(cb_id, one_tile);

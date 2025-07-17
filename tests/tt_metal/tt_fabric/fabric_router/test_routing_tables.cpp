@@ -50,11 +50,26 @@ namespace tt::tt_fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
 
-TEST_F(ControlPlaneFixture, TestTGMeshGraphInit) {
+TEST(MeshGraphValidation, TestTGMeshGraphInit) {
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
     auto mesh_graph_desc = std::make_unique<MeshGraph>(tg_mesh_graph_desc_path.string());
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{0}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{1}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{2}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{3}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{4}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
 }
 
 TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
@@ -89,11 +104,14 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
     }
 }
 
-TEST_F(ControlPlaneFixture, TestT3kMeshGraphInit) {
+TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
     auto mesh_graph_desc = std::make_unique<MeshGraph>(t3k_mesh_graph_desc_path.string());
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{0}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
@@ -728,4 +746,18 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusY) {
     EXPECT_EQ(intra_mesh_routing_table[0][se_fabric_id][sw_fabric_id], RoutingDirection::W);
     EXPECT_EQ(intra_mesh_routing_table[0][se_fabric_id][se_fabric_id], RoutingDirection::C);
 }
+
+TEST(MeshGraphValidation, TestDualGalaxyMeshGraph) {
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+    auto mesh_graph_desc = std::make_unique<MeshGraph>(mesh_graph_desc_path.string());
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{0}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(7, 3)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{0}, HostRankId(1)),
+        MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(7, 7)));
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
