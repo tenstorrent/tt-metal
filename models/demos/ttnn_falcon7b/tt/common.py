@@ -4,6 +4,7 @@
 
 import torch
 import transformers
+from transformers.cache_utils import DynamicCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 
 import ttnn
@@ -201,7 +202,7 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
     torch_v_cache = torch.zeros(batch, 1, config.max_position_embeddings, head_dim)
 
     if llm_mode == "prefill":
-        layer_past = None
+        layer_past = DynamicCache()
         ttnn_k_cache = ttnn.from_torch(
             torch_k_cache, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=mesh_mapper
         )
@@ -211,7 +212,7 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
     elif llm_mode == "decode":
         k_cache_data = torch.rand(batch, 1, kv_cache_length, head_dim)
         v_cache_data = torch.rand(batch, 1, kv_cache_length, head_dim)
-        layer_past = (k_cache_data, v_cache_data)
+        layer_past = DynamicCache.from_legacy_cache(((k_cache_data, v_cache_data),))
 
         torch_k_cache[:, :, :kv_cache_length, :] = k_cache_data
         torch_v_cache[:, :, :kv_cache_length, :] = v_cache_data

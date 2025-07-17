@@ -38,7 +38,7 @@ def torch_model():
     filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
-    torch_model = transformers.models.falcon.modeling_falcon.FalconAttention(configuration).eval()
+    torch_model = transformers.models.falcon.modeling_falcon.FalconAttention(configuration, layer_idx=0).eval()
     torch_model.load_state_dict(filtered_state_dict)
     return torch_model
 
@@ -179,8 +179,12 @@ def test_falcon_attention(
     passed, pcc = assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
     assert_with_pcc(
-        pytorch_layer_present[0].squeeze(1), tt_layer_present[0].to(pytorch_layer_present[0].dtype), expected_pcc
+        pytorch_layer_present.key_cache[0].squeeze(1),
+        tt_layer_present[0].to(pytorch_layer_present.key_cache[0].dtype),
+        expected_pcc,
     )
     assert_with_pcc(
-        pytorch_layer_present[1].squeeze(1), tt_layer_present[1].to(pytorch_layer_present[1].dtype), expected_pcc
+        pytorch_layer_present.value_cache[0].squeeze(1),
+        tt_layer_present[1].to(pytorch_layer_present.value_cache[0].dtype),
+        expected_pcc,
     )
