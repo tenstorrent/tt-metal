@@ -54,7 +54,7 @@ def tensor_map():
     ],
 )
 @pytest.mark.parametrize(
-    "divisor_override",
+    "count_include_pad",
     [
         False,
         True,
@@ -63,8 +63,8 @@ def tensor_map():
 @pytest.mark.parametrize(
     "divisor_override",
     [
-        None,
         5,
+        None,
     ],
 )
 @pytest.mark.parametrize(
