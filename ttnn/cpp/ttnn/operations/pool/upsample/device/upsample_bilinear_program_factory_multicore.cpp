@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "upsample_op.hpp"
@@ -290,8 +288,11 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
+    uint32_t batch_size = input.padded_shape()[0];
+    uint32_t in_h = input.padded_shape()[1];
+
     // runtime args
-    uint32_t reader_nargs = 10;
+    uint32_t reader_nargs = 8;
     std::vector<uint32_t> reader_rt_args(reader_nargs);
     reader_rt_args[0] = input_stick_nbytes;
     reader_rt_args[1] = input_nsticks_per_core / in_w;
@@ -299,19 +300,23 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     reader_rt_args[3] = scale_factor_w;
     reader_rt_args[4] = in_w;
     reader_rt_args[5] = out_w;
-    reader_rt_args[6] = 0;  // set for each core below
+    reader_rt_args[6] =
+        0;  // denotes the position (index) of the first row of the input shard in its corresponding batch
+            // Note: the first row of the input shard corresponds to the second row (index 1) in the halo shard
+    reader_rt_args[7] = in_h;
 
-    uint32_t start_input_stick_id = 0;
+    uint32_t num_rows_per_core = div_up(batch_size * in_h, ncores_nhw);
+
+    uint32_t start_input_row_in_image_id = 0;
 
     if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         for (int32_t core = 0; core < ncores_nhw; ++core) {
             CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
-            reader_rt_args[6] = start_input_stick_id;
-            reader_rt_args[8] = (core == 0) ? 1 : 0;
-            reader_rt_args[9] = (core == ncores_nhw - 1) ? 1 : 0;
+            reader_rt_args[6] = start_input_row_in_image_id;
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
             SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
-            start_input_stick_id += input_nsticks_per_core;
+            start_input_row_in_image_id += num_rows_per_core;
+            start_input_row_in_image_id %= in_h;
         }
     } else {
         TT_FATAL(false, "Unsupported memory layout");
