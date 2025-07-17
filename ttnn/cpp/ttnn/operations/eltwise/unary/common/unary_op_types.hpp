@@ -89,6 +89,7 @@ enum class UnaryOpType {
     FLOOR,
     CEIL,
     TRUNC,
+    FRAC,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,
@@ -102,6 +103,7 @@ enum class UnaryOpType {
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
+    HARDSHRINK,
 };
 
 enum class VecMode {

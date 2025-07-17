@@ -23,7 +23,9 @@ run_t3000_ttmetal_tests() {
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectRingGatherAllChips" ; fail+=$?
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsInterleavedRingGatherAllChips" ; fail+=$?
   TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*" ; fail+=$?
-  ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
+  TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
+  TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleDevice*Fixture.*" ; fail+=$?
+  TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQMultiDevice*Fixture.*" ; fail+=$?
   ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
 
   # Programming examples
@@ -78,7 +80,8 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/ttnn/unit_tests_ttnn
+  ./build/test/ttnn/unit_tests_ttnn
+  ./build/test/ttnn/unit_tests_ttnn_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
@@ -95,6 +98,22 @@ run_t3000_ttnn_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_ttnn_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_tt_metal_multiprocess_tests() {
+   # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_tt_metal_multiprocess_tests"
+  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_tt_metal_multiprocess_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi

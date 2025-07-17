@@ -73,7 +73,11 @@ def load_inputs(user_input, len_per_batch, instruct):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             if "max_length" in user_input[i]:  # Clip the context to the max length provided
-                context_text = load_and_cache_context(user_input[i]["context"], cache_dir, max_length=len_per_batch[i])
+                context_text = load_and_cache_context(
+                    user_input[i]["context"],
+                    cache_dir,
+                    max_length=(user_input[i]["max_length"]) if batch == 1 else len_per_batch[i],
+                )
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
             if instruct:
@@ -84,6 +88,26 @@ def load_inputs(user_input, len_per_batch, instruct):
                 prompt = context_text
         in_prompt.append(prompt)
     return in_prompt
+
+
+def load_demo_targets(filename, galaxy_type):
+    """
+    Load expected demo targets from a JSON file.
+    """
+    if not os.path.exists(filename):
+        logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
+        return []
+
+    with open(filename, "r") as f:
+        try:
+            demo_targets = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
+            return []
+
+    demo_targets = demo_targets["targets"][galaxy_type]
+
+    return demo_targets
 
 
 def create_tt_model(
@@ -165,7 +189,7 @@ def create_tt_model(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, num_layers, run_on_6U",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, num_layers, print_outputs",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -178,10 +202,10 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only
+            False,  # apc_test
             False,  # pcc_check
             80,  # num layers
-            True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -194,10 +218,10 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only
+            False,  # apc_test
             False,  # pcc_check
             80,  # num layers
-            True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # Repeat-5 Batch-1 run (Throughput) - 1 user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -210,10 +234,10 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only,
+            False,  # apc_test,
             False,  # pcc_check
             80,  # num layers
-            True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # Long-context run - multiple users, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -226,13 +250,13 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only,
+            False,  # apc_test,
             False,  # pcc_check
             80,  # num layers
-            True,  # run on 6U
+            False,  # print_outputs
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -242,26 +266,26 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only,
+            False,  # apc_test,
             False,  # pcc_check
             80,  # num layers
-            False,  # run on 6U
+            False,  # print_outputs
         ),
-        (  # CI Run for PCC check for 1 Layer: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+        (  # APC Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
-            False,  # instruct mode
+            True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            130,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only
+            True,  # apc_test
             True,  # pcc_check
-            1,  # num layers
-            True,  # run on 6U
+            80,  # num layers
+            False,  # print_outputs
         ),
         (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
@@ -274,10 +298,10 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only
+            False,  # apc_test
             True,  # pcc_check
             80,  # num layers
-            True,  # run on 6U
+            False,  # print_outputs
         ),
     ],
     ids=[
@@ -286,7 +310,7 @@ def create_tt_model(
         "repeat2",  # latency with 5 repeat batches
         "long-context-batch32",  # max-length for 32 users
         "long-context-32k",  # max-length
-        "pcc-1L",  # pcc check for 1L
+        "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-80L",  # pcc check for 80L + teacher forced
     ],
 )
@@ -334,14 +358,14 @@ def test_demo_text(
     stop_at_eos,
     mesh_device,
     is_ci_env,
-    ci_only,
+    apc_test,
     num_layers,
     pcc_check,
     pcc_decode_len,
     reset_seeds,
     request,
     galaxy_type,
-    run_on_6U,
+    print_outputs,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -349,6 +373,33 @@ def test_demo_text(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Llama TG only supports batch-32")
+    if galaxy_type == "6U" and apc_test:
+        pytest.skip("Skipping test since there is no 6U machines dedicated for APC")
+    if apc_test and not pcc_check:
+        raise ValueError("APC test requires PCC check to be enabled")
+    if pcc_check:
+        demo_targets = load_demo_targets("models/demos/llama3_subdevices/demo/text_demo_targets.json", galaxy_type)
+
+    # Override parameters from command line if they are provided
+    input_prompts = request.config.getoption("--input_prompts") or input_prompts
+    if request.config.getoption("--instruct") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        instruct = request.config.getoption("--instruct")
+    repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
+    max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
+    batch_size = request.config.getoption("--batch_size") or batch_size
+    max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
+    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    page_params = request.config.getoption("--page_params") or page_params
+    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    if request.config.getoption("--stop_at_eos") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        stop_at_eos = request.config.getoption("--stop_at_eos")
+    print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True  # repeat_batches > 1
@@ -365,8 +416,6 @@ def test_demo_text(
         if batch_size == 32
         else [15384 * 8]
     )
-    if galaxy_type == "6U" and not run_on_6U:
-        pytest.skip("Skipping test as persistent buffers for ring ccl ops are stored only for seqlens up to 8k")
 
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -377,25 +426,6 @@ def test_demo_text(
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
-    # Override parameters from command line if they are provided
-    # input_prompts = request.config.getoption("--input_prompts") or input_prompts
-    # if request.config.getoption("--instruct") in [
-    #     0,
-    #     1,
-    # ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
-    #     instruct = request.config.getoption("--instruct")
-    # repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
-    # max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
-    # batch_size = request.config.getoption("--batch_size") or batch_size
-    # max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
-    # paged_attention = request.config.getoption("--paged_attention") or paged_attention
-    # page_params = request.config.getoption("--page_params") or page_params
-    # sampling_params = request.config.getoption("--sampling_params") or sampling_params
-    # if request.config.getoption("--stop_at_eos") in [
-    #     0,
-    #     1,
-    # ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
-    #     stop_at_eos = request.config.getoption("--stop_at_eos")
     stop_at_eos = False
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -600,11 +630,20 @@ def test_demo_text(
         if pcc_check:
             torch_output_logits = torch_output[0]
             logits = tt_out_logits_all_users[0, 0, :vocab_size]
-            does_pass, pcc_message = comp_pcc(logits, torch_output_logits, 0.91)
+            does_pass, pcc_message = comp_pcc(
+                logits, torch_output_logits, demo_targets["prefill_pcc"] if apc_test else 0.91
+            )
             logger.info(f"PCC: {pcc_message}")
             logger.info(
                 f"Teacher forced token at prefill {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
             )
+            assert_message = (
+                f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
+                f"If it is expected to be different in Llama model, please update the text_demo_targets.json file.\n"
+                f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+            )
+            if apc_test:
+                assert pcc_message == demo_targets["prefill_pcc"], assert_message
 
         # Save prefill token
         prefilled_token = toks.view(-1, 1)
@@ -645,7 +684,7 @@ def test_demo_text(
         except Exception as e:
             logger.error(f"Error switching to decode mode: {str(e)}")
             model.tt_ccl.close()
-        logger.info(f"Starting decode loop...")
+        logger.info(f"Starting decode loop from positions: {decoding_pos}")
 
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
@@ -660,13 +699,19 @@ def test_demo_text(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
+            # Determine whether to enable trace
+            if apc_test:
+                is_enable_trace = iteration != 0  # First iteration is compile time and checks PCC
+            else:
+                is_enable_trace = enable_trace if not pcc_check else False
             # Run decode forward
             try:
-                tt_out_logits_saved = torch.zeros(vocab_size) if pcc_check else None
+                # Save logits only for PCC check when tracing is disabled
+                tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
                 tt_out_tok, read_event = generator.decode_forward_text(
                     out_tok,
                     current_pos,
-                    enable_trace=enable_trace if not pcc_check else False,
+                    enable_trace=is_enable_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     read_from_device=True,
@@ -676,6 +721,8 @@ def test_demo_text(
                 )
                 read_events.append(read_event)
                 tt_out_toks.append(tt_out_tok)
+                if apc_test and iteration == 0:
+                    tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
                 break
@@ -683,31 +730,47 @@ def test_demo_text(
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            # else:
-            #     profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-            #     decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-
+                logger.info(f"Iteration {iteration} (compile): {1000*decode_iteration_time:.4f}ms")
             # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
+            # If it's apc_test we do not teacher force, but we still check PCC for only iteration == 0
             teacher_forcing = (
-                pcc_check and max_encoded_prompt_len + iteration + 1 < len(ref_tokens) and num_layers == 80
+                not apc_test
+                and pcc_check
+                and max_encoded_prompt_len + iteration + 1 < len(ref_tokens)
+                and num_layers == 80
             )
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0))
                 tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
                     out_tok = out_tok.repeat(32, 1)
-
-                if teacher_forcing:
-                    torch_output_logits = torch_output[iteration + 1]
-                    does_pass, pcc_message = comp_pcc(tt_out_logits_saved, torch_output_logits, 0.91)
+                # Check if iteration == 1, because that's when we compare outputs from iteration 0
+                if teacher_forcing or (apc_test and iteration == 1):
+                    # Since APC test is only for the first decode iteration, we use the logits from the first iteration and not current one
+                    if apc_test:
+                        tt_out_logits_saved = tt_out_logits_saved_iter_0
+                        torch_output_logits = torch_output[1]  # 0 is prefill logits
+                    else:
+                        torch_output_logits = torch_output[iteration + 1]
+                    does_pass, pcc_message = comp_pcc(
+                        tt_out_logits_saved, torch_output_logits, demo_targets["decode_pcc"] if apc_test else 0.91
+                    )
                     logger.info(f"PCC: {pcc_message}")
                     logger.info(
                         f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
                     )
+                    assert_message = (
+                        f"Decode PCC check failed: {pcc_message}, while expected {demo_targets['decode_pcc']}.\n"
+                        f"If any ops in Llama model might be impacted, please update decode_pcc in the text_demo_targets.json file.\n"
+                        f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+                    )
+                    if apc_test:
+                        assert pcc_message == demo_targets["decode_pcc"], assert_message
+
+                if teacher_forcing:
                     _, tt_top5_tokens = torch.topk(tt_out_logits_saved, k=5, dim=-1)
                     _, ref_top5_tokens = torch.topk(torch_output_logits, k=5, dim=-1)
                     top_1_acc = tt_top5_tokens[0] == ref_top5_tokens[0]
@@ -718,12 +781,6 @@ def test_demo_text(
                     logger.info(
                         f"Top-5 Correctness:{torch.any(tt_top5_tokens == ref_top5_tokens).item(),} Accuracy: {top_5_acc}"
                     )
-                # Always print perf after every iteration
-                tokens_per_second_per_user = 1 / decode_iteration_time
-
-                logger.info(
-                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-                )
 
                 # Save output token to print out later
                 if not pcc_check:
@@ -743,13 +800,34 @@ def test_demo_text(
                                     users_decoding = False
 
                 # Print out generated outputs for each user at the end of every iteration
-                if not is_ci_env and not pcc_check:
+                if print_outputs and not is_ci_env and not pcc_check:
                     for user in range(batch_size):
                         text = "".join(tokenizer.decode(all_outputs[user]))
                         if len(text) > 100:
                             text = "..." + text[-97:]
                         text = text.replace("\n", " ")
                         logger.info("[User {}] {}".format(user, text))
+
+                # The e2e decode inference accounts for device execution + host post-processing time
+                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                # Always print perf after every iteration
+                tokens_per_second_per_user = 1 / decode_iteration_time
+
+                logger.info(
+                    f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
+                )
+                if apc_test and demo_targets["token_pos"] == iteration:
+                    lower_bound = demo_targets["throughput"] - demo_targets["absolute_margin"]
+                    upper_bound = demo_targets["throughput"] + demo_targets["absolute_margin"]
+                    # TODO: Enable once experimentaly established avg and absolute margin
+                    assert_message = (
+                        f"Throughput for APC test is not within the expected range. Current throughput: {tokens_per_second_per_user:.1f} tok/s/user, Update text_demo_targets.json file with the expected throughput.\n"
+                        f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+                    )
+                    # assert (
+                    #     lower_bound <= tokens_per_second_per_user <= upper_bound
+                    # ), assert_message
 
             current_pos += 1
             iteration += 1
@@ -877,7 +955,7 @@ def test_demo_text(
         "Full demo runtime": profiler.get_duration("run"),
     }
 
-    if num_layers == 80 and pcc_check and len(top_1_accs) > 0 and len(top_5_accs) > 0:
+    if not apc_test and num_layers == 80 and pcc_check and len(top_1_accs) > 0 and len(top_5_accs) > 0:
         measurements["Top 1 Accuracy"] = sum(top_1_accs) / len(top_1_accs)
         measurements["Top 5 Accuracy"] = sum(top_5_accs) / len(top_5_accs)
 

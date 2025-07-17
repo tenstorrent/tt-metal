@@ -67,7 +67,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
@@ -314,7 +313,7 @@ void Device::init_command_queue_device() {
     auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
-        watcher_lock = watcher_get_lock();
+        watcher_lock = MetalContext::instance().watcher_server()->get_lock();
     }
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
         for (uint32_t x = 0; x < logical_grid_size().x; x++) {
@@ -644,6 +643,9 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Sp
 
 CommandQueue& Device::command_queue(size_t cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
+    if (!using_fast_dispatch_) {
+        return *(CommandQueue *)(IDevice *)this;
+    }
     TT_FATAL(cq_id < command_queues_.size(), "cq_id {} is out of range", cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[cq_id];

@@ -217,9 +217,6 @@ constexpr auto geglu = ttnn::register_operation<
 constexpr auto swiglu = ttnn::register_operation<
     "ttnn::swiglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>();
-constexpr auto hardshrink = ttnn::register_operation<
-    "ttnn::hardshrink",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::HARDSHRINK>>();
 constexpr auto logical_not_ = ttnn::register_operation<
     "ttnn::logical_not_",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
@@ -247,8 +244,5 @@ constexpr auto rpow = ttnn::register_operation<
 constexpr auto normalize_global = ttnn::register_operation<
     "ttnn::normalize_global",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>>();
-constexpr auto frac = ttnn::register_operation<
-    "ttnn::frac",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::FRAC>>();
 
 }  // namespace ttnn

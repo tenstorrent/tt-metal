@@ -10,14 +10,46 @@ using namespace tt::tt_metal::distributed::multihost;
 
 namespace tt::tt_metal::distributed {
 
+namespace {
+
+void point_to_point_barrier(
+    const std::vector<Rank>& ranks, std::shared_ptr<multihost::DistributedContext> distributed_context) {
+    TT_FATAL(ranks.size() == 2, "Point-to-point barrier requires exactly two ranks.");
+    TT_FATAL(ranks[0] != ranks[1], "Point-to-Point barrier cannot be used for synchronization within the same rank.");
+    TT_FATAL(
+        distributed_context->rank() == ranks[0] || distributed_context->rank() == ranks[1],
+        "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
+        *ranks[0],
+        *ranks[1],
+        *distributed_context->rank());
+
+    if (distributed_context->rank() == ranks[0]) {
+        int sync_msg = 1;
+        distributed_context->ssend(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), ranks[1], Tag{0});
+    } else {
+        int sync_msg = 0;
+        distributed_context->recv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), ranks[0], Tag{0});
+        TT_FATAL(sync_msg == 1, "Received unexpected message during point-to-point barrier.");
+    }
+}
+
+}  // namespace
+
 MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
     auto context = config.distributed_context ? config.distributed_context : DistributedContext::get_current_world();
-    TT_FATAL(
-        context->rank() == config.sender_rank || context->rank() == config.receiver_rank,
-        "Cannot create a socket on rank {} with sender rank {} and receiver rank {}.",
-        *context->rank(),
-        *config.sender_rank,
-        *config.receiver_rank);
+
+    if (!(context->rank() == config.sender_rank || context->rank() == config.receiver_rank)) {
+        log_warning(
+            LogMetal,
+            "Creating a null socket on host rank {} with sender rank {} and receiver rank {}.",
+            *context->rank(),
+            *config.sender_rank,
+            *config.receiver_rank);
+        return;
+    }
+
     TT_FATAL(
         config.sender_rank != config.receiver_rank,
         "{} must only be used for communication between different host ranks, not within the same rank.",
@@ -36,7 +68,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
 }
 
 void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext> context) {
-    auto local_endpoint_desc = generate_local_endpoint_descriptor(*this);
+    auto local_endpoint_desc = generate_local_endpoint_descriptor(*this, context->id());
     SocketPeerDescriptor remote_endpoint_desc;
     // Convention:
     //  - Sender Endpoint sends its descriptor first, then receives the peer's descriptor.
@@ -54,6 +86,7 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
         fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
     }
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
+    point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
@@ -99,3 +132,29 @@ tt::tt_fabric::FabricNodeId MeshSocket::get_fabric_node_id(SocketEndpoint endpoi
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace std {
+
+std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
+    const tt::tt_metal::distributed::SocketConfig& config) const noexcept {
+    std::optional<tt::tt_metal::distributed::multihost::Rank> distributed_context_rank = std::nullopt;
+    std::optional<tt::tt_metal::distributed::multihost::Size> distributed_context_size = std::nullopt;
+    if (config.distributed_context) {
+        distributed_context_rank = config.distributed_context->rank();
+        distributed_context_size = config.distributed_context->size();
+    }
+    return tt::stl::hash::hash_objects_with_default_seed(
+        config.socket_connection_config,
+        config.socket_mem_config,
+        config.sender_rank,
+        config.receiver_rank,
+        distributed_context_rank,
+        distributed_context_size);
+}
+
+std::size_t hash<tt::tt_metal::distributed::MeshSocket>::operator()(
+    const tt::tt_metal::distributed::MeshSocket& socket) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(socket.attribute_values());
+}
+
+}  // namespace std

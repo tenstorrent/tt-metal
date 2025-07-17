@@ -34,6 +34,7 @@ set(METAL_OPS_FILES
     # Common
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
     # RMSNorm
+    # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation_types.hpp
@@ -41,6 +42,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+    # RMSNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/rmsnorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/rmsnorm_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.cpp
     # CrossEntropy
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
