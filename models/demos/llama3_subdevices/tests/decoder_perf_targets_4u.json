@@ -70,7 +70,7 @@
             "op_name": "ReduceScatter_FF3",
             "kernel_duration": 9456.963068181818,
             "op_to_op": 911.3131313131312,
-            "first_to_last_start": 370.0,
+            "first_to_last_start": 723.1111111111111,
             "non-overlapped-dispatch-time": 7952.344444444445,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
@@ -167,8 +167,8 @@
         },
         "RotaryEmbeddingLlamaFusedQK_0": {
             "op_name": "RotaryEmbeddingLlamaFusedQK",
-            "kernel_duration": 2801.02178030303,
-            "op_to_op": 692.959595959596,
+            "kernel_duration": 2492.621527777778,
+            "op_to_op": 874.0,
             "first_to_last_start": 2616.0858585858587,
             "non-overlapped-dispatch-time": 2981.8611111111113,
             "kernel_duration_relative_margin": 0.1,
@@ -201,7 +201,7 @@
         "AllGatherAsync_1": {
             "op_name": "AllGatherAsync_1",
             "kernel_duration": 19229.59375,
-            "op_to_op": 2422.0,
+            "op_to_op": 746.0,
             "non-overlapped-dispatch-time": 3521.8,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
