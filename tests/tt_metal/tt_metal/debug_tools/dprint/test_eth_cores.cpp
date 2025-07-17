@@ -125,9 +125,6 @@ TEST_F(DPrintFixture, IdleEthTestPrint) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-        if (device->id() == 0) {
-            continue;
-        }
         this->RunTestOnDevice(
             [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false); },
             device);
