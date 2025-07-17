@@ -12,7 +12,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import gather_cos_sin, get_rot_transformation_mat
 from models.utility_functions import nearest_32
-from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
+from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
 
 
 # Copied from DeepseekV3RotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L114
@@ -233,13 +233,36 @@ def rotary_embedding_factory(dim, max_position_embeddings=2048, base=10000, rope
 
 
 def compute_gather_cos_sin(dhead, end, theta, rope_scaling):
-    # import pdb; pdb.set_trace()
     rotary_embedding = rotary_embedding_factory(
         dim=dhead, max_position_embeddings=end // 2, base=theta, rope_scaling=rope_scaling
     )
-    # legacy_cos, legacy_sin = precompute_freqs(dhead, end, theta, None, None)
-    # legacy_cos_gathered, legacy_sin_gathered = gather_cos_sin(torch.arange(end // 2), legacy_cos, legacy_sin)
     return rotary_embedding.cos_cached, rotary_embedding.sin_cached
+
+
+def get_rot_mats(head_dim, device, seq_len, theta, rope_scaling, datatype=ttnn.bfloat16):
+    cos_matrix, sin_matrix = compute_gather_cos_sin(
+        dhead=head_dim,
+        end=2 * seq_len,
+        theta=theta,
+        rope_scaling=rope_scaling,
+    )
+
+    cos_matrix = ttnn.from_torch(
+        cos_matrix,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=datatype,
+        mesh_mapper=replicate_tensor_to_mesh_mapper(device),
+    )
+    sin_matrix = ttnn.from_torch(
+        sin_matrix,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=datatype,
+        mesh_mapper=replicate_tensor_to_mesh_mapper(device),
+    )
+
+    return [cos_matrix, sin_matrix]
 
 
 class RotarySetup(LightweightModule):
@@ -267,26 +290,13 @@ class RotarySetup(LightweightModule):
         self.core_grid = device.compute_with_storage_grid_size()
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
-        cos_matrix, sin_matrix = compute_gather_cos_sin(
-            dhead=head_dim,
-            end=max_seq_len * 2,
+        self.cos_matrix, self.sin_matrix = get_rot_mats(
+            head_dim=head_dim,
+            device=device,
+            seq_len=max_seq_len,
             theta=rope_theta,
             rope_scaling=rope_scaling,
-        )
-
-        self.cos_matrix = ttnn.from_torch(
-            cos_matrix,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
-        self.sin_matrix = ttnn.from_torch(
-            sin_matrix,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            datatype=datatype,
         )
 
         self.batch_grid = (
@@ -334,7 +344,7 @@ class RotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=replicate_tensor_to_mesh_mapper(device),
         )
 
     def get_both_trans_mats(self):
@@ -360,7 +370,7 @@ class RotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -369,7 +379,7 @@ class RotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
             )
 
         return rot_idxs

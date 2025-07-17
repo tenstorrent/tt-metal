@@ -10,8 +10,9 @@ from loguru import logger
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, get_rot_transformation_mat
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -75,13 +76,12 @@ def test_attention_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling.factor if model_args.rope_scaling else None,
-        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+    rot_mats = get_rot_mats(
+        head_dim=model_args.head_dim,
+        device=mesh_device,
+        seq_len=max_seq_len,
+        theta=model_args.rope_theta,
+        rope_scaling=model_args.rope_scaling,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
 
