@@ -12,7 +12,7 @@ fi
 > rankfile  # Clear or create rankfile
 
 for (( rank=0; rank<num_ranks; rank++ )); do
-    echo "rank $rank=$rank slot=0:$rank" >> rankfile
+    echo "rank $rank=$rank slot=0:0" >> rankfile
 done
 
 echo "Generated rankfile:"
