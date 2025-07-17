@@ -108,16 +108,23 @@ struct fabric_connection_info_t {
     uint32_t edm_worker_location_info_addr;
     uint32_t buffer_size_bytes;
     uint32_t buffer_index_semaphore_id;
+    uint32_t padding[3];
+    // 16-byte aligned semaphore address for flow control
     uint32_t worker_flow_control_semaphore;
-};
+} __attribute__((aligned(16)));
 
-// Ensure worker_flow_control_semaphore is properly aligned for pointer access
+// Ensure worker_flow_control_semaphore is properly aligned for pointer access in all array elements
 static_assert(
-    offsetof(fabric_connection_info_t, worker_flow_control_semaphore) % 4 == 0,
-    "worker_flow_control_semaphore must be 4-byte aligned for safe pointer access");
+    offsetof(fabric_connection_info_t, worker_flow_control_semaphore) % 16 == 0,
+    "worker_flow_control_semaphore must be 16-byte aligned for safe pointer access");
 
-// Fabric connection metadata stored in worker L1
-// 16 for WH, 12 for BH
+// Ensure the struct itself is 16-byte aligned so that worker_flow_control_semaphore
+// remains aligned in connections array
+static_assert(
+    sizeof(fabric_connection_info_t) % 16 == 0,
+    "fabric_connection_info_t size must be a multiple of 16 bytes to maintain worker_flow_control_semaphore alignment "
+    "in arrays");
+
 struct tensix_fabric_connections_l1_info_t {
     static constexpr uint8_t MAX_FABRIC_ENDPOINTS = 16;
     // Each index corresponds to ethernet channel index
@@ -126,11 +133,6 @@ struct tensix_fabric_connections_l1_info_t {
     uint8_t padding[12];              // pad to cache line alignment
 };
 
-// Ensure the struct size is a multiple of 4 bytes to maintain alignment in connections array
-static_assert(
-    sizeof(fabric_connection_info_t) % 4 == 0,
-    "fabric_connection_info_t size must be a multiple of 4 bytes to maintain alignment in arrays");
-
-static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 656, "Struct size mismatch!");
+static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 1040, "Struct size mismatch!");
 
 }  // namespace tt::tt_fabric
