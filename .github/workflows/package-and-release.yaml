@@ -27,6 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.ref }}
       - name: Get is-release-candidate
         id: get-is-release-candidate
         run: |
