@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/run_operation.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -37,6 +38,21 @@ struct CorePageStride {
     CoreCoord core;
     PageStride page_stride;
 };
+
+// Utility functions used by program factories
+enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
+
+std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
+    tt::tt_metal::Buffer* input_buffer, tt::tt_metal::Buffer* output_buffer);
+
+std::vector<uint32_t> get_runtime_args_for_given_ranges(
+    const std::vector<uint32_t>& physical_core_coords,
+    const std::vector<PageStride>& page_stride_vector,
+    const uint32_t output_page_offset,
+    const uint32_t& input_addr,
+    const uint32_t starting_range,
+    const uint32_t ending_range,
+    const ReshardStridesInRange reshard_strides_in_range = ReshardStridesInRange::ALL_STRIDES);
 
 tt::tt_metal::operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output);
 

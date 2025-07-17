@@ -95,6 +95,9 @@ target_sources(
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
         sharded/reshard/device/reshard_op.cpp
         sharded/reshard/device/reshard_program_factory.cpp
+        sharded/reshard/device/reshard_same_width_program_factory.cpp
+        sharded/reshard/device/reshard_generic_program_factory.cpp
+        sharded/reshard/device/reshard_same_height_program_factory.cpp
         sharded/reshard/device/nd_reshard_program_factory.cpp
         sharded/reshard/reshard.cpp
         sharded/sharded_common.cpp
