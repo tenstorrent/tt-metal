@@ -69,6 +69,9 @@ public:
     void connect_to_fabric_router();
     bool validate_results(std::vector<uint32_t>& data) const override;
 
+    // Method to access traffic configurations for traffic analysis
+    const std::vector<std::pair<TestTrafficSenderConfig, uint32_t>>& get_configs() const { return configs_; }
+
     // global line sync configs - stores sync traffic configs with their fabric connection indices
     std::vector<std::pair<TestTrafficSenderConfig, uint32_t>> global_sync_configs_;
 
@@ -108,7 +111,7 @@ public:
         const SenderMemoryMap* sender_memory_map = nullptr,
         const ReceiverMemoryMap* receiver_memory_map = nullptr);
     tt::tt_metal::Program& get_program_handle();
-    const FabricNodeId& get_node_id();
+    const FabricNodeId& get_node_id() const;
     uint32_t add_fabric_connection(
         RoutingDirection direction, const std::vector<uint32_t>& link_indices, bool is_sync_fabric);
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
@@ -122,6 +125,9 @@ public:
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
     void validate_results() const;
     void set_sync_core(CoreCoord coord) { sync_core_coord_ = coord; };
+
+    // Method to access sender configurations for traffic analysis
+    const std::unordered_map<CoreCoord, TestSender>& get_senders() const { return senders_; }
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
@@ -384,7 +390,7 @@ inline TestDevice::TestDevice(
 
 inline tt::tt_metal::Program& TestDevice::get_program_handle() { return this->program_handle_; }
 
-inline const FabricNodeId& TestDevice::get_node_id() { return this->fabric_node_id_; }
+inline const FabricNodeId& TestDevice::get_node_id() const { return this->fabric_node_id_; }
 
 inline uint32_t TestDevice::add_fabric_connection(
     RoutingDirection direction, const std::vector<uint32_t>& link_indices, bool is_sync_fabric) {

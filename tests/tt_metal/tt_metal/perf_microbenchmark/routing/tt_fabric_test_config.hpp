@@ -1744,18 +1744,6 @@ private:
             to_yaml(out, sender);
         }
         out << YAML::EndSeq;
-
-        // Add line sync configurations if present
-        if (!config.global_sync_configs.empty()) {
-            out << YAML::Key << "global_sync_configs";
-            out << YAML::Value;
-            out << YAML::BeginSeq;
-            for (const auto& sync_sender : config.global_sync_configs) {
-                to_yaml(out, sync_sender);
-            }
-            out << YAML::EndSeq;
-        }
-
         out << YAML::EndMap;
     }
 

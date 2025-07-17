@@ -589,7 +589,6 @@ struct SenderKernelTrafficConfig {
             num_packets_to_send = metadata.num_packets;
         }
 
-        uint64_t start_timestamp = get_timestamp();
         for (uint32_t i = 0; i < num_packets_to_send; i++) {
             fabric_connection_handle->wait_for_empty_write_slot();
 
@@ -614,15 +613,12 @@ struct SenderKernelTrafficConfig {
             }
         }
 
-        elapsed_cycles += get_timestamp() - start_timestamp;
         num_packets_processed += num_packets_to_send;
     }
 
     // Round-robin version: always sends exactly one packet
     template <bool BENCHMARK_MODE>
     void send_one_packet() {
-        uint64_t start_timestamp = get_timestamp();
-
         fabric_connection_handle->wait_for_empty_write_slot();
 
         if constexpr (!BENCHMARK_MODE) {
@@ -645,7 +641,6 @@ struct SenderKernelTrafficConfig {
             metadata.seed = prng_next(metadata.seed);
         }
 
-        elapsed_cycles += get_timestamp() - start_timestamp;
         num_packets_processed += 1;  // Always increment by 1
     }
 
