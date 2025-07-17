@@ -75,21 +75,22 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     uint32_t out_w = sliding_window_config.get_output_shape()[2];
     uint32_t out_c = sliding_window_config.channels;
     uint32_t batch_size = sliding_window_config.batch_size;
-    uint32_t out_c_padded = tt::round_up(out_c, 16);
     uint32_t out_nhw = batch_size * out_h * out_w;
 
     bool is_out_tiled = output_dtype == DataType::BFLOAT8_B;
     uint32_t tile_rows = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
-    uint32_t out_nhw_padded = tt::round_up(out_nhw, tile_rows * sliding_window_config.num_cores_nhw);
-
-    ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
-    ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
     auto mem_config = out_mem_config;
 
     if (mem_config.is_sharded()) {
         auto layout = mem_config.memory_layout();
         if (layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            uint32_t out_nhw_padded = tt::round_up(out_nhw, tile_rows * sliding_window_config.num_cores_nhw);
+            uint32_t out_c_padded = tt::round_up(out_c, 16);
+
+            ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
+            ttnn::Shape output_shape({1, 1, out_nhw, out_c});
+
             uint32_t total_height_tiles = out_nhw_padded / tile_rows;
             uint32_t num_cores = sliding_window_config.num_cores_nhw;
             TT_FATAL(num_cores > 0, "num_cores must be > 0");
@@ -99,7 +100,22 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
             auto shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
             mem_config = mem_config.with_shard_spec(shard_spec);
+            return TensorSpec(
+                output_shape,
+                tt::tt_metal::TensorLayout::fromPaddedShape(
+                    output_dtype,
+                    tt::tt_metal::PageConfig(input.layout()),  // Preserve layout from input
+                    mem_config,
+                    output_shape,
+                    padded_output_shape));
+
         } else if (layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            uint32_t out_nhw_padded = tt::round_up(out_nhw, tile_rows * sliding_window_config.num_cores_nhw);
+            uint32_t out_c_padded =
+                tt::round_up(out_c / sliding_window_config.num_cores_c, 8) * sliding_window_config.num_cores_c;
+
+            ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
+            ttnn::Shape output_shape({1, 1, out_nhw, out_c});
             uint32_t total_height_tiles = out_nhw_padded / tile_rows;
             uint32_t num_cores = sliding_window_config.num_cores_c;
             std::array<uint32_t, 2> shard_shape = {
@@ -109,18 +125,46 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
             auto shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, orientation};
             mem_config = mem_config.with_shard_spec(shard_spec);
+            return TensorSpec(
+                output_shape,
+                tt::tt_metal::TensorLayout::fromPaddedShape(
+                    output_dtype,
+                    tt::tt_metal::PageConfig(input.layout()),  // Preserve layout from input
+                    mem_config,
+                    output_shape,
+                    padded_output_shape));
         } else if (layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            uint32_t out_nhw_padded = tt::round_up(out_nhw, tile_rows * sliding_window_config.num_cores_nhw);
+            // uint32_t out_c_padded = tt::round_up(
+            //     tt::round_up(out_c / sliding_window_config.num_cores_c, 8) * sliding_window_config.num_cores_c, 16);
+            // uint32_t out_c_padded = tt::round_up(out_c, 16);
+            uint32_t out_c_padded = tt::round_up(out_c / sliding_window_config.num_cores_c, 8);
+
+            ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
+            ttnn::Shape output_shape({1, 1, out_nhw, out_c});
             uint32_t total_height_tiles = out_nhw_padded / tile_rows;
             uint32_t num_cores_nhw = sliding_window_config.num_cores_nhw;
             uint32_t num_cores_c = sliding_window_config.num_cores_c;
             std::array<uint32_t, 2> shard_shape = {
-                total_height_tiles / num_cores_nhw, out_c_padded / num_cores_c};  // For example, 1 row per tile height
+                total_height_tiles / num_cores_nhw, out_c_padded};  // For example, 1 row per tile height
             auto shard_grid = mem_config.shard_spec()->grid;
             auto orientation = mem_config.shard_spec()->orientation;
+            return TensorSpec(
+                output_shape,
+                tt::tt_metal::TensorLayout::fromPaddedShape(
+                    output_dtype,
+                    tt::tt_metal::PageConfig(input.layout()),  // Preserve layout from input
+                    mem_config,
+                    output_shape,
+                    padded_output_shape));
         } else {
             TT_THROW("Unsupported memory layout in Pool2D output spec");
         }
     } else {
+        uint32_t out_nhw_padded = tt::round_up(out_nhw, tile_rows * sliding_window_config.num_cores_nhw);
+        uint32_t out_c_padded = tt::round_up(
+            tt::round_up(out_c / sliding_window_config.num_cores_c, 8) * sliding_window_config.num_cores_c, 16);
+
         // fallback: infer row-major shard shape based on input
         uint32_t num_cores = sliding_window_config.num_cores_nhw;
         TT_FATAL(input.shard_spec().has_value(), "Input must be sharded if output is not");
@@ -132,16 +176,19 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
         auto shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
         mem_config = mem_config.with_shard_spec(shard_spec);
-    }
 
-    return TensorSpec(
-        output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
-            output_dtype,
-            tt::tt_metal::PageConfig(input.layout()),  // Preserve layout from input
-            mem_config,
+        ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
+        ttnn::Shape output_shape({1, 1, out_nhw, out_c});
+
+        return TensorSpec(
             output_shape,
-            padded_output_shape));
+            tt::tt_metal::TensorLayout::fromPaddedShape(
+                output_dtype,
+                tt::tt_metal::PageConfig(input.layout()),  // Preserve layout from input
+                mem_config,
+                output_shape,
+                padded_output_shape));
+    }
 }
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
