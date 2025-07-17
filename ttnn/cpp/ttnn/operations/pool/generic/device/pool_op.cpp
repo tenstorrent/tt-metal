@@ -77,15 +77,16 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     uint32_t batch_size = sliding_window_config.batch_size;
     uint32_t out_nhw = batch_size * out_h * out_w;
 
-    bool is_out_tiled = output_dtype == DataType::BFLOAT8_B;
+    bool is_out_tiled = false;  // pool output is row major
     uint32_t tile_rows = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
 
-    auto mem_config = out_mem_config;
-    auto layout = mem_config.memory_layout();
     uint32_t num_cores_nhw = sliding_window_config.num_cores_nhw;
     uint32_t num_cores_c = sliding_window_config.num_cores_c;
     TT_FATAL(num_cores_nhw > 0, "num_cores_nhw must be > 0");
     TT_FATAL(num_cores_c > 0, "num_cores_c must be > 0");
+
+    auto mem_config = out_mem_config;
+    auto layout = mem_config.memory_layout();
 
     uint32_t out_nhw_padded = tt::round_up(out_nhw, tile_rows * num_cores_nhw);
     uint32_t out_c_padded = tt::round_up(out_c, 16);
