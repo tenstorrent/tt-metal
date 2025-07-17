@@ -132,7 +132,6 @@ target_sources(
         view/view.cpp
         sort/sort.cpp
         sort/device/sort_device_operation.cpp
-        sort/device/sort_program_factory.cpp
         sort/device/sort_single_row_single_core_program_factory.cpp
         sort/device/sort_cross_core_data_exchange_program_factory.cpp
         sort/device/sort_single_row_multi_core_program_factory.cpp
