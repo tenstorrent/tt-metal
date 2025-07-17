@@ -105,6 +105,6 @@ jobs:
           prefix: "test_reports_"
 
       - name: Check for slow tests
-        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@blozano-shift-left-api
+        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
         with:
           threshold: ${{ inputs.per-test-timeout }}
