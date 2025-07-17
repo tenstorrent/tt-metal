@@ -117,7 +117,7 @@ class MLA1D(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[-2, None],
+                dims=[None, -2],
                 mesh_shape=list(mesh_device.shape),
             ),
         )
@@ -137,7 +137,7 @@ class MLA1D(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[-1, None],
+                dims=[None, -1],
                 mesh_shape=list(mesh_device.shape),
             ),
         )
@@ -157,7 +157,7 @@ class MLA1D(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[-2, None],
+                dims=[None, -2],
                 mesh_shape=list(mesh_device.shape),
             ),
         )
@@ -185,7 +185,7 @@ class MLA1D(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[-3, None],
+                dims=[None, -3],
                 mesh_shape=list(mesh_device.shape),
             ),
         )
@@ -199,7 +199,7 @@ class MLA1D(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[-3, None],
+                dims=[None, -3],
                 mesh_shape=list(mesh_device.shape),
             ),
         )
@@ -219,7 +219,7 @@ class MLA1D(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[-1, None],
+                dims=[None, -1],
                 mesh_shape=list(mesh_device.shape),
             ),
         )
@@ -377,7 +377,7 @@ class MLA1D(AbstractModule):
         max_seq_len = hf_config.max_seq_len
 
         mesh_shape = list(mesh_device.shape)
-        num_heads_local = num_heads // mesh_shape[0]
+        num_heads_local = num_heads // mesh_shape[1]
 
         config: ModelDecodeConfig = {}
         config["hf_config"] = hf_config
@@ -541,7 +541,7 @@ class MLA1D(AbstractModule):
         # Q
         config["wq_a_rs"] = ReduceScatterAsyncConfig(
             mesh_device=MeshDeviceStub(list(mesh_device.shape)),
-            cluster_axis=0,
+            cluster_axis=1,
             dim=3,
             from_remote_multi_device_global_semaphore=ccl.get_semaphore(0),
             to_remote_multi_device_global_semaphore=ccl.get_semaphore(0),
@@ -552,7 +552,7 @@ class MLA1D(AbstractModule):
         )
         config["wq_a_ag"] = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(list(mesh_device.shape)),
-            cluster_axis=0,
+            cluster_axis=1,
             dim=3,
             multi_device_global_semaphore=ccl.get_semaphore(0),
             num_links=ccl.get_max_links(0),
@@ -563,7 +563,7 @@ class MLA1D(AbstractModule):
         # KV
         config["wkv_a_ag"] = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(list(mesh_device.shape)),
-            cluster_axis=0,
+            cluster_axis=1,
             dim=1,
             multi_device_global_semaphore=ccl.get_semaphore(0),
             num_links=ccl.get_max_links(0),
@@ -584,7 +584,7 @@ class MLA1D(AbstractModule):
         # WO
         config["wo_ag"] = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(list(mesh_device.shape)),
-            cluster_axis=0,
+            cluster_axis=1,
             dim=1,
             multi_device_global_semaphore=ccl.get_semaphore(0),
             num_links=ccl.get_max_links(0),
@@ -648,7 +648,7 @@ class MLA1D(AbstractModule):
 
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
-        num_heads_local = num_heads // cfg["mesh_shape"][0]
+        num_heads_local = num_heads // cfg["mesh_shape"][1]
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
