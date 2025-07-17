@@ -122,14 +122,14 @@ install(
         COMPONENT metalium-validation
 )
 
-add_library(unit_tests_unit_smoke OBJECT)
-add_library(TT::Metalium::Test::Unit::Smoke ALIAS unit_tests_unit_smoke)
+add_library(unit_cpp_tests OBJECT)
+add_library(TT::Metalium::Test::Unit::Smoke ALIAS unit_cpp_tests)
 
 target_sources(
-    unit_tests_unit_smoke
+    unit_cpp_tests
     PRIVATE
         test_add_two_ints.cpp
     # Add more unit smoke test files here in the future
 )
 
-target_link_libraries(unit_tests_unit_smoke PRIVATE test_metal_common_libs)
+target_link_libraries(unit_cpp_tests PRIVATE test_metal_common_libs)
