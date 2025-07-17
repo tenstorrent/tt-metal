@@ -297,7 +297,7 @@ template <typename Container>
 }
 
 /**
- * Wraps all local values from a container to a conster with MaybeRemote objects.
+ * Wraps all local values from a container to a container with MaybeRemote objects.
  *
  * @tparam Container Any container type
  * @param container The container of objects of type T
