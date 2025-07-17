@@ -162,6 +162,7 @@ to tile layout during tensor creation (ttnn.Tensor).</p>
 </dt>
 <dd class="field-even">
 <ul class="simple">
+<li><p><strong>spec</strong> (<em>ttnn.TensorSpec</em><em>, </em><em>optional</em>) – the desired <cite>ttnn</cite> tensor spec. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>tile</strong> (<em>ttnn.Tile</em><em>, </em><em>optional</em>) – the desired tiling configuration for the tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>pad_value</strong> (<em>float</em><em>, </em><em>optional</em>) – the desired padding value for tiling. Only used if <cite>layout</cite> is <cite>TILE_LAYOUT</cite>. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – the desired <cite>ttnn</cite> layout. Defaults to <cite>ttnn.ROW_MAJOR_LAYOUT</cite>.</p></li>
