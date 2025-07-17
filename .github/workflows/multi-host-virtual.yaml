@@ -29,21 +29,15 @@ jobs:
           sudo apt-get update
           sudo apt install -y git build-essential cmake ninja-build pkg-config cargo g++-12 pandoc xz-utils python3-dev python3-pip python3-venv libhwloc-dev libnuma-dev libatomic1 libstdc++6 libboost-dev libtbb-dev libcapstone-dev libc++-17-dev libc++abi-17-dev wget openmpi-bin libopenmpi-dev
 
+      - name: Pull docker image
+        run: docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64
+
       - name: Generate the rankfile
         run: .github/scripts/multihost/virtualized/generate-rankfile.sh "4"
-
-      - name: Run tt-smi via mpirun command
-        run: |
-          echo "Running mpirun command on multiple hosts"
-          mpirun --rankfile rankfile --tag-output  --mca plm_rsh_agent .github/scripts/multihost/virtualized/docker-wrapper.sh tt-smi -ls || true
 
       - name: Compile mpi allreduce test
         run: |
           mpicc mpi.c
-      
-      - name: Run mpi allreduce test outside docker
-        run: |
-          mpirun --np 4 --tag-output ./a.out
       
       - name: Run mpi allreduce test inside docker
         run: |
