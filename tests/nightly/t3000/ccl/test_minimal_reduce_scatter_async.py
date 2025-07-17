@@ -248,7 +248,7 @@ def run_reduce_scatter_impl(
     "enable_trace, num_iters",
     [
         # (True, 10),
-        (False, 1),
+        (False, 100),
     ],
     ids=["check"],
 )

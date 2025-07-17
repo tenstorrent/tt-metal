@@ -9,8 +9,6 @@
 #include <cstdint>
 #include <utility>
 
-#include "debug/dprint.h"
-
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
 
@@ -85,7 +83,6 @@ void kernel_main() {
         // If slices_forwarded in writer is 7, we don't forward anymore and write it to output_buffer
         // Otherwise, the writer will write cb_output_id to the next chip in the forward direction
         for (uint32_t i = 0; i < ring_size; ++i) {
-            DPRINT << i << ENDL();
             const bool do_reduce = i != 0;
             uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
@@ -133,6 +130,7 @@ void kernel_main() {
                     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                 }
             }
+            // DOESN"T FIX
             while (tiles_read < tiles_to_read) {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
@@ -143,11 +141,17 @@ void kernel_main() {
                     tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                 }
 
+                // FIXES
+
                 cb_reserve_back(cb_in0, tile_granularity);
+
+                // FIXES
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                    // FIXES
                     noc_async_read_tile(tile_id, input_tensor_addrgen, l1_write_addr);
+                    // FIXES
                     l1_write_addr += input_tensor_page_size;
                     tiles_read++;
 
@@ -158,15 +162,25 @@ void kernel_main() {
                     }
                 }
 
+                // FIXES
+
                 if (do_reduce) {
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
+
+                    // DOESN'T FIX
+
                     cb_reserve_back(cb_intermediate_id, tile_granularity);
+
+                    // DOESN'T FIX
+
                     uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t intermediate_tile_id =
                             intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
+                        // DOESN'T FIX
                         noc_async_read_tile(
                             intermediate_tile_id, intermediate_tensor_addrgen, intermediate_l1_write_addr);
+                        // DOESN'T FIX
                         intermediate_l1_write_addr += input_tensor_page_size;
 
                         intermediate_pages_read_in_row++;
@@ -176,12 +190,21 @@ void kernel_main() {
                         }
                     }
 
+                    // DOESN'T FIX
+
                     noc_async_read_barrier();
                     cb_push_back(cb_intermediate_id, tile_granularity);
                 }
 
+                // FIXES
+
                 noc_async_read_barrier();
+
+                // FIXES
+
                 cb_push_back(cb_in0, tile_granularity);
+
+                // FIXES
 
                 // Skip the tiles going the other direction
                 tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -205,6 +228,7 @@ void kernel_main() {
                     intermediate_pages_read_in_row = pages_read_in_row;
                     intermediate_row_offset = row_offset;
                 }
+                // FIXES
             }
 
             // Next slice idx

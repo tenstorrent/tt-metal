@@ -13,8 +13,6 @@
 #include <cstdint>
 #include <utility>
 
-#include "debug/dprint.h"
-
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
@@ -102,7 +100,6 @@ void kernel_main() {
 
         uint32_t batch_slice_offset = batch_slice_num_pages * b;
         for (uint32_t i = 0; i < ring_size; ++i) {
-            DPRINT << i << ENDL();
             uint32_t actual_slice_idx;
             if constexpr (direction) {
                 actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
