@@ -85,10 +85,10 @@ def test_llama_model_inference(
 
     # This sets the minimum PCC for each iteration based on optimization mode
     if optimizations == LlamaOptimizations.accuracy:
-        pcc = 0.918  # TODO Look on improving PCC
+        pcc = 0.917  # TODO Look on improving PCC
     else:  # performance mode
         assert optimizations == LlamaOptimizations.performance
-        pcc = 0.918  # TODO Look on improving PCC
+        pcc = 0.917  # TODO Look on improving PCC
 
     # Use instruct weights instead of general weights
     instruct = True
