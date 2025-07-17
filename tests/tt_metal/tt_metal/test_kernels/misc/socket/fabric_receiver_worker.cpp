@@ -9,11 +9,11 @@
 void kernel_main() {
     // Get this value from MeshSocket struct on host
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t data_size = get_compile_time_arg_val(3);
-    constexpr uint32_t output_core_x = get_compile_time_arg_val(4);
-    constexpr uint32_t output_core_y = get_compile_time_arg_val(5);
-    constexpr uint32_t output_addr = get_compile_time_arg_val(6);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr uint32_t data_size = get_compile_time_arg_val(2);
+    constexpr uint32_t output_core_x = get_compile_time_arg_val(3);
+    constexpr uint32_t output_core_y = get_compile_time_arg_val(4);
+    constexpr uint32_t output_addr = get_compile_time_arg_val(5);
 
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
