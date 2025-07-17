@@ -193,48 +193,12 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
             TT_THROW("Unsupported DataType: {}", std::string(py::repr(py_dtype)));
         }
 
-        PreprocessedPyTensor result{
+        return PreprocessedPyTensor{
             .data_type = data_type,
             .contiguous_py_tensor = contiguous_py_tensor,
             .num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
             .py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
         };
-
-        if (false) {
-            auto dtype = contiguous_py_tensor.attr("dtype");
-            auto data_ptr = reinterpret_cast<void*>(result.py_data_ptr);
-
-            py::list elements;
-
-            if (dtype.is(py::module_::import("torch").attr("float32"))) {
-                float* float_data = static_cast<float*>(data_ptr);
-                for (std::size_t i = 0; i < result.num_elements; ++i) {
-                    elements.append(float_data[i]);
-                }
-            } else if (dtype.is(py::module_::import("torch").attr("float16"))) {
-                py::object struct_module = py::module_::import("struct");
-                uint16_t* half_data = static_cast<uint16_t*>(data_ptr);
-                for (std::size_t i = 0; i < result.num_elements; ++i) {
-                    py::bytes packed = py::bytes(reinterpret_cast<const char*>(&half_data[i]), 2);
-                    py::object unpacked = struct_module.attr("unpack")("e", packed);
-                    elements.append(unpacked[py::int_(0)]);
-                }
-            } else if (dtype.is(py::module_::import("torch").attr("int32"))) {
-                int32_t* int_data = static_cast<int32_t*>(data_ptr);
-                for (std::size_t i = 0; i < result.num_elements; ++i) {
-                    elements.append(int_data[i]);
-                }
-            } else if (dtype.is(py::module_::import("torch").attr("int64"))) {
-                int64_t* long_data = static_cast<int64_t*>(data_ptr);
-                for (std::size_t i = 0; i < result.num_elements; ++i) {
-                    elements.append(long_data[i]);
-                }
-            }
-
-            py::print("Tensor data:", elements, "input dtype: ", dtype);
-        }
-
-        return result;
     } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
         py::object contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
         DataType data_type = DataType::INVALID;
@@ -303,6 +267,130 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
     }
 }
 
+struct PyTensorHostConversionStrategy {
+    /// Data conversion has already been done on host, no extra type cast is necessary
+    bool host_side_conversion = false;
+    /// Use this layout to construct the initial tensor -- extra conversion might be done
+    /// after the tensor has been moved to device.
+    Layout construct_with_layout = Layout::TILE_LAYOUT;
+    std::optional<DataType> construct_with_data_type = std::nullopt;
+    py::object tensor;
+};
+
+PyTensorHostConversionStrategy prepare_conversion_strategy(
+    py::object tensor, std::optional<DataType> dtype, std::optional<Layout> layout bool has_device, ) {
+    PyTensorConversionStrategy res;
+    bool HANDLE_FLOAT32_BUG_23405 = true;
+    py::object torch = py::module_::import("torch");
+
+    auto ttnn_fallback_type_mapping = [&torch](std::optional<DataType> dtype) -> std::optional<py::object> {
+        if (!dtype.has_value()) {
+            return std::nullopt;
+        } else {
+            switch (dtype.value()) {
+                case DataType::UINT8: return torch.attr("uint8");
+                case DataType::UINT16: return torch.attr("int16");
+                case DataType::INT32: return torch.attr("int32");
+                case DataType::UINT32: return torch.attr("uint32");
+                case DataType::BFLOAT4_B: return torch.attr("float32");
+                case DataType::BFLOAT8_B: return torch.attr("float32");
+                case DataType::FLOAT32: return torch.attr("float32");
+                case DataType::BFLOAT16: return torch.attr("bfloat16");
+                default: return std::nullopt;
+            }
+        }
+    };
+
+    auto ttnn_unsupported_type_mapping = [&torch](py::object dtype) -> std::optional<py::object> {
+        if (dtype.equal(torch.attr("int64"))) {
+            return torch.attr("int32");
+        } else if (dtype.equal(torch.attr("float16"))) {
+            return torch.attr("bfloat16");
+        } else {
+            return std::nullopt;
+        }
+    };
+
+    auto is_torch_missing_data_type = [](std::optional<DataType> dtype) -> bool {
+        return dtype.has_value && (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT4_B ||
+                                   dtype.value() == DataType::UINT32);
+    };
+
+    if (!has_device && ttnn_fallback_type_mapping(dtype).has_value()) {
+        tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        res.host_side_conversion = true;
+        if (is_torch_missing_data_type(dtype)) {
+            res.construct_with_data_type = dtype;
+        }
+    } else if (ttnn_unsupported_type_mapping(dtype).has_value()) {
+        if (ttnn_fallback_type_mapping(dtype).has_value()) {
+            tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        } else {
+            tensor = tensor.attr("to")(ttnn_unsupported_type_mapping(dtype));
+        }
+        res.host_side_conversion = true;
+        if (is_torch_missing_data_type(dtype)) {
+            res.construct_with_data_type = dtype;
+        }
+    } else if (tensor.attr("dtype").equal(torch.attr("uint8")) && dtype && *dtype != DataType::UINT8) {
+        tensor = tensor.attr("to")(*ttnn_fallback_type_mapping(dtype));
+        res.host_side_conversion = true;
+    } else if (
+        HANDLE_FLOAT32_BUG_23405 && tensor.attr("dtype").equal(torch.attr("float32")) && dtype &&
+        dtype.value() != DataType::FLOAT32) {
+        tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        res.host_side_conversion = true;
+        if (is_torch_missing_data_type(dtype)) {
+            res.construct_with_data_type = dtype;
+        }
+    } else if (
+        layout && layout.value() == Layout::ROW_MAJOR &&
+        (tensor.attr("dtype").equal(torch.attr("float32")) || tensor.attr("dtype").equal(torch.attr("int32"))) &&
+        dtype && dtype.value() == DataType::UINT8) {
+        tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        res.host_side_conversion = true;
+    } else if (
+        !dtype.has_value() ||
+        (dtype.value() == DataType::FLOAT32 && tensor.attr("dtype").equal(torch.attr("float32"))) ||
+        (dtype.value() == DataType::BFLOAT16 && tensor.attr("dtype").equal(torch.attr("bfloat16"))) ||
+        (dtype.value() == DataType::INT32 && tensor.attr("dtype").equal(torch.attr("int32"))) ||
+        (dtype.value() == DataType::uint8 && tensor.attr("dtype").equal(torch.attr("uint8")))) {
+        res.host_side_conversion = true;
+        if (is_torch_missing_data_type(dtype)) {
+            res.construct_with_data_type = dtype;
+        }
+    } else if (
+        HANDLE_FLOAT32_BUG_23405 && layout && layout.value() == Layout::ROW_MAJOR && dtype &&
+        dtype.value() == DataType::FLOAT32) {
+        tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        res.host_side_conversion = true;
+        if (is_torch_missing_data_type(dtype)) {
+            res.construct_with_data_type = dtype;
+        }
+    }
+
+    const auto py_dtype = tensor.attr("dtype");
+
+    if (dtype.has_value() && (*dtype == DataType::BFLOAT4_B || *dtype == DataType::BFLOAT8_B)) {
+        res.layout = Layout::TILE_LAYOUT;
+    } else if (HANDLE_FLOAT32_BUG_23405 and py_dtype.equal(torch.attr("float32"))) {
+        if (dtype && *dtype != DataType::FLOAT32) {
+            // Typecast is needed, can't tilize the data on device due to the bug
+            res.layout = Layout::TILE_LAYOUT;
+        } else {
+            res.layout = optional_layout.value_or(Layout::ROW_MAJOR);
+        }
+    } else if (has_device) {
+        res.layout = Layout::ROW_MAJOR;
+    } else {
+        res.layout = optional_layout.value_or(Layout::ROW_MAJOR);
+    }
+
+    res.tensor = tensor;
+
+    return res;
+}
+
 Tensor convert_python_tensor_to_tt_tensor(
     const py::handle& py_tensor,
     std::optional<DataType> optional_data_type,
@@ -326,7 +414,14 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
-    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
+    std::optional<PyTensorHostConversionStrategy> strategy;
+    if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
+        strategy = prepare_conversion_strategy(py_tensor, optional_data_type, optional_layout, has_device);
+    }
+
+    auto preprocessed_py_tensor = strategy ? parse_py_tensor(strategy->tensor, strategy->construct_with_data_type)
+                                           : parse_py_tensor(py_tensor, optional_data_type);
+
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
     TT_FATAL(
@@ -359,7 +454,10 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto output = create_tt_tensor_from_py_data(
         preprocessed_py_tensor.py_data_ptr,
         shape,
-        TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config),
+        TensorLayout(
+            preprocessed_py_tensor.data_type,
+            PageConfig(strategy ? strategy->construct_with_layout : layout, optional_tile),
+            memory_config),
         device,
         pydata_pin,
         cq_id,
@@ -367,7 +465,10 @@ Tensor convert_python_tensor_to_tt_tensor(
         mesh_mapper);
 
     output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
+
+    if (output) {
+        GraphTracker::instance().track_function_end(output);
+    }
     return output;
 }
 
