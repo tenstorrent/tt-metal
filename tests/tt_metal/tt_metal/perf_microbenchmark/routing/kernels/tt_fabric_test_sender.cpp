@@ -41,6 +41,7 @@ void kernel_main() {
     uint64_t total_elapsed_cycles = 0;
 
     // Round-robin packet sending: send one packet from each config per iteration
+    uint64_t start_timestamp = get_timestamp();
     while (packets_left_to_send) {
         packets_left_to_send = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
@@ -57,6 +58,7 @@ void kernel_main() {
             packets_left_to_send |= traffic_config->has_packets_to_send();
         }
     }
+    uint64_t total_elapsed_cycles_outer_loop = get_timestamp() - start_timestamp;
 
     sender_config.close_connections();
 
@@ -64,11 +66,11 @@ void kernel_main() {
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
         auto* traffic_config = sender_config.traffic_config_ptrs[i];
         total_packets_sent += traffic_config->num_packets_processed;
-        total_elapsed_cycles += traffic_config->elapsed_cycles;
     }
 
     // Write test results
-    tt::tt_fabric::fabric_tests::write_test_cycles(sender_config.get_result_buffer_address(), total_elapsed_cycles);
+    tt::tt_fabric::fabric_tests::write_test_cycles(
+        sender_config.get_result_buffer_address(), total_elapsed_cycles_outer_loop);
     tt::tt_fabric::fabric_tests::write_test_packets(sender_config.get_result_buffer_address(), total_packets_sent);
 
     // Mark test as passed
