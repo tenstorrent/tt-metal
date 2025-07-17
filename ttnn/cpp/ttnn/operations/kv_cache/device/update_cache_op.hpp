@@ -7,6 +7,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "update_cache_multi_core_program_factory.hpp"
+#include "fill_cache_multi_core_program_factory.hpp"
 
 namespace ttnn::operations::kv_cache {
 
