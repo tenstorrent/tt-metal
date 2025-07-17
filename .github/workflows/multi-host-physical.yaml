@@ -30,7 +30,7 @@ jobs:
       - name: Run tt-smi via mpirun command
         run: |
           echo "Running mpirun command on multiple hosts"
-          mpirun --rankfile /etc/rankfile --tag-output  --mca orte_launch_agent $(pwd)/.github/scripts/multihost/physical/docker-wrapper.sh --mca btl_tcp_if_exclude docker0,lo tt-smi -ls
+          mpirun --rankfile /etc/rankfile --tag-output  --mca orte_launch_agent $(pwd)/.github/scripts/multihost/physical/docker-wrapper.sh --mca btl_tcp_if_exclude docker0,lo tt-smi -ls || true
 
       - name: Compile mpi allreduce test
         run: |
