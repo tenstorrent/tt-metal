@@ -16,7 +16,6 @@
 #include <vector>
 
 using namespace tt::tt_metal;
-
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
 constexpr uint32_t TILE_WIDTH = 32;
@@ -138,9 +137,8 @@ int main(int argc, char** argv) {
     MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
     MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
 
-
-    //We're writing to a shard allocated on Device Coordinate 0, 0, since this is a 1x1 
-    // When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    // We're writing to a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
     distributed::WriteShard(cq, a, a_data, device_coord);
     distributed::WriteShard(cq, b, b_data, device_coord);
 
@@ -203,8 +201,8 @@ int main(int argc, char** argv) {
     // Read the output buffer.
     std::vector<uint32_t> c_data;
 
-    //We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1 
-    // When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
     distributed::ReadShard(cq, c_data, c, device_coord);
     distributed::Finish(cq);
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)

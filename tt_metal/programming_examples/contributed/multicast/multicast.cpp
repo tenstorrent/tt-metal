@@ -301,8 +301,8 @@ int main(int argc, char **argv) {
         ////////// TILE MULTICAST VERIFICATION //////////
         std::vector<bfloat16> received_tiles(num_dests * TILE_HW);
 
-        //We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1 
-        // When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+        // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+        //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
         distributed::ReadShard(cq, received_tiles, output_dram_buffer, device_coord);
         bool verbose_verify =
             false;  // if enabled, the original and all multicast-received tiles are printed in full (32x32).
