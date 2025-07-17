@@ -121,16 +121,14 @@ static void test_single_core_reshard(
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
-    // auto output_vec = output_tensor.template to_vector<T>();
-    // Get the tensor from device to host first
-    auto host_tensor = output_tensor.cpu(true);
+    auto output_tensor_cpu = output_tensor.cpu(true);
 
     // Get individual shards
-    std::vector<Tensor> shards = ttnn::distributed::get_device_tensors(host_tensor);
+    std::vector<Tensor> output_tensor_shards = ttnn::distributed::get_device_tensors(output_tensor_cpu);
 
     // Combine data from all shards
     std::vector<T> output_vec;
-    for (const auto& shard : shards) {
+    for (const auto& shard : output_tensor_shards) {
         auto shard_vec = shard.to_vector<T>();
         output_vec.insert(output_vec.end(), shard_vec.begin(), shard_vec.end());
     }
