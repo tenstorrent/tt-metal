@@ -186,10 +186,6 @@ void MAIN {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-                                // binop_with_scalar_tile_init();
-                                // for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                //     mul_unary_tile(i, 0xFF);
-                                // }
                                 tile_regs_commit();
                                 // Pack out to output buffer
                                 cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);

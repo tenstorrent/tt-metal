@@ -18,9 +18,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("mkn", [(128, 7168, 2048), (128, 2048, 7168)])
 @pytest.mark.parametrize("num_experts", [8])
-@pytest.mark.parametrize("num_tokens", [(2, 1)])  # , (64, 128), (64, 256)])
-@pytest.mark.parametrize("tile_h", [32])
-@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("num_tokens", [(1, 1), (1, 4), (1, 32)])
+@pytest.mark.parametrize("tile_h", [32, 16])
+@pytest.mark.parametrize("tile_w", [32, 16])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
 def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype):
     torch.manual_seed(0)
