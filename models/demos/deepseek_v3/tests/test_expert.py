@@ -64,7 +64,6 @@ def test_forward_pass(mode, seq_len, mesh_device, temp_dir, hf_config):
     reference_model = ReferenceExpert(
         hf_config, hidden_size=hf_config.hidden_size, intermediate_size=hf_config.moe_intermediate_size
     )
-    breakpoint()  # Debugging point to inspect the reference model
     reference_model.eval()
 
     hf_state_dict = reference_model.state_dict()
