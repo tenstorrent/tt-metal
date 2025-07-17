@@ -28,7 +28,6 @@ class SubDeviceManagerTracker;
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
 public:
-    // friend void tt_gdb(IDevice* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(
         chip_id_t device_id,

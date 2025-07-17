@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <vector>
-#include <random>
 #include <sys/types.h>
 
 #include <gtest/gtest.h>
@@ -305,31 +304,28 @@ std::vector<T> convert_layout(
 
 }  // namespace reference
 
+namespace {
 template <typename T>
-std::vector<T>& get_test_data() {
-    constexpr size_t MAX_BATCH = 1;
-    constexpr size_t MAX_ROWS = 128;
-    constexpr size_t MAX_COLS = 128;
-
+std::vector<T>& get_test_data(size_t n_elements = 128 * 128) {
     static std::vector<T> data;
-    if (!data.empty()) {
-        return data;
+    static size_t max_n_elements = 0;
+    if (n_elements > max_n_elements) {
+        max_n_elements = n_elements;
+    } else {
+        if (!data.empty()) {
+            return data;
+        }
     }
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
-
-    size_t n_elements = MAX_BATCH * MAX_ROWS * MAX_COLS;
     data.resize(n_elements);
 
     for (size_t i = 0; i < n_elements; i++) {
-        float val = dist(gen);
-        data[i] = static_cast<T>(val);
+        data[i] = static_cast<T>(static_cast<float>(i));
     }
 
     return data;
 }
+}  // namespace
 
 // Note: tuple is used for ::testing::Combine
 using TilizeUntilizeParams = std::tuple<

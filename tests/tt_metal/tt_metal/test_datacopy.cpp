@@ -38,7 +38,6 @@ namespace tt_metal {
 class IDevice;
 }  // namespace tt_metal
 }  // namespace tt
-// #include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

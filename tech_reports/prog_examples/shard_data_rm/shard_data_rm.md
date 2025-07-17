@@ -7,7 +7,7 @@ To build and execute, you may use the following commands:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/shard_data_rm
+    ./build/programming_examples/metal_example_shard_data_rm
 ```
 # Device setup
 
