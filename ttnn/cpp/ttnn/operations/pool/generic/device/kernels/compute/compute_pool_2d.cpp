@@ -37,9 +37,12 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
+    constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
+    constexpr uint32_t num_faces_in_input_tile = is_partial_tile                                         ? 1
+                                                 : (max_rows_for_reduction < 32 || window_size_hw <= 16) ? 2
+                                                                                                         : 4;
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
@@ -57,7 +60,6 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
-    constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_output_tile);
