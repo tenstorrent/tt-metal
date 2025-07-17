@@ -49,6 +49,14 @@ python models/tt_transformers/scripts/repack_weights_70b.py <path_to_checkpoint_
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
 
+**⚠️ Warning**
+>
+> Weights downloaded from the `huggingface-cli` via
+>```
+>huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
+>```
+> will be in the same format as a direct download from Meta (i.e. as `consolidated.xx.pth` files). Hence, you will still need to repack your weights and export `LLAMA_DIR` as before. This is contrary to if you downloaded your weights directly from `huggingface`, as those weights will be downloaded as sharded `.safetensors` files.
+
 ## Setting the Environment Variables
 
 ```
@@ -178,3 +186,20 @@ To use line for only some of the AG ops, you can set USE_LINE_AG set in `llama_c
 - LINE_RS = 1
 - LINE_AG = 0
 - USE_LINE_AG = {"QKV"}
+
+## Updating APC Test Target Values
+<!-- Add instructions for updating pcc -->
+The Llama3.3 70B model runs text_demo.py in APC and can perform assertions at multiple points:
+
+- **Prefill PCC** – Indicates that a change in the underlying prefill operation is affecting the results.
+
+- **Decode PCC** – Indicates that a change in the underlying decode operation is affecting the results.
+
+- **Throughput** – Suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
+
+In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in
+models/demos/llama3_subdevices/demo/text_demo_targets.json.
+
+Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
+
+If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.

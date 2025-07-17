@@ -114,7 +114,7 @@ public:
 #endif
 #endif
         } else {
-            auto header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+            auto header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
             header->to_chip_unicast(num_hops);
         }
 #else
@@ -152,7 +152,7 @@ public:
     template <uint8_t noc_idx, bool count = true>
     FORCE_INLINE void write_inline(uint64_t dst, uint32_t val) {
 #if defined(FABRIC_RELAY)
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         packet_header->to_noc_unicast_inline_write(
             tt::tt_fabric::NocUnicastInlineWriteCommandHeader{.noc_address = dst, .value = val});
         // Use the fabric_atomic_inc helper to send the header
@@ -173,7 +173,7 @@ public:
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
 
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         while (length > k_FabricMaxBurstSize) {
             packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, k_FabricMaxBurstSize);
 
@@ -254,7 +254,7 @@ public:
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
 
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         while (length > k_FabricMaxBurstSize) {
             packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, k_FabricMaxBurstSize);
 

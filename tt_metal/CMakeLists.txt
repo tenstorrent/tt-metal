@@ -53,7 +53,7 @@ set_source_files_properties(
 )
 
 # TODO(afuller): this should be self-describing modules.
-#   For now just cherry-pick all the files I discovered empirally by trying to run a test.
+#   For now just cherry-pick all the files I discovered empirically by trying to run a test.
 add_library(jitapi INTERFACE)
 # These headers are for the device, not host; will require cross compiling to verify.
 set_target_properties(
@@ -63,6 +63,7 @@ set_target_properties(
             FALSE
 )
 
+file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 target_sources(
     jitapi
     INTERFACE
@@ -109,36 +110,7 @@ target_sources(
             impl/dispatch/kernels/cq_helpers.hpp
             impl/dispatch/kernels/packet_queue.hpp
             impl/dispatch/kernels/packet_queue_ctrl.hpp
-            include/compute_kernel_api.h
-            include/compute_kernel_api/bcast.h
-            include/compute_kernel_api/blank.h
-            include/compute_kernel_api/cb_api.h
-            include/compute_kernel_api/common.h
-            include/compute_kernel_api/common_globals.h
-            include/compute_kernel_api/compute_kernel_hw_startup.h
-            include/compute_kernel_api/eltwise_binary.h
-            include/compute_kernel_api/eltwise_unary/comp.h
-            include/compute_kernel_api/eltwise_unary/eltwise_unary.h
-            include/compute_kernel_api/eltwise_unary/exp.h
-            include/compute_kernel_api/eltwise_unary/negative.h
-            include/compute_kernel_api/eltwise_unary/recip.h
-            include/compute_kernel_api/eltwise_unary/relu.h
-            include/compute_kernel_api/eltwise_unary/sfpu_split_includes.h
-            include/compute_kernel_api/eltwise_unary/sqrt.h
-            include/compute_kernel_api/mask.h
-            include/compute_kernel_api/matmul.h
-            include/compute_kernel_api/pack.h
-            include/compute_kernel_api/pack_untilize.h
-            include/compute_kernel_api/reconfig_data_format.h
-            include/compute_kernel_api/reduce.h
-            include/compute_kernel_api/reg_api.h
-            include/compute_kernel_api/softmax.h
-            include/compute_kernel_api/tile_move_copy.h
-            include/compute_kernel_api/tilize.h
-            include/compute_kernel_api/transpose_wh.h
-            include/compute_kernel_api/untilize.h
-            include/compute_kernel_api/eltwise_binary.h
-            include/compute_kernel_api/tile_move_copy.h
+            ${COMPUTE_KERNEL_API}
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
