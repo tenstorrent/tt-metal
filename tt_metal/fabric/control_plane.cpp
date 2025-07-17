@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <iostream>
 #include <magic_enum/magic_enum.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -1164,16 +1165,51 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
 
 std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const {
+    // Query the mesh coord range owned by the current host
+    auto host_local_coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
+    auto src_mesh_coord = this->routing_table_generator_->mesh_graph->chip_to_coordinate(
+        src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    auto dst_mesh_coord = this->routing_table_generator_->mesh_graph->chip_to_coordinate(
+        dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
+    // The src node is considered valid in this API if its owned by the current host. This requires the node to be in a
+    // mesh and coordinate range on this host.
+    bool valid_src =
+        this->is_local_mesh(src_fabric_node_id.mesh_id) and host_local_coord_range.contains(src_mesh_coord);
+    // Fabric Route will terminate at the exit node if the host does not own the destination node. i.e. dest is not on a
+    // mesh or coordinte range owned by the host.
+    bool end_route_at_exit_node =
+        !(this->is_local_mesh(dst_fabric_node_id.mesh_id) and host_local_coord_range.contains(dst_mesh_coord));
+
+    TT_FATAL(
+        valid_src,
+        "Cannot generate the fabric route between {} and {} on host {}, since M {} is not local to the host.",
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        this->local_mesh_binding_.host_rank,
+        src_fabric_node_id.mesh_id);
+
+    std::vector<FabricNodeId> candidate_end_nodes;
+    if (end_route_at_exit_node) {
+        // If routing to a mesh remote to the host, we need to generate a path to a local exit node that can direct
+        // traffic to the remote mesh.
+        candidate_end_nodes = routing_table_generator_->get_exit_nodes_routing_to_mesh(dst_fabric_node_id.mesh_id);
+    } else {
+        // If routing to a mesh local to the host, we can route directly to the destination chip.
+        candidate_end_nodes.push_back(dst_fabric_node_id);
+    }
+
     std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
-    // Find any eth chan on the plane id
-    while (src_fabric_node_id != dst_fabric_node_id) {
+    while (std::find(candidate_end_nodes.begin(), candidate_end_nodes.end(), src_fabric_node_id) ==
+           candidate_end_nodes.end()) {
         i++;
         auto src_mesh_id = src_fabric_node_id.mesh_id;
         auto src_chip_id = src_fabric_node_id.chip_id;
         auto dst_mesh_id = dst_fabric_node_id.mesh_id;
         auto dst_chip_id = dst_fabric_node_id.chip_id;
         if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
+            log_warning(
+                tt::LogFabric, "Could not find a route between {} and {}", src_fabric_node_id, dst_fabric_node_id);
             return {};
         }
         chan_id_t next_chan_id = 0;
@@ -1186,6 +1222,8 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         }
         if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
             // The complete route b/w src and dst not found, probably some eth cores are reserved along the path
+            log_warning(
+                tt::LogFabric, "Could not find a route between {} and {}", src_fabric_node_id, dst_fabric_node_id);
             return {};
         }
         if (src_chan_id != next_chan_id) {
@@ -1197,7 +1235,12 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
             this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
         route.push_back({src_fabric_node_id, src_chan_id});
     }
-
+    if (end_route_at_exit_node) {
+        // When routing to a remote mesh, append the exit node to the route.
+        route.push_back(
+            {src_fabric_node_id,
+             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_fabric_node_id.mesh_id]});
+    }
     return route;
 }
 
@@ -1418,24 +1461,10 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
     const auto& connected_chips_and_eth_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
     size_t num_eth_endpoint = 0;
-    for (const auto& [connected_chip_id, eth_cores] : connected_chips_and_eth_cores) {
-        // iterate all physically connected ethernet cores
-        for (const auto& eth_core : eth_cores) {
-            auto eth_channel_id = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
-            bool is_fabric_connected = false;
-            eth_chan_directions router_direction = eth_chan_directions::COUNT;
-            for (const auto& [direction, eth_chans] :
-                 this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
-                // Check if the physically connected channel is part of fabric channel
-                if (std::find(eth_chans.begin(), eth_chans.end(), eth_channel_id) != eth_chans.end()) {
-                    is_fabric_connected = true;
-                    router_direction = this->routing_direction_to_eth_direction(direction);
-                    break;
-                }
-            }
-            if (!is_fabric_connected) {
-                continue;
-            }
+    for (const auto& [direction, eth_chans] :
+         this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+        for (auto eth_channel_id : eth_chans) {
+            eth_chan_directions router_direction = this->routing_direction_to_eth_direction(direction);
             if (num_eth_endpoint >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
                 log_warning(
                     tt::LogFabric,
@@ -1668,7 +1697,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
             for (auto link : extract_intermesh_eth_links(config_data[0], chip_id)) {
                 // Find the CoreCoord for this channel
                 for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
-                    if (channel == link) {
+                    if (channel == link and this->is_intermesh_eth_link_trained(chip_id, core_coord)) {
                         intermesh_eth_links.push_back({core_coord, link});
                         break;
                     }
@@ -1732,8 +1761,6 @@ bool ControlPlane::is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) 
 
 // TODO: Support Intramesh links through this API as well
 bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const {
-    TT_FATAL(
-        this->is_intermesh_eth_link(chip_id, eth_core), "Can only call {} on intermesh ethernet links.", __FUNCTION__);
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto remote_connections = cluster.get_ethernet_connections_to_remote_devices();
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
@@ -1830,8 +1857,13 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
             // responsible for querying this information.
             // Note: On UBB systems, intermesh links are already identified as active by UMD, so control
             // plane does not need to do this.
+            const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
             auto intermesh_links = this->get_intermesh_eth_links(chip_id);
             for (const auto& [eth_coord, eth_chan] : intermesh_links) {
+                if (eth_routing_info.find(eth_coord) != eth_routing_info.end() and
+                    eth_routing_info.at(eth_coord) == EthRouterMode::FABRIC_ROUTER and skip_reserved_cores) {
+                    continue;
+                }
                 active_ethernet_cores.insert(eth_coord);
             }
         }
@@ -1865,10 +1897,6 @@ void ControlPlane::generate_local_intermesh_link_table() {
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (this->has_intermesh_links(chip_id)) {
             for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
-                if (not this->is_intermesh_eth_link_trained(chip_id, eth_core)) {
-                    // Link is untrained/unusuable
-                    continue;
-                }
                 // TODO: remove below logic, should at very least be using UMD apis to get ids
                 // But all this data can be provided by UMD
                 tt_cxy_pair virtual_eth_core(
@@ -2061,8 +2089,8 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
             }
         }
         if (intermesh_routing_direction != RoutingDirection::NONE) {
-            router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[intermesh_routing_direction].push_back(
-                eth_chan);
+            auto& direction_to_channel_map = router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
+            direction_to_channel_map[intermesh_routing_direction].push_back(eth_chan);
         }
     }
     // Compute the number of intermesh links requsted by the user and ensure that they could be mapped to physical links
