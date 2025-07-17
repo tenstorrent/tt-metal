@@ -32,6 +32,8 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -295,7 +297,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
                 case DataType::UINT8: return torch.attr("uint8");
                 case DataType::UINT16: return torch.attr("int16");
                 case DataType::INT32: return torch.attr("int32");
-                case DataType::UINT32: return torch.attr("uint32");
+                case DataType::UINT32: return torch.attr("int32");
                 case DataType::BFLOAT4_B: return torch.attr("float32");
                 case DataType::BFLOAT8_B: return torch.attr("float32");
                 case DataType::FLOAT32: return torch.attr("float32");
@@ -493,21 +495,25 @@ Tensor convert_python_tensor_to_tt_tensor(
     if (strategy) {
         if (strategy->host_side_conversion) {
             if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout) {
-                output = output.to_layout(optional_layout.value());
+                if (optional_layout.value() == Layout::TILE) {
+                    output = ttnn::tilize_with_zero_padding(output, memory_config);
+                } else {
+                    output = ttnn::untilize(output, memory_config);
+                }
             }
         } else {
             if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
                 ZoneScopedN("no-device type conversion");
                 if (output.layout() != Layout::TILE) {
                     ZoneScopedN("pre-typecast layout conversion");
-                    output = output.to_layout(Layout::TILE);
+                    output = ttnn::tilize_with_zero_padding(output, memory_config);
                 }
 
                 output = ttnn::typecast(output, optional_data_type.value());
 
                 if (optional_layout.has_value() && output.layout() != optional_layout.value()) {
                     ZoneScopedN("post-typecast layout conversion");
-                    output = output.to_layout(optional_layout.value());
+                    output = ttnn::untilize(output, memory_config);
                 }
             }
         }
