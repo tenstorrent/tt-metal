@@ -50,6 +50,11 @@ using std::chrono::microseconds;
 //     --page-size <size in bytes>
 //     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
+//     --skip-read (skip EnqueueReadBuffer (D2H) test)
+//     --skip-write (skip EnqueueWriteBuffer (H2D) test)
+//     --device (device ID)
+//     ... Any google benchmark command line arguments
+//
 ////////////////////////////////////////////////////////////////////////////////
 
 struct CommandArg {
@@ -58,36 +63,20 @@ struct CommandArg {
     bool skip_read, skip_write, bypass_check;
 };
 
-CommandArg parseArgs(int argc, char** argv) {
+CommandArg parseCustomArgs(int argc, char** argv) {
     CommandArg args;
     std::vector<std::string> input_args(argv, argv + argc);
 
-    int32_t buffer_type_it;
-    std::tie(buffer_type_it, input_args) =
-        test_args::get_command_option_int32_and_remaining_args(input_args, "--buffer-type", 0);
+    int32_t buffer_type_it = test_args::get_command_option_int32(input_args, "--buffer-type", 0);
     args.buffer_type = buffer_type_it == 0 ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
 
-    std::tie(args.transfer_size, input_args) =
-        test_args::get_command_option_uint32_and_remaining_args(input_args, "--transfer-size", 512 * 1024 * 1024);
-
-    std::tie(args.page_size, input_args) =
-        test_args::get_command_option_uint32_and_remaining_args(input_args, "--page-size", 2048);
-
-    std::tie(args.num_tests, input_args) =
-        test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tests", 10);
-
-    std::tie(args.bypass_check, input_args) =
-        test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
-
-    std::tie(args.skip_read, input_args) = test_args::has_command_option_and_remaining_args(input_args, "--skip-read");
-
-    std::tie(args.skip_write, input_args) =
-        test_args::has_command_option_and_remaining_args(input_args, "--skip-write");
-
-    std::tie(args.device_id, input_args) =
-        test_args::get_command_option_uint32_and_remaining_args(input_args, "--device");
-
-    test_args::validate_remaining_args(input_args);
+    args.transfer_size = test_args::get_command_option_uint32(input_args, "--transfer-size", 512 * 1024 * 1024);
+    args.page_size = test_args::get_command_option_uint32(input_args, "--page-size", 2048);
+    args.num_tests = test_args::get_command_option_uint32(input_args, "--num-tests", 10);
+    args.bypass_check = test_args::has_command_option(input_args, "--bypass-check");
+    args.skip_read = test_args::has_command_option(input_args, "--skip-read");
+    args.skip_write = test_args::has_command_option(input_args, "--skip-write");
+    args.device_id = test_args::get_command_option_uint32(input_args, "--device", 0);
 
     TT_ASSERT(
         args.page_size == 0 ? args.transfer_size == 0 : args.transfer_size % args.page_size == 0,
@@ -125,7 +114,8 @@ static void BM_read(benchmark::State& state, const BenchmarkParam& para) {
 }
 
 int main(int argc, char** argv) {
-    CommandArg args = parseArgs(argc, argv);
+    CommandArg args = parseCustomArgs(argc, argv);
+    benchmark::Initialize(&argc, argv);
 
     if (args.device_id >= MetalContext::instance().get_cluster().number_of_devices()) {
         log_info(LogTest, "Skip! Device id {} is not applicable on this system", args.device_id);
