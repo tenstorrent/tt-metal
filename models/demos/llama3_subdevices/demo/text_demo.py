@@ -438,7 +438,7 @@ def test_demo_text(
     prefill_enable_trace = True  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
-    input_lenghts = (
+    input_lengths = (
         [
             534,
             1008,
