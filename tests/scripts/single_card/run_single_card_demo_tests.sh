@@ -283,11 +283,11 @@ run_yolov7_demo() {
 }
 
 # comment out vgg_unet from CI until data and weights loading problems are resolved
-#run_vgg_unet_demo() {
-#
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
-#
-#}
+run_vgg_unet_demo() {
+
+ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
+
+}
 
 
 
