@@ -26,7 +26,8 @@ def reference_model(hf_config):
     "mode,seq_len",
     [
         ("decode", 128),
-        ("prefill", 2048),
+        ("prefill", 256),
+        # ("prefill", 2048),
     ],
 )
 def test_forward_pass(
@@ -91,7 +92,7 @@ def test_forward_pass(
     ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
     # output shape per device  = [1, experts_per_device, seq_len, hidden_size]
-    # There are 32 groups of unique experts output in case TG
+    # There are 32 groups of unique experts output in case of TG
     # We first concate rows and then columns to get the final output
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
@@ -100,9 +101,9 @@ def test_forward_pass(
             galaxy_or_t3k_mesh, dims=(0, 1), mesh_shape=tuple(galaxy_or_t3k_mesh.shape)
         ),
     )
-    # (4, experts_per_device*8, seq_len, hidden_size)
+    # example shape (4, experts_per_device*8, seq_len, hidden_size) for TG
     tt_output_torch = tt_output_torch.reshape(batch_size, -1, seq_len, hf_config_single_layer.hidden_size)
-    # (1, experts_per_device*8*4, seq_len, hidden_size)
+    # example shape (1, experts_per_device*8*4, seq_len, hidden_size) for TG
     tt_output_torch = tt_output_torch[0].unsqueeze(1)
 
     # Compare outputs

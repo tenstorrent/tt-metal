@@ -36,6 +36,11 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         return dim, hidden_dim
 
     @classmethod
+    def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
+        """Calculate the number of experts per device based on the total number of experts and the device shape."""
+        return even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
+
+    @classmethod
     def convert_weights_moe(
         cls,
         hf_config: PretrainedConfig,
@@ -43,11 +48,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        # assert cls.is_device_supported(mesh_device)
-
-        # breakpoint()  # Debugging point to inspect the state_dict structure
-        num_experts_per_device = hf_config.n_routed_experts // mesh_device.get_num_devices()
-        num_groups = hf_config.n_routed_experts // num_experts_per_device
+        num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
 
         w1_per_device_state_dict_group = []
         w2_per_device_state_dict_group = []
@@ -63,6 +64,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
             start_expert = device_idx * num_experts_per_device
             end_expert = start_expert + num_experts_per_device
 
+            # TODO: check for quantized weights
             for expert_idx in range(start_expert, end_expert):
                 w1_sub_group.append(state_dict[f"experts.{expert_idx}.gate_proj.weight"])
                 w2_sub_group.append(state_dict[f"experts.{expert_idx}.down_proj.weight"])
@@ -78,11 +80,8 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
                 "input_tensor_b": save_and_get_path(
                     output_path / f"w1_experts.input_tensor_b",
                     cls._convert_weight_moe(
-                        hf_config,
                         w1_per_device_state_dict_group,
                         mesh_device,
-                        is_w2=False,
-                        num_experts_per_device=num_experts_per_device,
                     ),
                 )
             },
@@ -90,11 +89,8 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
                 "input_tensor_b": save_and_get_path(
                     output_path / f"w2_experts.input_tensor_b",
                     cls._convert_weight_moe(
-                        hf_config,
                         w2_per_device_state_dict_group,
                         mesh_device,
-                        is_w2=True,
-                        num_experts_per_device=num_experts_per_device,
                     ),
                 )
             },
@@ -102,11 +98,8 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
                 "input_tensor_b": save_and_get_path(
                     output_path / f"w3_experts.input_tensor_b",
                     cls._convert_weight_moe(
-                        hf_config,
                         w3_per_device_state_dict_group,
                         mesh_device,
-                        is_w2=False,
-                        num_experts_per_device=num_experts_per_device,
                     ),
                 )
             },
@@ -116,11 +109,8 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
     @classmethod
     def _convert_weight_moe(
         cls,
-        hf_config: PretrainedConfig,
         wx_per_device_state_dict_group: list[torch.Tensor],
         mesh_device: ttnn.Device,
-        is_w2: bool,
-        num_experts_per_device: int,
     ) -> ttnn.Tensor:
         """
         Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
@@ -132,12 +122,6 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         Returns:
             The converted TTNN tensor.
         """
-        dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
-
-        per_device_in_features, per_device_out_features = dim, hidden_dim
-        if is_w2:
-            per_device_in_features, per_device_out_features = hidden_dim, dim
-
         multi_dev_host_weights = ttnn.from_host_shards(
             [
                 ttnn.from_torch(e.unsqueeze(0), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
@@ -154,74 +138,53 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
 
         return multi_dev_weights
 
-    @final
     @classmethod
-    def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
-        """
-        As we only support 1D tensor parallelism, we only support 1D mesh devices.
-
-        Args:
-            mesh_device: The mesh device to check.
-
-        Returns:
-            True if the device is supported, False otherwise.
-        """
-        return tuple(mesh_device.shape)[0] >= 1
-
-    @classmethod
-    def decode_model_config(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.Device,
-        input_num_cores: int | None = None,
-        output_num_cores: int | None = None,
-    ) -> ModelDecodeConfig:
-        """Generate decode configuration for this module.
-
-        Args:
-            hf_config: HuggingFace model configuration object
-            mesh_device: TTNN mesh device the model will be placed later on
-            input_num_cores (optional): Number of cores the input tensor is sharded on.
-                Must be a divisor of the tile width of the input tensor (i.e. sharding cannot be padded)
-            output_num_cores (optional): Number of cores the output tensor is sharded on.
-                Must be a divisor of the tile width of the output tensor (i.e. sharding cannot be padded)
-
-        Returns:
-            ModelDecodeConfig containing operator configurations for decode mode
-        """
-        # Extract dimensions from HF config
-        dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
-
-        num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
+    def _create_model_config(
+        cls, mesh_device: ttnn.Device, mem_config: ttnn.MemoryConfig, num_experts_per_device: int
+    ) -> ModelPrefillConfig:
         # Calculate input and output memory configurations
-        input_memory_config = ttnn.L1_MEMORY_CONFIG
-        output_memory_config = ttnn.L1_MEMORY_CONFIG
+        input_memory_config = mem_config
+        output_memory_config = mem_config
 
         # Construct the config
         return {
             "w1_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=mem_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=mem_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_SDPA,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=mem_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "mul_experts": MulConfig(
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=mem_config,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
             "input_memory_config": input_memory_config,  # For asserting the input to the MLP
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
             "num_experts_per_device": num_experts_per_device,
         }
+
+    @classmethod
+    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+        """Generate decode configuration for this module.
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device the model will be placed later on
+
+        Returns:
+            ModelPrefillConfig containing operator configurations for prefill mode
+        """
+        num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
+        return cls._create_model_config(mesh_device, ttnn.L1_MEMORY_CONFIG, num_experts_per_device)
 
     @classmethod
     def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
@@ -234,46 +197,12 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
-        # Extract dimensions from HF config
-        dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
-
         num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
-        # Calculate input and output memory configurations
-        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
-        # Construct the config
-        return {
-            "w1_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-            ),
-            "w2_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_SDPA,
-            ),
-            "w3_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-            ),
-            "mul_experts": MulConfig(
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            ),
-            "input_memory_config": input_memory_config,  # For asserting the input to the MLP
-            "output_memory_config": output_memory_config,  # For asserting the output of the MLP
-            "num_experts_per_device": num_experts_per_device,
-        }
+        return cls._create_model_config(mesh_device, ttnn.DRAM_MEMORY_CONFIG, num_experts_per_device)
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"]
-
-        # activations are repeated for each expert as we don't support activation broadcasting inside the matmul
-        _, experts_per_device, batch_size, _ = x.shape
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1_experts"])
