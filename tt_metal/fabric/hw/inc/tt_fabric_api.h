@@ -12,6 +12,7 @@
 #include "tt_fabric_interface.h"
 #include "eth_chan_noc_mapping.h"
 #include "fabric_edm_packet_header.hpp"
+#include "packet_header_pool.h"
 #include <type_traits>
 
 namespace tt::tt_fabric {
@@ -1086,6 +1087,89 @@ inline void fabric_endpoint_init(tt_l1_ptr ClientInterfaceType client_interface,
         noc_async_read_one_packet(dest_addr, routing_tables_offset, sizeof(fabric_router_l1_config_t));
         noc_async_read_barrier();
     }
+}
+
+// Direct multicast header setup
+template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
+inline void fabric_multicast_add_header(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* direction_header,
+    uint32_t src_addr,
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size,
+    uint16_t e_depth,
+    uint16_t w_depth,
+    uint16_t n_depth,
+    uint16_t s_depth) {
+#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
+    packet_header_t* packet_header = (packet_header_t*)direction_header;
+    packet_header->routing.flags = FORWARD | MCAST_DATA;
+    packet_header->routing.packet_size_bytes = size;
+    packet_header->routing.dst_mesh_id = dst_mesh_id;
+    packet_header->routing.dst_dev_id = dst_dev_id;
+    packet_header->session.command = ASYNC_WR;
+    packet_header->session.target_offset_l = (uint32_t)dst_addr;
+    packet_header->session.target_offset_h = dst_addr >> 32;
+    packet_header->packet_parameters.mcast_parameters.east = e_depth;
+    packet_header->packet_parameters.mcast_parameters.west = w_depth;
+    packet_header->packet_parameters.mcast_parameters.north = n_depth;
+    packet_header->packet_parameters.mcast_parameters.south = s_depth;
+    tt_fabric_add_header_checksum(packet_header);
+#else
+    low_latency_packet_header_t* packet_header = (low_latency_packet_header_t*)direction_header;
+    packet_header->routing.packet_size_bytes = size;
+    packet_header->routing.command = ASYNC_WR;
+    packet_header->routing.target_offset_l = (uint32_t)dst_addr;
+    packet_header->routing.target_offset_h = dst_addr >> 32;
+
+    if (e_depth) {
+        fabric_set_mcast_route(packet_header, eth_chan_directions::EAST, e_depth);
+    } else if (w_depth) {
+        fabric_set_mcast_route(packet_header, eth_chan_directions::WEST, w_depth);
+    } else if (n_depth) {
+        fabric_set_mcast_route(packet_header, eth_chan_directions::NORTH, n_depth);
+    } else if (s_depth) {
+        fabric_set_mcast_route(packet_header, eth_chan_directions::SOUTH, s_depth);
+    }
+#endif
+}
+
+template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
+inline route_id_t fabric_async_write_multicast(
+    volatile tt_l1_ptr fabric_push_client_interface_t* client_interface,
+    uint32_t src_addr,
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size,
+    uint16_t e_depth,
+    uint16_t w_depth,
+    uint16_t n_depth,
+    uint16_t s_depth) {
+    const uint16_t depths[4] = {e_depth, w_depth, n_depth, s_depth};
+    static const eth_chan_directions directions[4] = {
+        eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH};
+    route_id_t route_id = ROUTE_ID_ALLOC();
+    auto* headers = ROUTE_ID_HEADER_ALLOC(route_id, 2);
+
+    // Send multicast for each active direction using pre-allocated headers
+    for (eth_chan_directions dir : directions) {
+        if (depths[dir] > 0) {
+            auto* direction_header = headers[dir];
+
+            uint16_t e = (dir == 0) ? depths[dir] : 0;
+            uint16_t w = (dir == 1) ? depths[dir] : 0;
+            uint16_t n = (dir == 2) ? depths[dir] : 0;
+            uint16_t s = (dir == 3) ? depths[dir] : 0;
+
+            fabric_multicast_add_header<data_mode>(
+                direction_header, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, e, w, n, s);
+
+            fabric_async_write_push_data<data_mode>(client_interface, src_addr, size, direction_header);
+        }
+    }
+    return route_id;
 }
 
 }  // namespace tt::tt_fabric
