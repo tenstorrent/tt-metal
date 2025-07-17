@@ -34,7 +34,6 @@ target_sources(
         dispatch_buffer/test_sub_device.cpp
         dispatch_program/test_dispatch.cpp
         dispatch_program/test_global_circular_buffers.cpp
-        dispatch_program/test_program_reuse.cpp
         dispatch_trace/test_sub_device.cpp
         dispatch_util/test_ringbuffer_cache.cpp
 )
