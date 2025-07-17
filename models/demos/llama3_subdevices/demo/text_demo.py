@@ -228,7 +228,7 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # Repeat-2 Batch-1 run (Throughput) - 1 user, small prompt
+        (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             2,  # repeat_batches
@@ -245,7 +245,7 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # Long-context run 16K - multiple users, long prompt (adapted to the model being used and architecture)
+        (  # long-context-batch32 - multiple users, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -262,7 +262,7 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # Long-context run 32K - Single user, long prompt (adapted to the model being used and architecture)
+        (  # long-context-32k - Single user, long prompt (adapted to the model being used and architecture)
             "models/demos/llama3_subdevices/demo/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -277,8 +277,9 @@ def create_tt_model(
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
+            False,  # print_outputs
         ),
-        (  # Prefill-only profile [default 4K seqlen] - Single user, long prompt
+        (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -295,7 +296,7 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # APC Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+        (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             True,  # instruct mode
@@ -313,7 +314,7 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+        (  # pcc-80L - CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
