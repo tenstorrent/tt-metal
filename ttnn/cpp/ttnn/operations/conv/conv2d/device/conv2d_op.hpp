@@ -333,7 +333,8 @@ conv_op_l1_usage calculate_L1_usage(
     tt::tt_metal::DataType input_datatype,
     tt::tt_metal::DataType output_datatype,
     bool enable_bias,
-    bool is_1d_depthwise_conv);
+    bool is_1d_depthwise_conv,
+    bool skip_act_cb_create = false);
 
 }  // namespace conv2d
 
