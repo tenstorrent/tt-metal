@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
@@ -807,6 +807,18 @@ def test_unary_silu_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     golden_function = ttnn.get_golden_function(ttnn.silu)
     golden_tensor = golden_function(in_data1, device=device)
 
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.9999)
+
+
+def test_unary_silu_threshold(device):
+    in_data1 = torch.tensor([[-1.0, 0.0, 0.5, 1.0, 1.5, 3.5, 5.0, 5.2, 5.5]], dtype=torch.bfloat16)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.silu(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.silu)
+    golden_tensor = golden_function(in_data1, device=device)
+
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.032)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.9999)
 
 
