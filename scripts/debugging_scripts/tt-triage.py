@@ -30,6 +30,7 @@ Description:
 """
 
 from collections import namedtuple
+import re
 import time
 import os
 import sys
@@ -550,6 +551,7 @@ def get_running_ops_table(
 def extract_callstack_from_gdb(gdb_client, start: str, end: str) -> list[str]:
     cs = []
     is_cs = False
+
     for line in gdb_client.communicate()[0].splitlines():
         if start in line:
             is_cs = True
@@ -599,7 +601,27 @@ def get_callstack_with_gdb(pid: int, loc, risc_name: str, elf_path: str, kernel_
     )
     gdb_client.stdin.flush()
 
-    return extract_callstack_from_gdb(gdb_client, start_callstack, end_callstack)
+    cs = extract_callstack_from_gdb(gdb_client, start_callstack, end_callstack)
+
+    pattern = re.compile(
+        r"#\d+\s+"  # Skip the frame number
+        r"(?:(?P<pc>0x[0-9a-fA-F]+)\s+in\s+)?"
+        r"(?P<fcn_name>\w+)"  # Capture only function name (e.g., 'main')
+        r"(?:\s*\(.*?\))?"  # Ignore arguments in parentheses
+        r"\s+at\s+"
+        r"(?P<file_path>.*?):(?P<line>\d+)"
+    )
+
+    entry = CallstackEntry()
+    for line in cs:
+        match = pattern.match(line)
+        if match:
+            entry.pc = match.groupdict()["pc"]
+            entry.function_name = match.groupdict()["fcn_name"]
+            entry.file = match.groupdict()["file_path"]
+            entry.line = match.groupdict()["line"]
+
+    return cs
 
 
 def get_process_ids(ui_state: UIState):
