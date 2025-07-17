@@ -48,6 +48,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     l1_read_addr += payload_size_bytes;
 }
 
+#ifdef ARCH_WORMHOLE
 FORCE_INLINE void scatter_write_for_fabric_write_forward(
     uint64_t first_noc0_dest_noc_addr,
     uint64_t second_noc0_dest_noc_addr,
@@ -68,6 +69,7 @@ FORCE_INLINE void scatter_write_for_fabric_write_forward(
         (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
     noc_async_writes_flushed();
 }
+#endif
 
 FORCE_INLINE void write_for_fabric_write_forward(
     uint64_t noc0_dest_noc_addr,
@@ -86,6 +88,7 @@ FORCE_INLINE void write_for_fabric_write_forward(
     noc_async_writes_flushed();
 }
 
+#ifdef ARCH_WORMHOLE
 FORCE_INLINE void scatter_write_for_fabric_write_backward(
     uint64_t first_noc0_dest_noc_addr,
     uint64_t second_noc0_dest_noc_addr,
@@ -106,6 +109,7 @@ FORCE_INLINE void scatter_write_for_fabric_write_backward(
         (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
     noc_async_writes_flushed();
 }
+#endif
 
 FORCE_INLINE void write_for_fabric_write_backward(
     uint64_t noc0_dest_noc_addr,

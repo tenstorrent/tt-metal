@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <utility>
 
+#ifdef ARCH_WORMHOLE
 FORCE_INLINE void scatter_write_and_advance_local_read_address_for_fabric(
     uint64_t first_noc0_dest_noc_addr,
     uint64_t second_noc0_dest_noc_addr,
@@ -33,6 +34,7 @@ FORCE_INLINE void scatter_write_and_advance_local_read_address_for_fabric(
 
     l1_read_addr += first_payload_size_bytes + second_payload_size_bytes;
 }
+#endif
 
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric(
     uint64_t noc0_dest_noc_addr,
