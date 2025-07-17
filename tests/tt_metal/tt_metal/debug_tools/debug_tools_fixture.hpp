@@ -197,7 +197,9 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(test_mode_previous);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
         if (MetalContext::instance().watcher_server()) {
-            MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
+            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
+                MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
+            }
         }
     }
 
