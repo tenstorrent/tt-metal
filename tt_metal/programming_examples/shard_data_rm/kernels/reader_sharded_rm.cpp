@@ -19,15 +19,16 @@ void kernel_main() {
     constexpr auto s0_args = TensorAccessorArgs<1>();
     const auto s0 = TensorAccessor(s0_args, src_addr, stick_size);
     uint32_t stick_id = start_id;
-    const uint32_t n_sticks = shard_size / element_per_stick;
     cb_reserve_back(cb_id_in0, shard_size);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
     DPRINT << "Core (0," << current_core << "): ";
+    const uint32_t n_sticks = shard_size / element_per_stick;
     for (uint32_t i = 0; i < n_sticks; i++) {
         uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+        // Read a tick at a time from the source address and write it to the L1 write address.
         noc_async_read(src_noc_addr, l1_write_addr, stick_size);
-        noc_async_read_barrier();  // wait for noc read to finish
+        noc_async_read_barrier();  // wait for the read to finish
         // We are reading 32 bits at a time, so we can read two bfloat16 values and print
         uint16_t* read_ptr_bf16 = (uint16_t*)l1_write_addr;
         DPRINT << BF16(read_ptr_bf16[0]) << " ";
@@ -37,4 +38,7 @@ void kernel_main() {
     }
     DPRINT << ENDL();
     cb_push_back(cb_id_in0, shard_size);
+
+    // At this point we have read all the sticks into the circular buffer. Computation and proceed knowing
+    // that it has data in circular buffer and in a specific format.
 }

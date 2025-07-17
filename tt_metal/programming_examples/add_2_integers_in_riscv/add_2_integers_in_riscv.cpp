@@ -14,6 +14,15 @@ using namespace tt::tt_metal;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 int main() {
+    // Ensure printing from kernel is enabled (so we can see the output of the Data Movement kernels).
+    char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
+    if (env_var == nullptr) {
+        fmt::print(
+            "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of the Data "
+            "Movement kernels.\n");
+        fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
+    }
+
     // Initialize a device
     IDevice* device = CreateDevice(0);
 
@@ -33,6 +42,8 @@ int main() {
     // There are many modes of buffer allocation, here we use interleaved buffers. Interleaved buffers are the most
     // flexible and generally recommended buffer type for most applications. As the Tensix core does not have direct
     // access to DRAM, an extra buffer on L1 (SRAM) is required to read/write data from/to DRAM.
+    // page_size is the size of each page in the buffer. In most applications this will be set to the size of a tile.
+    // But for this example we set it to the size of a single integer as that is what we are adding.
     InterleavedBufferConfig dram_config{
         .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
     InterleavedBufferConfig l1_config{
