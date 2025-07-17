@@ -366,6 +366,8 @@ enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_LOCAL_AND_REMOTE = 0x3
 };
 
+enum class VCType : uint8_t { VC0, VC1 };
+
 // tracks if the main loop made any progress. If many loop iterations were completed without
 // did_something=true (i.e. no progress was made), then we allow for context switch in case
 // the link is down
@@ -2218,6 +2220,7 @@ void kernel_main() {
         has_downstream_edm_vc0_buffer_connection, local_sender_channel_free_slots_stream_ids_ordered);
     constexpr auto worker_sender_channel_id = my_direction;
     size_t next_available_sender_channel_free_slots_stream_index = 1;
+
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
         // upto 3 bits set for 2D. 0, 1, 2, 3 for East, West, North, South downstream connections.
