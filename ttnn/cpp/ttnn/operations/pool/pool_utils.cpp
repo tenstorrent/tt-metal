@@ -206,7 +206,6 @@ uint32_t calculate_L1_usage(
     }
 
     uint32_t clear_value_cb_size = 0;
-    const bool avg_pool_on_blackhole = is_blackhole && pool_type == Pool2DType::AVG_POOL2D;
     if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel ||
         (is_wide_reduction && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0)) {
         // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
