@@ -9,6 +9,10 @@ runs:
   using: "composite"
   steps:
     - run: |
+        pwd
+        ls
+        ls ${{ github.workspace }}
+        ls ${{ github.workspace }}/tests
         ls ${{ github.workspace }}/tests/scripts
         cd ${{ github.workspace }}
         set -x
