@@ -171,7 +171,7 @@ def test_stable_diffusion_unet_trace(device):
     print(f"SD1.4 is running at {fps} FPS")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 6348800}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 6458368}], indirect=True)
 def test_stable_diffusion_vae_trace(device):
     if is_wormhole_b0():
         os.environ["SLOW_MATMULS"] = "1"
@@ -229,12 +229,10 @@ def test_stable_diffusion_vae_trace(device):
     ttnn.release_trace(device, tid)
 
     pcc = 0.985
-    if is_blackhole():
-        pcc = 0.923
     assert_with_pcc(torch_output, ttnn_out, pcc)
 
     inference_time = profiler.get(f"vae_run_for_inference_{0}")
-    expected_inference_time = 0.749 if is_wormhole_b0() else 0.474
+    expected_inference_time = 0.749 if is_wormhole_b0() else 0.478
 
     assert (
         inference_time <= expected_inference_time
@@ -346,7 +344,6 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
             time_step,
             guidance_scale,
             ttnn_scheduler,
-            is_blackhole(),
         )
     )
 
@@ -366,7 +363,6 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
         time_step,
         guidance_scale,
         ttnn_scheduler,
-        is_blackhole(),
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
