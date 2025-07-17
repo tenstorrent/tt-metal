@@ -18,15 +18,15 @@ from models.utility_functions import comp_pcc
 @pytest.fixture
 def reference_model(hf_config):
     """Get the actual DeepSeek MLP model using local implementation."""
+    hf_config.n_routed_experts = 64  # Set number of experts for testing
     return DeepseekV3MoE_Experts(hf_config)
 
 
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
-        ("decode", 32),
-        # ("prefill", 512),
-        # ("prefill", 2048),  # Test chunking
+        ("decode", 128),
+        ("prefill", 2048),
     ],
 )
 def test_forward_pass(
@@ -38,6 +38,7 @@ def test_forward_pass(
     galaxy_or_t3k_mesh,
 ):
     """Test forward pass against reference model."""
+    torch.manual_seed(0)
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights
@@ -45,7 +46,6 @@ def test_forward_pass(
 
     # Setup: Convert weights and get weight_config
     weight_config = TTExpert.convert_weights_moe(hf_config_single_layer, hf_state_dict, temp_dir, galaxy_or_t3k_mesh)
-    breakpoint()
     # Generate appropriate config
     if mode == "prefill":
         model_config = TTExpert.prefill_model_config(hf_config_single_layer, galaxy_or_t3k_mesh)
@@ -66,7 +66,7 @@ def test_forward_pass(
 
     # Convert input to TTNN
     tt_input = ttnn.from_torch(
-        torch_input,
+        torch_input.repeat(1, run_config["num_experts_per_device"], 1, 1),  # repeating activations for each expert
         device=galaxy_or_t3k_mesh,
         mesh_mapper=ttnn.ReplicateTensorToMesh(galaxy_or_t3k_mesh),
         dtype=ttnn.bfloat16,
@@ -90,13 +90,20 @@ def test_forward_pass(
         actual_output_memory_config == expected_output_memory_config
     ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
+    # output shape per device  = [1, experts_per_device, seq_len, hidden_size]
+    # There are 32 groups of unique experts output in case TG
+    # We first concate rows and then columns to get the final output
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            galaxy_or_t3k_mesh, dims=(-2, -1), mesh_shape=tuple(galaxy_or_t3k_mesh.shape)
+            galaxy_or_t3k_mesh, dims=(0, 1), mesh_shape=tuple(galaxy_or_t3k_mesh.shape)
         ),
     )
+    # (4, experts_per_device*8, seq_len, hidden_size)
+    tt_output_torch = tt_output_torch.reshape(batch_size, -1, seq_len, hf_config_single_layer.hidden_size)
+    # (1, experts_per_device*8*4, seq_len, hidden_size)
+    tt_output_torch = tt_output_torch[0].unsqueeze(1)
 
     # Compare outputs
     pcc_required = 0.98  # Slightly lower due to bfloat conversions
