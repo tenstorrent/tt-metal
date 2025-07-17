@@ -130,7 +130,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   create-tag:
     needs: get-params
-    uses: ./.github/workflows/release-verify-or-create-tag.yaml
+    uses: ./.github/workflows/release-verify-or-create-tag.yaml@releases/v0.60.0
     with:
       fetch_depth: 0
       bump_each_commit: false
