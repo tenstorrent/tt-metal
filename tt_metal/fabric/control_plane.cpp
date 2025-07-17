@@ -386,8 +386,6 @@ void ControlPlane::load_physical_chip_mapping(
 
 void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
     MeshShape mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
-    std::uint32_t mesh_ns_size = mesh_shape[0];
-    std::uint32_t mesh_ew_size = mesh_shape[1];
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
     auto get_physical_chip_id = [&](const MeshCoordinate& mesh_coord) {
@@ -935,7 +933,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     auto connected_host_rank_id = this->routing_table_generator_->mesh_graph
                                                       ->get_host_rank_for_chip(mesh_id, logical_connected_chip_id)
                                                       .value();
-                    const auto& intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
                     auto unique_chip_id =
                         tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
                     // Look up connected chip's intermesh link table and grab local desc channel
@@ -1457,7 +1454,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
 
     // Get all physically connected ethernet channels directly from the cluster
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+    cluster.get_soc_desc(physical_chip_id);
     const auto& connected_chips_and_eth_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
     size_t num_eth_endpoint = 0;
@@ -1888,7 +1885,7 @@ void ControlPlane::generate_local_intermesh_link_table() {
     // Populate the local to remote mapping for all intermesh links
     // This cannot be done by UMD, since it has no knowledge of links marked
     // for intermesh routing (these links are hidden from UMD).
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    (void)tt::tt_metal::MetalContext::instance().get_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
