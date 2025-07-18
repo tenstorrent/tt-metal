@@ -90,10 +90,10 @@ void MAIN {
             if constexpr (tilize_reconfig_needed) {
                 if (first_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
                 } else if (last_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
                 }
             }
             tile_regs_acquire();
