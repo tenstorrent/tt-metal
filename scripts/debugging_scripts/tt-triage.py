@@ -16,8 +16,8 @@ Options:
     -V --vverbose                              Print more verbose output.                                       [default: False]
     --inspector-log-path=<inspector_log_path>  Path to the inspector log directory.
     --halt-on-error                            Halt on first error.                                             [default: False]
-    -g --gdb          Enable getting callstack from GDB.           [default: False]
-    --port=<port>     Port for GDB server (only if GDB is enabled) [default: 6767]
+    -g --gdb          Enable getting callstack from GDB (only if -V is enabled)                                 [default: False]
+    --port=<port>     Port for GDB server (only if GDB is enabled)                                              [default: 6767]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -557,18 +557,18 @@ def get_running_ops_table(
 def get_callstack_entry(line: str) -> CallstackEntry:
     pattern = re.compile(
         r"#\d+\s+"  # Skip the frame number
-        r"(?:(?P<pc>0x[0-9a-fA-F]+)\s+in\s+)?"
-        r"(?P<fcn_name>\w+)"  # Capture only function name (e.g., 'main')
-        r"(?:\s*\(.*?\))?"  # Ignore arguments in parentheses
-        r"\s+at\s+"
-        r"(?P<file_path>.*?):(?P<line>\d+)"
+        r"(?:(?P<pc>0x[0-9a-fA-F]+)\s+in\s+)?"  # Capture pc if available
+        r"(?P<function_name>\w+)"  # Capture function name
+        r"(?:\s*\(.*?\))?"  # Ignore parentheses
+        r"\s+at\s+"  # Skip at
+        r"(?P<file_path>.*?):(?P<line>\d+)"  # Capture file path and line
     )
 
     entry = CallstackEntry()
     match = pattern.match(line)
     if match:
         entry.pc = int(match.groupdict()["pc"], 16) if match.groupdict()["pc"] is not None else None
-        entry.function_name = match.groupdict()["fcn_name"]
+        entry.function_name = match.groupdict()["function_name"]
         entry.file = match.groupdict()["file_path"]
         entry.line = match.groupdict()["line"]
 
