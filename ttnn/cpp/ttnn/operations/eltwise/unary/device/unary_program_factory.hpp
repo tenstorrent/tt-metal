@@ -6,6 +6,7 @@
 
 #include "unary_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 
 namespace ttnn::operations::unary::program {
 

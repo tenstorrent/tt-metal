@@ -317,3 +317,83 @@ def test_ttnn_where_nan_bf8b(device):
     assert torch_equal_nan(tt_result1, result1)
     assert torch_equal_nan(tt_result2, result2)
     assert torch_equal_nan(tt_result3, result3)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize(
+    "scalars",
+    [
+        (1000.0, 700.0),
+        (float("inf"), 1.0),
+        (1.0, float("inf")),
+        (float("nan"), 0.0),
+        (2.0, float("nan")),
+        (-0.0, 34.5),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([100]),
+        torch.Size([64, 128]),
+        torch.Size([3, 128, 32]),
+        torch.Size([1, 3, 320, 384]),
+        torch.Size([1, 1, 32, 320, 12]),
+    ],
+)
+def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, device):
+    condition = torch.tensor([[0, 1] * (input_shapes[-1] // 2)] * input_shapes[0], dtype=torch_dtype)
+    scalar_true, scalar_false = scalars
+
+    torch_result = torch.where(condition.bool(), scalar_true, scalar_false)
+    if torch_dtype != torch.float32:
+        torch_result = torch.where(
+            torch.isnan(torch_result), torch.tensor(float("inf"), dtype=torch_dtype), torch_result
+        )
+
+    ttnn_condition = ttnn.from_torch(condition, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_condition, scalar_true, scalar_false)
+
+    tt_result = ttnn.to_torch(ttnn_result)
+    assert torch_equal_nan(tt_result, torch_result)
+
+
+@pytest.mark.parametrize(
+    "scalars",
+    [
+        (3, 7),
+        (-10, 42),
+        (0, 1),
+        (9999, -9999),
+        (-24567, 16777216),
+        (-16777216, 56789),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([100]),
+        torch.Size([64, 128]),
+        torch.Size([3, 128, 32]),
+        torch.Size([1, 3, 320, 384]),
+        torch.Size([1, 1, 32, 320, 12]),
+    ],
+)
+def test_where_TSS_int_types(scalars, input_shapes, device):
+    scalar_true, scalar_false = scalars
+    condition = torch.tensor([[0, 1] * (input_shapes[-1] // 2)] * input_shapes[0], dtype=torch.int32)
+
+    torch_result = torch.where(condition.bool(), scalar_true, scalar_false)
+
+    ttnn_condition = ttnn.from_torch(condition, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_condition, scalar_true, scalar_false)
+
+    tt_result = ttnn.to_torch(ttnn_result)
+
+    assert torch.equal(tt_result, torch_result)
