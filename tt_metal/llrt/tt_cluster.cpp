@@ -1208,7 +1208,6 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
 }
 
 void Cluster::release_ethernet_cores_for_fabric_routers() {
-    std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
         for (const auto& [eth_core, mode] : eth_cores) {
             if (mode == EthRouterMode::FABRIC_ROUTER) {
