@@ -73,9 +73,11 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, self.args.padded_vocab_size, dtype=torch.int32)
-        for i in range(indices_tensor_torch.shape[3]):
-            indices_tensor_torch[:, :, :, i] = i
+        indices_tensor_torch = (
+            torch.arange(self.args.padded_vocab_size, dtype=torch.int32)
+            .view(1, 1, 1, -1)
+            .expand(1, 1, self.max_batch_size, -1)
+        )
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
             dtype=ttnn.uint16,
