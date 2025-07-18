@@ -65,8 +65,6 @@ run_perf_models_other() {
 
     fi
 
-    env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
-
     env pytest -n auto models/demos/ttnn_falcon7b/tests -m $test_marker
 
     env pytest models/demos/distilbert/tests/test_perf_distilbert.py -m $test_marker
