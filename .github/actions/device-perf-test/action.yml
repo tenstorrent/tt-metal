@@ -9,16 +9,18 @@ runs:
   using: "composite"
   steps:
     - run: |
-        pwd
+        export PYTHONPATH=pwd
         ls
-        ls ${{ github.workspace }}
-        ls ${{ github.workspace }}/tests
+        cd tests
+        ls
+        cd scripts
+        ls
         ls ${{ github.workspace }}/tests/scripts
         cd ${{ github.workspace }}
         set -x
         export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
 
-        export PYTHONPATH=${{ github.workspace }}
+        
 
         ${{ inputs.commands }}
 

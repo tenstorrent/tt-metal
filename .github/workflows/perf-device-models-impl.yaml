@@ -49,10 +49,6 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
