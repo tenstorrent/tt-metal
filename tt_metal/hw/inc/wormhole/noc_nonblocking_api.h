@@ -169,7 +169,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_f
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -183,7 +183,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     bool multicast_path_reserve,
     bool posted = false,
     uint32_t trid = 0) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
@@ -207,7 +207,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
             noc_posted_writes_num_issued[noc] += 1;
         } else {
@@ -838,16 +838,18 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     }
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool non_posted = true, bool one_packet = false>
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool non_posted = true,
+    bool update_counter = true,
+    bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
-    if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (non_posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-        }
-    } else {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        } else {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         }
     }
@@ -861,13 +863,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
-    if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (non_posted) {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;
-        }
-    } else {
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        } else {
             noc_posted_writes_num_issued[noc] += 1;
         }
     }
