@@ -80,12 +80,14 @@ def run_unet_model(
     model_location_generator,
     iterations=1,
 ):
-    model_location = model_location_generator("stable-diffusion-xl-base-1.0", download_if_ci_v2=True)
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=30 * 60
+    )
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="unet",
+        # subfolder="unet",
         local_files_only=is_ci_env or is_ci_v2_env,
         cache_dir=SDXL_CI_WEIGHTS_PATH if is_ci_env else None,
     )
