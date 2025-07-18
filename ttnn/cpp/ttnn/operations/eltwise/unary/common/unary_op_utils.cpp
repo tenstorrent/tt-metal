@@ -79,6 +79,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LEZ:
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
+        case UnaryOpType::HARDSIGMOID: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -548,6 +549,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::ALT_COMPLEX_ROTATE90:
             op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
+            break;
+        case UnaryOpType::HARDSIGMOID:
+            op_init_and_name = {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
             break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
