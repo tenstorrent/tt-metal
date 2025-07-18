@@ -132,7 +132,8 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
+        const auto& physical_device_ids =
+            extract_locals(SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape).values());
         physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
 
         std::vector<IDevice*> devices = {};
@@ -201,7 +202,6 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
         device_open = true;
