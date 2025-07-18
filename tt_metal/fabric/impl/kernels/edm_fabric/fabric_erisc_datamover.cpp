@@ -1842,14 +1842,8 @@ FORCE_INLINE void teardown(
         receiver_channel_1_trid_tracker.all_buffer_slot_transactions_acked();
     }
 
-    if constexpr (NUM_ACTIVE_ERISCS > 1) {
-        wait_for_other_local_erisc();
-    }
-
     // re-init the noc counters as the noc api used is not incrementing them
-    if constexpr (IS_TEARDOWN_MASTER()) {
-        ncrisc_noc_counters_init();
-    }
+    ncrisc_noc_counters_init();
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
@@ -1863,11 +1857,14 @@ FORCE_INLINE void teardown(
                 *termination_signal_ptr);
         }
     }
-    // TODO: ADD TEARDOWN SYNCHRONIZATION
-    if constexpr (IS_TEARDOWN_MASTER()) {
-        noc_async_write_barrier();
-        noc_async_atomic_barrier();
 
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        wait_for_other_local_erisc();
+    }
+    if constexpr (IS_TEARDOWN_MASTER()) {
         *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
     }
 }
@@ -2391,6 +2388,8 @@ void kernel_main() {
         receiver_channel_1_trid_tracker;
 
 #ifdef ARCH_BLACKHOLE
+    // A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
+    // A more detailed description can be found in `noc_inline_dw_write` in the `dataflow_api` header file
     constexpr bool use_posted_writes_for_connection_open = false;
 #else
     constexpr bool use_posted_writes_for_connection_open = true;
