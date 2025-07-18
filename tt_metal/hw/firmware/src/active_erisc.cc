@@ -91,7 +91,7 @@ inline void service_base_fw() {
 inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
     // Also check enable_fw_flag[0] if we need to exit immediately
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE && enable_fw_flag[0]) {
+    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
         service_base_fw();
     }
