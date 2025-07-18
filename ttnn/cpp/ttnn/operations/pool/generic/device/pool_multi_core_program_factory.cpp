@@ -56,7 +56,6 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
 
     std::vector<ScalarInfo> scalars;
-    float value;
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
@@ -266,7 +265,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     constexpr tt::DataFormat indices_df =
         tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.dtype());
-    const uint32_t indices_nbytes = datum_size(indices_df);
 
     const uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     const uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
@@ -551,7 +549,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp";
     }
 
-    auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+    CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
     uint32_t temporary_size = program.get_cb_memory_size();
     uint32_t post_allocate_size =
@@ -729,12 +727,8 @@ void Pool2D::MultiCore::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;
-    auto& reader0_kernel = cached_program.shared_variables.reader0_kernel;
-    auto& reader1_kernel = cached_program.shared_variables.reader1_kernel;
     auto& raw_in_cb = cached_program.shared_variables.raw_in_cb;
     auto& cb_out = cached_program.shared_variables.cb_out;
-    auto& ncores = cached_program.shared_variables.ncores;
-    auto& ncores_w = cached_program.shared_variables.ncores_w;
 
     const auto& input_tensor = tensor_args.input_tensor_;
 

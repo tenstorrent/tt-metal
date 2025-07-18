@@ -15,7 +15,6 @@ namespace ttnn::operations::experimental {
 void SliceWriteDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
-    const bool has_step = std::any_of(this->step.cbegin(), this->step.cend(), [](uint32_t s) { return s != 1; });
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0).value();
     const auto output_padded_shape = output_tensor.padded_shape();

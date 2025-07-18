@@ -73,7 +73,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     Tensor& output_tensor,
     const int block_size,
     const bool capture_buffers) {
-    IDevice* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -136,14 +135,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     uint32_t pad_cb_pagesize = out_stick_nbytes;
     uint32_t pad_cb_npages = 1;
     cb_indices.pad_cb_id0 = cb_indices.get_next_cb_id();
-    auto pad_cb0 =
-        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id0, out_df, pad_cb_npages, pad_cb_pagesize);
+    create_circular_buffer(program, all_cores, cb_indices.pad_cb_id0, out_df, pad_cb_npages, pad_cb_pagesize);
     cb_indices.pad_cb_id1 = cb_indices.get_next_cb_id();
-    auto pad_cb1 =
-        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id1, out_df, pad_cb_npages, pad_cb_pagesize);
+    create_circular_buffer(program, all_cores, cb_indices.pad_cb_id1, out_df, pad_cb_npages, pad_cb_pagesize);
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
-    uint32_t pagesize = 0;
 
     uint32_t input_to_writer_cb_id0 = cb_indices.src_cb_id;
     uint32_t input_to_writer_cb_id1 = cb_indices.src_cb_id;
@@ -154,9 +150,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         input_to_writer_cb_id1 = cb_indices.untilize_out_cb_id1;
         const uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
         const uint32_t untilize_out_cb_num_pages = ENABLE_UNTILIZE_DOUBLE_BUFFERING ? 2 * output_ntiles : output_ntiles;
-        auto untilize_out_cb0 = create_circular_buffer(
+        create_circular_buffer(
             program, all_cores, cb_indices.untilize_out_cb_id0, out_df, untilize_out_cb_num_pages, out_tile_size);
-        auto untilize_out_cb1 = create_circular_buffer(
+        create_circular_buffer(
             program, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
 
         const std::string compute_kernel_name =
@@ -274,7 +270,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     reader_ct_args[0] = enable_padding ? cb_indices.padding_config0 : 0;
     reader_ct_args[1] = cb_indices.gather_config0;
     reader_ct_args[5] = cb_indices.pad_cb_id0;
-    KernelHandle reader_kernel_id0 = CreateKernel(
+    CreateKernel(
         program,
         reader_kernel_name,
         all_cores,
@@ -286,7 +282,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     reader_ct_args[3] = input_to_writer_cb_id1;
     reader_ct_args[5] = cb_indices.pad_cb_id1;
     reader_ct_args[17] = 1;  // Block start offset
-    KernelHandle reader_kernel_id1 = CreateKernel(
+    CreateKernel(
         program,
         reader_kernel_name,
         all_cores,
@@ -404,13 +400,9 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     uint32_t pad_cb_pagesize = out_stick_nbytes;
     uint32_t pad_cb_npages = 1;
     cb_indices.pad_cb_id = cb_indices.get_next_cb_id();
-    auto pad_cb =
-        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id, out_df, pad_cb_npages, pad_cb_pagesize);
+    create_circular_buffer(program, all_cores, cb_indices.pad_cb_id, out_df, pad_cb_npages, pad_cb_pagesize);
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
-    uint32_t config_nbytes =
-        tt::datum_size(kernel_config_df) * 2;  // each config is a pair "start, size", so double the size
-    uint32_t pagesize = 0;
 
     uint32_t temp_cb_id = 0;
     uint32_t input_to_writer_cb_id = cb_indices.src_cb_id;
@@ -423,7 +415,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             CircularBufferConfig(output_ntiles * out_tile_size, {{cb_indices.untilize_out_cb_id, out_df}})
                 .set_page_size(cb_indices.untilize_out_cb_id, out_tile_size)
                 .set_globally_allocated_address(*dst_buffer);  // untilize into the dst buffer for in place untilize
-        auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
+        CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
         log_debug(
             tt::LogOp,
             "CB {} :: npages = {}, pagesize = {}",
@@ -438,8 +430,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             // wide tensors use a different compute kernel which requires use of a temp buffer for the intermediate
             // untilized results
             temp_cb_id = cb_indices.get_next_cb_id();
-            auto temp_cb =
-                create_circular_buffer(program, all_cores, temp_cb_id, out_df, ntiles_per_block, out_tile_size);
+            create_circular_buffer(program, all_cores, temp_cb_id, out_df, ntiles_per_block, out_tile_size);
             log_debug(
                 tt::LogOp,
                 "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
@@ -451,8 +442,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, input_to_writer_cb_id};
             compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
         }
-        KernelHandle untilize_kernel_id =
-            CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
+        CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
 
     TT_ASSERT(padding_config.dtype() == DataType::UINT16);
@@ -518,7 +508,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             CircularBufferConfig(
                 max_ref_size * output_shard_shape[1] * out_nbytes, {{remote_temp_cb_id, kernel_config_df}})
                 .set_page_size(remote_temp_cb_id, output_shard_shape[1] * out_nbytes);
-        CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
+        CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
     }
 
     // noc conversion function
@@ -535,7 +525,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
     int32_t num_cores_x = device->compute_with_storage_grid_size().x;
-    int32_t num_cores_y = device->compute_with_storage_grid_size().y;
     int32_t num_active_cores = cores.size();
     int32_t num_cores_rectangular = is_block_sharded ? num_active_cores : tt::round_up(num_active_cores, num_cores_x);
     int32_t num_noop_cores = is_block_sharded ? 0 : num_cores_rectangular - num_active_cores;
@@ -574,9 +563,9 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
 
     // create the NC/BR sync CBs
     int32_t sync_cb_id1 = cb_indices.get_next_cb_id();
-    auto sync_cb1 = create_circular_buffer(program, all_cores, sync_cb_id1, tt::DataFormat::UInt16, 1, 2);
+    create_circular_buffer(program, all_cores, sync_cb_id1, tt::DataFormat::UInt16, 1, 2);
     int32_t sync_cb_id2 = cb_indices.get_next_cb_id();
-    auto sync_cb2 = create_circular_buffer(program, all_cores, sync_cb_id2, tt::DataFormat::UInt16, 1, 2);
+    create_circular_buffer(program, all_cores, sync_cb_id2, tt::DataFormat::UInt16, 1, 2);
 
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
