@@ -75,7 +75,7 @@ static void configure_risc_settings(
         // Wormhole: All RISC cores handle both sender and receiver channels
         enable_handshake = true;
         enable_context_switch = true;
-        enable_interrupts = true;
+        enable_interrupts = false;
         is_sender_channel_serviced.fill(true);
         is_receiver_channel_serviced.fill(true);
     } else if (arch == tt::ARCH::BLACKHOLE) {
