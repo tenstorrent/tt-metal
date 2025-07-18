@@ -30,7 +30,7 @@ protected:
 
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-        if (slow_dispatch) {
+        if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
@@ -62,7 +62,7 @@ protected:
         if (!is_n300_cluster_) {
             GTEST_SKIP() << "This suite can only be run on N300";
         }
-        if (slow_dispatch) {
+        if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
