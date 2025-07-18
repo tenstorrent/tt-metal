@@ -70,7 +70,7 @@ def reference_model(hf_config, request):
 @pytest.mark.parametrize(
     "mode, batch, seq_len, norm_category",
     [
-        ("decode", 64, 1, "attention_norm"),  # Batch decode with distributed and sharded inputs
+        ("decode", 32, 1, "attention_norm"),  # Batch decode with distributed and sharded inputs
         ("prefill", 1, 128, "attention_norm"),  # Prefill with distributed and interleaved inputs
         ("decode", 32, 1, "q_norm"),  # Q norm test (uses q_lora_rank)
         ("prefill", 1, 128, "q_norm"),  # Q norm prefill test
@@ -123,7 +123,7 @@ def test_rmsnorm_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, -2), mesh_shape=list(mesh_device.shape))
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=list(mesh_device.shape))
         if is_decoder_norm
         else ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
@@ -153,7 +153,7 @@ def test_rmsnorm_forward_pass(
     if is_decoder_norm:
         tt_output_torch = ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-1, -2), mesh_shape=list(mesh_device.shape)),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=list(mesh_device.shape)),
         )
     else:
         tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
