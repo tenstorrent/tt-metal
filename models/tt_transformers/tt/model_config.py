@@ -22,6 +22,7 @@ from models.tt_transformers.tt.common import (
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
+    rope_scaling_model_factory,
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -1459,12 +1460,7 @@ class ModelArgs:
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
         rope_scaling_params = text_config.get("rope_scaling", None)
-        if rope_scaling_params:
-            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
-        else:
-            self.rope_scaling_factor = None
-            self.orig_context_len = None
+        self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
