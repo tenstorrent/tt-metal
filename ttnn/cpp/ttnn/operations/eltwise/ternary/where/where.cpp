@@ -88,19 +88,62 @@ Tensor WhereOperation::invoke(
         (memory_config.has_value() ? memory_config.value().is_sharded() : false) ||
         (output.has_value() ? output.value().memory_config().is_sharded() : false);
 
-    // Check if both are Tensors and no sharding is present and involves no broadcast
-    if (is_value_true_Tensor && is_value_false_Tensor && !has_shard_spec) {
-        const auto& t_true = std::get<Tensor>(value_true);
-        const auto& t_false = std::get<Tensor>(value_false);
-        if (ternary_utils::have_same_shape(t_true, predicate) && ternary_utils::have_same_shape(predicate, t_false)) {
-            std::cout << "ternary LLK where op" << std::endl;
-            std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
-                                                                      : std::optional<DataType>(predicate.dtype());
+    // Check if we can use LLK where: TTT, TST, or TTS cases with same shapes and no sharding
+    bool can_use_llk_where = false;
+    if (!has_shard_spec) {
+        if (is_value_true_Tensor && is_value_false_Tensor) {
+            // TTT case: both tensors must have same shape as predicate
+            const auto& t_true = std::get<Tensor>(value_true);
+            const auto& t_false = std::get<Tensor>(value_false);
+            bool shapes_match =
+                ternary_utils::have_same_shape(t_true, predicate) && ternary_utils::have_same_shape(predicate, t_false);
+            can_use_llk_where = shapes_match;
+        } else if (is_value_true_Tensor && !is_value_false_Tensor) {
+            // TTS case: only value_true tensor must have same shape as predicate
+            const auto& t_true = std::get<Tensor>(value_true);
+            bool shapes_match = ternary_utils::have_same_shape(t_true, predicate);
+            can_use_llk_where = shapes_match;
+        } else if (!is_value_true_Tensor && is_value_false_Tensor) {
+            // TST case: only value_false tensor must have same shape as predicate
+            const auto& t_false = std::get<Tensor>(value_false);
+            bool shapes_match = ternary_utils::have_same_shape(predicate, t_false);
+            can_use_llk_where = shapes_match;
+        }
+    }
+
+    if (can_use_llk_where) {
+        std::cout << "LLK where op" << std::endl;
+        std::optional<DataType> output_dtype =
+            output.has_value() ? std::optional<DataType>(output->dtype()) : std::optional<DataType>(predicate.dtype());
+
+        // Call ttnn::prim::where based on the case
+        if (is_value_true_Tensor && is_value_false_Tensor) {
+            // TTT case
             return ttnn::prim::where(
                 queue_id,
                 predicate,
-                t_true,
-                t_false,
+                std::get<Tensor>(value_true),
+                std::get<Tensor>(value_false),
+                output_dtype,
+                memory_config.value_or(predicate.memory_config()),
+                output);
+        } else if (is_value_true_Tensor && !is_value_false_Tensor) {
+            // TTS case
+            return ttnn::prim::where(
+                queue_id,
+                predicate,
+                std::get<Tensor>(value_true),
+                std::get<float>(value_false),
+                output_dtype,
+                memory_config.value_or(predicate.memory_config()),
+                output);
+        } else if (!is_value_true_Tensor && is_value_false_Tensor) {
+            // TST case
+            return ttnn::prim::where(
+                queue_id,
+                predicate,
+                std::get<float>(value_true),
+                std::get<Tensor>(value_false),
                 output_dtype,
                 memory_config.value_or(predicate.memory_config()),
                 output);
@@ -116,7 +159,6 @@ Tensor WhereOperation::invoke(
         value_true,
         value_false);
 }
-
 }  // namespace ternary
 }  // namespace operations
 }  // namespace ttnn

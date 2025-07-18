@@ -27,14 +27,16 @@ struct WhereDeviceOperation {
         DataType input_dtype;
         std::optional<DataType> dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        std::optional<float> value_false_scalar;  // For tensor-tensor-scalar case
+        std::optional<float> value_true_scalar;   // For tensor-scalar-tensor case
 
         DataType get_dtype() const;
     };
 
     struct tensor_args_t {
         const Tensor& predicate;
-        const Tensor& value_true;
-        const Tensor& value_false;
+        std::optional<Tensor> value_true;   // Make optional for scalar case
+        std::optional<Tensor> value_false;  // Make optional for scalar case
         std::optional<Tensor> optional_output_tensor;
     };
 
@@ -74,6 +76,24 @@ struct WhereDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& predicate,
         const Tensor& value_true,
+        const Tensor& value_false,
+        const std::optional<const DataType>& output_dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& optional_output_tensor);
+
+    // tensor-tensor-scalar invocation
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& predicate,
+        const Tensor& value_true,
+        const float value_false,
+        const std::optional<const DataType>& output_dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& optional_output_tensor);
+
+    // tensor-scalar-tensor invocation
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& predicate,
+        const float value_true,
         const Tensor& value_false,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
