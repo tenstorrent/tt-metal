@@ -4,27 +4,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TODO: Write needed arguments for this script
+Script Name: dispatcher_data.py
+ 
+Usage:
+    dispatcher_data
 """
 
 from dataclasses import dataclass
 import os
-from docopt import docopt
 from functools import cache
-from inspector_data import run as get_inspector_data
-from parse_inspector_logs import InspectorData
-import sys
-from triage import TriageScript
+from inspector_data import run as get_inspector_data, InspectorData
+from triage import ScriptConfig
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
-from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.tt_exalens_lib import parse_elf
 from ttexalens.context import Context
 from utils import ORANGE, RST
 from triage import TTTriageError
 
-triage_config = TriageScript(
+script_config = ScriptConfig(
     data_provider=True,
     depends=["inspector_data"],
 )
@@ -41,7 +40,7 @@ class DispatcherCoreData:
     watcher_kernel_id: int
 
 class DispatcherData:
-    def __init__(self, inspector_data: InspectorData):
+    def __init__(self, inspector_data: InspectorData, context: Context):
         self.inspector_data = inspector_data
 
         self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
@@ -192,19 +191,17 @@ class DispatcherData:
         return os.path.realpath(firmware_elf_path)
 
 
-def get_dispatcher_data(inspector_data: InspectorData) -> DispatcherData:
-    return DispatcherData(inspector_data)
+def get_dispatcher_data(inspector_data: InspectorData, context: Context) -> DispatcherData:
+    return DispatcherData(inspector_data, context)
 
 
 
 @cache
 def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
-    return get_dispatcher_data(inspector_data)
+    return get_dispatcher_data(inspector_data, context)
 
 
 if __name__ == "__main__":
-    context = init_ttexalens()
-    args = docopt(__doc__, argv=sys.argv[1:])
-    dispatcher_data = run(args, context)
-    # TODO: Print dispatcher data in a readable format
+    from triage import run_script
+    run_script()

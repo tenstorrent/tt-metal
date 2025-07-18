@@ -4,20 +4,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TODO: Write needed arguments for this script
+Script Name: devices_to_check.py
+
+Usage:
+    devices_to_check [--dev=<device_id>]...
+
+Options:
+    --dev=<device_id>   Specify the device id. 'all' is also an option  [default: in_use]
 """
 
-from docopt import docopt
 from functools import cache
-from inspector_data import run as get_inspector_data
-from parse_inspector_logs import InspectorData
-import sys
-from triage import TriageScript
-from ttexalens.tt_exalens_init import init_ttexalens
+from inspector_data import run as get_inspector_data, InspectorData
+from triage import ScriptConfig
 from ttexalens.context import Context
 from utils import ORANGE, RST
 
-triage_config = TriageScript(
+script_config = ScriptConfig(
     data_provider=True,
     depends=["inspector_data"],
 )
@@ -50,8 +52,5 @@ def run(args, context: Context):
 
 
 if __name__ == "__main__":
-    context = init_ttexalens()
-    args = docopt(__doc__, argv=sys.argv[1:])
-    devices = run(args, context)
-    print(f"Devices to check: {devices}")
-    print()
+    from triage import run_script
+    run_script()

@@ -79,7 +79,9 @@ class StartupData:
         print(f"  {self.convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}")
 
 
-def get_kernels(log_directory: str) -> dict[int, KernelData]:
+def get_kernels(log_directory: str) -> dict[int, "KernelData"]:
+    from inspector_data import KernelData
+
     yaml_path = os.path.join(log_directory, "kernels.yaml")
     data = read_yaml(yaml_path)
 
@@ -116,7 +118,8 @@ def get_startup_data(log_directory: str) -> StartupData:
     raise ValueError("No startup time found in startup.yaml")
 
 
-def get_programs(log_directory: str, verbose: bool = False) -> dict[int, ProgramData]:
+def get_programs(log_directory: str, verbose: bool = False) -> dict[int, "ProgramData"]:
+    from inspector_data import ProgramData
     yaml_path = os.path.join(log_directory, "programs_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:
@@ -188,7 +191,8 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
     return programs
 
 
-def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, MeshDeviceData]:
+def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, "MeshDeviceData"]:
+    from inspector_data import MeshDeviceData
     yaml_path = os.path.join(log_directory, "mesh_devices_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:
@@ -231,7 +235,8 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, Mes
     return mesh_devices
 
 
-def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, MeshWorkloadData]:
+def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, "MeshWorkloadData"]:
+    from inspector_data import MeshCoordinate, MeshWorkloadProgramData, MeshWorkloadData
     yaml_path = os.path.join(log_directory, "mesh_workloads_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:
@@ -288,9 +293,9 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
 
 
 def update_programs_with_mesh_workloads(
-    programs: dict[int, ProgramData],
-    mesh_workloads: dict[int, MeshWorkloadData],
-    mesh_devices: dict[int, MeshDeviceData],
+    programs: dict[int, "ProgramData"],
+    mesh_workloads: dict[int, "MeshWorkloadData"],
+    mesh_devices: dict[int, "MeshDeviceData"],
 ):
     for mesh_workload in mesh_workloads.values():
         for mesh_id, binary_status in mesh_workload.binary_status_per_mesh_device.items():
@@ -305,7 +310,7 @@ def update_programs_with_mesh_workloads(
                         program.binary_status_per_device[device_id] = binary_status
 
 
-def get_devices_in_use(programs: dict[int, ProgramData]) -> set[int]:
+def get_devices_in_use(programs: dict[int, "ProgramData"]) -> set[int]:
     used_devices = set()
     for program in programs.values():
         # Only include devices with status "Committed"
@@ -329,7 +334,7 @@ def get_log_directory(log_directory: str | None = None) -> str:
 
 
 def get_data(log_directory: str | None = None) -> "InspectorData":
-    from inspector_data import InspectorData
+    from inspector_data import InspectorData, KernelData, MeshDeviceData, MeshWorkloadData, ProgramData
 
     class InspectorLogsData(InspectorData):
         def __init__(self, log_directory: str):

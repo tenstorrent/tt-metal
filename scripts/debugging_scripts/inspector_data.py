@@ -4,16 +4,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TODO: Write needed arguments for this script
+Script Name: inspector_data.py
+ 
+Usage:
+    inspector_data [--inspector-log-path=<inspector_log_path>]
+
+Options:
+    --inspector-log-path=<inspector_log_path>  Path to the inspector log directory.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cache
-from triage import TriageScript
+from triage import ScriptConfig
 from parse_inspector_logs import get_data as get_logs_data
 
-triage_config = TriageScript(
+script_config = ScriptConfig(
     data_provider=True,
 )
 
@@ -108,3 +114,8 @@ class InspectorData(ABC):
 def run(args, context) -> InspectorData:
     log_directory = args["--inspector-log-path"]
     return get_logs_data(log_directory)
+
+
+if __name__ == "__main__":
+    from triage import run_script
+    run_script()
