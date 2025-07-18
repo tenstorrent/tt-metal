@@ -637,13 +637,13 @@ def test_demo_text(
             logger.info(
                 f"Teacher forced token at prefill {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
             )
-	    if apc_test
-            	assert_message = (
-                	f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
-                	f"If it is expected to be different in Llama model, please update the text_demo_targets.json file.\n"
-                	f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
-            	)
-                assert pcc_message == demo_targets["prefill_pcc"], assert_message
+        if apc_test:
+            assert_message = (
+                f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
+                f"If it is expected to be different in Llama model, please update the text_demo_targets.json file.\n"
+                f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+            )
+            assert pcc_message == demo_targets["prefill_pcc"], assert_message
 
         # Save prefill token
         prefilled_token = toks.view(-1, 1)
@@ -762,13 +762,13 @@ def test_demo_text(
                     logger.info(
                         f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
                     )
-                    if apc_test:
-		    	assert_message = (
-                        	f"Decode PCC check failed: {pcc_message}, while expected {demo_targets['decode_pcc']}.\n"
-                        	f"If any ops in Llama model might be impacted, please update decode_pcc in the text_demo_targets.json file.\n"
-                        	f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
-                    	)
-                        assert pcc_message == demo_targets["decode_pcc"], assert_message
+                if apc_test:
+                    assert_message = (
+                        f"Decode PCC check failed: {pcc_message}, while expected {demo_targets['decode_pcc']}.\n"
+                        f"If any ops in Llama model might be impacted, please update decode_pcc in the text_demo_targets.json file.\n"
+                        f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+                    )
+                    assert pcc_message == demo_targets["decode_pcc"], assert_message
 
                 if teacher_forcing:
                     _, tt_top5_tokens = torch.topk(tt_out_logits_saved, k=5, dim=-1)
