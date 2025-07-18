@@ -4,7 +4,7 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv2.tt.tt_temporal_self_attention import multi_scale_deformable_attn
+from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
 
 
 class TtCustomMSDeformableAttention:
@@ -101,11 +101,7 @@ class TtCustomMSDeformableAttention:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
         )
-        attention_weights = ttnn.to_torch(attention_weights)
-        attention_weights = attention_weights.softmax(-1)
-        attention_weights = ttnn.from_torch(
-            attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
-        )
+        attention_weights = ttnn.softmax(attention_weights, -1)
 
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels, self.num_points)

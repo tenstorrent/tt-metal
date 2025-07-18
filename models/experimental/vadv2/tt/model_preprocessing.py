@@ -9,7 +9,7 @@ from models.experimental.vadv2.reference.resnet import ResNet
 from models.experimental.vadv2.reference.fpn import FPN
 from models.experimental.vadv2.reference.encoder import BEVFormerEncoder
 from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer
-from models.experimental.vadv2.reference.head import VADHead
+from models.experimental.vadv2.reference.head import VADHead, LaneNet, MLP
 
 from models.experimental.vadv2.reference.decoder import (
     CustomTransformerDecoder,
@@ -20,7 +20,6 @@ from models.experimental.vadv2.reference.decoder import (
 )
 from models.experimental.vadv2.reference.temporal_self_attention import TemporalSelfAttention
 from models.experimental.vadv2.reference.spatial_cross_attention import SpatialCrossAttention
-
 from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
     preprocess_model_parameters,
@@ -93,7 +92,7 @@ def custom_preprocessor(model, name):
     def extract_transformer_parameters(transformer_module):
         parameters = {"layers": {}}
 
-        for i, layer in enumerate(transformer_module.layers):  # BaseTransformerLayer
+        for i, layer in enumerate(transformer_module.layers):
             layer_dict = {
                 "attentions": {},
                 "ffn": {},
@@ -210,13 +209,12 @@ def custom_preprocessor(model, name):
             layer_params = {}
             layer_index = 0
 
-            # Handle different structures: Sequential, Linear, LayerNorm, or custom
             if isinstance(mod, nn.Sequential):
                 layers = mod
-            elif hasattr(mod, "mlp") and isinstance(mod.mlp, nn.Sequential):  # e.g. MLP wrapper
+            elif hasattr(mod, "mlp") and isinstance(mod.mlp, nn.Sequential):
                 layers = mod.mlp
             else:
-                layers = [mod]  # Single Linear or LayerNorm
+                layers = [mod]
 
             for layer in layers:
                 if isinstance(layer, nn.Linear):
@@ -231,7 +229,6 @@ def custom_preprocessor(model, name):
                         "bias": preprocess_layernorm_parameter(layer.bias, dtype=dtype),
                     }
                     layer_index += 1
-                # Skip activation, dropout, etc.
 
             branch_params[str(i)] = layer_params
 
@@ -247,14 +244,57 @@ def custom_preprocessor(model, name):
             }
         return params
 
+    def extract_positional_encoding(model, dtype):
+        pos_encoding = model.positional_encoding
+
+        return {
+            "row_embed": {
+                "weight": ttnn.from_torch(pos_encoding.row_embed.weight, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+            },
+            "col_embed": {
+                "weight": ttnn.from_torch(pos_encoding.col_embed.weight, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+            },
+        }
+
+    def extract_embeddings_to_ttnn(model, names, dtype):
+        return {
+            name: {"weight": ttnn.from_torch(getattr(model, name).weight, dtype=dtype, layout=ttnn.TILE_LAYOUT)}
+            for name in names
+        }
+
+    def extract_lanenet_parameters(lane_encoder, dtype=ttnn.bfloat16):
+        lanenet_params = {}
+
+        for name, layer in lane_encoder.layer_seq.named_modules():
+            if isinstance(layer, MLP):
+                linear_layer = layer.mlp[0]
+                norm_layer = layer.mlp[1]
+
+                lanenet_params[name] = {
+                    "linear": {
+                        "weight": preprocess_linear_weight(linear_layer.weight, dtype=dtype),
+                        "bias": preprocess_linear_bias(linear_layer.bias, dtype=dtype),
+                    },
+                    "norm": {
+                        "weight": preprocess_layernorm_parameter(norm_layer.weight, dtype=dtype),
+                        "bias": preprocess_layernorm_parameter(norm_layer.bias, dtype=dtype),
+                    },
+                }
+
+        return lanenet_params
+
     if isinstance(model, (VADHead, CustomTransformerDecoder, VADPerceptionTransformer)):
         parameters = {}
         parameters["head"] = {}
-        # parameters = parameters[""]
-        # print(model.encoder)
-        # ss
 
-        print("helloo")
+        parameters["head"]["positional_encoding"] = {}
+        pos_encoding = model.positional_encoding
+        parameters["head"]["positional_encoding"]["row_embed"] = {
+            "weight": ttnn.from_torch(pos_encoding.row_embed.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        }
+        parameters["head"]["positional_encoding"]["col_embed"] = {
+            "weight": ttnn.from_torch(pos_encoding.col_embed.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        }
 
         if isinstance(model.motion_decoder, CustomTransformerDecoder):
             parameters["head"]["motion_decoder"] = extract_transformer_parameters(model.motion_decoder)
@@ -264,6 +304,9 @@ def custom_preprocessor(model, name):
             parameters["head"]["ego_map_decoder"] = extract_transformer_parameters(model.ego_map_decoder)
         if isinstance(model.ego_agent_decoder, CustomTransformerDecoder):
             parameters["head"]["ego_agent_decoder"] = extract_transformer_parameters(model.ego_agent_decoder)
+
+        if hasattr(model, "lane_encoder") and isinstance(model.lane_encoder, LaneNet):
+            parameters["head"]["lane_encoder"] = extract_lanenet_parameters(model.lane_encoder)
 
         if isinstance(model.transformer, VADPerceptionTransformer):
             parameters["head"]["transformer"] = {}
@@ -319,17 +362,41 @@ def custom_preprocessor(model, name):
             parameters["head"]["transformer"]["cams_embeds"] = ttnn.from_torch(
                 model.transformer.cams_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
+        embedding_layers = [
+            "bev_embedding",
+            "query_embedding",
+            "map_instance_embedding",
+            "map_pts_embedding",
+            "motion_mode_query",
+            "ego_query",
+        ]
+        parameters["head"].update(extract_embeddings_to_ttnn(model, embedding_layers, dtype=ttnn.bfloat16))
+        parameters["head"]["branches"] = {}
 
-        parameters["head"]["cls_branches"] = extract_sequential_branch(model.cls_branches, dtype=ttnn.bfloat16)
-        parameters["head"]["reg_branches"] = extract_sequential_branch(model.reg_branches, dtype=ttnn.bfloat16)
-        parameters["head"]["traj_branches"] = extract_sequential_branch(model.traj_branches, dtype=ttnn.bfloat16)
+        parameters["head"]["branches"]["cls_branches"] = extract_sequential_branch(
+            model.cls_branches, dtype=ttnn.bfloat16
+        )
+        parameters["head"]["branches"]["reg_branches"] = extract_sequential_branch(
+            model.reg_branches, dtype=ttnn.bfloat16
+        )
+        parameters["head"]["branches"]["traj_branches"] = extract_sequential_branch(
+            model.traj_branches, dtype=ttnn.bfloat16
+        )
         parameters["head"]["traj_cls_branches"] = extract_sequential_branch(
             model.traj_cls_branches, dtype=ttnn.bfloat16
         )
-        parameters["head"]["map_cls_branches"] = extract_sequential_branch(model.map_cls_branches, dtype=ttnn.bfloat16)
-        parameters["head"]["map_reg_branches"] = extract_sequential_branch(model.map_reg_branches, dtype=ttnn.bfloat16)
-        parameters["head"]["ego_fut_decoder"] = extract_sequential_branch(model.ego_fut_decoder, dtype=ttnn.bfloat16)
-        parameters["head"]["agent_fus_mlp"] = extract_sequential_branch(model.agent_fus_mlp, dtype=ttnn.bfloat16)
+        parameters["head"]["branches"]["map_cls_branches"] = extract_sequential_branch(
+            model.map_cls_branches, dtype=ttnn.bfloat16
+        )
+        parameters["head"]["branches"]["map_reg_branches"] = extract_sequential_branch(
+            model.map_reg_branches, dtype=ttnn.bfloat16
+        )
+        parameters["head"]["branches"]["ego_fut_decoder"] = extract_sequential_branch(
+            model.ego_fut_decoder, dtype=ttnn.bfloat16
+        )
+        parameters["head"]["branches"]["agent_fus_mlp"] = extract_sequential_branch(
+            model.agent_fus_mlp, dtype=ttnn.bfloat16
+        )
 
     return parameters
 

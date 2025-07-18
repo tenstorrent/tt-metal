@@ -11,7 +11,8 @@ from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, 
 from models.experimental.vadv2.reference.decoder import CustomTransformerDecoder
 from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer
 from models.experimental.vadv2.reference.utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
-from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
+
+# from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 
 
 class LearnedPositionalEncoding(nn.Module):
@@ -61,7 +62,6 @@ class LaneNet(nn.Module):
         x = pts_lane_feats
         for name, layer in self.layer_seq.named_modules():
             if isinstance(layer, MLP):
-                # x [bs,max_lane_num,9,dim]
                 x = layer(x)
                 x_max = torch.max(x, -2)[0]
                 x_max = x_max.unsqueeze(2).repeat(1, 1, x.shape[2], 1)
@@ -507,15 +507,20 @@ class VADHead(nn.Module):
 
         if self.motion_decoder is not None:
             batch_size, num_agent = outputs_coords_bev[-1].shape[:2]
+
             # motion_query
             motion_query = hs[-1].permute(1, 0, 2)  # [A, B, D]
             mode_query = self.motion_mode_query.weight  # [fut_mode, D]
             # [M, B, D], M=A*fut_mode
-            motion_query = (motion_query[:, None, :, :] + mode_query[None, :, None, :]).flatten(0, 1)
+            motion_query = (motion_query[:, None, :, :] + mode_query[None, :, None, :]).flatten(
+                0, 1
+            )  # torch.Size([300, 6, 1, 256])
+
             if self.use_pe:
                 motion_coords = outputs_coords_bev[-1]  # [B, A, 2]
                 motion_pos = self.pos_mlp_sa(motion_coords)  # [B, A, D]
-                motion_pos = motion_pos.unsqueeze(2).repeat(1, 1, self.fut_mode, 1).flatten(1, 2)
+                motion_pos = motion_pos.unsqueeze(2).repeat(1, 1, self.fut_mode, 1)
+                motion_pos = motion_pos.flatten(1, 2)
                 motion_pos = motion_pos.permute(1, 0, 2)  # [M, B, D]
             else:
                 motion_pos = None
@@ -607,7 +612,7 @@ class VADHead(nn.Module):
             ego_his_feats = self.ego_his_encoder(ego_his_trajs)  # [B, 1, dim]
         else:
             ego_his_feats = self.ego_query.weight.unsqueeze(0).repeat(batch, 1, 1)
-        # Interaction
+        # # Interaction
         ego_query = ego_his_feats
         ego_pos = torch.zeros((batch, 1, 2), device=ego_query.device)
         ego_pos_emb = self.ego_agent_pos_mlp(ego_pos)
@@ -619,7 +624,8 @@ class VADHead(nn.Module):
             agent_query, agent_pos, agent_conf, score_thresh=self.query_thresh, use_fix_pad=self.query_use_fix_pad
         )
         agent_pos_emb = self.ego_agent_pos_mlp(agent_pos)
-        # ego <-> agent interaction
+
+        # # ego <-> agent interaction
         ego_agent_query = self.ego_agent_decoder(
             query=ego_query.permute(1, 0, 2),
             key=agent_query.permute(1, 0, 2),
@@ -629,14 +635,14 @@ class VADHead(nn.Module):
             key_padding_mask=agent_mask,
         )
 
-        # ego <-> map interaction
+        # # ego <-> map interaction
         ego_pos = torch.zeros((batch, 1, 2), device=agent_query.device)
         ego_pos_emb = self.ego_map_pos_mlp(ego_pos)
         map_query = map_hs[-1].view(batch_size, self.map_num_vec, self.map_num_pts_per_vec, -1)
         map_query = self.lane_encoder(map_query)  # [B, P, pts, D] -> [B, P, D]
         map_conf = map_outputs_classes[-1]
         map_pos = map_outputs_coords_bev[-1]
-        # use the most close pts pos in each map inst as the inst's pos
+        # # use the most close pts pos in each map inst as the inst's pos
         batch, num_map = map_pos.shape[:2]
         map_dis = torch.sqrt(map_pos[..., 0] ** 2 + map_pos[..., 1] ** 2)
         min_map_pos_idx = map_dis.argmin(dim=-1).flatten()  # [B*P]
@@ -683,7 +689,6 @@ class VADHead(nn.Module):
 
         outs = {
             "bev_embed": bev_embed,
-            "hs": hs,
             "all_cls_scores": outputs_classes,
             "all_bbox_preds": outputs_coords,
             "all_traj_preds": outputs_trajs.repeat(outputs_coords.shape[0], 1, 1, 1, 1),
@@ -1447,12 +1452,13 @@ class VADHead(nn.Module):
     ):
         if dis_thresh is None:
             raise NotImplementedError("Not implement yet")
-
         # use the most close pts pos in each map inst as the inst's pos
         batch, num_map = map_pos.shape[:2]
         map_dis = torch.sqrt(map_pos[..., 0] ** 2 + map_pos[..., 1] ** 2)
         min_map_pos_idx = map_dis.argmin(dim=-1).flatten()  # [B*P]
+
         min_map_pos = map_pos.flatten(0, 1)  # [B*P, pts, 2]
+
         min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
         min_map_pos = min_map_pos.view(batch, num_map, 2)  # [B, P, 2]
 

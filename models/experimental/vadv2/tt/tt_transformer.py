@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+import numpy as np
 from models.experimental.vadv2.tt.tt_encoder import TtBEVFormerEncoder
 from models.experimental.vadv2.tt.tt_decoder import TtDetectionTransformerDecoder, TtMapDetectionTransformerDecoder
 
@@ -12,6 +13,7 @@ class TtVADPerceptionTransformer:
     def __init__(
         self,
         params,
+        params_branches,
         device,
         num_feature_levels=4,
         num_cams=6,
@@ -37,6 +39,7 @@ class TtVADPerceptionTransformer:
         _ffn_dim_ = _dim_ * 2
         self.device = device
         self.params = params
+        self.params_branches = (params_branches,)
         self.encoder = TtBEVFormerEncoder(
             params.encoder,
             device,
@@ -55,7 +58,12 @@ class TtVADPerceptionTransformer:
         )
         if decoder is not None:
             self.decoder = TtDetectionTransformerDecoder(
-                num_layers=3, embed_dim=_dim_, num_heads=8, params=params.decoder, device=self.device
+                num_layers=3,
+                embed_dim=_dim_,
+                num_heads=8,
+                params=params.decoder,
+                params_branches=params_branches,
+                device=self.device,
             )
         else:
             self.decoder = None
@@ -65,6 +73,7 @@ class TtVADPerceptionTransformer:
                 embed_dim=_dim_,
                 num_heads=8,
                 params=params.map_decoder,
+                params_branches=params_branches,
                 device=self.device,
             )
         else:
@@ -104,21 +113,24 @@ class TtVADPerceptionTransformer:
         bev_queries = ttnn.repeat(bev_queries, (1, bs, 1))
         bev_pos = ttnn.reshape(bev_pos, [bev_pos.shape[0], bev_pos.shape[1], bev_pos.shape[2] * bev_pos.shape[3]])
         bev_pos = ttnn.permute(bev_pos, (2, 0, 1))
-
+        bev_queries = ttnn.to_torch(bev_queries)
         # obtain rotation angle and shift with ego motion
-        # delta_x = np.array([each["can_bus"][0] for each in kwargs["img_metas"]])
-        # delta_y = np.array([each["can_bus"][1] for each in kwargs["img_metas"]])
-        # ego_angle = np.array([each["can_bus"][-2] / np.pi * 180 for each in kwargs["img_metas"]])
-        # grid_length_y = grid_length[0]
-        # grid_length_x = grid_length[1]
-        # translation_length = np.sqrt(delta_x**2 + delta_y**2)
-        # translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
-        # bev_angle = ego_angle - translation_angle
-        # shift_y = translation_length * np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
-        # shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
-        # shift_y = shift_y * self.use_shift
-        # shift_x = shift_x * self.use_shift
-        # shift = bev_queries.new_tensor([shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy
+        delta_x = np.array([each["can_bus"][0] for each in kwargs["img_metas"]])
+        delta_y = np.array([each["can_bus"][1] for each in kwargs["img_metas"]])
+        ego_angle = np.array([each["can_bus"][-2] / np.pi * 180 for each in kwargs["img_metas"]])
+        grid_length_y = grid_length[0]
+        grid_length_x = grid_length[1]
+        translation_length = np.sqrt(delta_x**2 + delta_y**2)
+        translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
+        bev_angle = ego_angle - translation_angle
+        shift_y = translation_length * np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
+        shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
+        shift_y = shift_y * self.use_shift
+        shift_x = shift_x * self.use_shift
+
+        shift = bev_queries.new_tensor([shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy
+
+        shift = ttnn.from_torch(shift, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
         if prev_bev is not None:
             if prev_bev.shape[1] == bev_h * bev_w:
@@ -136,7 +148,10 @@ class TtVADPerceptionTransformer:
                     prev_bev[:, i] = tmp_prev_bev[:, 0]
 
         # add can bus signals
-        # can_bus = bev_queries.new_tensor([each["can_bus"] for each in kwargs["img_metas"]])  # [:, :]
+        can_bus = bev_queries.new_tensor([each["can_bus"] for each in kwargs["img_metas"]])
+        can_bus = ttnn.from_torch(can_bus, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # [:, :]
+        bev_queries = ttnn.from_torch(bev_queries, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
         can_bus = can_bus = ttnn.linear(can_bus, params.can_bus_mlp["0"].weight, bias=params.can_bus_mlp["0"].bias)
         can_bus = ttnn.relu(can_bus)
@@ -164,10 +179,12 @@ class TtVADPerceptionTransformer:
                 cam_embeds = params.cams_embeds
                 cam_embeds = ttnn.reshape(cam_embeds, (cam_embeds.shape[0], 1, 1, cam_embeds.shape[1]))
                 feat = feat + cam_embeds
+                ttnn.deallocate(cam_embeds)
             level_embeds = params.level_embeds
             level_embeds = level_embeds[lvl : lvl + 1, :]
             level_embeds = ttnn.reshape(level_embeds, (1, 1, level_embeds.shape[0], level_embeds.shape[-1]))
             feat = feat + level_embeds
+            ttnn.deallocate(level_embeds)
             spatial_shapes.append(spatial_shape)
             feat_flatten.append(feat)
 
@@ -267,6 +284,7 @@ class TtVADPerceptionTransformer:
         )  # bev_embed shape: bs, bev_h*bev_w, embed_dims
 
         bs = mlvl_feats[0].shape[0]
+        object_query_embed = ttnn.to_layout(object_query_embed, layout=ttnn.ROW_MAJOR_LAYOUT)
         query_pos, query = ttnn.split(object_query_embed, self.embed_dims, dim=1)
         query_pos = ttnn.unsqueeze(query_pos, 0)
         query_pos = ttnn.expand(query_pos, (bs, -1, -1))
@@ -278,6 +296,7 @@ class TtVADPerceptionTransformer:
         )
         reference_points = ttnn.sigmoid(reference_points)
         init_reference_out = reference_points
+        map_query_embed = ttnn.to_layout(map_query_embed, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         map_query_pos, map_query = ttnn.split(map_query_embed, self.embed_dims, dim=1)
         map_query_pos = ttnn.unsqueeze(map_query_pos, 0)
@@ -309,7 +328,7 @@ class TtVADPerceptionTransformer:
                 value=bev_embed,
                 query_pos=query_pos,
                 reference_points=reference_points,
-                reg_branches=None,
+                reg_branches=reg_branches,
                 cls_branches=cls_branches,
                 spatial_shapes=spatial_shapes,
                 level_start_index=ttnn.zeros((1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device),
@@ -332,7 +351,7 @@ class TtVADPerceptionTransformer:
                 value=bev_embed,
                 query_pos=map_query_pos,
                 reference_points=map_reference_points,
-                reg_branches=None,
+                reg_branches=map_reg_branches,
                 cls_branches=map_cls_branches,
                 spatial_shapes=spatial_shapes,
                 level_start_index=ttnn.zeros((1,), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device),
