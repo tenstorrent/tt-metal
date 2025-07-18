@@ -972,7 +972,7 @@ void kernel_main() {
 #endif
 
     if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
+        fabric_connection.open<true>();
     }
     while (stream_done_mask != finish_value) {
         if ((stream_done_mask & 0x1) == 0) {
