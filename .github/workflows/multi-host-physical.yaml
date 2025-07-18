@@ -36,4 +36,4 @@ jobs:
       - name: Run tests on multiple hosts
         run: |
           echo "Running mpirun command on multiple hosts"
-          mpirun --rankfile /etc/rankfile --tag-output --mca btl_tcp_if_exclude docker0,lo --mca orte_launch_agent .github/scripts/multihost/physical/docker-wrapper.sh ./build/test/tt_metal/multi_host_fabric_tests
+          mpirun --rankfile /etc/rankfile --tag-output --mca btl_tcp_if_exclude docker0,lo --mca orte_launch_agent $(pwd)/.github/scripts/multihost/physical/docker-wrapper.sh ./build/test/tt_metal/multi_host_fabric_tests
