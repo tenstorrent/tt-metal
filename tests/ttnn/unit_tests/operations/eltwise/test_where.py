@@ -301,3 +301,19 @@ def test_ttnn_where_nan_bf8b(device):
     assert torch_equal_nan(tt_result1, result1)
     assert torch_equal_nan(tt_result2, result2)
     assert torch_equal_nan(tt_result3, result3)
+
+
+def test_ttnn_where_TSS(device):
+    C = torch.tensor([[0, 1] * 2, [1, 0] * 2] * 2, dtype=torch.bfloat16)
+    # C = torch.ones(4, 4, dtype=torch.bfloat16)
+    T = 25.0
+    F = 30.0
+    golden = torch.where(C != 0, T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_result = ttnn.where(ttnn_C, T, F)
+    result = ttnn.to_torch(ttnn_result)
+    print(result)
+    print()
+    print(golden)

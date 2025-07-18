@@ -106,6 +106,20 @@ Tensor WhereOperation::invoke(
                 output);
         }
     }
+    if (!is_value_true_Tensor && !is_value_false_Tensor && !has_shard_spec) {
+        const auto& t_true = std::get<float>(value_true);
+        const auto& t_false = std::get<float>(value_false);
+        std::cout << "ternary LLK where op TSS" << std::endl;
+        std::optional<DataType> output_dtype =
+            output.has_value() ? std::optional<DataType>(output->dtype()) : std::optional<DataType>(predicate.dtype());
+        unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
+
+        return ttnn::operations::unary::Unary_chain::invoke(
+            queue_id,
+            predicate,
+            {unary::UnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
+            memory_config);
+    }
 
     std::cout << "Legacy where op" << std::endl;
     return std::visit(

@@ -357,6 +357,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             break;
         case UnaryOpType::HARDSHRINK: op_init_and_name = {}; break;
+        case UnaryOpType::WHERE_TSS: op_init_and_name = {}; break;
 
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
@@ -674,6 +675,7 @@ std::string get_compute_kernel_path(
         case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
         case UnaryOpType::TANHSHRINK: return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
         case UnaryOpType::IDENTITY: return fmt::format("{}/{}", compute_root, "eltwise_identity_kernel.cpp");
+        case UnaryOpType::WHERE_TSS: return fmt::format("{}/{}", compute_root, "where_tss_kernel.cpp");
         case UnaryOpType::HARDSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
                 return fmt::format("{}/{}", compute_root, "hardshrink_kernel_sfpu.cpp");
