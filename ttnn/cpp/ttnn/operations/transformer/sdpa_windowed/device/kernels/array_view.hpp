@@ -18,6 +18,8 @@ enum class CBAccessType : uint8_t { CB_FRONT_RW, CB_BACK_RW, CB_FRONT_RO, CB_BAC
  * or back (write pointer) of a circular buffer (CB). Read/write access is determined at compile time
  * based on the CBAccessType parameter.
  *
+ * @note: for ASSERT to work, `TT_METAL_WATCHER` must be defined.
+ *
  * Lifetime:
  *   The lifetime of any one ArrayView must be contained within the lifetime of its surrounding
  *   cb_push_back/cb_pop_front pair
