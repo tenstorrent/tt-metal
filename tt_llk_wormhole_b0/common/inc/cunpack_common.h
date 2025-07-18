@@ -10,10 +10,6 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 
-#ifdef PERF_DUMP
-#include "perf_res_decouple.h"
-#endif
-
 namespace ckernel::unpacker
 {
 constexpr uint32_t TILE_DESC_SIZE = 2; // Unpacker descriptor size in dwords

@@ -19,13 +19,8 @@ using namespace ckernel::unpacker;
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, const std::uint32_t num_faces = 4, const bool narrow_tile = false)
 {
-#if SKIP_UNP == 1
-    static constexpr uint unpack_srca = TT_OP_NOP;
-    static constexpr uint unpack_srcb = TT_OP_NOP;
-#else
     static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
 
     if constexpr (BType == BroadcastType::COL)
     {
@@ -155,8 +150,4 @@ inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t a
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
 }

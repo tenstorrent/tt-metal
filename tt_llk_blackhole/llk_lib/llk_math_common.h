@@ -10,9 +10,6 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
-#ifdef PERF_DUMP
-#include "ckernel_perf_api.h"
-#endif
 
 using namespace ckernel::math;
 
@@ -48,26 +45,12 @@ inline void _llk_math_wait_for_dest_available_()
 {
     // These lightweight functions for sync with packer imply
     // no mode change - entire epoch is either double buffer or single buffer
-#ifdef PERF_DUMP
-    if constexpr (MATH_PACK_DECOUPLE == 0)
-    {
-        math_dest_wait();
-    }
-#else
     math_dest_wait();
-#endif
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_dest_section_done_()
 {
-#ifdef PERF_DUMP
-    if constexpr (MATH_PACK_DECOUPLE)
-    {
-        return;
-    }
-#endif
-
     set_math_semaphores();
     if constexpr (Dst == DstSync::SyncHalf)
     {
@@ -79,12 +62,6 @@ inline void _llk_math_dest_section_done_()
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_pack_sync_init_()
 {
-#ifdef PERF_DUMP
-    if constexpr (MATH_PACK_DECOUPLE)
-    {
-        return;
-    }
-#endif
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0)
     {

@@ -15,21 +15,10 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
-#ifdef PERF_DUMP
-#include "ckernel_perf_api.h"
-#endif
-
 // wait until math is done and has produced something to pack
 inline void _llk_packer_wait_for_math_done_()
 {
-#ifdef PERF_DUMP
-    if constexpr (MATH_PACK_DECOUPLE == 0)
-    {
-        TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
-    }
-#else
     TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
-#endif
 }
 
 // Tell math that it can write again
@@ -45,13 +34,6 @@ inline void _llk_packer_set_math_semaphore_()
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_dest_section_done_()
 {
-#ifdef PERF_DUMP
-    if constexpr (MATH_PACK_DECOUPLE)
-    {
-        return;
-    }
-#endif
-
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
 
     if constexpr (Dst == DstSync::SyncFull)

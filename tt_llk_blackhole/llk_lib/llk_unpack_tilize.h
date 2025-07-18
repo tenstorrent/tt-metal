@@ -18,18 +18,12 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const bool unpack_to_dest = false)
 {
-#if SKIP_UNP == 1
-    static constexpr uint unpack_srca            = TT_OP_NOP;
-    static constexpr uint unpack_srca_to_dest    = TT_OP_NOP;
-    static constexpr uint unpack_srcb_zerosrc    = TT_OP_NOP;
-    static constexpr uint unpack_srcb_set_dvalid = TT_OP_NOP;
-#else
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca_to_dest =
         TT_OP_UNPACR(0, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-#endif
+
     const uint32_t outerloop = 1;
     const uint32_t innerloop = 1;
 
@@ -179,10 +173,6 @@ inline void _llk_unpack_tilize_(
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
 }
 
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)

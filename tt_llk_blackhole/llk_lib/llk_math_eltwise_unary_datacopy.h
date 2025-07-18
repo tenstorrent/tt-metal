@@ -30,8 +30,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
-#if SKIP_UNP == 1
-#else
         math_unpack_to_dest_math_ready();
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32, true>(dst_index);
         math::math_unpack_to_dest_tile_ready();
@@ -48,7 +46,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             // Clears zero flags in DEST for one face.
             TT_ZEROACC(p_zeroacc::CLR_16, 0, 1 /*clear zero flags*/, ADDR_MOD_3, dest_base_offset_in_faces + dst_index_in_faces + i);
         }
-#endif
     }
     else
     {

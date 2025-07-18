@@ -18,10 +18,6 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-#ifndef SKIP_UNP
-#define SKIP_UNP 0
-#endif
-
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
@@ -36,21 +32,6 @@ inline void _llk_unpack_A_mop_config_(
         (((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) || (!unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
 
-#if SKIP_UNP == 1
-    static constexpr uint unpack_srca            = TT_OP_NOP;
-    static constexpr uint unpack_srca_to_dest    = TT_OP_NOP;
-    static constexpr uint unpack_srca_set_dvalid = TT_OP_NOP;
-    static constexpr uint unpack_srcb            = TT_OP_NOP;
-    static constexpr uint unpack_srcb_inc_z_0    = TT_OP_NOP;
-    static constexpr uint unpack_srcb_zerosrc    = TT_OP_NOP;
-    static constexpr uint unpack_srcb_set_dvalid = TT_OP_NOP;
-    static constexpr uint srca_set_z_1           = TT_OP_NOP;
-    static constexpr uint srcb_set_z_2           = TT_OP_NOP;
-    static constexpr uint srcb_clear_z           = TT_OP_NOP;
-    constexpr uint replay_buf_len                = 1;
-    lltt::record(0, 1);
-    TTI_NOP;
-#else
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca_to_dest =
@@ -75,7 +56,6 @@ inline void _llk_unpack_A_mop_config_(
     TTI_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca_zerosrc_set_dvalid = lltt::replay_insn(0, 2);
     static constexpr uint unpack_srcb_unpack_srcb        = lltt::replay_insn(2, 2);
-#endif
 
     if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format))
     {
@@ -131,7 +111,6 @@ inline void _llk_unpack_A_mop_config_(
     {
         if (transpose_of_faces)
         {
-#if SKIP_UNP == 0
             constexpr uint replay_buf_len = 3;
             lltt::record(4, replay_buf_len);
             TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
@@ -144,7 +123,7 @@ inline void _llk_unpack_A_mop_config_(
             {
                 TTI_UNPACR(SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch0_z+=1
             }
-#endif
+
             const uint32_t outerloop = num_faces < 4 ? 1 : 2;
             const uint32_t innerloop = num_faces < 2 ? 1 : 2;
             ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(4, replay_buf_len)); // Unpack faces 0/2 && 1/3 to srcA
@@ -302,8 +281,4 @@ inline void _llk_unpack_A_(
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
 }
