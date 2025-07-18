@@ -11,12 +11,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.mlp_1d import MLP1D
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
-    COMPUTE_KERNEL_CONFIG_SDPA,
-    even_int_div,
-    save_and_get_path,
-)
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, even_int_div, save_and_get_path
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -156,7 +151,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=mem_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_SDPA,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),

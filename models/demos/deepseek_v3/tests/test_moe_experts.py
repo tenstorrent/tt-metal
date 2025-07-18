@@ -18,7 +18,6 @@ from models.utility_functions import comp_pcc
 @pytest.fixture
 def reference_model(hf_config):
     """Get the actual DeepSeek MLP model using local implementation."""
-    hf_config.n_routed_experts = 64  # Set number of experts for testing
     return DeepseekV3MoE_Experts(hf_config)
 
 
@@ -27,7 +26,7 @@ def reference_model(hf_config):
     [
         ("decode", 128),
         ("prefill", 256),
-        # ("prefill", 2048),
+        ("prefill", 2048),
     ],
 )
 def test_forward_pass(
