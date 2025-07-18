@@ -154,7 +154,7 @@ class VADPerceptionTransformer(nn.Module):
         level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
 
         feat_flatten = feat_flatten.permute(0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)
-        print("bev_queries", bev_queries.shape)
+
         bev_embed = self.encoder(
             bev_queries,
             feat_flatten,
@@ -187,7 +187,7 @@ class VADPerceptionTransformer(nn.Module):
         obtain bev features.
         """
         lidar_feat = None
-        print("bev_queries", bev_queries.shape)
+
         bev_embed = self.attn_bev_encode(
             mlvl_feats, bev_queries, bev_h, bev_w, grid_length=grid_length, bev_pos=bev_pos, prev_bev=prev_bev, **kwargs
         )
@@ -258,8 +258,6 @@ class VADPerceptionTransformer(nn.Module):
                     be returned when `as_two_stage` is True, \
                     otherwise None.
         """
-        print("TRANSFORMER")
-        print("--------bev_queries----------", bev_queries.shape)
 
         bev_embed = self.get_bev_features(
             mlvl_feats, bev_queries, bev_h, bev_w, grid_length=grid_length, bev_pos=bev_pos, prev_bev=prev_bev, **kwargs
@@ -288,7 +286,6 @@ class VADPerceptionTransformer(nn.Module):
 
         if self.decoder is not None:
             # [L, Q, B, D], [L, B, Q, D]
-            print("Start Decoder")
             inter_states, inter_references = self.decoder(
                 query=query,
                 key=None,
@@ -302,14 +299,12 @@ class VADPerceptionTransformer(nn.Module):
                 **kwargs,
             )
             inter_references_out = inter_references
-            print("End Decoder")
         else:
             inter_states = query.unsqueeze(0)
             inter_references_out = reference_points.unsqueeze(0)
 
         if self.map_decoder is not None:
             # [L, Q, B, D], [L, B, Q, D]
-            print("Start MAP Decoder")
             map_inter_states, map_inter_references = self.map_decoder(
                 query=map_query,
                 key=None,
@@ -323,7 +318,6 @@ class VADPerceptionTransformer(nn.Module):
                 **kwargs,
             )
             map_inter_references_out = map_inter_references
-            print("End MAP decoder")
         else:
             map_inter_states = map_query.unsqueeze(0)
             map_inter_references_out = map_reference_points.unsqueeze(0)

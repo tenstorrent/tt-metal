@@ -4,7 +4,7 @@
 
 import warnings
 import ttnn
-from models.experimental.vadv2.tt.tt_temporal_self_attention import multi_scale_deformable_attn
+from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
 
 
 class TtSpatialCrossAttention:
@@ -130,7 +130,7 @@ class TtSpatialCrossAttention:
         slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
         ttnn.deallocate(self.params.output_proj.weight)
         ttnn.deallocate(self.params.output_proj.bias)
-
+        ttnn.deallocate(queries_rebatch)
         return slots + inp_residual
 
 
@@ -197,6 +197,7 @@ class TtMSDeformableAttention3D:
         level_start_index=None,
         **kwargs,
     ):
+        ttnn.deallocate(key)
         params = self.params
         if value is None:
             value = query
@@ -231,21 +232,21 @@ class TtMSDeformableAttention3D:
         ttnn.deallocate(params.attention_weights.weight)
         ttnn.deallocate(params.attention_weights.bias)
         # ttnn.deallocate(query)
+        # ttnn.deallocate(identity)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
         )
-        attention_weights = ttnn.to_torch(attention_weights)
-        attention_weights = attention_weights.softmax(-1)
-        attention_weights = ttnn.from_torch(
-            attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
-        )
+        # attention_weights = ttnn.to_torch(attention_weights)
+        attention_weights = ttnn.softmax(attention_weights, dim=-1)
+        attention_weights = ttnn.to_memory_config(attention_weights, ttnn.DRAM_MEMORY_CONFIG)
+        # attention_weights = ttnn.from_torch(
+        #     attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        # )
 
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels, self.num_points)
         )
-        # reference_points = ttnn.from_torch(
-        #     reference_points, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
-        # )
+
         if reference_points.shape[-1] == 2:
             offset_normalizer = ttnn.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], dim=-1)
             bs_r, num_query, num_Z_anchors, _ = reference_points.shape
@@ -258,16 +259,59 @@ class TtMSDeformableAttention3D:
 
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
             offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
-            sampling_offsets = ttnn.to_torch(sampling_offsets)
-            offset_normalizer_xy = ttnn.to_torch(offset_normalizer_xy)
-            sampling_locations = sampling_offsets / offset_normalizer_xy
-            reference_xy = ttnn.to_torch(reference_xy)
-            bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_locations.shape
-            sampling_locations = sampling_locations.view(
-                bs, num_query, num_heads, num_levels, num_all_points // num_Z_anchors, num_Z_anchors, xy
+
+            sampling_offsets_reshaped = ttnn.reshape(
+                sampling_offsets, [sampling_offsets.shape[0], -1, sampling_offsets.shape[4], sampling_offsets.shape[5]]
             )
-            sampling_locations = reference_xy + sampling_locations
-            sampling_locations = ttnn.from_torch(sampling_locations, device=self.device, dtype=ttnn.bfloat16)
+            offset_normalizer_xy_reshaped = ttnn.reshape(
+                offset_normalizer_xy,
+                [offset_normalizer_xy.shape[0], -1, offset_normalizer_xy.shape[4], offset_normalizer_xy.shape[5]],
+            )
+
+            sampling_locations = ttnn.div(sampling_offsets_reshaped, offset_normalizer_xy_reshaped)
+            ttnn.deallocate(sampling_offsets_reshaped)
+            ttnn.deallocate(offset_normalizer_xy_reshaped)
+            ttnn.deallocate(offset_normalizer_xy)
+
+            sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets.shape)
+            ttnn.deallocate(sampling_offsets)
+
+            bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_locations.shape
+            sampling_locations = ttnn.reshape(
+                sampling_locations,
+                [bs, num_query, num_heads, num_levels, num_all_points // num_Z_anchors, num_Z_anchors, xy],
+            )
+            reference_xy_reshaped = ttnn.reshape(
+                reference_xy,
+                (
+                    reference_xy.shape[0],
+                    reference_xy.shape[1],
+                    -1,
+                    reference_xy.shape[4],
+                    reference_xy.shape[5],
+                    reference_xy.shape[6],
+                ),
+            )
+            sampling_locations_reshaped = ttnn.reshape(
+                sampling_locations,
+                (
+                    sampling_locations.shape[0],
+                    sampling_locations.shape[1],
+                    -1,
+                    sampling_locations.shape[4],
+                    sampling_locations.shape[5],
+                    sampling_locations.shape[6],
+                ),
+            )
+
+            sampling_locations_add = reference_xy_reshaped + sampling_locations_reshaped
+
+            sampling_locations = ttnn.reshape(sampling_locations_add, sampling_locations.shape)
+
+            ttnn.deallocate(reference_xy_reshaped)
+            ttnn.deallocate(sampling_locations_reshaped)
+            ttnn.deallocate(sampling_locations_add)
+
             bs, num_query, num_heads, num_levels, num_points, num_Z_anchors, xy = sampling_locations.shape
             assert num_all_points == num_points * num_Z_anchors
             sampling_locations = ttnn.reshape(
@@ -280,10 +324,11 @@ class TtMSDeformableAttention3D:
             raise ValueError(
                 f"Last dim of reference_points must be" f" 2 or 4, but get {reference_points.shape[-1]} instead."
             )
-
-        output = multi_scale_deformable_attn(
-            value, spatial_shapes, sampling_locations, attention_weights, self.device, reshape=True
-        )
+        ttnn.deallocate(reference_points)
+        output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
+        ttnn.deallocate(attention_weights)
+        ttnn.deallocate(value)
+        ttnn.deallocate(sampling_locations)
 
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))

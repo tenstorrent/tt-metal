@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import copy
 import warnings
 from models.experimental.vadv2.tt.tt_ffn import TtFFN
 from models.experimental.vadv2.tt.tt_mha import TtMultiheadAttention
 from models.experimental.vadv2.tt.tt_deformable_attention import TtCustomMSDeformableAttention
-import copy
 
 
 class TtBaseTransformerLayer:

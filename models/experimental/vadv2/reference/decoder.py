@@ -48,7 +48,9 @@ def multi_scale_deformable_attn_pytorch(value, value_spatial_shapes, sampling_lo
 
 def inverse_sigmoid(x, eps=1e-5):
     x = x.clamp(min=0, max=1)
+
     x1 = x.clamp(min=eps)
+
     x2 = (1 - x).clamp(min=eps)
     return torch.log(x1 / x2)
 
@@ -440,6 +442,7 @@ class MapDetectionTransformerDecoder(nn.Module):
                 assert reference_points.shape[-1] == 2
 
                 new_reference_points = torch.zeros_like(reference_points)
+
                 new_reference_points[..., :2] = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])
                 # new_reference_points[..., 2:3] = tmp[
                 #     ..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])
@@ -528,10 +531,13 @@ class DetectionTransformerDecoder(nn.Module):
                 assert reference_points.shape[-1] == 3
 
                 new_reference_points = torch.zeros_like(reference_points)
+                print(new_reference_points.shape)
                 new_reference_points[..., :2] = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])
                 new_reference_points[..., 2:3] = tmp[..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])
 
                 new_reference_points = new_reference_points.sigmoid()
+                # torch.save(new_reference_points, "models/experimental/vadv2/dumps/dump1")
+                # ss
 
                 reference_points = new_reference_points.detach()
 
