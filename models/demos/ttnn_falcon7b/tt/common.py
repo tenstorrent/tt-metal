@@ -229,11 +229,11 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
     return layer_past, tt_layer_past
 
 
-def create_position_ids(llm_mode, kv_cache_length):
+def create_position_ids(llm_mode, seq_len, kv_cache_length):
     if llm_mode == "prefill":
-        position_ids = None
+        position_ids = torch.arange(seq_len)
     elif llm_mode == "decode":
-        position_ids = torch.LongTensor([kv_cache_length])
+        position_ids = torch.arange(kv_cache_length, kv_cache_length + seq_len)
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
-    return position_ids
+    return position_ids.unsqueeze(0)

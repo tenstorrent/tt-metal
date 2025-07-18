@@ -97,7 +97,7 @@ def test_falcon_attention(
         mesh_device,
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=shard_dim),
     )
-    position_ids = create_position_ids(llm_mode, kv_cache_len)
+    position_ids = create_position_ids(llm_mode, seq_len, kv_cache_len)
     attention_mask, tt_attention_mask = create_attention_mask(
         llm_mode,
         dtype,
@@ -118,10 +118,7 @@ def test_falcon_attention(
         mesh_device,
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
-    _position_ids = position_ids
-    if _position_ids is None:
-        _position_ids = torch.arange(seq_len)
-    position_embeddings = torch_model.rotary_emb(attention_input, _position_ids.unsqueeze(0))
+    position_embeddings = torch_model.rotary_emb(attention_input, position_ids)
 
     pytorch_out, pytorch_layer_present = torch_model(
         attention_input,
