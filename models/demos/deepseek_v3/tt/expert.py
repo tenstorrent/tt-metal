@@ -11,12 +11,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.mlp_1d import MLP1D
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
-    COMPUTE_KERNEL_CONFIG_SDPA,
-    even_int_div,
-    save_and_get_path,
-)
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, even_int_div, save_and_get_path
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -50,59 +45,42 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
     ) -> WeightConfig:
         num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
 
-        w1_per_device_state_dict_group = []
-        w2_per_device_state_dict_group = []
-        w3_per_device_state_dict_group = []
+        # Mapping from weight keys to expert names
+        weight_key_to_expert = {"gate_proj": "w1_experts", "down_proj": "w2_experts", "up_proj": "w3_experts"}
+
+        # Initialize per-weight-type dictionary of device groups
+        weight_groups = {key: [] for key in weight_key_to_expert.keys()}
+        num_devices = mesh_device.get_num_devices()
 
         # Group experts by device
-        for device_idx in range(mesh_device.get_num_devices()):
-            w1_sub_group = []
-            w2_sub_group = []
-            w3_sub_group = []
-
-            # Add experts for this device
+        for device_idx in range(num_devices):
+            # Calculate expert range for this device
             start_expert = device_idx * num_experts_per_device
             end_expert = start_expert + num_experts_per_device
+            expert_indices = range(start_expert, end_expert)
 
             # TODO: check for quantized weights
-            for expert_idx in range(start_expert, end_expert):
-                w1_sub_group.append(state_dict[f"experts.{expert_idx}.gate_proj.weight"])
-                w2_sub_group.append(state_dict[f"experts.{expert_idx}.down_proj.weight"])
-                w3_sub_group.append(state_dict[f"experts.{expert_idx}.up_proj.weight"])
+            # Process each weight type
+            for weight_key in weight_key_to_expert.keys():
+                # Collect tensors for this weight type and device
+                weight_tensors = [
+                    state_dict[f"experts.{expert_idx}.{weight_key}.weight"] for expert_idx in expert_indices
+                ]
+                # Stack and permute, then add to the corresponding weight group
+                weight_groups[weight_key].append(torch.stack(weight_tensors, dim=0).permute(0, 2, 1))
 
-            w1_per_device_state_dict_group.append(torch.stack(w1_sub_group, dim=0).permute(0, 2, 1))
-            w2_per_device_state_dict_group.append(torch.stack(w2_sub_group, dim=0).permute(0, 2, 1))
-            w3_per_device_state_dict_group.append(torch.stack(w3_sub_group, dim=0).permute(0, 2, 1))
-
-        # Convert weights for each expert group
+        # Convert weights for each expert group using compact loop
         return {
-            "w1_experts": {
+            experts_group: {
                 "input_tensor_b": save_and_get_path(
-                    output_path / f"w1_experts.input_tensor_b",
+                    output_path / f"{experts_group}.input_tensor_b",
                     cls._convert_weight_moe(
-                        w1_per_device_state_dict_group,
+                        weight_groups[weight_key],
                         mesh_device,
                     ),
                 )
-            },
-            "w2_experts": {
-                "input_tensor_b": save_and_get_path(
-                    output_path / f"w2_experts.input_tensor_b",
-                    cls._convert_weight_moe(
-                        w2_per_device_state_dict_group,
-                        mesh_device,
-                    ),
-                )
-            },
-            "w3_experts": {
-                "input_tensor_b": save_and_get_path(
-                    output_path / f"w3_experts.input_tensor_b",
-                    cls._convert_weight_moe(
-                        w3_per_device_state_dict_group,
-                        mesh_device,
-                    ),
-                )
-            },
+            }
+            for weight_key, experts_group in weight_key_to_expert.items()
         }
 
     @final
@@ -156,7 +134,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=mem_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_SDPA,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -201,7 +179,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         return cls._create_model_config(mesh_device, ttnn.DRAM_MEMORY_CONFIG, num_experts_per_device)
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+    def _forward_util(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"]
 
         # Gate and up projections
@@ -221,5 +199,9 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         return output
 
     @classmethod
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        return cls._forward_util(x, cfg)
+
+    @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls.forward_decode(x, cfg)
+        return cls._forward_util(x, cfg)

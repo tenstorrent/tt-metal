@@ -2,23 +2,51 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from pathlib import Path
+from typing import Any, Literal
+
 import pytest
 import torch
+import torch.nn as nn
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE_Experts
 
 # Import from local reference files instead of HuggingFace
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tt.expert import Expert as TTExpert
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
 
+class DeepseekV3MoE_Experts(nn.Module):
+    """
+    A mixed expert module containing shared experts.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.experts = nn.ModuleList(
+            [
+                ReferenceExpert(config, intermediate_size=config.moe_intermediate_size)
+                for i in range(config.n_routed_experts)
+            ]
+        )
+
+    def forward(self, hidden_states):
+        outputs = []
+        for expert in self.experts:
+            outputs.append(expert(hidden_states))
+
+        # returns a tensor of shape (topK_experts, batch_size, seq_len, hidden_size)
+        return torch.cat(outputs, dim=0)
+
+
 @pytest.fixture
-def reference_model(hf_config):
+def reference_model(hf_config: Any | torch.Any):
     """Get the actual DeepSeek MLP model using local implementation."""
-    hf_config.n_routed_experts = 64  # Set number of experts for testing
     return DeepseekV3MoE_Experts(hf_config)
 
 
@@ -26,19 +54,19 @@ def reference_model(hf_config):
     "mode,seq_len",
     [
         ("decode", 128),
-        ("prefill", 256),
-        # ("prefill", 2048),
+        ("prefill", 2048),
     ],
 )
 def test_forward_pass(
-    mode,
-    seq_len,
-    reference_model,
-    hf_config_single_layer,
-    temp_dir,
-    galaxy_or_t3k_mesh,
+    mode: Literal["decode"] | Literal["prefill"],
+    seq_len: Literal[128] | Literal[256] | Literal[2048],
+    reference_model: DeepseekV3MoE_Experts,
+    hf_config_single_layer: Any,
+    temp_dir: Path,
+    galaxy_or_t3k_mesh: Any,
 ):
     """Test forward pass against reference model."""
+
     torch.manual_seed(0)
     batch_size = 1
 
@@ -60,6 +88,7 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Create input tensor
+    # TODO: Add tests for real weitghts
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config_single_layer.hidden_size)
 
     # Reference forward pass
