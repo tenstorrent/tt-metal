@@ -334,9 +334,6 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             }
 
             EXPECT_EQ(src, result);
-
-            bufa->deallocate();
-            bufa = nullptr;
         }
     }
 }
@@ -619,14 +616,14 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRou
     }
 }
 
-// TEST_F(UnitMeshCQSingleCardBufferFixture, Sending131072Pages) {
-//     for (const auto& mesh_device : devices_) {
-//         TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
-//         log_info(tt::LogTest, "Running On Device {}", mesh_device->id());
-//         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(mesh_device,
-//         mesh_device->mesh_command_queue(), config);
-//     }
-// }
+TEST_F(UnitMeshCQSingleCardBufferFixture, Sending131072Pages) {
+    for (const auto& mesh_device : devices_) {
+        TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
+        log_info(tt::LogTest, "Running On Device {}", mesh_device->id());
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+            mesh_device, mesh_device->mesh_command_queue(), config);
+    }
+}
 
 TEST_F(UnitMeshCQSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTransferPage) {
     constexpr uint32_t num_round_robins = 2;
