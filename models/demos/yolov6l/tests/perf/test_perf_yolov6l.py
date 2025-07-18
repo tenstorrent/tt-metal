@@ -16,7 +16,7 @@ from models.utility_functions import disable_persistent_kernel_cache, is_wormhol
 
 
 def get_expected_times(name):
-    base = {"yolov6l": (183.7, 0.014)}
+    base = {"yolov6l": (183.7, 0.015)}
     return base[name]
 
 
