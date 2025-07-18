@@ -79,7 +79,7 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
         if ((dim == ReduceOpDim::H || dim == ReduceOpDim::HW) && nd_shard_spec.shard_shape.rank() > 1) {
             nd_shard_spec.shard_shape[-2] = div_up(nd_shard_spec.shard_shape[-2], input_tensor.logical_shape()[-2]);
         }
-        return {tensor_spec.sharded(std::move(nd_shard_spec), TensorSpec::ShardShapeAlignment::Required)};
+        return {tensor_spec.sharded(std::move(nd_shard_spec), TensorSpec::ShardShapeAlignment::REQUIRED)};
     }
 
     return {tensor_spec};

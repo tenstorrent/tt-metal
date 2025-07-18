@@ -151,8 +151,9 @@ def map_hf_to_meta_keys(loaded_weights):
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
     checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
     assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-    is_chunked = "layers_" in str(checkpoints[0])
+    is_chunked = any(ckpt.stem.startswith("layers_") for ckpt in checkpoints)
     if is_chunked:
+        checkpoints = [ckpt_name for ckpt_name in checkpoints if ckpt_name.stem.startswith("layers_")]
         checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
     else:
         checkpoint = load_sharded_checkpoints(checkpoints, n_layers)

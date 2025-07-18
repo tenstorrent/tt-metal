@@ -12,7 +12,7 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  TG-Unit-tests:
+  TG-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-deepseek-tests-impl.yaml

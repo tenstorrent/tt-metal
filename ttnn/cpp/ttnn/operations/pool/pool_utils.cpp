@@ -43,6 +43,20 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
     return bfloat16(value).to_packed();
 }
 
+bool is_pool_op_one_scalar_per_core(
+    Pool2DType pool_type,
+    bool ceil_mode,
+    uint32_t ceil_h,
+    uint32_t ceil_w,
+    bool count_include_pad,
+    uint32_t pad_h,
+    uint32_t pad_w,
+    std::optional<int32_t> divisor_override) {
+    return pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
+           ((ceil_mode == false || (ceil_h == 0 && ceil_w == 0)) &&
+            (count_include_pad == true || (pad_h == 0 && pad_w == 0)));
+}
+
 std::map<std::string, std::string> get_defines(Pool2DType pool_type) {
     std::map<std::string, std::string> defines;
     switch (pool_type) {
@@ -91,22 +105,22 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     // pooling can accept any height and either a tile multiple or half a tile for width.
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_c = 1;
-        uint32_t tile_size = channels / num_cores_c;
-        if (tile_size != 16 && tile_size % tt::constants::TILE_WIDTH != 0) {
+        uint32_t c_per_core = channels / num_cores_c;
+        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
             return std::nullopt;
         }
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto grid_x = pconfig.grid.ranges()[0].end_coord.x - pconfig.grid.ranges()[0].start_coord.x + 1;
         auto grid_y = pconfig.grid.ranges()[0].end_coord.y - pconfig.grid.ranges()[0].start_coord.y + 1;
         uint32_t num_cores_c = block_shard_orientation == ShardOrientation::COL_MAJOR ? grid_y : grid_x;
-        uint32_t tile_size = channels / num_cores_c;
-        if (tile_size != 16 && tile_size % tt::constants::TILE_WIDTH != 0) {
+        uint32_t c_per_core = channels / num_cores_c;
+        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
             return std::nullopt;
         }
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t num_cores_c = pconfig.grid.num_cores();
-        uint32_t tile_size = channels / num_cores_c;
-        if (tile_size != 16 && tile_size % tt::constants::TILE_WIDTH != 0) {
+        uint32_t c_per_core = channels / num_cores_c;
+        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
             return std::nullopt;
         }
     }
@@ -116,13 +130,20 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
-    const uint32_t kernel_h,
-    const uint32_t kernel_w,
-    const uint32_t out_h,
-    const uint32_t out_w,
+    uint32_t pad_h,
+    uint32_t pad_w,
+    uint32_t ceil_pad_h,
+    uint32_t ceil_pad_w,
+    bool ceil_mode,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t out_h,
+    uint32_t out_w,
     const MemoryConfig& input_memory,
     const MemoryConfig& output_memory,
-    Pool2DType pool_type) {
+    Pool2DType pool_type,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override) {
     const auto& input_shape = input.get_padded_shape();
 
     auto in_dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
@@ -151,11 +172,11 @@ uint32_t calculate_L1_usage(
     }
     const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
 
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
-
+    bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool is_large_kernel =
         is_partial_tile ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2 : kernel_size_hw > tt::constants::TILE_HEIGHT;
+    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool && is_large_kernel ? 4 : 8;
+    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     // ToDo: enable 32 sticks per tile for reduction for all cases.
     const uint32_t max_rows_for_reduction =
@@ -165,8 +186,6 @@ uint32_t calculate_L1_usage(
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
     }
-
-    uint32_t nblocks = 1;
 
     // CBs
     uint32_t multi_buffering_factor = 2;
@@ -179,16 +198,11 @@ uint32_t calculate_L1_usage(
     uint32_t in_scalar_cb_size_0 = in_scalar_cb_npages * in_scalar_cb_pagesize;
     uint32_t in_scalar_cb_size_1 = 0;
 
-    // For avgpool, instantiate and use this CB, which consists of 1s. We don't want to divide
-    // twice by kernel size for large kernel case.
-    uint32_t in_one_cb_size = 0;
-    if (pool_type == Pool2DType::AVG_POOL2D) {
-        uint32_t in_one_cb_pagesize = tile_size(in_df);
-        uint32_t in_one_cb_npages = 1;
-        in_one_cb_size = in_one_cb_pagesize * in_one_cb_npages;
-        if (split_reader) {
-            in_scalar_cb_size_1 = in_scalar_cb_npages * in_scalar_cb_pagesize;
-        }
+    bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
+        pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
+
+    if (pool_type == Pool2DType::AVG_POOL2D && split_reader && !one_scalar_per_core) {
+        in_scalar_cb_size_1 = in_scalar_cb_npages * in_scalar_cb_pagesize;
     }
 
     uint32_t clear_value_cb_size = 0;
@@ -201,7 +215,6 @@ uint32_t calculate_L1_usage(
     }
 
     uint32_t in_cb_sz = 0;
-    // uint32_t in_nblocks_c = 1;
     if (is_wide_reduction) {
         in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_HW;
     } else {
@@ -212,7 +225,7 @@ uint32_t calculate_L1_usage(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
-    uint32_t in_cb_npages = multi_buffering_factor * nblocks;
+    uint32_t in_cb_npages = multi_buffering_factor;
     uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
     uint32_t in_cb_config_1_size = 0;
 
@@ -227,13 +240,6 @@ uint32_t calculate_L1_usage(
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * in_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
-    uint32_t max_pool_partials_cb_config_size = 0;
-    if (is_large_kernel) {
-        uint32_t max_pool_partials_cb_pagesize = in_cb_pagesize;
-        uint32_t max_pool_partials_cb_npages = nblocks;
-        max_pool_partials_cb_config_size = max_pool_partials_cb_npages * max_pool_partials_cb_pagesize;
-    }
-
     uint32_t alignment_bytes = 32;
     if (is_blackhole) {
         alignment_bytes = 64;
@@ -243,23 +249,17 @@ uint32_t calculate_L1_usage(
         return factor * alignment_bytes;
     };
 
-    // 5 sync CBs, each with 2 bytes per page, 2 or 1 pages.
-    uint32_t sync_cb_1_3_5 = 2 * (2 + 1 + 1);
-    uint32_t sync_cb_2_4 = 0;
-    if (split_reader) {
-        sync_cb_2_4 = 2 * (2 + 1);  // 2 pages, 1 byte per page
-    }
-
-    return in_scalar_cb_size_0 + in_scalar_cb_size_1 + in_one_cb_size + clear_value_cb_size + in_cb_config_0_size +
-           in_cb_config_1_size + align(out_cb_config_size) /* global, involved */
-           + max_pool_partials_cb_config_size + sync_cb_1_3_5 + sync_cb_2_4;
+    return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
+           align(out_cb_config_size) /* global, involved */;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     const Tensor& input_tensor,
     const SlidingWindowConfig& sliding_window_config,
     uint32_t channels,
-    Pool2DType pool_type) {
+    Pool2DType pool_type,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
@@ -277,6 +277,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             ttnn::Shape({1, 1, nhw, out_channel_padded}), parallel_config, tt::constants::TILE_HEIGHT);
     };
 
+    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+
     auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
         auto input_parallel_config = pool::determine_valid_parallel_config(
             layout,
@@ -288,6 +290,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             orientation,
             false,
             false,
+            is_in_tiled,  // if input is tiled we need the shard width to be a tile multiple,
             0);
 
         if (!input_parallel_config.has_value()) {
@@ -295,15 +298,22 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
         }
         uint32_t l1_usage = calculate_L1_usage(
             input_tensor,
+            sliding_window_config.get_pad_h(),
+            sliding_window_config.get_pad_w(),
+            sliding_window_config.get_ceil_pad_h(),
+            sliding_window_config.get_ceil_pad_w(),
+            sliding_window_config.ceil_mode,
             sliding_window_config.window_hw.first,
             sliding_window_config.window_hw.second,
             sliding_window_config.get_output_shape()[1],
             sliding_window_config.get_output_shape()[2],
             get_memconfig(input_parallel_config.value()),
             get_memconfig(input_parallel_config.value()),
-            pool_type);
+            pool_type,
+            count_include_pad,
+            divisor_override);
 
-        return {l1_usage, input_parallel_config};
+        return {.l1_usage = l1_usage, .config = input_parallel_config};
     };
 
     auto l1_config_height = calc_l1_usage_inner(TensorMemoryLayout::HEIGHT_SHARDED, ShardOrientation::ROW_MAJOR);

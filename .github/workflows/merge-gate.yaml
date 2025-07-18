@@ -105,6 +105,17 @@ jobs:
       skip-tt-train: false
       publish-artifact: false
 
+  build-sweeps:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true'
+        }}
+    needs: find-changes
+    uses: ./.github/workflows/build-wrapper.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+
   metalium-smoke-tests:
     needs: [find-changes, build-tsan]
     if: ${{ github.ref_name == 'main' ||
@@ -116,7 +127,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300",
+          "N300-viommu",
           "N300-llmbox",
           "P150b-viommu",
         ]
@@ -139,7 +150,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300",
+          "N300-viommu",
           "N300-llmbox",
           "P150b-viommu",
         ]
@@ -179,7 +190,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150",
+          "N150-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
@@ -201,7 +212,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150",
+          "N150-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
@@ -225,13 +236,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests]
+    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-docs, build-tsan, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
+          optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
