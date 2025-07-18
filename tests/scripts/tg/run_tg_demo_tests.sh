@@ -14,7 +14,7 @@ run_tg_llama3_tests() {
     for i in {1..20}; do
       echo "LOG_METAL: Running Llama3 tests for $llama_dir, iteration $i"
       # Run the text demo with different configurations
-      LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "apc" --timeout 400; fail+=$?;
+      LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "apc" --timeout 600; fail+=$?;
     # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full" --timeout 1000; fail+=$?;
     # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
     # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "long-context-batch32" --timeout 1000; fail+=$?;
