@@ -114,7 +114,7 @@ void kernel_main() {
         .page_size = output_single_tile_size_bytes,
         .data_format = output_data_format};
 
-    constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_7;
     const InterleavedPow2AddrGenFast<sparsity_is_dram> s_sparsity = {
         .bank_base_address = sparsity_addr, .log_base_2_of_page_size = sparsity_log2_of_pagesize};
 
