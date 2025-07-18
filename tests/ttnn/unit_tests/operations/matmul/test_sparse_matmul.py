@@ -38,10 +38,6 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
     zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
     sparsity.view(-1)[zero_indices] = 0.0
 
-    # TODO: Issue 25199: first and last value being read incorrectly
-    sparsity[:, :, :, 0] = 1.0
-    sparsity[:, :, :, -1] = 1.0
-
     sparsity = sparsity.to(dtype=torch.float32)
 
     nnz = int((sparsity != 0).sum().item())

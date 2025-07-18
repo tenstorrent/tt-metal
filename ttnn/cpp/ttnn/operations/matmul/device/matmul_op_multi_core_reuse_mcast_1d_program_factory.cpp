@@ -3286,12 +3286,19 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
 
-    uint32_t sparsity_cb_index = tt::CBIndex::c_6;
+    uint32_t sparsity_cb_index0 = tt::CBIndex::c_6;
+    uint32_t sparsity_cb_index1 = tt::CBIndex::c_7;
+
     uint32_t sparsity_cb_size = B_B * sizeof(uint32_t);
-    tt_metal::CircularBufferConfig sparsity_cb_config =
-        tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index, tt::DataFormat::Float32}})
-            .set_page_size(sparsity_cb_index, sparsity_cb_size);
-    auto cb_sparsity = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config);
+    tt_metal::CircularBufferConfig sparsity_cb_config0 =
+        tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index0, tt::DataFormat::Float32}})
+            .set_page_size(sparsity_cb_index0, sparsity_cb_size);
+    tt_metal::CircularBufferConfig sparsity_cb_config1 =
+        tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index1, tt::DataFormat::Float32}})
+            .set_page_size(sparsity_cb_index1, sparsity_cb_size);
+
+    auto cb_sparsity0 = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
+    auto cb_sparsity1 = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
 
     if (interm0_data_format != output_data_format) {
         // output
