@@ -72,6 +72,7 @@ jobs:
               # e2e performant test is present in .../vit/demo folder only
               - models/demos/wormhole/vit/demo/
               - models/experimental/yolov5x/tests/perf/
+              - models/experimental/vovnet/tests/perf/
 
     name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:

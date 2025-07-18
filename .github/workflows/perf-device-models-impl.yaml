@@ -285,6 +285,15 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
+      - name: vovnet tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "VoVNet"
+          commands: |
+            pytest models/experimental/vovnet/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
       - name: Merge test reports
         id: generate-device-perf-report
         timeout-minutes: ${{ matrix.test-info.timeout }}
