@@ -3,21 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from torch import nn
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import gather_cos_sin, get_rot_transformation_mat
+from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
 from models.utility_functions import nearest_32
 from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
 
 
 # Copied from DeepseekV3RotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L114
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_position_embeddings, base, device=None):
+    def __init__(self, dim: int, max_position_embeddings: int, base: float, device: Optional[Any] = None) -> None:
         super().__init__()
 
         self.dim = dim
@@ -35,7 +35,7 @@ class RotaryEmbedding(nn.Module):
         self.max_seq_len_cached = None
 
     @staticmethod
-    def permute_to_meta_format(cos, sin):
+    def permute_to_meta_format(cos: torch.Tensor, sin: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # Undo the HF permute
         cos = cos[:, : cos.shape[1] // 2]
         cos = torch.stack((cos, cos), dim=-1).flatten(-2)
@@ -48,7 +48,7 @@ class RotaryEmbedding(nn.Module):
 
         return cos, sin
 
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
+    def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
         self.max_seq_len_cached = seq_len
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
 
@@ -61,8 +61,10 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
         self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
 
-    def forward(self, x, seq_len=None):
+    def forward(self, x: torch.Tensor, seq_len: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # x: [bs, num_attention_heads, seq_len, head_size]
+        if seq_len is None:
+            seq_len = x.shape[-2]  # Get sequence length from input tensor
         if self.max_seq_len_cached is None or seq_len > self.max_seq_len_cached:
             self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
 
@@ -76,17 +78,17 @@ class RotaryEmbedding(nn.Module):
 class YarnRotaryEmbedding(RotaryEmbedding):
     def __init__(
         self,
-        dim,
-        max_position_embeddings,
-        base,
-        factor,
-        original_max_position_embeddings,
-        beta_fast,
-        beta_slow,
-        mscale,
-        mscale_all_dim,
-        device=None,
-    ):
+        dim: int,
+        max_position_embeddings: int,
+        base: float,
+        factor: float,
+        original_max_position_embeddings: int,
+        beta_fast: float,
+        beta_slow: float,
+        mscale: float,
+        mscale_all_dim: float,
+        device: Optional[Any] = None,
+    ) -> None:
         self.scaling_factor = factor
         self.original_max_position_embeddings = original_max_position_embeddings
         self.beta_fast = beta_fast
@@ -97,24 +99,26 @@ class YarnRotaryEmbedding(RotaryEmbedding):
 
     # Inverse dim formula to find dim based on number of rotations
     @staticmethod
-    def yarn_find_correction_dim(num_rotations, dim, base, max_position_embeddings):
+    def yarn_find_correction_dim(num_rotations: float, dim: int, base: float, max_position_embeddings: int) -> float:
         return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
 
     # Find dim range bounds based on rotations
     @staticmethod
-    def yarn_find_correction_range(low_rot, high_rot, dim, base, max_position_embeddings):
+    def yarn_find_correction_range(
+        low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int
+    ) -> Tuple[int, int]:
         low = math.floor(YarnRotaryEmbedding.yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
         high = math.ceil(YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
         return max(low, 0), min(high, dim - 1)  # Clamp values just in case
 
     @staticmethod
-    def yarn_get_mscale(scale, mscale):
+    def yarn_get_mscale(scale: float, mscale: float) -> float:
         if scale <= 1:
             return 1.0
         return 0.1 * mscale * math.log(scale) + 1.0
 
     @staticmethod
-    def yarn_linear_ramp_mask(min, max, dim):
+    def yarn_linear_ramp_mask(min: float, max: float, dim: int) -> torch.Tensor:
         if min == max:
             max += 0.001  # Prevent singularity
 
@@ -122,7 +126,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         ramp_func = torch.clamp(linear_func, 0, 1)
         return ramp_func
 
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
+    def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
         self.max_seq_len_cached = seq_len
         dim = self.dim
 
@@ -165,22 +169,22 @@ class YarnRotaryEmbedding(RotaryEmbedding):
 class LlamaRotaryEmbedding(RotaryEmbedding):
     def __init__(
         self,
-        dim,
-        max_position_embeddings,
-        base,
-        factor,
-        original_max_position_embeddings,
-        low_freq_factor,
-        high_freq_factor,
-        device=None,
-    ):
+        dim: int,
+        max_position_embeddings: int,
+        base: float,
+        factor: float,
+        original_max_position_embeddings: int,
+        low_freq_factor: float,
+        high_freq_factor: float,
+        device: Optional[Any] = None,
+    ) -> None:
         self.scaling_factor = factor
         self.orig_context_len = original_max_position_embeddings
         self.low_freq_factor = low_freq_factor
         self.high_freq_factor = high_freq_factor
         super().__init__(dim, max_position_embeddings, base, device)
 
-    def apply_scaling(self, freqs):
+    def apply_scaling(self, freqs: torch.Tensor) -> torch.Tensor:
         # Llama-3.x specific scaling
         # Values obtained from grid search
         low_freq_wavelen = self.orig_context_len / self.low_freq_factor
@@ -200,7 +204,7 @@ class LlamaRotaryEmbedding(RotaryEmbedding):
                 new_freqs.append((1 - smooth) * freq / self.scaling_factor + smooth * freq)
         return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
+    def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
         self.max_seq_len_cached = seq_len
         freqs = 1.0 / (self.base ** (torch.arange(0, self.dim, 2)[: (self.dim // 2)].float() / self.dim))
         t = torch.arange(seq_len)
@@ -214,7 +218,13 @@ class LlamaRotaryEmbedding(RotaryEmbedding):
         self.register_buffer("sin_cached", (torch.sin(freqs)).to(dtype), persistent=False)
 
 
-def rotary_embedding_factory(dim, max_position_embeddings, base, rope_scaling=None, device=None):
+def rotary_embedding_factory(
+    dim: int,
+    max_position_embeddings: int,
+    base: float,
+    rope_scaling: Optional[RopeScaling] = None,
+    device: Optional[Any] = None,
+) -> Union[RotaryEmbedding, YarnRotaryEmbedding, LlamaRotaryEmbedding]:
     if rope_scaling is None:
         return RotaryEmbedding(dim, max_position_embeddings, base, device)
     else:
@@ -232,14 +242,23 @@ def rotary_embedding_factory(dim, max_position_embeddings, base, rope_scaling=No
         )
 
 
-def compute_gather_cos_sin(dhead, end, theta, rope_scaling):
+def compute_gather_cos_sin(
+    dhead: int, end: int, theta: float, rope_scaling: Optional[RopeScaling]
+) -> Tuple[torch.Tensor, torch.Tensor]:
     rotary_embedding = rotary_embedding_factory(
         dim=dhead, max_position_embeddings=end // 2, base=theta, rope_scaling=rope_scaling
     )
     return rotary_embedding.cos_cached, rotary_embedding.sin_cached
 
 
-def get_rot_mats(head_dim, device, seq_len, theta, rope_scaling, datatype=ttnn.bfloat16):
+def get_rot_mats(
+    head_dim: int,
+    device: Any,
+    seq_len: int,
+    theta: float,
+    rope_scaling: Optional[RopeScaling],
+    datatype: Any = ttnn.bfloat16,
+) -> List[ttnn.Tensor]:
     cos_matrix, sin_matrix = compute_gather_cos_sin(
         dhead=head_dim,
         end=2 * seq_len,
@@ -268,14 +287,14 @@ def get_rot_mats(head_dim, device, seq_len, theta, rope_scaling, datatype=ttnn.b
 class RotarySetup(LightweightModule):
     def __init__(
         self,
-        device,
+        device: Any,
         batch_size: int,
         head_dim: int,
         max_seq_len: int,
         rope_theta: float,
-        rope_scaling: Optional[dict] = None,
-        datatype=ttnn.bfloat16,
-    ):
+        rope_scaling: Optional[RopeScaling] = None,
+        datatype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
         super().__init__()
 
         self.batch_size = batch_size
@@ -347,12 +366,12 @@ class RotarySetup(LightweightModule):
             mesh_mapper=replicate_tensor_to_mesh_mapper(device),
         )
 
-    def get_both_trans_mats(self):
+    def get_both_trans_mats(self) -> Dict[str, ttnn.Tensor]:
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
         assert self.transformation_mat_prefill is not None, "Prefill Transformation matrix not initialized"
         return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
 
-    def get_rot_idxs(self, position_idxs, on_host=False):
+    def get_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
@@ -384,7 +403,9 @@ class RotarySetup(LightweightModule):
 
         return rot_idxs
 
-    def get_rot_mats(self, position_idxs, return_rot_idxs=False):
+    def get_rot_mats(
+        self, position_idxs: Union[torch.Tensor, ttnn.Tensor], return_rot_idxs: bool = False
+    ) -> List[ttnn.Tensor]:
         device = self.device
 
         # If position_idxs is a torch tensor, get the TTNN version of it
