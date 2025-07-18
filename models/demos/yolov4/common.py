@@ -48,6 +48,7 @@ def load_torch_model(model_location_generator, module=None):
     else:
         print("Entering CIv2 route")
         model_path = model_location_generator("vision-models/yolov4", model_subdir="", download_if_ci_v2=True)
+        print("Model location generator return path",model_path)
 
     if model_path == "models":
         if not os.path.exists("models/demos/yolov4/tests/pcc/yolov4.pth"):  # check if yolov4.th is availble
