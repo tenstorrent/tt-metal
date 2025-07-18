@@ -16,11 +16,6 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_eltwise_complex PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_eltwise_complex
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_eltwise_complex PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(TARGETS ttnn_op_eltwise_complex FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

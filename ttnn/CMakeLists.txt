@@ -89,8 +89,9 @@ target_include_directories(
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core
-    PRIVATE
+    PUBLIC
         TT::Metalium
+    PRIVATE
         xtensor
         FlatBuffers::FlatBuffers
         Boost::algorithm
@@ -431,6 +432,7 @@ target_link_libraries(
     ttnncpp
     PUBLIC
         TT::Metalium
+        xtensor
     PRIVATE
         TTNN::Core
         TTNN::Ops::Bernoulli

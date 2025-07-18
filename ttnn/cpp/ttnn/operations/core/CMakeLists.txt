@@ -26,9 +26,9 @@ target_sources(
 target_include_directories(ttnn_op_core PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_core
-    PRIVATE
-        TT::Metalium
+    PUBLIC
         TTNN::Core
+        TT::Metalium
 )
 
 install(TARGETS ttnn_op_core FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
