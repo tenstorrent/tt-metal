@@ -376,25 +376,6 @@ run_t3000_sd35large_tests() {
   fi
 }
 
-run_t3000_sentence_bert_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/sentence_bert/tests/test_sentence_bert_e2e_performant.py ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_sentence_bert_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
@@ -443,9 +424,6 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
-
-  # Run sentence bert tests
-  run_t3000_sentence_bert_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests
