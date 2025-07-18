@@ -211,4 +211,8 @@ private:
     size_t memory_map_end_address_;
 };
 
+// Returns the eth direction in which the data should be forwarded from the src to reach the dest
+std::optional<eth_chan_directions> get_eth_forwarding_direction(
+    FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
+
 }  // namespace tt::tt_fabric
