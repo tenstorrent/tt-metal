@@ -15,6 +15,7 @@ from models.tt_transformers.tt.common import (
     freqs_to_rotation_matrix,
     num_to_core_range_set,
     calculate_hidden_dim,
+    get_base_model_name,
     get_out_subblock_w,
     encode_prompt_instruct,
     encode_prompt_hf,
@@ -24,7 +25,6 @@ from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
 from enum import Enum, auto
-from tqdm import tqdm
 from dataclasses import dataclass
 from models.demos.llama3_subdevices.tt.load_checkpoints import (
     load_meta_state_dict,
@@ -439,8 +439,8 @@ class TtModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.1-70B-Instruct",
-        "LLAMA3_3_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.3-70B-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama-3.1-70B-Instruct",
+        "LLAMA3_3_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama-3.3-70B-Instruct",
     }
 
     def __init__(
@@ -463,7 +463,7 @@ class TtModelArgs:
         self.from_hf_url = False  # updated below if true
         self.max_prefill_chunk_size = max_seq_len
         self.use_prefetcher = False
-        self.max_top_k = 64
+        self.max_top_k = 32
 
         if self.num_devices == 32:
             self.use_prefetcher = True
@@ -602,6 +602,16 @@ class TtModelArgs:
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
         self.is_galaxy = self.num_devices == 32
+        self.galaxy_type = None
+
+        if self.is_galaxy:
+            self.galaxy_type = "6U" if ttnn.GetNumPCIeDevices() == 32 else "4U"
+        else:
+            raise ValueError(
+                f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
+            )
+        self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
+        self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -778,6 +788,8 @@ class TtModelArgs:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
             def w1_w3_prg_config(seq_len, use_interleaved):
+                if seq_len == 128:
+                    return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
@@ -832,6 +844,10 @@ class TtModelArgs:
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
             def w2_prg_config(seq_len):
+                if seq_len == 128:
+                    return self.matmul_1d_config(
+                        128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
+                    )
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if seq_len < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -916,7 +932,7 @@ class TtModelArgs:
 
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(7, 7),
-                    in0_block_w=4,
+                    in0_block_w=2,  # seeing this to 2 because 4 gives oom for long seqlen continuous batching
                     out_subblock_h=1,
                     out_subblock_w=5,
                     out_block_h=out_block_h,
@@ -930,16 +946,24 @@ class TtModelArgs:
 
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = w2_prg_config
 
-            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
-                in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
-                per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= 1024,
+            self.model_config["WO_PREFILL_PROGCFG"] = (
+                lambda seq_len: self.matmul_1d_config(
+                    seq_len, 1024, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=16
+                )
+                if seq_len == 128
+                else (
+                    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                        out_subblock_h=1,  # Must be divisible by per_core_M
+                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                        per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=seq_len <= 1024,
+                    )
+                )
             )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
@@ -968,18 +992,26 @@ class TtModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
-                in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(
-                    1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
-                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= 2048,
+            self.model_config["XQKV_PREFILL_PROGCFG"] = (
+                lambda seq_len: self.matmul_1d_config(
+                    seq_len, 2048, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=16
+                )
+                if seq_len == 128
+                else (
+                    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                        out_subblock_h=1,  # Must be divisible by per_core_M
+                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                        per_core_M=max(
+                            1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                        ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                        per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=seq_len <= 2048,
+                    )
+                )
             )
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
@@ -1548,7 +1580,7 @@ class TtModelArgs:
             )
 
             # Note PACKET_WORKER_CRS is 8 cores and it can NOT use any core in the following ranges:
-            # {1,6}-{2,7} (Reduce scatter ethernet worker cores),
+            # {2,8}-{3,8},{5,3}-{6,3}  (CCL cores),
             # {1,0}-{2,0}, {1,4}-{2,5}, {1,9}-{2,9}, {5,0}-{6,2}, {5,4}-{6,7}, {5,9}-{6,9} (Matmul)
             # {0,0}-{0,9}, {4,0}-{4,9} (Prefetcher)
             # {3,6} (Matmul hop core)
@@ -1940,10 +1972,7 @@ class TtModelArgs:
 
     @property
     def base_model_name(self):
-        # HuggingFace name contains a dash, but Meta name does not (e.g. Llama-3.1-70B vs Llama3.1-70B)
-        # Until we switch to HF weights-first, we need to force the dash out
-        model_name = self.model_name.replace("Llama-", "Llama")
-        return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        return get_base_model_name(self.model_name)
 
     @property
     def vision_chunk_ntok(self):
@@ -1970,24 +1999,24 @@ class TtModelArgs:
         # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
         if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama3.2-1B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama3.2-3B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama3.1-8B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama3.2-11B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
             self.max_prefill_chunk_size = 128 * 1024
         elif "3.3-70B" in checkpoint_dir:
-            self.model_name = "Llama3.3-70B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.3-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
             self.max_prefill_chunk_size = 128 * 1024
@@ -2538,73 +2567,6 @@ class TtModelArgs:
                     logger.warning(f"Falling back to base model encoding with no chat template")
 
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
-
-
-def load_llama_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
-    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-    assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-    is_chunked = "layers_" in str(checkpoints[0])
-    if is_chunked:
-        checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
-    else:
-        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
-
-    return checkpoint
-
-
-def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
-    checkpoint = {}
-
-    (f"Loading {len(checkpoints)} checkpoint files")
-    for ckpt in tqdm(checkpoints):
-        if n_layers:
-            # Layer range is in the file name, like layers_start-end.pth
-            layer_range = ckpt.stem.split("_")[1]
-            start_layer, end_layer = map(int, layer_range.split("-"))
-            if start_layer > n_layers + start_layer_idx:
-                continue
-            if end_layer < start_layer_idx:
-                continue
-
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        checkpoint.update(loaded_ckpt)
-    return checkpoint
-
-
-def load_sharded_checkpoints(checkpoints, n_layers):
-    checkpoint = {}
-    logger.info(f"Loading {len(checkpoints)} checkpoint files")
-    for ckpt in tqdm(checkpoints):
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        for (
-            key,
-            value,
-        ) in loaded_ckpt.items():
-            if "layers." in key:
-                layer_num = int(key.split("layers.")[1].split(".")[0])
-                if n_layers and layer_num >= n_layers:
-                    continue
-            if key in checkpoint:
-                checkpoint[key] += [value]
-            else:
-                checkpoint[key] = [value]
-        del loaded_ckpt
-
-    # concat checkpoint values
-    for key, value in checkpoint.items():
-        if len(value) == 1 or "norm" in key:
-            checkpoint[key] = value[0]
-        else:
-            if key == "tok_embeddings.weight" or key == "output.weight":
-                assert value[0].shape[1] == 8192  # FIXME: do we need this hardcoded shape?
-                # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
-                checkpoint[key] = torch.cat(value, dim=0)
-            else:
-                # cat_dim is index of the smallest dimension in value[0].shape
-                cat_dim = torch.argmin(torch.tensor(value[0].shape))
-                checkpoint[key] = torch.cat(value, dim=cat_dim)
-
-    return checkpoint
 
 
 def num_to_corerange(x):

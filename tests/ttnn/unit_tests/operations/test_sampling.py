@@ -14,7 +14,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_blackhole
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device):
@@ -181,7 +180,6 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     )
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -206,7 +204,6 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -219,7 +216,7 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
 @pytest.mark.parametrize(
     "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
 )
-def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids, use_program_cache):
+def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):

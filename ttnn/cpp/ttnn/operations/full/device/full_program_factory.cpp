@@ -4,7 +4,7 @@
 
 #include "full_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -49,7 +49,6 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         tt::tt_metal::split_work_to_cores(grid, num_tiles);
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(data_format);
 
     // Create program
     Program program = Program();
@@ -65,7 +64,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         });
 
     // Create kernels
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     switch (dtype) {
         case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::INT32: reader_defines["OUTPUT_DTYPE_INT32"] = "1"; break;

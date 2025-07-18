@@ -13,7 +13,6 @@ import ttnn
 from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
-
 TILE_WIDTH = 32
 
 
@@ -57,43 +56,47 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
         raise ValueError("Invalid ncores")
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        [2, 1280, 4, 4],  # 256x256
-        [2, 1280, 8, 8],
+        [1, 640, 16, 16],
+        [1, 1280, 8, 8],
+        [1, 1280, 16, 16],
+        [2, 1280, 16, 16],
         [2, 640, 16, 16],
-        [2, 1280, 8, 8],  # 512x512
-        [2, 1280, 16, 16],
-        [2, 1280, 16, 16],
+        [1, 256, 28, 28],
+        [1, 512, 14, 14],
     ],
 )
 @pytest.mark.parametrize("scale_h", [2])
 @pytest.mark.parametrize("scale_w", [2])
-def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
-    batch_size, height, width, num_channels = input_shapes
-
+@pytest.mark.parametrize("mode", ["nearest"])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("math_approx_mode", [True, False])
+def test_upsample_single_core(device, input_shapes, mode, scale_h, scale_w, math_fidelity, math_approx_mode):
+    batch_size, num_channels, height, width = input_shapes
     torch.manual_seed(0)
+
     input = torch.rand(input_shapes, dtype=torch.bfloat16)
-    tt_input = input.permute(0, 3, 1, 2)
+    tt_input = input.permute(0, 2, 3, 1)
+    input_tensor = ttnn.from_torch(tt_input, device=device)
+    scale_factor = (scale_h, scale_w)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode)
+    torch_result = torch_upsample(input)
 
     scale_factor = (scale_h, scale_w)
-    m = nn.Upsample(scale_factor=scale_factor, mode="nearest")
-    torch_result = m(tt_input)
-    torch_result = torch_result.permute(0, 2, 3, 1)
 
-    ## ttnn uses NHWC, so need to set scale_factor_c = 1
-    scale_factor = (scale_h, scale_w)
-    input_tensor = ttnn.from_torch(input, device=device)
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
+
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_result, output_tensor)
-
+    torch_result = torch_result.permute(0, 2, 3, 1)
+    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor)
+    logger.info(pcc_message)
     allclose = torch.allclose(output_tensor, torch_result)
     isclose = torch.all(torch.isclose(output_tensor, torch_result))
     isequal = torch.equal(output_tensor, torch_result)
-
     assert allclose
     assert isclose
     assert isequal
@@ -143,9 +146,9 @@ def upsample_multicore_common(
         )
         if shard_strategy == ttnn.ShardStrategy.BLOCK:
             if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-                ncores = (core_range[0][1][0] - core_range[0][0][0] + 1, core_range[0][1][1] - core_range[0][0][1] + 1)
-            elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
                 ncores = (core_range[0][1][1] - core_range[0][0][1] + 1, core_range[0][1][0] - core_range[0][0][0] + 1)
+            elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+                ncores = (core_range[0][1][0] - core_range[0][0][0] + 1, core_range[0][1][1] - core_range[0][0][1] + 1)
         elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
             ncores = shard_grid.num_cores()
         else:
@@ -331,6 +334,7 @@ def test_upsample_multicore_corerange(
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w",
     (
+        (1, 1280, 8, 8, 2, 2),
         (1, 256, 16, 16, 8, 8),  # 256x256
         (1, 256, 32, 32, 4, 4),  # 256x256
         (1, 256, 64, 64, 2, 2),  # 256x256
@@ -338,6 +342,11 @@ def test_upsample_multicore_corerange(
         (1, 72, 8, 8, 2, 2),
         (1, 288, 8, 8, 2, 2),
         (1, 1024, 8, 8, 2, 2),
+        (1, 256, 28, 28, 2, 2),
+        (1, 512, 14, 14, 2, 2),
+        (2, 32, 16, 16, 2, 2),
+        (4, 64, 48, 48, 3, 3),
+        (64, 32, 4, 4, 2, 2),
     ),
 )
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])
@@ -345,7 +354,6 @@ def test_upsample_multicore_corerange(
 @pytest.mark.parametrize("math_approx_mode", [True, False])
 def test_bilinear_multi_core(
     device,
-    use_program_cache,
     batch_size,
     num_channels,
     height,

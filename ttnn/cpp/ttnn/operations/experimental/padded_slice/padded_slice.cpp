@@ -61,7 +61,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
         if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
             auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
-            tensor = ttnn::to_layout(tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+            tensor = ttnn::to_layout(tensor, input_layout);
             return tensor;
         }
         return ret_input_tensor;

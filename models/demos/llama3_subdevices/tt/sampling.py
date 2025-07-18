@@ -30,7 +30,7 @@ class TTSampling(LightweightModule):
         self.max_batch_size = args.max_batch_size
         self.max_top_k = args.max_top_k
 
-        max_num_gather_links = 4 if is_RING_6U else 3
+        max_num_gather_links = args.model_config["GALAXY_NUM_LINKS"]
         self.num_gather_links = (
             self.max_top_k // 32 if self.max_top_k // 32 <= max_num_gather_links else max_num_gather_links
         )
@@ -106,8 +106,12 @@ class TTSampling(LightweightModule):
         seed: int = 0,
         tt_out_tok: ttnn.Tensor = None,
     ):
+        x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids)
+
         # Local top k
-        topk_values, topk_indices = ttnn.topk(x, k=self.max_top_k, dim=-1, sub_core_grids=self.args.sub_core_grid_topk)
+        topk_values, topk_indices = ttnn.topk(
+            x_bf16, k=self.max_top_k, dim=-1, sub_core_grids=self.args.sub_core_grid_topk
+        )
 
         # Gather values
         # Note: Persistent output buffer used, do not deallocate output!

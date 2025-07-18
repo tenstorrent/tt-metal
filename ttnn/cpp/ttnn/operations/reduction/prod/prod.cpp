@@ -6,13 +6,13 @@
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "cpp/ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -79,7 +79,7 @@ Tensor ProdOperation::invoke(
     const int size = static_cast<int>(input_a.logical_shape().rank());
 
     const auto old_rank = input_a.logical_shape().rank();
-    const ttnn::Shape input_shape = input_a.logical_shape();
+    const ttnn::Shape& input_shape = input_a.logical_shape();
 
     // If no dim is provided, compute the prod across all dimensions
     if (!dim.has_value()) {

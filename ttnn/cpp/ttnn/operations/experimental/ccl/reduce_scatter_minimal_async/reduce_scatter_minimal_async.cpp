@@ -12,23 +12,23 @@ namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     const ttnn::Tensor& input_tensor,
-    ttnn::Tensor& persistent_intermediate_buffer,
-    ttnn::Tensor& persistent_output_buffer,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<uint32_t> cluster_axis) {
     return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
         input_tensor,
-        persistent_intermediate_buffer,
-        persistent_output_buffer,
+        persistent_output_buffers,
         dim,
         multi_device_global_semaphore,
         num_links,
         memory_config,
         topology,
-        subdevice_id);
+        subdevice_id,
+        cluster_axis);
 }
 }  // namespace ttnn::operations::experimental::ccl

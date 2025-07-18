@@ -5,12 +5,14 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <magic_enum/magic_enum.hpp>
+#include <iomanip>
 #include <map>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
@@ -18,20 +20,64 @@
 namespace tt::tt_fabric {
 namespace system_health_tests {
 
-const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
-    {tt::ARCH::WORMHOLE_B0, {0x00, 0x40, 0xC0, 0x80}},
-    {tt::ARCH::BLACKHOLE, {0xC0, 0x80, 0x00, 0x40}},
+struct UbbId {
+    std::uint32_t tray_id;
+    std::uint32_t asic_id;
 };
 
-std::pair<std::uint32_t, std::uint32_t> get_ubb_ids(chip_id_t chip_id) {
+enum class ConnectorType { EXTERNAL, TRACE, LK1, LK2, LK3 };
+
+enum class LinkingBoardType {
+    A,
+    B,
+};
+
+const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
+    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
+    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
+};
+
+const std::unordered_map<ConnectorType, LinkingBoardType> linking_board_types = {
+    {ConnectorType::LK1, LinkingBoardType::A},
+    {ConnectorType::LK2, LinkingBoardType::A},
+    {ConnectorType::LK3, LinkingBoardType::B},
+};
+
+std::uint64_t cw_pair_to_full(uint32_t hi, uint32_t lo) {
+    return (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+}
+
+UbbId get_ubb_id(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), cluster.get_bus_id(chip_id) & 0xF0);
+    const auto bus_id = cluster.get_bus_id(chip_id);
+    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_asic_id = cluster.get_ubb_asic_id(chip_id);
-        return std::make_pair(tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id);
+        auto ubb_asic_id = bus_id & 0x0F;
+        return UbbId{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
     }
-    return std::make_pair(0, 0);
+    return UbbId{0, 0};  // Invalid UBB ID if not found
+}
+
+ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t chan, ClusterType cluster_type) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    if (cluster.is_external_cable(chip_id, eth_core)) {
+        return ConnectorType::EXTERNAL;
+    }
+    if (cluster_type == ClusterType::GALAXY) {
+        auto ubb_id = get_ubb_id(chip_id);
+        if ((ubb_id.asic_id == 5 || ubb_id.asic_id == 6) && (12 <= chan && chan <= 15)) {
+            return ConnectorType::LK1;
+        } else if ((ubb_id.asic_id == 7 || ubb_id.asic_id == 8) && (12 <= chan && chan <= 15)) {
+            return ConnectorType::LK2;
+        } else if ((ubb_id.asic_id == 4 || ubb_id.asic_id == 8) && (8 <= chan && chan <= 11)) {
+            return ConnectorType::LK3;
+        } else {
+            return ConnectorType::TRACE;
+        }
+    } else {
+        return ConnectorType::TRACE;
+    }
 }
 
 bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::ClusterType cluster_type) {
@@ -68,18 +114,89 @@ bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::ClusterType clust
     }
 }
 
+std::string get_ubb_id_str(chip_id_t chip_id) {
+    auto ubb_id = get_ubb_id(chip_id);
+    return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
+}
+
+std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t channel, ClusterType cluster_type) {
+    auto connector = get_connector_type(chip_id, eth_core, channel, cluster_type);
+    std::stringstream str;
+    str << "(";
+    switch (connector) {
+        case ConnectorType::EXTERNAL: str << "external connector"; break;
+        case ConnectorType::TRACE: str << "internal trace"; break;
+        case ConnectorType::LK1:
+        case ConnectorType::LK2:
+        case ConnectorType::LK3:
+            str << "linking board " << magic_enum::enum_name(connector).back() << " type "
+                << magic_enum::enum_name(linking_board_types.at(connector));
+            break;
+    }
+    str << ")";
+    return str.str();
+}
+
+TEST(Cluster, ReportIntermeshLinks) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Check if cluster supports intermesh links
+    if (!control_plane.system_has_intermesh_links()) {
+        log_info(tt::LogTest, "Cluster does not support intermesh links");
+        return;
+    }
+
+    log_info(tt::LogTest, "Intermesh Link Configuration Report");
+    log_info(tt::LogTest, "===================================");
+
+    // Get all intermesh links in the system
+    auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
+
+    // Summary
+    size_t total_chips = 0;
+    size_t total_links = 0;
+    for (const auto& [chip_id, links] : all_intermesh_links) {
+        if (links.size() > 0) {
+            total_chips++;
+            total_links += links.size();
+        }
+    }
+
+    log_info(tt::LogTest, "Total chips with intermesh links: {}", total_chips);
+    log_info(tt::LogTest, "Total intermesh links: {}", total_links);
+    log_info(tt::LogTest, "");
+
+    // Detailed information per chip
+    for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
+        if (control_plane.has_intermesh_links(chip_id)) {
+            auto links = control_plane.get_intermesh_eth_links(chip_id);
+            log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
+
+            for (const auto& [eth_core, channel] : links) {
+                log_info(tt::LogTest, "  Channel {} at {}", channel, eth_core.str());
+            }
+        }
+    }
+}
+
 TEST(Cluster, ReportSystemHealth) {
     // Despite potential error messages, this test will not fail
     // It is a report of system health
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& eth_connections = cluster.get_ethernet_connections();
-    const auto& eth_connections_to_remote_mmio_devices = cluster.get_ethernet_connections_to_remote_mmio_devices();
 
     auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
     std::stringstream ss;
     std::vector<std::uint32_t> read_vec;
     auto retrain_count_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+    auto crc_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
+    auto corr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
+    auto uncorr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
     if (unique_chip_ids.empty()) {
         // Temporary patch to workaround unique chip ids not being set for non-6U systems
         for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
@@ -96,33 +213,49 @@ TEST(Cluster, ReportSystemHealth) {
         std::stringstream chip_id_ss;
         chip_id_ss << std::dec << "Chip: " << chip_id << " Unique ID: " << std::hex << unique_chip_id;
         if (cluster_type == tt::ClusterType::GALAXY) {
-            auto [tray_id, ubb_asic_id] = get_ubb_ids(chip_id);
-            chip_id_ss << " Tray: " << tray_id << " N" << ubb_asic_id;
+            chip_id_ss << " " << get_ubb_id_str(chip_id);
         }
         ss << chip_id_ss.str() << std::endl;
         for (const auto& [eth_core, chan] : soc_desc.logical_eth_core_to_chan_map) {
             tt_cxy_pair virtual_eth_core(
                 chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
             std::stringstream eth_ss;
+            uint32_t crc_error_val = 0;
+            uint32_t corr_val_lo = 0, corr_val_hi = 0, uncorr_val_lo = 0, uncorr_val_hi = 0;
             cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
+            // TODO: remove WORMHOLE checks once register access available for all platform
+            if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+                cluster.read_core(&crc_error_val, sizeof(uint32_t), virtual_eth_core, crc_addr);
+                cluster.read_core(&corr_val_hi, sizeof(uint32_t), virtual_eth_core, corr_addr);
+                cluster.read_core(&corr_val_lo, sizeof(uint32_t), virtual_eth_core, corr_addr + 4);
+                cluster.read_core(&uncorr_val_hi, sizeof(uint32_t), virtual_eth_core, uncorr_addr);
+                cluster.read_core(&uncorr_val_lo, sizeof(uint32_t), virtual_eth_core, uncorr_addr + 4);
+            }
             eth_ss << " eth channel " << std::dec << (uint32_t)chan << " " << eth_core.str();
-            std::string connection_type =
-                cluster.is_external_cable(chip_id, eth_core) ? "(external connector)" : "(internal trace)";
+            std::string connection_type = get_connector_str(chip_id, eth_core, chan, cluster_type);
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
                 if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
                     const auto& [connected_chip_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
-                    std::cout << "Connected chip: " << connected_chip_id
-                              << " connected eth core: " << connected_eth_core.str() << std::endl;
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
-                           << connected_chip_id << " " << connected_eth_core.str();
+                           << connected_chip_id;
+                    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+                        eth_ss << "\n\tCRC Errors: 0x" << std::hex << crc_error_val << " ";
+                        eth_ss << "Corrected Codewords: 0x" << std::hex << cw_pair_to_full(corr_val_hi, corr_val_lo)
+                               << " Uncorrected Codewords: 0x" << std::hex
+                               << cw_pair_to_full(uncorr_val_hi, uncorr_val_lo);
+                    }
+                    if (cluster_type == tt::ClusterType::GALAXY) {
+                        eth_ss << " " << get_ubb_id_str(connected_chip_id);
+                    }
+                    eth_ss << " " << connected_eth_core.str();
                 } else {
                     const auto& [connected_chip_unique_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core_to_remote_mmio_device(std::make_tuple(chip_id, eth_core));
-                    std::cout << "Connected unique chip: " << connected_chip_unique_id
-                              << " connected eth core: " << connected_eth_core.str() << std::endl;
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
-                           << connected_chip_unique_id << " " << connected_eth_core.str();
+                           << std::hex << connected_chip_unique_id;
+                    // Cannot use get_ubb_id_str here as connected_chip_unique_id is on other host
+                    eth_ss << " " << connected_eth_core.str();
                 }
                 if (read_vec[0] > 0) {
                     unexpected_system_states.push_back(chip_id_ss.str() + eth_ss.str());
@@ -225,8 +358,8 @@ TEST(Cluster, TestMeshFullConnectivity) {
     if (not target_system_topology_str.empty()) {
         target_system_topology =
             magic_enum::enum_cast<FabricType>(target_system_topology_str, magic_enum::case_insensitive);
-        // TORUS_2D is the only topology that is supported for all cluster types
-        if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_2D) {
+        // TORUS_XY is the only topology that is supported for all cluster types
+        if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_XY) {
             bool supported_topology = false;
             switch (cluster_type) {
                 case tt::ClusterType::GALAXY:
@@ -244,13 +377,11 @@ TEST(Cluster, TestMeshFullConnectivity) {
             }
         }
     }
-    uint32_t tray_id = 0, ubb_asic_id = 0;
     for (const auto& [chip, connections] : eth_connections) {
         std::stringstream chip_ss;
         chip_ss << "Chip " << chip;
         if (cluster_type == tt::ClusterType::GALAXY) {
-            std::tie(tray_id, ubb_asic_id) = get_ubb_ids(chip);
-            chip_ss << " Tray: " << tray_id << " N" << ubb_asic_id;
+            chip_ss << " " << get_ubb_id_str(chip);
         }
         const auto& soc_desc = cluster.get_soc_desc(chip);
         std::map<chip_id_t, int> num_connections_to_chip;
@@ -278,7 +409,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
                     << num_expected_chip_connections << " chips for " << magic_enum::enum_name(*target_system_topology)
                     << " topology";
             };
-            if (*target_system_topology == FabricType::TORUS_2D) {
+            if (*target_system_topology == FabricType::TORUS_XY) {
                 static constexpr std::uint32_t num_expected_chip_connections = 4;
                 validate_num_connections(num_connections_to_chip.size(), num_expected_chip_connections);
             } else {
@@ -305,8 +436,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
             std::stringstream other_chip_ss;
             other_chip_ss << "Chip " << other_chip;
             if (cluster_type == tt::ClusterType::GALAXY) {
-                auto [other_tray_id, other_ubb_asic_id] = get_ubb_ids(other_chip);
-                other_chip_ss << " Tray: " << other_tray_id << " N" << other_ubb_asic_id;
+                other_chip_ss << " " << get_ubb_id_str(other_chip);
             }
             if (num_target_connections > 0) {
                 EXPECT_GE(count, num_target_connections)

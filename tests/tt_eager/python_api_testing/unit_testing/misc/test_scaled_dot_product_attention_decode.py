@@ -285,11 +285,11 @@ def run_test_sdpa_decode_multi_pos(
         K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
         K_slice = torch.cat(
             [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
+        )  # b, nh, S, d
         V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
         V_slice = torch.cat(
             [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
+        )  # b, nh, S, d
         attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
         expect = torch.nn.functional.scaled_dot_product_attention(
@@ -473,11 +473,11 @@ def run_test_sdpa_decode_single_iter(
     K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
     K_slice = torch.cat(
         [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
+    )  # b, nh, S, d
     V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
     V_slice = torch.cat(
         [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
+    )  # b, nh, S, d
     attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
     expect = torch.nn.functional.scaled_dot_product_attention(
         Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
@@ -523,9 +523,7 @@ def run_test_sdpa_decode_single_iter(
         # [1, 8, 1, 8192*16, 128, (1, 1), False, True],  # llama2-70B long seqlen
     ),
 )
-def test_sdpa_decode(
-    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor, use_program_cache
-):
+def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor):
     if nkv > 1 and q_dtype != ttnn.bfloat16:
         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
 
@@ -560,7 +558,7 @@ def test_sdpa_decode(
         [32, 4, 1, 4224, 128, (8, 8)],  # llama3.2 vision encoder on n300
     ),
 )
-def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, use_program_cache):
+def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     if nkv > 1 and q_dtype != ttnn.bfloat16:
         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
 
@@ -586,9 +584,7 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     "b, nh, nkv, s, d, grid_size, single_iter, cur_pos_tensor",
     ([32, 8, 1, 32768, 128, (8, 6), True, True],),  # Llama2-70B
 )
-def test_sdpa_decode_ignore_users(
-    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor, use_program_cache
-):
+def test_sdpa_decode_ignore_users(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor):
     ttnn.device.DisablePersistentKernelCache()
 
     # Set odd users to -1 to test skipping users
@@ -803,11 +799,11 @@ def run_test_sdpa_decode_paged_attention(
         K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
         K_slice = torch.cat(
             [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
+        )  # b, nh, S, d
         V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
         V_slice = torch.cat(
             [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
+        )  # b, nh, S, d
         attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
         expect = torch.nn.functional.scaled_dot_product_attention(
@@ -997,11 +993,11 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
     K_slice = torch.cat(
         [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
+    )  # b, nh, S, d
     V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
     V_slice = torch.cat(
         [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
+    )  # b, nh, S, d
 
     attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
     for i in range(b):
@@ -1058,7 +1054,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
 )
 @pytest.mark.parametrize("block_size", (32, 64, 128), ids=["paged_32", "paged_64", "paged_128"])
 def test_sdpa_decode_paged_attention(
-    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size
 ):
     if s == 128 * 1024 and block_size != 64:
         # 128k sequence, block_size 64 tests the sizing of the page table CB
@@ -1148,7 +1144,7 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     ],
 )
 def test_sdpa_decode_sharded_on_subcoregrids(
-    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
 ):
     run_test_sdpa_decode_single_iter(
         device,
@@ -1185,7 +1181,7 @@ def test_sdpa_decode_sharded_on_subcoregrids(
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.skip("Skipping Perf Test in CI")
-def test_sdpa_decode_perf(device, use_program_cache):
+def test_sdpa_decode_perf(device):
     dtype = ttnn.bfloat8_b
     q_dtype = ttnn.bfloat16
     nh = 8
@@ -1247,7 +1243,7 @@ def test_sdpa_decode_perf(device, use_program_cache):
     "b, nh, nkv, s, d",
     ([16, 8, 1, 8192, 128],),  # Llama2-70B
 )
-def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_cache):
+def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
     ttnn.device.DisablePersistentKernelCache()
 
     dummy_tensors = []
@@ -1479,6 +1475,6 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         [16, 8, 1, 32768, 128, (8, 6)],
     ),
 )
-def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, use_program_cache):
+def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)

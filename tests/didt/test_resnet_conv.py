@@ -85,6 +85,7 @@ class ResnetConvTest(OpTestBase):
         self.weights_block_w = weights_block_w
         self.weights_df_on_device = weights_df_on_device
         self.reader_patterns_cache = {}
+        self.out_dtype = out_dtype
 
     # Remove weights shape
     def generate_torch_weights(self, shape):
@@ -138,6 +139,7 @@ class ResnetConvTest(OpTestBase):
             conv_config=self.program_config,
             compute_config=self.compute_config,
             groups=self.groups,
+            dtype=self.out_dtype,
         )
         self.reader_patterns_cache.clear()
         return tt_output_tensor_on_device
@@ -154,7 +156,7 @@ class ResnetConvTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache):
+def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_interval):
     groups = 1
     dilation = 1
     pad_w = 0
@@ -195,7 +197,6 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
 
     shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
         deallocate_activation=False,
@@ -223,7 +224,7 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),  # see what this does
         in0_dtype,
         in1_dtype,
-        None,  # out_dtype
+        activations_dtype,  # out_dtype
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ROW_MAJOR_LAYOUT,
         conv_config,  # program config
@@ -266,16 +267,13 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_specific_chip_resnet_conv(
-    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval, use_program_cache
-):
+def test_specific_chip_resnet_conv(mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
     test_resnet_conv(
         mesh_device.get_device(logical_chip_id),
         didt_workload_iterations,
         determinism_check_interval,
-        use_program_cache,
         False,
     )
 
@@ -288,9 +286,5 @@ def test_specific_chip_resnet_conv(
     indirect=["t3k_single_board_mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_specific_board_resnet_conv(
-    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache
-):
-    test_resnet_conv(
-        t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, False
-    )
+def test_specific_board_resnet_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval):
+    test_resnet_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)

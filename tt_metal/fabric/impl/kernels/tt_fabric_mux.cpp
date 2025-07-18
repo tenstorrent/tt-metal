@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
@@ -55,11 +56,7 @@ void setup_channel(
     size_t& sender_flow_control_address,
     StreamId my_channel_free_slots_stream_id) {
     new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
-        channel_base_address,
-        buffer_size_bytes,
-        sizeof(PACKET_HEADER_TYPE),
-        0, /* unused, eth_transaction_ack_word_addr */
-        channel_id);
+        channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE), channel_id);
     channel_base_address += NUM_BUFFERS * buffer_size_bytes;
     init_ptr_val(my_channel_free_slots_stream_id, NUM_BUFFERS);
 
@@ -119,10 +116,19 @@ void forward_data(
 }
 
 void kernel_main() {
+    size_t rt_args_idx = 0;
+
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
-    size_t rt_args_idx = 0;
+    // clear out memory regions
+    auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
+    for (uint32_t i = 0; i < num_regions_to_clear; i++) {
+        auto address = get_arg_val<uint32_t>(rt_args_idx++);
+        auto size = get_arg_val<uint32_t>(rt_args_idx++);
+        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
+    }
+
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
@@ -191,7 +197,7 @@ void kernel_main() {
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
-            bool all_channels_drained = false;
+            bool all_channels_drained = true;
             for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
                 all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
             }
@@ -201,7 +207,7 @@ void kernel_main() {
             }
 
             if (all_channels_drained) {
-                return;
+                break;
             }
         }
 

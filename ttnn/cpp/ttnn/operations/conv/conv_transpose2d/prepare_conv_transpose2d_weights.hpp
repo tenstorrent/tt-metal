@@ -29,9 +29,11 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     std::array<uint32_t, 2> stride,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
-    const bool has_bias,
+    bool has_bias,
     uint32_t groups,
     T* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     bool mirror_kernel = true);
@@ -52,6 +54,8 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 

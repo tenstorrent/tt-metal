@@ -26,7 +26,6 @@ def randomize_tensor(tensor_map, tensor_shape):
 
 def run_avg_pool2d(
     device,
-    use_program_cache,
     tensor_map,
     input_shape,
     kernel_size,
@@ -37,6 +36,7 @@ def run_avg_pool2d(
     count_include_pad,
     shard_scheme,
     run_twice=False,
+    dtype=ttnn.bfloat16,
 ):
     ## Test setup for both.
     in_n, in_c, in_h, in_w = input_shape
@@ -44,7 +44,10 @@ def run_avg_pool2d(
     torch_input = randomize_tensor(tensor_map, input_shape)
 
     ## Test setup for Actual.
-    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    if dtype == ttnn.bfloat8_b:
+        ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_input = ttnn.permute(ttnn_input, (0, 2, 3, 1))
     ttnn_input = ttnn.reshape(ttnn_input, (1, 1, in_n * in_h * in_w, in_c))
 
@@ -100,8 +103,21 @@ def run_avg_pool2d(
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     ## Assertion
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
-    allclose = torch.allclose(ttnn_output, torch_output, rtol=0.02)
+    pcc_thresh = 0.99
+    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    # TTNN only supports scalars in Bfloat16, so we cannot support rtol lower than 0.01
+    # for instance, a 3x3 kernel uses scalar 1/9 = 0.111, which in Bfloat16 is 0.11084
+    # so if we fill the tensor with 1s, Torch gets 9 * 0.111 = 0.999 which converted back
+    # to Bfloat16 rounds to 1.0 but TTNN gets 9 * 0.11084 = 0.99756 which converted back
+    # to Bfloat16 rounds to 0.9961, so the rdiff in this case is 0.0039
+    # since the atol default is 0.016 we don't see this issue for low magnitude values, but
+    # when using small divisor overrides with large kernels we see much large values which
+    # overwhelm the atol and the rtol becomes significant
+    rtol = 0.01
+    if dtype == ttnn.bfloat8_b:
+        atol = 0.35
+    assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
+    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     assert allclose, " Reference and output tensor are not close"
 
 
@@ -211,7 +227,6 @@ def test_run_avg_pool2d(
         )
     run_avg_pool2d(
         device,
-        use_program_cache,
         tensor_map,
         input_shape,
         kernel_size,

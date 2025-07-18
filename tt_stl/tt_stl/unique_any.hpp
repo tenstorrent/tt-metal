@@ -9,7 +9,7 @@
 
 #include <tt_stl/concepts.hpp>
 
-namespace tt::stl {
+namespace ttsl {
 
 template <auto MAX_STORAGE_SIZE, auto ALIGNMENT>
 struct unique_any final {
@@ -23,7 +23,7 @@ struct unique_any final {
             if constexpr (std::is_move_constructible_v<BaseType>) {
                 return new (&self) BaseType{std::move(*reinterpret_cast<BaseType*>(other))};
             } else {
-                static_assert(tt::stl::concepts::always_false_v<BaseType>);
+                static_assert(ttsl::concepts::always_false_v<BaseType>);
             }
         }} {
         static_assert(sizeof(BaseType) <= MAX_STORAGE_SIZE);
@@ -79,4 +79,10 @@ private:
     void* (*move_storage)(storage_t& storage, void*) = nullptr;
 };
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

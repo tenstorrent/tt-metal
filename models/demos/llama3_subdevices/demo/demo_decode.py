@@ -14,7 +14,6 @@ import requests
 from pathlib import Path
 import hashlib
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
@@ -37,7 +36,7 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 65, "max": 70}},
 }
 
 
@@ -131,7 +130,6 @@ def run_llama3_demo(
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     dtype = ttnn.bfloat8_b
-    num_links = 4 if is_RING_6U else 2
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
@@ -189,8 +187,8 @@ def run_llama3_demo(
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
 
     if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama3.1-70B"
+        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
+        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -227,7 +225,7 @@ def run_llama3_demo(
         )
         logger.info("Page table tensor done")
 
-    # Load TTNN Llama3.1 model
+    # Load TTNN Llama-3.1 model
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -433,7 +431,7 @@ def run_llama3_demo(
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
     all_tokens_per_second_per_user = []
-
+    failed_tokens_per_second_per_user = []
     read_events = []
     tt_out_toks_cpu = []
     iteration_time_start = time()
@@ -517,11 +515,12 @@ def run_llama3_demo(
 
                 if not stress_test:
                     # Increment failure count if throughput is too low
-                    if iteration < 200 and (
+                    if decode_iteration in range(1, 200) and (
                         tokens_per_second_per_user < tsu_thresholds["min"]
                         or tokens_per_second_per_user > tsu_thresholds["max"]
                     ):
                         tsu_failures += 1
+                        failed_tokens_per_second_per_user.append((decode_iteration, tokens_per_second_per_user))
 
                 iteration_time_start = time()
 
@@ -576,17 +575,13 @@ def run_llama3_demo(
 
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * iteration / 100
+        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * decode_iteration / 100
         if tsu_failures > tsu_perf_drop_limit:
             logger.info(out_of_targets_msg)
             logger.info(f"Failing iterations sorted by t/s/u")
-            sorted_tokens_per_second_per_user = sorted(all_tokens_per_second_per_user)
-            for i in range(len(sorted_tokens_per_second_per_user)):
-                if (
-                    sorted_tokens_per_second_per_user[i] < tsu_thresholds["min"]
-                    or sorted_tokens_per_second_per_user[i] > tsu_thresholds["max"]
-                ):
-                    logger.info(f"Iteration {i}: {sorted_tokens_per_second_per_user[i]}")
+            sorted_tokens_per_second_per_user = sorted(failed_tokens_per_second_per_user, key=lambda x: x[1])
+            for iteration, tsu in sorted_tokens_per_second_per_user:
+                logger.info(f"Iteration {iteration}: {tsu}")
         # Assert at the end of test to check if the throughput recuperated
         assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
 
@@ -599,7 +594,7 @@ def run_llama3_demo(
 # input_prompts (string): input json file with prompts to process. See models/demos/llama3/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
@@ -732,7 +727,7 @@ def run_llama3_demo(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -753,7 +748,6 @@ def test_llama_demo(
     start_pos,
     optimizations,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
     request,
@@ -765,7 +759,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
     if galaxy_type != "6U" and galaxy_type != "4U":
         raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 

@@ -278,8 +278,12 @@ run_t3000_tteager_tests() {
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_send_recv_async.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py ; fail+=$?
 
   # distributed layernorm
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?
@@ -359,10 +363,9 @@ run_t3000_sd35large_tests() {
 
   # Run test_model for sd35 large
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  mesh_device=T3K
   sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
-  MESH_DEVICE=$mesh_device SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_transformer_block.py ; fail+=$?
-  MESH_DEVICE=$mesh_device SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_patch_embedding.py ; fail+=$?
+  SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_transformer_block.py -k "t3k" ; fail+=$?
+  SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_patch_embedding.py -k "t3k"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

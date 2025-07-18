@@ -8,9 +8,12 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "tt-metalium/assert.hpp"
 #include "tt-metalium/distributed_host_buffer.hpp"
+#include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/memory_pin.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
+#include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
 #include <tt_stl/overloaded.hpp>
@@ -99,8 +102,7 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
         buffer_size_bytes,
         page_size_bytes,
         memory_config.buffer_type(),
-        memory_config.memory_layout(),
-        tensor_spec.compute_distribution_spec());
+        tensor_spec.compute_buffer_sharding_args());
 }
 
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
@@ -110,8 +112,7 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
         .page_size = tensor_spec.compute_page_size_bytes(),
         .buffer_type = memory_config.buffer_type(),
-        .buffer_layout = memory_config.memory_layout(),
-        .shard_parameters = tensor_spec.compute_distribution_spec(),
+        .sharding_args = tensor_spec.compute_buffer_sharding_args(),
     };
 
     // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
@@ -343,13 +344,10 @@ inline constexpr int constexpr_strlen(const char* str) { return *str ? 1 + const
 constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
 constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = constexpr_strlen(TENSOR_TYPE_STRING) + 1;
 
-static constexpr auto TAB = "    ";
-static constexpr auto TAB_MINUS_1 = "   ";
-
-template <typename BufferType>
+template <typename T>
 void to_string_row_major(
     std::stringstream& ss,
-    const BufferType& buffer,
+    tt::stl::Span<const T> buffer,
     const ttnn::Shape& shape,
     const tt::tt_metal::Strides& strides,
     std::size_t outer_index,
@@ -393,8 +391,7 @@ void to_string_row_major(
         }
 
         if (rank > 1) {
-            to_string_row_major<BufferType>(
-                ss, buffer, shape, strides, index, buffer_offset + index * stride, rank - 1, dim + 1);
+            to_string_row_major(ss, buffer, shape, strides, index, buffer_offset + index * stride, rank - 1, dim + 1);
         } else {
             print_datum(ss, buffer[buffer_offset + index]);
         }
@@ -405,62 +402,70 @@ void to_string_row_major(
     }
 }
 
-template <typename BufferType>
-std::string to_string(
-    const BufferType& buffer,
+template <typename T>
+void to_string(
+    std::stringstream& ss,
+    tt::stl::Span<const T> buffer,
     const ttnn::Shape& shape,
     const tt::tt_metal::Strides& strides,
     DataType dtype,
     Layout layout) {
-    std::stringstream ss;
     ss << TENSOR_TYPE_STRING << "(";
 
     if (TTNN_TENSOR_PRINT_PROFILE == TensorPrintProfile::Empty) {
         ss << "...";
     } else {
-        to_string_row_major<BufferType>(ss, buffer, shape, strides, 0, 0, shape.rank());
+        to_string_row_major<T>(ss, buffer, shape, strides, 0, 0, shape.rank());
     }
     ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
        << ", layout=" << fmt::format("{}", layout) << ")";
-    return ss.str();
 }
 
 }  // namespace detail
 
 template <typename T>
-std::string to_string(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
-    const auto tile = tensor.tensor_spec().tile();
-    const auto shape = tensor.logical_shape();
-    const auto dtype = original_dtype.value_or(tensor.dtype());
-    const auto layout = original_layout.value_or(tensor.layout());
+std::string to_string(const Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
 
     if (!tensor.is_allocated()) {
         return fmt::format(
             "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
             detail::TENSOR_TYPE_STRING,
             shape,
-            dtype,
-            layout);
+            tensor.dtype(),
+            tensor.layout());
     }
+
+    auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
+        if (tensor.layout() == Layout::ROW_MAJOR) {
+            return tensor;
+        } else if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
+            return ttnn::to_layout(ttnn::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+        } else {
+            return ttnn::to_layout(tensor, Layout::ROW_MAJOR);
+        }
+    };
+
+    auto get_device_buffers = [&](const HostStorage& storage) {
+        std::vector<HostBuffer> buffers;
+        storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
+        return buffers;
+    };
 
     return std::visit(
         tt::stl::overloaded{
             [&](const HostStorage& storage) -> std::string {
-                if (tensor.layout() != Layout::ROW_MAJOR) {
-                    if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-                        return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
+                const Tensor row_major_tensor = get_row_major_tensor(tensor);
+                const auto strides = row_major_tensor.tensor_spec().compute_strides();
+                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
+                std::stringstream ss;
+                for (size_t i = 0; i < buffers.size(); i++) {
+                    detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+                    if (i + 1 != buffers.size()) {
+                        ss << std::endl;
                     }
-                    return to_string<T>(
-                        ttnn::to_layout(
-                            tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, static_cast<IDevice*>(nullptr)),
-                        dtype,
-                        layout);
                 }
-
-                const auto strides = tensor.tensor_spec().compute_strides();
-                const auto buffer = host_buffer::get_as<T>(storage.buffer);
-                return detail::to_string(buffer, shape, strides, dtype, layout);
+                return ss.str();
             },
             [&](const DeviceStorage& storage) -> std::string {
                 auto cpu_tensor = tensor.cpu();
@@ -473,22 +478,18 @@ std::string to_string(
                 if (mesh_device->num_devices() == 1) {
                     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
                 }
+
+                const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
+                const auto strides = row_major_tensor.tensor_spec().compute_strides();
                 const auto& coords = storage.coords;
                 auto coords_it = coords.begin();
+                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
                 std::stringstream ss;
-                apply(cpu_tensor, [&](const Tensor& device_shard) {
+                for (size_t i = 0; i < buffers.size(); i++) {
                     const distributed::MeshCoordinate coord = *coords_it++;
                     ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
-                    ss << to_string<T>(device_shard) << std::endl;
-                });
-                return ss.str();
-            },
-            [&](const MultiDeviceHostStorage& storage) -> std::string {
-                std::stringstream ss;
-                auto device_tensors = ttnn::distributed::get_device_tensors(tensor);
-                for (size_t i = 0; i < device_tensors.size(); i++) {
-                    ss << to_string<T>(device_tensors[i]);
-                    if (i + 1 != device_tensors.size()) {
+                    detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+                    if (i + 1 != buffers.size()) {
                         ss << std::endl;
                     }
                 }
@@ -497,34 +498,43 @@ std::string to_string(
         tensor.storage());
 }
 
-template std::string to_string<bfloat16>(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
-template std::string to_string<float>(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
-template std::string to_string<int32_t>(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
-template std::string to_string<uint32_t>(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
-template std::string to_string<uint16_t>(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
-template std::string to_string<uint8_t>(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
+template std::string to_string<bfloat16>(const Tensor& tensor);
+template std::string to_string<float>(const Tensor& tensor);
+template std::string to_string<int32_t>(const Tensor& tensor);
+template std::string to_string<uint32_t>(const Tensor& tensor);
+template std::string to_string<uint16_t>(const Tensor& tensor);
+template std::string to_string<uint8_t>(const Tensor& tensor);
 
 template <>
-std::string to_string<bfloat8_b>(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
-    return to_string<uint32_t>(tensor, original_dtype);
+std::string to_string<bfloat8_b>(const Tensor& tensor) {
+    return to_string<float>(tensor);
 }
 
 template <>
-std::string to_string<bfloat4_b>(
-    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
-    return to_string<uint32_t>(tensor, original_dtype);
+std::string to_string<bfloat4_b>(const Tensor& tensor) {
+    return to_string<float>(tensor);
 }
 
 // ======================================================================================
 //                                      .to_host()
 // ======================================================================================
+
+HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
+    ZoneScopedN("AllocateBuffer");
+    const size_t size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+    switch (tensor_spec.data_type()) {
+        case DataType::BFLOAT16: return HostBuffer(std::vector<bfloat16>(size_bytes / sizeof(bfloat16)));
+        case DataType::FLOAT32: return HostBuffer(std::vector<float>(size_bytes / sizeof(float)));
+        case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
+        case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
+        case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B:
+        case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
+        case DataType::INVALID: TT_THROW("Invalid data type");
+    }
+    TT_THROW("Unreachable");
+}
 
 template <typename T>
 Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
@@ -574,7 +584,7 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
-    const auto& storage = std::get<DeviceStorage>(tensor.storage());
+    const auto& storage = tensor.device_storage();
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
@@ -586,16 +596,12 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     }
 
     distributed_host_buffer = distributed_host_buffer.transform(
-        [&](const HostBuffer&) {
-            ZoneScopedN("AllocateBuffer");
-            std::vector<T> data_vec(tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T));
-            return HostBuffer(std::move(data_vec));
-        },
+        [&](const HostBuffer&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    MultiDeviceHostStorage host_storage(std::move(distributed_host_buffer));
+    HostStorage host_storage(std::move(distributed_host_buffer));
     return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.distributed_tensor_config());
 }
 
@@ -664,7 +670,11 @@ std::shared_ptr<Buffer> to_device_buffer(
     return std::visit(
         tt::stl::overloaded{
             [&device, &tensor_spec, cq_id](const HostStorage& storage) {
-                auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+                TT_FATAL(
+                    storage.buffer().shape() == distributed::MeshShape(1, 1),
+                    "Can't get a single buffer from host storage distributed over mesh shape {}",
+                    storage.buffer().shape());
+                auto data_to_write = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0))->view_as<T>();
                 auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
                 auto input_size_bytes = data_to_write.size() * sizeof(T);
                 TT_FATAL(
@@ -727,12 +737,12 @@ Tensor to_device<bfloat8_b>(
 namespace {
 
 DeviceStorage replicate_to_mesh_buffer(
-    const HostStorage& storage,
-    distributed::MeshDevice* mesh_device,
+    const HostBuffer& buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     ttnn::QueueId cq_id) {
-    auto data_to_write = storage.buffer.view_bytes();
+    auto* mesh_device = mesh_buffer->device();
+    auto data_to_write = buffer.view_bytes();
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     const auto input_size_bytes = data_to_write.size();
     TT_FATAL(
@@ -752,7 +762,7 @@ DeviceStorage replicate_to_mesh_buffer(
     return DeviceStorage(mesh_buffer, std::move(coords));
 }
 
-DeviceStorage shard_to_mesh_buffer(
+DeviceStorage write_to_mesh_buffer(
     const DistributedHostBuffer& distributed_host_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     ttnn::QueueId cq_id) {
@@ -778,47 +788,21 @@ DeviceStorage to_device_mesh_buffer(
     ttnn::QueueId cq_id) {
     return std::visit(
         tt::stl::overloaded{
-            [&mesh_buffer, &tensor_spec, cq_id](const HostStorage& storage) {
-                // Replicate data across devices in a mesh.
-                return replicate_to_mesh_buffer(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
-            },
-            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const MultiDeviceHostStorage& storage) {
-                // Shard multi device host shards across devices in a mesh.
-                if (storage.distributed_buffer().shape() == mesh_buffer->device()->shape()) {
-                    return shard_to_mesh_buffer(storage.distributed_buffer(), mesh_buffer, cq_id);
+            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const HostStorage& storage) {
+                const auto& host_storage_shape = storage.buffer().shape();
+                const auto& mesh_device_shape = mesh_buffer->device()->shape();
+                if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
+                    host_storage_shape == distributed::MeshShape(1, 1)) {
+                    // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
+                    const auto device_buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
+                    return replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id);
                 } else {
-                    // Reshape distributed host buffer.
-                    // TODO: #22169 - there are 2 reasons for this code path - legacy serialization path that stored
-                    // multi device host tensors without the necessary metadata, and `aggregate_as_tensor` calls that
-                    // similarly lack the metadata to properly distribute the shards across the mesh.
-                    auto* mesh_device = mesh_buffer->device();
-
                     TT_FATAL(
-                        storage.distributed_buffer().shape().mesh_size() <= mesh_device->shape().mesh_size(),
-                        "Distributed host buffer has more shards than the mesh device");
-
-                    auto dst_distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
-
-                    const auto dst_range = [mesh_device, &host_tensor_attributes]() {
-                        if (auto* shard2d_strategy =
-                                std::get_if<ShardTensor2D>(&host_tensor_attributes.get_distributed_tensor_config())) {
-                            distributed::MeshShape distribution_shape(
-                                shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
-                            return distributed::MeshCoordinateRange(distribution_shape);
-                        } else {
-                            return distributed::MeshCoordinateRange(mesh_device->shape());
-                        }
-                    }();
-
-                    std::vector<HostBuffer> shards;
-                    storage.distributed_buffer().apply([&](const HostBuffer& shard) { shards.push_back(shard); });
-
-                    auto dst_coord_it = dst_range.begin();
-                    for (int i = 0; i < shards.size(); ++i, ++dst_coord_it) {
-                        dst_distributed_host_buffer.emplace_shard(
-                            *dst_coord_it, [&shards, i]() { return std::move(shards[i]); });
-                    }
-                    return shard_to_mesh_buffer(dst_distributed_host_buffer, mesh_buffer, cq_id);
+                        host_storage_shape == mesh_device_shape,
+                        "Distributed host buffer has different shape {} than the mesh device {}",
+                        host_storage_shape,
+                        mesh_device_shape);
+                    return write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id);
                 }
             },
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
@@ -847,23 +831,81 @@ Tensor to_device_mesh_tensor(
 }
 
 template <typename T>
-void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
-    TT_FATAL(host_tensor.storage_type() != StorageType::DEVICE, "Host tensor is on device.");
-    TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
-    TT_FATAL(mesh_tensor.is_allocated(), "Buffer must be allocated on device.");
+void copy_to_host_tensor(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, ttnn::QueueId cq_id) {
+    ZoneScoped;
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Source tensor is not on device.");
+    TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Destination tensor is not on host.");
+    TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
 
-    TT_FATAL(host_tensor.logical_shape() == mesh_tensor.logical_shape(), "Host tensor has different shape");
-    TT_FATAL(host_tensor.dtype() == mesh_tensor.dtype(), "Host tensor has different dtype");
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(
-        host_tensor.tensor_spec().page_config() == mesh_tensor.tensor_spec().page_config(),
+        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = std::get<DeviceStorage>(mesh_tensor.storage()).mesh_buffer;
+    const auto& device_storage = device_tensor.device_storage();
+    const auto& mesh_buffer = device_storage.mesh_buffer;
+    ttnn::MeshDevice* device = mesh_buffer->device();
+    distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
+
+    const auto& distributed_host_buffer = host_tensor.host_storage().buffer();
+
+    // Host tensor must have pre-allocated buffers for all device shards.
+    // However, it may have some extra shards. Drop them by "unwrapping" the distributed host buffer, and re-wrapping
+    // only for those shards that are actually present on device.
+    std::vector<std::pair<distributed::MeshCoordinate, std::optional<HostBuffer>>> shards;
+    shards.reserve(device_storage.coords.size());
+    for (const auto& device_coord : device_storage.coords) {
+        shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
+    }
+
+    DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    const size_t expected_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    for (const auto& [device_coord, host_buffer] : shards) {
+        dst_distributed_host_buffer.emplace_shard(device_coord, [&]() {
+            // Note the lambda is executed only for host-local shards.
+            // If `host_buffer` is nullopt, the data was not correctly allocated on the host.
+            TT_FATAL(host_buffer.has_value(), "Host shard for device shard {} is not populated.", device_coord);
+
+            TT_FATAL(
+                host_buffer->view_bytes().size() == expected_size_bytes,
+                "Host shard for device shard {} has invalid size: {} != {}",
+                device_coord,
+                host_buffer->view_bytes().size(),
+                expected_size_bytes);
+            return *host_buffer;
+        });
+    }
+
+    mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+
+    host_tensor = Tensor(
+        HostStorage(std::move(dst_distributed_host_buffer)),
+        device_tensor.tensor_spec(),
+        device_tensor.distributed_tensor_config());
+}
+
+template <typename T>
+void copy_to_device_tensor(const Tensor& host_tensor, Tensor& device_tensor, ttnn::QueueId cq_id) {
+    ZoneScoped;
+    TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Source tensor is not on host.");
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor is not on device.");
+    TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
+
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
+    TT_FATAL(
+        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
+        "Host tensor has different page config");
+
+    auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
 
     DeviceStorage mesh_storage = to_device_mesh_buffer<T>(
-        host_tensor.storage(), mesh_buffer, mesh_tensor.tensor_spec(), *host_tensor.tensor_attributes, cq_id);
-
-    mesh_tensor.tensor_attributes->get_storage() = mesh_storage;
+        host_tensor.storage(), mesh_buffer, device_tensor.tensor_spec(), *host_tensor.tensor_attributes, cq_id);
+    device_tensor = Tensor(
+        std::move(mesh_storage),
+        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
+        host_tensor.distributed_tensor_config());
 }
 
 template Tensor to_device_mesh_tensor<bfloat16>(
@@ -915,21 +957,39 @@ Tensor to_device_mesh_tensor<bfloat8_b>(
     return to_device_mesh_tensor<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
 
-template void copy_to_mesh_tensor<bfloat16>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<float>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<int32_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint32_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint16_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint8_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_device_tensor<bfloat16>(const Tensor&, Tensor&, ttnn::QueueId);
+template void copy_to_device_tensor<float>(const Tensor&, Tensor&, ttnn::QueueId);
+template void copy_to_device_tensor<int32_t>(const Tensor&, Tensor&, ttnn::QueueId);
+template void copy_to_device_tensor<uint32_t>(const Tensor&, Tensor&, ttnn::QueueId);
+template void copy_to_device_tensor<uint16_t>(const Tensor&, Tensor&, ttnn::QueueId);
+template void copy_to_device_tensor<uint8_t>(const Tensor&, Tensor&, ttnn::QueueId);
+template void copy_to_host_tensor<bfloat16>(const Tensor&, Tensor&, bool, ttnn::QueueId);
+template void copy_to_host_tensor<float>(const Tensor&, Tensor&, bool, ttnn::QueueId);
+template void copy_to_host_tensor<int32_t>(const Tensor&, Tensor&, bool, ttnn::QueueId);
+template void copy_to_host_tensor<uint32_t>(const Tensor&, Tensor&, bool, ttnn::QueueId);
+template void copy_to_host_tensor<uint16_t>(const Tensor&, Tensor&, bool, ttnn::QueueId);
+template void copy_to_host_tensor<uint8_t>(const Tensor&, Tensor&, bool, ttnn::QueueId);
 
 template <>
-void copy_to_mesh_tensor<bfloat4_b>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
-    copy_to_mesh_tensor<uint32_t>(host_tensor, mesh_tensor, cq_id);
+void copy_to_device_tensor<bfloat4_b>(const Tensor& host_tensor, Tensor& device_tensor, ttnn::QueueId cq_id) {
+    copy_to_device_tensor<uint32_t>(host_tensor, device_tensor, cq_id);
 }
 
 template <>
-void copy_to_mesh_tensor<bfloat8_b>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
-    copy_to_mesh_tensor<uint32_t>(host_tensor, mesh_tensor, cq_id);
+void copy_to_device_tensor<bfloat8_b>(const Tensor& host_tensor, Tensor& device_tensor, ttnn::QueueId cq_id) {
+    copy_to_device_tensor<uint32_t>(host_tensor, device_tensor, cq_id);
+}
+
+template <>
+void copy_to_host_tensor<bfloat4_b>(
+    const Tensor& device_tensor, Tensor& host_tensor, bool blocking, ttnn::QueueId cq_id) {
+    copy_to_host_tensor<uint32_t>(device_tensor, host_tensor, blocking, cq_id);
+}
+
+template <>
+void copy_to_host_tensor<bfloat8_b>(
+    const Tensor& device_tensor, Tensor& host_tensor, bool blocking, ttnn::QueueId cq_id) {
+    copy_to_host_tensor<uint32_t>(device_tensor, host_tensor, blocking, cq_id);
 }
 
 // ======================================================================================
@@ -995,79 +1055,118 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
     }
     return logical_physical_mapping;
 };
+
+// Converts a span of logical data to row major physical data.
+template <typename T>
+std::vector<T> convert_to_row_major_physical_data(
+    tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value) {
+    const auto& physical_shape = tensor_spec.physical_shape();
+    const size_t physical_stride = physical_shape.width();
+    auto [logical_shard_shape, physical_shard_shape] =
+        CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
+
+    std::vector<T> row_major_physical_data(physical_shape.height() * physical_shape.width(), pad_value);
+
+    const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
+        tensor_spec.logical_2d_shape(), logical_shard_shape, physical_shard_shape, physical_stride);
+
+    for (const auto& [indices, cols] : logical_physical_mapping) {
+        for (const auto& [logical_idx_start, physical_idx_start] : indices) {
+            for (size_t col = 0; col < cols; col++) {
+                row_major_physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
+            }
+        }
+    }
+    return row_major_physical_data;
+}
+
+// Converts a span of row major physical data to logical data.
+template <typename T>
+std::vector<T> convert_to_logical_data(tt::stl::Span<const T> row_major_physical_data, const TensorSpec& tensor_spec) {
+    const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
+    const size_t physical_stride = tensor_spec.physical_shape().width();
+    auto [logical_shard_shape, physical_shard_shape] =
+        CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
+
+    std::vector<T> logical_data(logical_2d_shape.height() * logical_2d_shape.width(), 0);
+
+    const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
+        logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+
+    for (const auto& [indices, cols] : logical_physical_mapping) {
+        for (const auto& [logical_idx_start, physical_idx_start] : indices) {
+            for (size_t col = 0; col < cols; col++) {
+                logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
+            }
+        }
+    }
+    return logical_data;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 template <typename T>
-std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec, T pad_value) {
+std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value) {
     if (logical_data.size() == 0) {
         return {};
     }
 
     const auto& logical_shape = tensor_spec.logical_shape();
+    const auto& physical_shape = tensor_spec.physical_shape();
+
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
         "Logical data size {} should be same as volume indicated by logical shape {}",
         logical_data.size(),
         logical_shape);
 
-    const auto& physical_shape = tensor_spec.physical_shape();
-
-    auto row_major_physical_data = [&tensor_spec, &physical_shape, pad_value](auto&& logical_data) {
-        const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
-
-        if (logical_2d_shape != physical_shape) {
-            auto [logical_shard_shape, physical_shard_shape] =
-                CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
-
-            auto row_major_physical_data = std::vector<T>(physical_shape.height() * physical_shape.width(), pad_value);
-
-            size_t physical_stride = physical_shape.width();
-
-            const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
-                logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
-
-            for (const auto& [indices, cols] : logical_physical_mapping) {
-                for (const auto& [logical_idx_start, physical_idx_start] : indices) {
-                    for (size_t col = 0; col < cols; col++) {
-                        row_major_physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
-                    }
-                }
-            }
-            return row_major_physical_data;
-        } else {
-            return logical_data;
-        }
-    }(std::move(logical_data));
+    // If needed, convert logical data to row major physical data.
+    // `row_major_physical_data_span` stores span unconditionally (cheap), while `row_major_physical_data` stores the
+    // converted vector only when needed (expensive).
+    std::vector<T> row_major_physical_data;
+    tt::stl::Span<const T> row_major_physical_data_span;
+    if (tensor_spec.logical_2d_shape() != physical_shape) {
+        row_major_physical_data =
+            CMAKE_UNIQUE_NAMESPACE::convert_to_row_major_physical_data(logical_data, tensor_spec, pad_value);
+        row_major_physical_data_span = tt::stl::make_const_span(row_major_physical_data);
+    } else {
+        row_major_physical_data_span = logical_data;
+    }
 
     TT_FATAL(
-        row_major_physical_data.size() == physical_shape.height() * physical_shape.width(),
+        row_major_physical_data_span.size() == physical_shape.height() * physical_shape.width(),
         "Physical data size {} should be same as volume indicated by physical shape {}",
-        row_major_physical_data.size(),
+        row_major_physical_data_span.size(),
         physical_shape);
 
     if (tensor_spec.layout() == Layout::TILE) {
         return tensor_impl::convert_layout_row_major_to_tile(
-            physical_shape, tensor_spec.tile(), tt::stl::make_const_span(row_major_physical_data));
+            physical_shape, tensor_spec.tile(), row_major_physical_data_span);
+    } else if (!row_major_physical_data.empty()) {
+        // If conversion to physical data was performed, return the row major physical data to avoid extra copy.
+        return row_major_physical_data;
+    } else {
+        // Otherwise, copy the `row_major_physical_data_span`.
+        return std::vector<T>(row_major_physical_data_span.begin(), row_major_physical_data_span.end());
     }
-    return row_major_physical_data;
 }
 
 template std::vector<bfloat16> encode_tensor_data<bfloat16>(
-    std::vector<bfloat16>&& logical_data, const TensorSpec& tensor_spec, bfloat16 pad_value);
+    tt::stl::Span<const bfloat16> logical_data, const TensorSpec& tensor_spec, bfloat16 pad_value);
 template std::vector<float> encode_tensor_data<float>(
-    std::vector<float>&& logical_data, const TensorSpec& tensor_spec, float pad_value);
+    tt::stl::Span<const float> logical_data, const TensorSpec& tensor_spec, float pad_value);
 template std::vector<int32_t> encode_tensor_data<int32_t>(
-    std::vector<int32_t>&& logical_data, const TensorSpec& tensor_spec, int32_t pad_value);
+    tt::stl::Span<const int32_t> logical_data, const TensorSpec& tensor_spec, int32_t pad_value);
 template std::vector<uint32_t> encode_tensor_data<uint32_t>(
-    std::vector<uint32_t>&& logical_data, const TensorSpec& tensor_spec, uint32_t pad_value);
+    tt::stl::Span<const uint32_t> logical_data, const TensorSpec& tensor_spec, uint32_t pad_value);
 template std::vector<uint16_t> encode_tensor_data<uint16_t>(
-    std::vector<uint16_t>&& logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
+    tt::stl::Span<const uint16_t> logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
-    std::vector<uint8_t>&& logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
+    tt::stl::Span<const uint8_t> logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
 
 template <typename T>
-std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {
+std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec) {
     if (physical_data.size() == 0) {
         return {};
     }
@@ -1079,64 +1178,62 @@ std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSp
         physical_data.size(),
         physical_shape);
 
-    auto row_major_physical_data = [&tensor_spec, &physical_shape](std::vector<T>&& physical_data) {
-        if (tensor_spec.layout() == Layout::TILE) {
-            return tensor_impl::convert_layout_tile_to_row_major(
-                physical_shape, tensor_spec.tile(), tt::stl::make_const_span(physical_data));
-        } else {
-            return std::move(physical_data);
-        }
-    }(std::move(physical_data));
+    // If needed, convert physical data to row major physical data.
+    // `row_major_physical_data_span` stores span unconditionally (cheap), while `row_major_physical_data` stores the
+    // converted vector only when needed (expensive).
+    std::vector<T> row_major_physical_data;
+    tt::stl::Span<const T> row_major_physical_data_span;
+    if (tensor_spec.layout() == Layout::TILE) {
+        row_major_physical_data =
+            tensor_impl::convert_layout_tile_to_row_major(physical_shape, tensor_spec.tile(), physical_data);
+        row_major_physical_data_span = tt::stl::make_const_span(row_major_physical_data);
+    } else {
+        row_major_physical_data_span = physical_data;
+    }
 
-    auto logical_data = [&tensor_spec, &physical_shape](std::vector<T>&& row_major_physical_data) {
-        const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
-
-        if (logical_2d_shape != physical_shape) {
-            auto [logical_shard_shape, physical_shard_shape] =
-                CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
-
-            auto logical_data = std::vector<T>(logical_2d_shape.height() * logical_2d_shape.width(), 0);
-
-            size_t physical_stride = physical_shape.width();
-
-            const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
-                logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
-
-            for (const auto& [indices, cols] : logical_physical_mapping) {
-                for (const auto& [logical_idx_start, physical_idx_start] : indices) {
-                    for (size_t col = 0; col < cols; col++) {
-                        logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
-                    }
-                }
-            }
-            return logical_data;
-        } else {
-            return row_major_physical_data;
-        }
-    }(std::move(row_major_physical_data));
+    // Same pattern as the above - `logical_data` is non empty only when the conversion to logical data was performed.
+    std::vector<T> logical_data;
+    tt::stl::Span<const T> logical_data_span;
+    if (const auto& logical_2d_shape = tensor_spec.logical_2d_shape(); logical_2d_shape != physical_shape) {
+        logical_data = CMAKE_UNIQUE_NAMESPACE::convert_to_logical_data(row_major_physical_data_span, tensor_spec);
+        logical_data_span = tt::stl::make_const_span(logical_data);
+    } else {
+        logical_data_span = row_major_physical_data_span;
+    }
 
     const auto& logical_shape = tensor_spec.logical_shape();
     TT_FATAL(
-        logical_data.size() == logical_shape.volume(),
+        logical_data_span.size() == logical_shape.volume(),
         "Logical data size {} should be same as volume indicated by logical shape {}",
-        logical_data.size(),
+        logical_data_span.size(),
         logical_shape);
 
-    return logical_data;
+    // Check if conversion to logical data was performed, to avoid extra copy upon return.
+    if (!logical_data.empty()) {
+        return logical_data;
+    } else if (!row_major_physical_data.empty()) {
+        return row_major_physical_data;
+    } else {
+        return std::vector<T>(logical_data_span.begin(), logical_data_span.end());
+    }
+}
+
+bool logical_matches_physical(const TensorSpec& tensor_spec) {
+    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
 }
 
 template std::vector<bfloat16> decode_tensor_data<bfloat16>(
-    std::vector<bfloat16>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const bfloat16> physical_data, const TensorSpec& tensor_spec);
 template std::vector<float> decode_tensor_data<float>(
-    std::vector<float>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const float> physical_data, const TensorSpec& tensor_spec);
 template std::vector<int32_t> decode_tensor_data<int32_t>(
-    std::vector<int32_t>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const int32_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint32_t> decode_tensor_data<uint32_t>(
-    std::vector<uint32_t>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const uint32_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint16_t> decode_tensor_data<uint16_t>(
-    std::vector<uint16_t>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const uint16_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> decode_tensor_data<uint8_t>(
-    std::vector<uint8_t>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const uint8_t> physical_data, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                  .to_layout()
@@ -1148,16 +1245,12 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         return tensor;
     }
 
-    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    if (is_multi_device_host_tensor(tensor)) {
-        return transform(tensor, [&](const Tensor& tensor_shard) { return to_layout<T>(tensor_shard, target_layout); });
-    }
-
     auto source_layout = tensor.layout();
     auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
     auto convert =
-        [tile, &physical_shape, source_layout, target_layout](tt::stl::Span<const T> input_data) -> std::vector<T> {
+        [tile, &physical_shape, source_layout, target_layout](const HostBuffer& input_host_buffer) -> std::vector<T> {
+        const auto input_data = input_host_buffer.view_as<T>();
         switch (source_layout) {
             case Layout::ROW_MAJOR:
                 TT_FATAL(target_layout == Layout::TILE, "Unsupported layout conversion");
@@ -1170,17 +1263,8 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         TT_THROW("Unreachable");
     };
 
-    HostBuffer host_buffer = std::visit(
-        tt::stl::overloaded{
-            [&convert, target_layout](const HostStorage& storage) {
-                const auto input_data = host_buffer::get_as<T>(storage.buffer);
-                return HostBuffer(std::move(convert(input_data)));
-            },
-            [](const auto& s) -> HostBuffer { TT_THROW("Unsupported storage type {}", tt::stl::get_type_name(s)); }},
-        tensor.storage());
-
     return Tensor(
-        host_buffer,
+        tensor.host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); }),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -1188,7 +1272,8 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                 PageConfig(target_layout, tensor.tensor_spec().tile()),
                 MemoryConfig{},
                 tensor.logical_shape(),
-                tensor.padded_shape())));
+                tensor.padded_shape())),
+        tensor.distributed_tensor_config());
 }
 
 template Tensor to_layout<bfloat16>(const Tensor& tensor, Layout target_layout);
@@ -1234,23 +1319,17 @@ Tensor pad(
     float pad_value) {
     TT_FATAL(!is_device_tensor(tensor), "pad only supports host tensors");
 
-    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    if (is_multi_device_host_tensor(tensor)) {
-        return transform(tensor, [&](const Tensor& tensor_shard) {
-            return pad<T>(tensor_shard, output_padded_shape, input_tensor_start, pad_value);
-        });
-    }
-
     auto pad_value_ = static_cast<T>(pad_value);
     auto input_padded_shape = tensor.padded_shape();
     if (input_padded_shape.rank() < 2) {
         input_padded_shape = input_padded_shape.to_rank(2);
     }
     const auto input_strides = tensor.strides();
-    const auto input_data_type = tensor.dtype();
 
-    auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](const auto& input_buffer) {
-        const int rank = input_padded_shape.rank();
+    auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](
+                   const HostBuffer& input_host_buffer) {
+        const auto input_buffer = input_host_buffer.view_as<T>();
+        const auto rank = input_padded_shape.rank();
 
         auto output_buffer = std::vector<T>(output_padded_shape.volume());
         std::fill(output_buffer.begin(), output_buffer.end(), pad_value_);
@@ -1261,7 +1340,9 @@ Tensor pad(
 
         if (rank == 1) {
             std::memcpy(
-                output_buffer.data() + input_tensor_start[0], input_buffer.begin(), input_padded_shape[0] * sizeof(T));
+                output_buffer.data() + input_tensor_start[0],
+                input_buffer.begin(),
+                static_cast<size_t>(input_padded_shape[0]) * sizeof(T));
             return output_buffer;
         }
 
@@ -1280,17 +1361,17 @@ Tensor pad(
 
             for (int i = 0; i < rank - 1; ++i) {
                 input_idx += coords[i] * input_strides[i];
-                output_idx += (coords[i] + input_tensor_start[i]) * output_strides[i];
+                output_idx += (coords[i] + static_cast<size_t>(input_tensor_start[i])) * output_strides[i];
             }
 
             // Add offset (left padding) for the innermost dimension
-            output_idx += input_tensor_start[rank - 1] * output_strides[rank - 1];
+            output_idx += static_cast<size_t>(input_tensor_start[rank - 1]) * output_strides[rank - 1];
 
             // Copy entire input row with memcpy
             std::memcpy(
                 output_buffer.data() + output_idx,
                 input_buffer.begin() + input_idx,
-                input_padded_shape[rank - 1] * sizeof(T));
+                static_cast<size_t>(input_padded_shape[rank - 1]) * sizeof(T));
 
             // Increment coordinates (from right to left), ignore last dimension
             processed_all_coords = true;
@@ -1309,21 +1390,17 @@ Tensor pad(
         return output_buffer;
     };
 
-    HostBuffer output_buffer = std::visit(
-        tt::stl::overloaded{
-            [&pad](const HostStorage& storage) {
-                const auto input_data = host_buffer::get_as<T>(storage.buffer);
-                return HostBuffer(pad(input_data));
-            },
-            [](const auto& s) -> HostBuffer { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
-        tensor.storage());
     return Tensor(
-        std::move(output_buffer),
-        tensor.logical_shape(),
-        output_padded_shape,
-        tensor.dtype(),
-        tensor.layout(),
-        tensor.tensor_spec().tile());
+        tensor.host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
+        TensorSpec(
+            tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                tensor.dtype(),
+                PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
+                MemoryConfig{},
+                tensor.logical_shape(),
+                output_padded_shape)),
+        tensor.distributed_tensor_config());
 }
 
 template Tensor pad<bfloat16>(
@@ -1379,14 +1456,7 @@ template <typename T>
 Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     TT_FATAL(!is_device_tensor(tensor), "unpad only supports host tensors");
 
-    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    if (is_multi_device_host_tensor(tensor)) {
-        return transform(tensor, [&](const Tensor& tensor_shard) {
-            return unpad<T>(tensor_shard, output_tensor_start, output_tensor_end);
-        });
-    }
-
-    const auto input_shape = tensor.padded_shape();
+    const auto& input_shape = tensor.padded_shape();
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape
@@ -1402,7 +1472,8 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
     }
 
     auto unpad = [&input_shape, &input_strides, &output_shape, &output_tensor_start, &output_tensor_end](
-                     const auto& input_buffer) {
+                     const HostBuffer& input_host_buffer) {
+        const auto input_buffer = input_host_buffer.view_as<T>();
         ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         auto flat_output_index = 0;
@@ -1424,20 +1495,15 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
         return output_buffer;
     };
 
-    HostBuffer output_buffer = std::visit(
-        tt::stl::overloaded{
-            [&unpad](const HostStorage& storage) {
-                const auto input_data = host_buffer::get_as<T>(storage.buffer);
-                return HostBuffer(unpad(input_data));
-            },
-            [](const auto& s) -> HostBuffer { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
-        tensor.storage());
     return Tensor(
-        std::move(output_buffer),
-        ttnn::Shape(output_shape),
-        tensor.dtype(),
-        tensor.layout(),
-        tensor.tensor_spec().tile());
+        tensor.host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); }),
+        TensorSpec(
+            ttnn::Shape(output_shape),
+            tt::tt_metal::TensorLayout(
+                tensor.dtype(),
+                tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
+                tt::tt_metal::MemoryConfig{})),
+        tensor.distributed_tensor_config());
 }
 
 template Tensor unpad<bfloat16>(

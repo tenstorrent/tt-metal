@@ -10,6 +10,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "metal/operations.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -146,7 +147,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto groups = value->get_value().logical_shape().to_array_4D()[1];
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
-    constexpr auto none = tt::stl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
     auto q_scaled =
         ttnn::multiply(query->get_value(), scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
     auto key_tensor = key->get_value();
@@ -178,7 +179,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             false);
     }
     // (B, H, S, S)
-    auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
+    auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
     // TODO: add dropout here
 
     // softmax(σQ@K+mask) @ V
@@ -188,7 +189,7 @@ autograd::TensorPtr scaled_dot_product_attention(
 
     ttml::autograd::GradFunction grad =
         [scale, query, key, value, attention_weights, out, mask, batch_num, heads, seq_len, embedding_dim, groups]() {
-            constexpr auto none = tt::stl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+            constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
             auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
             // dL_d(softmax(σQK+mask)) = dL_dout @ value^T
             ttnn::Tensor dL_dattention_weights =

@@ -6,9 +6,10 @@
 #include "context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
-#include "fabric/fabric_mux_config.hpp"
+#include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
+#include <bit>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_align.hpp"
 #include "tt_metal.hpp"
@@ -19,9 +20,6 @@
 namespace tt::tt_metal {
 
 void RelayMux::GenerateStaticConfigs() {
-    constexpr uint32_t k_NumSlotsPerChannel = 16;
-    constexpr uint32_t k_BufferSize = 4096;
-
     uint32_t l1_base = 0;
     uint32_t l1_size = 0;
 
@@ -46,11 +44,11 @@ void RelayMux::GenerateStaticConfigs() {
 
     // Count number of value kernels that need the channels
     const auto kernels_requiring_full_size_channel =
-        std::count_if(upstream_kernels_.begin(), upstream_kernels_.end(), [](const FDKernel* kernel) {
+        (uint32_t)std::count_if(upstream_kernels_.begin(), upstream_kernels_.end(), [](const FDKernel* kernel) {
             return kernel->GetNodeId() != -1;
         });
     const auto kernels_requiring_header_only_channel =
-        std::count_if(downstream_kernels_.begin(), downstream_kernels_.end(), [](const FDKernel* kernel) {
+        (uint32_t)std::count_if(downstream_kernels_.begin(), downstream_kernels_.end(), [](const FDKernel* kernel) {
             return kernel->GetNodeId() != -1;
         });
 
@@ -60,38 +58,35 @@ void RelayMux::GenerateStaticConfigs() {
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
-    static_config_.buffer_size_bytes = fabric_context.get_fabric_packet_header_size_bytes() + k_BufferSize;
+
+    // Buffer size for the Mux must matching downstream fabric router size
+    // Round down to nearest power of 2
+    uint32_t mux_buffer_size = std::bit_floor(tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    uint32_t header_size = fabric_context.get_fabric_packet_header_size_bytes();
+    static_config_.buffer_size_bytes = header_size + mux_buffer_size;
+    uint32_t num_slots = 16;
+    if (mux_buffer_size < 3072) {
+        // Due to 2D fabric having smaller buffer size more slots can be used
+        num_slots = 32;
+    }
 
     // FabricMuxConfig only accepts Worker or Idle Eth. Eth is not accepted.
     CoreType mux_config_core = GetCoreType() == CoreType::WORKER ? CoreType::WORKER : CoreType::IDLE_ETH;
     mux_kernel_config_ = std::make_shared<tt::tt_fabric::FabricMuxConfig>(
         static_config_.num_full_size_channels.value(),
         static_config_.num_header_only_channels.value(),
-        k_NumSlotsPerChannel,
-        k_NumSlotsPerChannel,
+        num_slots,
+        num_slots,
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
         mux_config_core);
     mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
-    log_debug(
-        tt::LogMetal,
-        "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {}",
-        device_->id(),
-        kernels_requiring_header_only_channel,
-        kernels_requiring_full_size_channel,
-        static_config_.buffer_size_bytes.value(),
-        logical_core_.str(),
-        GetVirtualCore().str(),
-        d2h_);
-
-    uint32_t mux_buffer_end =
-        mux_kernel_config_->get_start_address_to_clear() + mux_kernel_config_->get_num_bytes_to_clear();
+    uint32_t mux_buffer_end = mux_kernel_config_->get_memory_map_end_address();
     TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
 
-    mux_rt_args_.clear();
     int destination_device_id = -1;
-    TT_ASSERT(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
+    TT_FATAL(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
     if (d2h_) {
         // Get the device which is upstream
         destination_device_id = tt::tt_metal::FDKernel::GetUpstreamDeviceId(device_id_);
@@ -99,16 +94,61 @@ void RelayMux::GenerateStaticConfigs() {
         // Get the device which is downstream on the specified tunnel
         destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(device_id_, tunnel_id_);
     }
-    const auto& available_links = tt_fabric::get_forwarding_link_indices(device_id_, destination_device_id);
-    TT_ASSERT(!available_links.empty());
-    tt_fabric::append_fabric_connection_rt_args(
-        device_id_,
-        destination_device_id,
-        available_links.back(),
-        *program_,
-        {logical_core_},
-        mux_rt_args_,
-        GetCoreType());
+    const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
+    const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
+
+    auto get_link_idx = [&](tt::tt_fabric::FabricNodeId src_fabric_node_id,
+                            tt::tt_fabric::FabricNodeId dst_fabric_node_id) -> uint32_t {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device_->is_mmio_capable()) {
+            const auto forwarding_direction =
+                control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+            TT_FATAL(
+                forwarding_direction.has_value(),
+                "No forwarding directions found from {} to {}",
+                src_fabric_node_id,
+                dst_fabric_node_id);
+            const auto& fabric_channels =
+                control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_direction);
+
+            for (auto i = 0; i < fabric_channels.size(); i++) {
+                const auto fabric_route =
+                    control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, fabric_channels[i]);
+                if (fabric_route.size() == 1) {
+                    return i;
+                }
+            }
+        } else {
+            const auto& available_links =
+                tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+            TT_FATAL(
+                !available_links.empty(), "No links available from {} to {}", src_fabric_node_id, dst_fabric_node_id);
+            return available_links.back();
+        }
+
+        TT_THROW("Unable to find forwarding link from {} to {}", src_fabric_node_id, dst_fabric_node_id);
+    };
+
+    auto link_index = get_link_idx(src_fabric_node_id, dst_fabric_node_id);
+    log_debug(
+        tt::LogMetal,
+        "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
+        "Slots: {}, L1 Size: {}, Src: {}, Dst: {}, Link Index: {}",
+        device_->id(),
+        kernels_requiring_header_only_channel,
+        kernels_requiring_full_size_channel,
+        static_config_.buffer_size_bytes.value(),
+        logical_core_.str(),
+        GetVirtualCore().str(),
+        d2h_,
+        mux_buffer_size,
+        num_slots,
+        l1_size,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_index);
+
+    mux_rt_args_ = mux_kernel_config_->get_fabric_mux_run_time_args(
+        src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_});
 }
 
 void RelayMux::GenerateDependentConfigs() {}
@@ -120,12 +160,7 @@ void RelayMux::CreateKernel() {
     tt::tt_metal::SetRuntimeArgs(*program_, mux_kernel, logical_core_, mux_rt_args_);
 }
 
-void RelayMux::ConfigureCore() {
-    // TODO: Only need to clear the read/write pointers to 0
-    std::vector<uint32_t> mux_zero_vec((mux_kernel_config_->get_num_bytes_to_clear() / sizeof(uint32_t)), 0);
-    tt::tt_metal::detail::WriteToDeviceL1(
-        device_, logical_core_, mux_kernel_config_->get_start_address_to_clear(), mux_zero_vec, GetCoreType());
-}
+void RelayMux::ConfigureCore() {}
 
 int RelayMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const {
     const auto& kernels = channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL ? upstream_kernels_
@@ -149,9 +184,7 @@ void assemble_fabric_mux_client_config_args(
     const CoreCoord& fabric_mux_core = fabric_mux->GetVirtualCore();
     config.virtual_x = fabric_mux_core.x;
     config.virtual_y = fabric_mux_core.y;
-    config.num_buffers_per_channel = ch_type == tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL
-                                         ? fabric_mux->GetMuxKernelConfig()->num_buffers_header_only_channel
-                                         : fabric_mux->GetMuxKernelConfig()->num_buffers_full_size_channel;
+    config.num_buffers_per_channel = fabric_mux->GetMuxKernelConfig()->get_num_buffers(ch_type);
     config.channel_buffer_size_bytes = fabric_mux->GetMuxKernelConfig()->get_buffer_size_bytes(ch_type);
     config.channel_base_address = fabric_mux->GetMuxKernelConfig()->get_channel_base_address(ch_type, ch_index);
     config.connection_info_address = fabric_mux->GetMuxKernelConfig()->get_connection_info_address(ch_type, ch_index);
@@ -181,7 +214,7 @@ int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
 
     constexpr size_t k_MaxTunnelSize = 5;  // 4 remote + 1 mmio
     for (const auto& tunnel : tunnels_from_mmio) {
-        TT_ASSERT(
+        TT_FATAL(
             tunnel.size() <= k_MaxTunnelSize,
             "Unexpected tunnel size {}. Max tunnel size expected {}",
             tunnel.size(),

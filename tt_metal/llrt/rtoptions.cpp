@@ -37,6 +37,7 @@ static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
+static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -59,6 +60,21 @@ RunTimeOptions::RunTimeOptions() {
     }
     this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
 
+    const char* visible_devices_str = std::getenv(TT_METAL_VISIBLE_DEVICES_ENV_VAR);
+    if (visible_devices_str != nullptr) {
+        this->is_visible_devices_env_var_set = true;
+        std::string devices_string(visible_devices_str);
+        size_t pos = 0;
+        while ((pos = devices_string.find(',')) != std::string::npos) {
+            std::string device_str = devices_string.substr(0, pos);
+            this->visible_devices.push_back(std::stoi(device_str));
+            devices_string.erase(0, pos + 1);
+        }
+        if (!devices_string.empty()) {
+            this->visible_devices.push_back(std::stoi(devices_string));
+        }
+    }
+
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
     ParseWatcherEnv();
@@ -68,8 +84,7 @@ RunTimeOptions::RunTimeOptions() {
         ParseFeatureEnv((RunTimeDebugFeatures)i);
     }
 
-    // Test mode has no env var, default is disabled
-    test_mode_enabled = false;
+    test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
 
     profiler_enabled = false;
     profile_dispatch_cores = false;
@@ -163,8 +178,7 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
-    const char* fb_fabric = getenv(TT_METAL_FD_FABRIC_DEMO);
-    fb_fabric_en = fb_fabric != nullptr;
+    using_slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
@@ -192,9 +206,12 @@ RunTimeOptions::RunTimeOptions() {
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
     }
 
-    if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
-        this->erisc_iram_enabled = true;
+    if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
+        bool disabled = strcmp(str, "0") == 0;
+        this->erisc_iram_enabled = !disabled;
+        this->erisc_iram_enabled_env_var = !disabled;
     }
+    this->fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
     if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
         this->disable_relaxed_memory_ordering = true;
@@ -204,7 +221,7 @@ RunTimeOptions::RunTimeOptions() {
         this->enable_gathering = true;
     }
 
-    const char *arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
+    const char* arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
     if (arc_debug_enabled_str != nullptr) {
         sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
     }
@@ -214,6 +231,14 @@ RunTimeOptions::RunTimeOptions() {
         if (disable_dma_ops_str[0] == '1') {
             this->disable_dma_ops = true;
         }
+    }
+
+    if (getenv("TT_METAL_FORCE_REINIT")) {
+        force_context_reinit = true;
+    }
+
+    if (getenv("TT_METAL_WATCHER_KEEP_ERRORS")) {
+        watcher_keep_errors = true;
     }
 }
 
@@ -307,8 +332,6 @@ void RunTimeOptions::ParseInspectorEnv() {
     } else {
         inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
     }
-    std::filesystem::remove_all(inspector_settings.log_path);
-    std::filesystem::create_directories(inspector_settings.log_path);
 
     const char* inspector_initialization_is_important_str = getenv("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT");
     if (inspector_initialization_is_important_str != nullptr) {

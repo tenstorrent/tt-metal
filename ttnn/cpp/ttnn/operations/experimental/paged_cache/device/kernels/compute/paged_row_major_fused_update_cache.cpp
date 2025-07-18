@@ -31,10 +31,11 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr uint32_t num_heads = get_compile_time_arg_val(7);
 
+    compute_kernel_hw_startup(cache_cb, untilized_cache_cb);
     pack_untilize_init<Wt>(cache_cb, untilized_cache_cb);
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        pack_untilize_init_short<Wt>(cache_cb, untilized_cache_cb);
+        pack_untilize_init<Wt>(cache_cb, untilized_cache_cb);
 
         // Untilize a block from the cache
         cb_wait_front(cache_cb, Wt);
@@ -50,7 +51,7 @@ void MAIN {
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        tilize_init_short(untilized_cache2_cb, Wt, out_cb);
+        tilize_init(untilized_cache2_cb, Wt, out_cb);
 
         // Wait on writer to update block. Tilize.
         cb_wait_front(untilized_cache2_cb, Wt);

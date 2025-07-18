@@ -10,8 +10,8 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 #include <utility>
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -171,7 +171,7 @@ void kernel_main() {
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
     if (fabric_connection.is_logically_connected()) {

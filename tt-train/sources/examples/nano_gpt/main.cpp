@@ -273,8 +273,8 @@ void generate(
         }
     }
 
-    auto mask_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-        mask, ttml::core::create_shape({1, 1, max_sequence_length, max_sequence_length}), device));
+    auto mask_tensor = ttml::autograd::create_tensor(
+        ttml::core::from_vector(mask, ttnn::Shape({1, 1, max_sequence_length, max_sequence_length}), device));
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
@@ -300,10 +300,7 @@ void generate(
         }
         auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            prompt_tokens_padded,
-            ttml::core::create_shape({1, 1, 1, prompt_tokens_padded_size}),
-            device,
-            ttnn::Layout::ROW_MAJOR));
+            prompt_tokens_padded, ttnn::Shape({1, 1, 1, prompt_tokens_padded_size}), device, ttnn::Layout::ROW_MAJOR));
 
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
@@ -662,7 +659,6 @@ int main(int argc, char **argv) {
     initialize_device(device_config.mesh_shape, device_config.device_ids);
 
     auto *device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -679,7 +675,7 @@ int main(int argc, char **argv) {
         }
     }
     cached_data.masks_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttml::core::create_shape({1, 1, sequence_length, sequence_length}), device));
+        ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
@@ -703,26 +699,33 @@ int main(int argc, char **argv) {
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
                 if (device_config.enable_ddp) {
-                    auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
-                    auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
+                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
                     auto data_tensor =
-                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-                            data_xtensor, device, data_composer, ttnn::Layout::ROW_MAJOR));
+                        ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                            data,
+                            ttnn::Shape({batch_size, 1, 1, sequence_length}),
+                            device,
+                            ttnn::Layout::ROW_MAJOR,
+                            mapper.get()));
 
-                    auto targets_xtensor = xt::adapt(targets, {batch_size, sequence_length});
-                    auto targets_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
-                    auto targets_tt_tensor = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-                        targets_xtensor, device, targets_composer, ttnn::Layout::ROW_MAJOR);
+                    auto targets_tt_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        targets,
+                        ttnn::Shape({batch_size, sequence_length}),
+                        device,
+                        ttnn::Layout::ROW_MAJOR,
+                        mapper.get());
                     auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                     return {data_tensor, targets_tensor};
                 }
 
+                const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
                 auto data_tensor =
                     ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                         data,
-                        ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
+                        ttnn::Shape({batch_size, 1, 1, sequence_length}),
                         device,
-                        ttnn::Layout::ROW_MAJOR));
+                        ttnn::Layout::ROW_MAJOR,
+                        mapper.get()));
 
                 auto targets_tensor =
                     ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
@@ -746,7 +749,8 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
+                arg.vocab_size =
+                    round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));

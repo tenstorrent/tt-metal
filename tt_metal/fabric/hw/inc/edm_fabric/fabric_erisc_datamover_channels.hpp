@@ -53,19 +53,16 @@ public:
      * Expected that *buffer_index_ptr is initialized outside of this object
      */
     EthChannelBuffer(
-        size_t channel_base_address,
-        size_t buffer_size_bytes,
-        size_t header_size_bytes,
-        size_t eth_transaction_ack_word_addr,  // Assume for receiver channel, this address points to a chunk of memory
-                                               // that can fit 2 eth_channel_syncs cfor ack
-        uint8_t channel_id) :
+        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id) :
         buffer_size_in_bytes(buffer_size_bytes),
         max_eth_payload_size_in_bytes(buffer_size_in_bytes),
         channel_id(channel_id) {
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
-            for (size_t j = 0; j < this->max_eth_payload_size_in_bytes; j++) {
-                reinterpret_cast<volatile uint8_t*>(this->buffer_addresses[i])[j] = 0;
+// need to avoid unrolling to keep code size within limits
+#pragma GCC unroll 1
+            for (size_t j = 0; j < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
         set_cached_next_buffer_slot_addr(this->buffer_addresses[0]);
@@ -134,7 +131,6 @@ struct EthChannelBufferTuple {
         const size_t channel_base_address[],
         const size_t buffer_size_bytes,
         const size_t header_size_bytes,
-        const size_t eth_transaction_ack_word_addr,
         const size_t channel_base_id) {
         size_t idx = 0;
 
@@ -144,7 +140,6 @@ struct EthChannelBufferTuple {
                       channel_base_address[idx],
                       buffer_size_bytes,
                       header_size_bytes,
-                      eth_transaction_ack_word_addr,
                       static_cast<uint8_t>(channel_base_id + idx)),
                   ++idx),
                  ...);

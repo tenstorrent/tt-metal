@@ -9,10 +9,10 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <gtest/gtest.h>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "impl/context/metal_context.hpp"
 #include "dispatch_test_utils.hpp"
 
 namespace tt::tt_metal {
@@ -71,8 +71,11 @@ protected:
 
     void SetUp() override {
         CommandQueueSingleCardProgramFixture::SetUp();
-        this->device_ = this->devices_[0];
-        this->initialize_seed();
+        if (!::testing::Test::IsSkipped()) {
+            // Parent may have skipped
+            this->device_ = this->devices_[0];
+            this->initialize_seed();
+        }
     }
 
     void initialize_seed() {
@@ -251,7 +254,7 @@ private:
         const uint32_t kernel_runtime_microseconds =
             this->generate_random_num(min_kernel_runtime_microseconds, max_kernel_runtime_microseconds);
 
-        const std::map<string, string> defines = {
+        const std::map<std::string, std::string> defines = {
             {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
             {"KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds)}};
 
@@ -364,8 +367,11 @@ protected:
 
     void SetUp() override {
         CommandQueueSingleCardTraceFixture::SetUp();
-        this->device_ = this->devices_[0];
-        this->initialize_seed();
+        if (!::testing::Test::IsSkipped()) {
+            // Parent may have skipped
+            this->device_ = this->devices_[0];
+            this->initialize_seed();
+        }
     }
 
     uint32_t trace_programs() {

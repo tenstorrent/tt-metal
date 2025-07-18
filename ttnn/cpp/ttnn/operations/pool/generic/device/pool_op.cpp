@@ -31,7 +31,7 @@ void validate_pool2d(
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
 
-    const auto input_shape = input.padded_shape();
+    const auto& input_shape = input.padded_shape();
     TT_FATAL(
         (input_shape[3] % tt::constants::TILE_WIDTH == 0) || (input_shape[3] == 16),
         "Input channels ({}) should be padded to nearest TILE_WIDTH ({}) or should be 16",
@@ -183,7 +183,8 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     DataType output_dtype,
     MemoryConfig memory_config,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    uint32_t memory_used) {
     return {
         operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,
@@ -191,7 +192,8 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .output_dtype_ = output_dtype,
             .memory_config_ = std::move(memory_config),
             .count_include_pad_ = count_include_pad,
-            .divisor_override_ = divisor_override},
+            .divisor_override_ = divisor_override,
+            .memory_used = memory_used},
         tensor_args_t{input_tensor}};
 }
 

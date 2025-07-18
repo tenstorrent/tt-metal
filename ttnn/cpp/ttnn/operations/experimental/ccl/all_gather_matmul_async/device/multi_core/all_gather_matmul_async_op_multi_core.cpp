@@ -19,7 +19,7 @@
 #include <sstream>
 #include <type_traits>
 
-#include "cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -35,7 +35,6 @@ using Tensors = std::vector<Tensor>;
 //   (in other words, disable the "bidirectional" send flag)
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core_with_workers(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_tensor,
     Tensor& all_gather_output_tensor,
     const Tensor& weight_tensor,
     Tensor& matmul_output_tensor,
@@ -108,6 +107,24 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
                     matmul_fused_op_signaler);
                 matmul_override_runtime_arguments_callback =
                     matmul_program_with_callbacks->override_runtime_arguments_callback;
+            } else if (std::is_same_v<
+                           ProgramConfigType,
+                           operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+                    program,
+                    all_gather_output_tensor,
+                    {weight_tensor},
+                    bias,
+                    {matmul_output_tensor},
+                    bcast_batch,
+                    compute_kernel_config,
+                    config,
+                    untilize_out,
+                    matmul_fused_op_signaler,
+                    std::nullopt,
+                    std::nullopt);
+                matmul_override_runtime_arguments_callback =
+                    matmul_program_with_callbacks->override_runtime_arguments_callback;
             } else {
                 TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
             }
@@ -127,10 +144,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
 
     // All Gather
     tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
-        ttnn::all_gather_async_minimal_interleaved_dim3_1_1_any_any_helper(
+        ttnn::all_gather_async_minimal_interleaved_helper(
             matmul_program_with_callbacks->program,
             input_tensor,
-            persistent_intermediate_tensor,
             target_device,
             forward_device,
             backward_device,
@@ -159,9 +175,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
                 matmul_override_runtime_arguments_callback.value()(
                     operation,
                     program,
-                    {output_tensors[1], input_tensors[1]}, /* all gather output tensor, weight tensor */
+                    {output_tensors[0], input_tensors[1]}, /* all gather output tensor, weight tensor */
                     optional_input_tensors,
-                    {output_tensors[2]} /* matmul output tensor */
+                    {output_tensors[1]} /* matmul output tensor */
                 );
             }
 
@@ -171,7 +187,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
                     program,
                     {input_tensors[0]}, /* input tensor */
                     optional_input_tensors,
-                    {output_tensors[0], output_tensors[1]} /* all gather output tensor */
+                    {output_tensors[0]} /* all gather output tensor */
                 );
             }
         };

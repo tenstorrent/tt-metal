@@ -100,9 +100,6 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    if input_a_dtype == ttnn.float32 and ttnn.device.is_grayskull(device):
-        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
-
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 

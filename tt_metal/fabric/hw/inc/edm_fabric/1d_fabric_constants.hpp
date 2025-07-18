@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "compile_time_args.h"
 #include "dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
@@ -211,8 +212,9 @@ constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS = DOWNSTREAM_SENDER_NUM_BUFFERS_A
 constexpr size_t SKIP_CHANNEL_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
 constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);
 constexpr bool skip_sender_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 1);
+constexpr bool skip_sender_vc1_channel_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 2);
 
-constexpr size_t MAIN_CT_ARGS_IDX_1 = SKIP_CHANNEL_IDX + 2;
+constexpr size_t MAIN_CT_ARGS_IDX_1 = SKIP_CHANNEL_IDX + 3;
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1);
 constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
 constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
@@ -282,6 +284,8 @@ constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_IDX
 constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 2) != 0;
 constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 3);
 constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 4);
+constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
+
 constexpr size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 5);
 constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 6);
 constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 7);
@@ -294,7 +298,11 @@ constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK = get_compile_time
 
 constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 11);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 12;
+// Context switch timeouts
+constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 12);
+constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 14;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -338,7 +346,62 @@ static_assert(
     "Special marker 1 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
+    conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();
+
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_completion_counter_addrs =
+    conditional_get_next_n_args<
+        multi_txq_enabled,
+        size_t,
+        TO_SENDER_CREDIT_COUNTERS_START_IDX + NUM_SENDER_CHANNELS,
+        NUM_SENDER_CHANNELS>();
+
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_ack_counter_ptrs = conditional_get_next_n_args<
+    multi_txq_enabled,
+    size_t,
+    TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * NUM_SENDER_CHANNELS,
+    NUM_RECEIVER_CHANNELS>();
+
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_completion_counter_ptrs =
+    conditional_get_next_n_args<
+        multi_txq_enabled,
+        size_t,
+        TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS,
+        NUM_RECEIVER_CHANNELS>();
+
+template <typename T>
+constexpr bool counter_credit_addresses_are_valid(const T& counter_addresses) {
+    for (size_t i = 0; i < counter_addresses.size(); i++) {
+        if (counter_addresses[i] == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(
+    !multi_txq_enabled || counter_credit_addresses_are_valid(to_sender_remote_ack_counter_addrs),
+    "to_sender_remote_ack_counter_addrs must be valid");
+static_assert(
+    !multi_txq_enabled || counter_credit_addresses_are_valid(to_sender_remote_completion_counter_addrs),
+    "to_sender_remote_completion_counter_addrs must be valid");
+static_assert(
+    !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_ack_counter_ptrs),
+    "local_receiver_ack_counter_ptrs must be valid");
+static_assert(
+    !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_completion_counter_ptrs),
+    "local_receiver_completion_counter_ptrs must be valid");
+
+constexpr size_t SPECIAL_MARKER_2_IDX =
+    TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) : 0);
+constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
+    "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
+    "CT args.");
+
+constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
 // TODO: Add type safe getter
 constexpr bool is_local_handshake_master =
@@ -381,7 +444,9 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_3_pkts_completed_id, to_sender_4_pkts_completed_id});
 
 // Miscellaneous configuration
-constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
+
+// TODO: move this to compile time args if we need to enable it
+constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
 namespace tt::tt_fabric {
 static_assert(

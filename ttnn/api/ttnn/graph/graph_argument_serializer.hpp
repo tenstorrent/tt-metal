@@ -11,7 +11,7 @@
 #include <unordered_map>
 
 namespace ttnn::graph {
-std::string graph_demangle(const std::string_view name);
+std::string graph_demangle(std::string_view name);
 
 class GraphArgumentSerializer {
 public:
@@ -35,7 +35,6 @@ private:
 
     void initialize();
 
-private:
     std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction> map;
 };
 }  // namespace ttnn::graph

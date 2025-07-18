@@ -18,17 +18,29 @@ on:
         default: "BH-LLMBox"
 
 jobs:
-  single-card-demo-tests:
+  llmbox-demo-tests:
     strategy:
       fail-fast: false
       matrix:
         test-group: [
           {
-            name: "llama3-8b quietbox data-parallel=4 performance",
+            name: "llama3.1-8b quietbox data-parallel=4 performance",
             arch: blackhole,
             cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4,
             owner_id: U05RWH3QUPM # Salar Hosseini
-          }
+           },
+           {
+            name: "llama3.1-8b quietbox data-parallel=4 stress",
+            arch: blackhole,
+            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 22000,
+            owner_id: U03PUAKE719 # Miguel Tairum
+           },
+           {
+            name: "llama3.3-70b batch-32 quietbox performance",
+            arch: blackhole,
+            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32",
+            owner_id: U03PUAKE719 # Miguel Tairum
+           }
         ]
     name: ${{ matrix.test-group.name }}
     runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"]

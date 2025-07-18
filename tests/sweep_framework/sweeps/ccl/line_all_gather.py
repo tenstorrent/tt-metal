@@ -71,7 +71,6 @@ def mesh_device_fixture():
     yield (mesh_device, "T3000 Mesh")
 
     print("ALL GATHER: Closing device mesh")
-    ttnn.DumpDeviceProfiler(mesh_device)
     ttnn.close_mesh_device(mesh_device)
     del mesh_device
 

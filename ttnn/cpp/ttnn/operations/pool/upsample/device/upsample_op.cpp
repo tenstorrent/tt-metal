@@ -45,7 +45,7 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.logical_shape();
+    const auto& input_shape = input.logical_shape();
 
     uint32_t out_n = input_shape[0];
     uint32_t out_h = input_shape[1] * scale_factor_h_;
@@ -89,20 +89,23 @@ operation::ProgramWithCallbacks UpSample::create_program(
             } else if (mode_ == "nearest") {
                 return upsample_multi_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
             } else {
-                TT_THROW("Unsupported mode");
+                TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
             }
         case UpSampleParallelizationStrategy::SINGLE_CORE:
             if (mode_ == "nearest") {
                 return upsample_single_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            } else if (mode_ == "bilinear") {
+                // With autosharding added this case should never be entered
+                TT_THROW("Unsupported mode: Bilinear mode is only supported on multi core");
             } else {
-                TT_THROW("Unsupported mode");
+                TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
             }
     };
     return upsample_single_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
 }
 
 UpSampleParallelizationStrategy UpSample::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
-    auto input = input_tensors.at(0);
+    const auto& input = input_tensors.at(0);
     if (input.memory_config().is_sharded()) {
         return UpSampleParallelizationStrategy::MULTI_CORE;
     }

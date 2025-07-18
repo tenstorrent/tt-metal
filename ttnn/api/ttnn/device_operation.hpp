@@ -199,8 +199,9 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
     }
 }
 
-// GCC 12 has a bug that causes a segfault when using reflection to log tensors.
-#if !defined(NDEBUG) && !defined(__GNUC__)
+// GCC 12 has a bug that causes a segfault when using reflection to log tensors in debug mode.
+// If building with clang, allow this to be compiled
+#if !defined(NDEBUG) && defined(__clang__)
 
 template <typename device_operation_t>
 inline void log_operation(

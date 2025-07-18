@@ -25,7 +25,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
-    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -60,8 +61,6 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
-
-    auto cshape = output.padded_shape();
 
     // A block of work is one MtNt
     uint32_t num_cores_y = compute_with_storage_grid_size.y;

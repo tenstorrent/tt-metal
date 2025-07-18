@@ -10,8 +10,27 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    common/kernels/*
+    move/device/kernels/*
+    permute/device/kernels/*
+    sharded/device/kernels/*
+    transpose/device/kernels/*
+)
 target_sources(
     ttnn_op_data_movement
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+            reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+            reshape_view/device/device/rm_reshape_interleaved.cpp
+            reshape_view/device/hostdevcommon/common.hpp
     PRIVATE
         bcast/bcast.cpp
         bcast/bcast_types.cpp
@@ -76,6 +95,7 @@ target_sources(
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
         sharded/reshard/device/reshard_op.cpp
         sharded/reshard/device/reshard_program_factory.cpp
+        sharded/reshard/device/nd_reshard_program_factory.cpp
         sharded/reshard/reshard.cpp
         sharded/sharded_common.cpp
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.cpp
@@ -110,28 +130,13 @@ target_sources(
         untilize_with_unpadding/device/untilize_with_unpadding_program_factory.cpp
         untilize_with_unpadding/untilize_with_unpadding.cpp
         view/view.cpp
-)
-
-file(
-    GLOB_RECURSE kernels
-    common/kernels/*
-    move/device/kernels/*
-    permute/device/kernels/*
-    sharded/device/kernels/*
-    transpose/device/kernels/*
-)
-target_sources(
-    ttnn_op_data_movement
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            ${kernels}
-            reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
-            reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
-            reshape_view/device/device/rm_reshape_interleaved.cpp
-            reshape_view/device/hostdevcommon/common.hpp
+        sort/sort.cpp
+        sort/device/sort_device_operation.cpp
+        sort/device/sort_program_factory.cpp
+        gather/gather.cpp
+        gather/device/gather_device_operation.cpp
+        gather/device/gather_program_factory.cpp
+        gather/tosa/gather_tosa.cpp
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})

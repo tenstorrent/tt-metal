@@ -19,6 +19,8 @@ bfloat4_b = DataType.BFLOAT4_B
 
 BufferType = ttnn._ttnn.tensor.BufferType
 TensorMemoryLayout = ttnn._ttnn.tensor.TensorMemoryLayout
+ShardShapeAlignment = ttnn._ttnn.tensor.ShardShapeAlignment
+ShardDistributionStrategy = ttnn._ttnn.tensor.ShardDistributionStrategy
 # TODO: MemoryConfig = ttnn._ttnn.types.MemoryConfig
 MemoryConfig = ttnn._ttnn.tensor.MemoryConfig
 MathFidelity = ttnn._ttnn.tensor.MathFidelity
@@ -40,10 +42,14 @@ TILE_SIZE = 32
 Tile = ttnn._ttnn.tensor.Tile
 
 Shape = ttnn._ttnn.types.Shape
+TensorSpec = ttnn._ttnn.tensor.TensorSpec
 Tensor = ttnn._ttnn.tensor.Tensor
 
 
 CoreGrid = ttnn._ttnn.types.CoreGrid
+
+ThrottleLevel = ttnn._ttnn.operations.core.ThrottleLevel
+
 
 DeviceComputeKernelConfig = ttnn._ttnn.operations.core.DeviceComputeKernelConfig
 WormholeComputeKernelConfig = ttnn._ttnn.operations.core.WormholeComputeKernelConfig

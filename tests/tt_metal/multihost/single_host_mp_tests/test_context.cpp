@@ -54,9 +54,6 @@ TEST(DistributedContextTest, AllReduceInt) {
     // assuming context is already initialized in main with argc, argv
     // in this case we will just get a world context
     auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    using Rank = tt::tt_metal::distributed::multihost::Rank;
-    using Tag = tt::tt_metal::distributed::multihost::Tag;
-    using Size = tt::tt_metal::distributed::multihost::Size;
 
     auto size = context->size();
 

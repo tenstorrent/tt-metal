@@ -29,24 +29,16 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
 
     // Split reader args
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(17);
-    constexpr uint32_t split_reader = act_block_h_datums != 0;
+    constexpr bool split_reader = get_compile_time_arg_val(17);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(18);
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
     constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(21);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
-    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(23);
-    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(24);
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(26);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(27);
-
-    constexpr uint32_t act_block_h_datums_read_last_block =
-        act_block_h_datums_last_block > act_block_h_datums
-            ? (act_block_h_datums_last_block - act_block_h_datums_first_reader) / 2
-            : 0;
-    constexpr uint32_t act_block_h_datums_first_reader_read = act_block_h_datums_first_reader / 2;
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
 
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
@@ -76,8 +68,6 @@ void kernel_main() {
     const uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
-
-    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2;  // Extra /2 because of packed uint16 reads
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr;
     uint32_t reader_idx;
@@ -115,7 +105,6 @@ void kernel_main() {
     bool load_bias = true;
 #endif
     constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    constexpr uint32_t tile_mcast_bytes = weight_tile_nbytes * weight_block_num_tiles;
     constexpr DataFormat weight_df = get_dataformat(cb_id_weight);
     const InterleavedAddrGenFast<true> s_weight = {
         .bank_base_address = weight_addr_dram_base, .page_size = weight_tile_nbytes, .data_format = weight_df};
@@ -132,8 +121,7 @@ void kernel_main() {
     // coalesce reads along weight_size_w
     uint32_t start_reader_idx;
     if constexpr (split_reader) {
-        start_reader_idx = 0;
-        start_reader_idx = act_block_h_datums_first_reader / 2;
+        start_reader_idx = (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1;
     }
 
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
@@ -153,20 +141,14 @@ void kernel_main() {
                 reader_idx = start_reader_idx;
                 cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles);
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
-                uint32_t act_block_h_datums_read_curr =
-                    bh == out_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
                 read_sticks<
                     dilation_w,
                     coalesced_read_bytes,
                     conv_act_c_read_bytes,
                     act_block_w_extra_align_bytes,
                     stride_w_bytes,
-                    weight_size_w>(
-                    act_block_h_datums_read_curr,
-                    packed_reader_indices_ptr,
-                    reader_offset,
-                    l1_write_addr_act,
-                    reader_idx);
+                    weight_size_w,
+                    stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_act_second_reader, act_block_num_tiles);
 
@@ -302,7 +284,8 @@ void kernel_main() {
         }
 #endif
         if constexpr (split_reader) {
-            start_reader_idx = reader_idx + act_block_h_datums_first_reader_read;
+            // Increment reader index for the next number of segments (number of segments for other reader)
+            start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
         }
     }  // out_num_blocks_h
 }

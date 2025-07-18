@@ -54,11 +54,11 @@ using tt::tt_metal::distributed::MeshShape;
 class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
 protected:
     T3000MultiCQFabricMeshDeviceFixture() {
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
         T3000MultiCQMeshDeviceFixture::TearDown();
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 };
 
@@ -69,7 +69,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_program_cache();
 
     auto view = mesh_device->get_view();
 
@@ -217,8 +216,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_program_cache();
-
     auto view = mesh_device->get_view();
 
     // build a line of devices
@@ -227,6 +224,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         view.get_device(MeshCoordinate(0, 1)),
         view.get_device(MeshCoordinate(0, 2)),
         view.get_device(MeshCoordinate(0, 3))};
+
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,

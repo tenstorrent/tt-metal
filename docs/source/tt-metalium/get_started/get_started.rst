@@ -3,60 +3,69 @@
 Getting Started
 ===============
 
-TT-Metalium is designed for the needs of non-ML and ML use cases.
+TT-Metalium is a framework for accelerating both ML and non-ML workloads on Tenstorrent hardware.
+
+TT-Metalium provides a C++ API for developers to write custom kernels that runs on Tenstorrent hardware. It gives you full control over the hardware, allowing you to optimize your code for performance and efficiency. And it does not hide the hardware details from you, so you can write code that is tailored to your specific use case.
 
 The GitHub repository for the project is located here:
 https://github.com/tenstorrent/tt-metal
 
-Installation and environment setup instructions are in the GitHub repository README: https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md
+Installation
+------------
+
+Install dependencies and build the project by following the instructions in the `installation guide
+<../installing.html>`_.
+
 
 Quick Start Guide
 -----------------
 
-Metalium lets developers run models effortlessly out of the box, engage in
-lightweight optimizations, and progress to more sophisticated, heavyweight
-optimizations. The following steps showcase the available tools for
-optimizing performance on Tenstorrent hardware.
+Basic Usage
+^^^^^^^^^^^
 
-1. Install and Build
-^^^^^^^^^^^^^^^^^^^^
+**Step 1: DRAM Loopback**
+    Learn the basic structure of an Metalium application by implementing a :ref:`DRAM Loopback Example` that copies data from one DRAM buffer to another (hence loopback). This example will help you understand the basic concepts fundamental to writing Metalium applications.
 
-Install and build the project by following the instructions in the
-`installation guide
-<../installing.html>`_.
+    **What you'll learn:** Basic host and kernel structure, buffer management, and data transfer.
 
-2. Beginner Metalium Usage: DRAM Loopback
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+**Step 2: Eltwise Binary Kernel**
+    Build on the loopback example by implementing an :ref:`Eltwise Binary Kernel<Eltwise binary example>` that performs element-wise addition of two buffers. This will introduce you to performing computations using the matrix engine (FPU) and passing data between kernels within a single Tensix core.
 
-Try creating a :ref:`basic kernel example <DRAM Loopback Example>` that uses
-the L1 and DRAM memory structures of the Tenstorrent device.
+    **What you'll learn:** Circular buffer for data passing, compute kernels, using the matrix engine for computations.
 
-3. Beginner Metalium Usage: Eltwise Binary Kernel
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+**Step 3: Eltwise SFPU**
+    Extend the previous example to implement an :ref:`Eltwise SFPU<Eltwise sfpu example>` kernel that performs element-wise addition using the SFPU (vector engine, Special Function Processing Unit). This will introduce you to the SFPU and how to use it for vectorized operations.
 
-Augment your loopback example an :ref:`additional kernel <Eltwise binary
-example>` that will use the compute engine of the Tensix core to add values in
-two buffers.
+    **What you'll learn:** Performing operations using the SFPU.
 
-4. Beginner Metalium Usage: Single-core Matrix Multiplication Kernel
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Intermediate Usage
+^^^^^^^^^^^^^^^^^^
+**Step 4: Single-core Matrix Multiplication**
+    Implement a :ref:`Single-core Matrix Multiplication Kernel<MatMul_Single_Core example>` that performs matrix multiplication using the matrix engine. This will help you understand how to handle complex dataflow and computations on the Tensix core.
 
-Use TT-Metalium to define your own matrix multiplication kernels. Refer to our
-simpler :ref:`single-core <MatMul_Single_Core example>` example as a starting
-point.
+    **What you'll learn:** Complex dataflow, tilized operatins and using the matrix engine for matrix multiplication.
 
-5. Advanced Metalium Usage: Multi-core Matrix Multiplication Kernel
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Advanced Usage
+^^^^^^^^^^^^^^
 
-Explore expert-level usage by building on the previous example to create a
-:ref:`multi-core<MatMul_Multi_Core example>` implementation.
+**Step 5: Multi-core Matrix Multiplication**
+    Build on the single-core matrix multiplication example to implement a :ref:`Multi-core Matrix Multiplication Kernel<MatMul_Multi_Core example>` that distributes the workload across multiple Tensix cores. This will introduce you to parallel processing and how to optimize performance by leveraging multiple cores.
 
-Where To Go From Here
-^^^^^^^^^^^^^^^^^^^^^
+    **What you'll learn:** Parallel processing and splitting workloads across multiple cores.
 
-If you're an ML developer looking for a simpler Python API to build models,
-take a look at our higher-level API `TT-NN <../../ttnn>`_.
+**Step 6: Optimized Multi-core Matrix Multiplication**
+    :ref:`Optimize the multi-core matrix multiplication<MatMul_Multi_Core_example>` kernel by implementing exploting the grid structure of the processor. Avoid redundant reads from DRAM and avoid NoC congestion by reading with one core and broadcasting the data to other cores. This will help you understand how to optimize performance by minimizing unneeded data movement and maximizing data reuse.
 
-If you're an internal TT-Metalium developer, please read and review the
-`contribution standards
-<https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_.
+    **What you'll learn:** Performance optimization techniques for high-performance kernels.
+
+Next Steps
+----------
+
+**For ML Developers**
+    Use the higher-level `TT-NN <../../ttnn>`_ API for model development and deployment.
+
+**For Contributors**
+    Review the `contribution guidelines <https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_ before submitting changes. We are always happy to assist in merging your contributions.
+
+**For Custom Kernels**
+    Study the provided examples and adapt them to your specific use case. Start simple and optimize iteratively.

@@ -35,6 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
     uint32_t out_subblock_h,
@@ -502,12 +503,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
 
-    std::map<string, string> mm_kernel_defines;
-    std::map<string, string> mm_kernel_in0_sender_sharded_defines;
-    std::map<string, string> mm_kernel_in0_sender_interleaved_defines;
-    std::map<string, string> mm_kernel_in1_sender_writer_defines;
-    std::map<string, string> mm_kernel_in1_receiver_writer_defines;
-    std::map<string, string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_sharded_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_interleaved_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -535,7 +536,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), cores.size(), mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), cores.size(), mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), cores.size(), mm_kernel_defines, throttle_level);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -1375,7 +1377,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
     auto in1_tile = b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
@@ -1483,6 +1486,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         Nt,
         Kt,
         bcast_batch,
+        ttnn::get_throttle_level(compute_kernel_config),
         in0_block_w,
         in0_last_ktile_w,
         out_subblock_h,

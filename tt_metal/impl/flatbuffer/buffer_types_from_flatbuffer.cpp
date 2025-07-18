@@ -21,7 +21,6 @@ BufferType from_flatbuffer(flatbuffer::BufferType type) {
 TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout layout) {
     switch (layout) {
         case flatbuffer::TensorMemoryLayout::Interleaved: return TensorMemoryLayout::INTERLEAVED;
-        case flatbuffer::TensorMemoryLayout::SingleBank: return TensorMemoryLayout::SINGLE_BANK;
         case flatbuffer::TensorMemoryLayout::HeightSharded: return TensorMemoryLayout::HEIGHT_SHARDED;
         case flatbuffer::TensorMemoryLayout::WidthSharded: return TensorMemoryLayout::WIDTH_SHARDED;
         case flatbuffer::TensorMemoryLayout::BlockSharded: return TensorMemoryLayout::BLOCK_SHARDED;

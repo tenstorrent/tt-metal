@@ -25,17 +25,6 @@ Get started with the model of your choice. Install one of numerous configuration
 <https://github.com/tenstorrent/tt-metal?tab=readme-ov-file#llms>`_
 for details.
 
-3. TT-NN Tutorial: Multi-Head Attention (Simple)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Learn the basics of multi-head attention operations with TT-NN
-with a simple example: `TT-NN simple module <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-Multi-Head-Attention-using-ttnn>`_.
-
-4. TT-NN Tutorial: Multi-Head Attention (Optimized)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Dive deeper into multi-head attention operations in TT-NN, optimizing
-performance: `optimizing performance <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-optimized-version-of-Multi-Head-Attention>`_.
 
 Where To Go From Here
 ^^^^^^^^^^^^^^^^^^^^^

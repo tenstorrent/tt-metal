@@ -9,6 +9,10 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_worm
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -205,9 +209,10 @@ def run_multi_core_matmul_1d(
     untilize_out=False,
     use_regular_grid=True,
     scheme="random",
-    num_links=3,
+    is_6u_device=False,
 ):
-    print("Making model args")
+    num_links = 4 if is_6u_device else 3
+    profiler = (BenchmarkProfiler(),)
     model_args = TtModelArgs(
         mesh_device,
         instruct=True,
@@ -216,7 +221,6 @@ def run_multi_core_matmul_1d(
         max_seq_len=128 * 1024,
         dummy_weights="random",
     )
-    print("Model args made")
     model_args.n_layers = 1
     model_configuration = model_args.get_model_config()
 
@@ -226,6 +230,7 @@ def run_multi_core_matmul_1d(
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
+    warmup_iters = 10
     num_iters = 75
     warmup_iters = 10
     mesh_device.enable_program_cache()
@@ -513,6 +518,52 @@ def run_multi_core_matmul_1d(
     worker_sub_device = ttnn.SubDevice([worker_cores_range_set])
     worker_sub_device_id = ttnn.SubDeviceId(0)
     signpost("start")
+    logger.info("Compiling model")
+    rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
+        in0_t,
+        in1_t,
+        tt_input,
+        tt_intermediate,
+        dim,
+        ccl_semaphore_handle,
+        1,
+        mesh_device,
+        num_links,
+        worker_sub_device_id,
+        program_config=program_config,
+        memory_config_mm=output_sharded_mem_config,
+        compute_kernel_config=compute_kernel_config,
+        dtype=output_dtype,
+        memory_config_rs=model_configuration["REDUCE_SCATTER_OUT_MEMCFG"],
+        topology=ttnn.Topology.Ring if is_6u_device else ttnn.Topology.Linear,
+    )
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Capturing trace")
+    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for _ in range(warmup_iters):
+        rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
+            in0_t,
+            in1_t,
+            tt_input,
+            tt_intermediate,
+            dim,
+            ccl_semaphore_handle,
+            1,
+            mesh_device,
+            num_links,
+            worker_sub_device_id,
+            program_config=program_config,
+            memory_config_mm=output_sharded_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=output_dtype,
+            memory_config_rs=model_configuration["REDUCE_SCATTER_OUT_MEMCFG"],
+            topology=ttnn.Topology.Ring if is_6u_device else ttnn.Topology.Linear,
+        )
+        rs_out.deallocate(True)
+        matmul_out.deallocate(True)
+    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for _ in range(num_iters):
         rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
             in0_t,
@@ -530,10 +581,22 @@ def run_multi_core_matmul_1d(
             compute_kernel_config=compute_kernel_config,
             dtype=output_dtype,
             memory_config_rs=model_configuration["REDUCE_SCATTER_OUT_MEMCFG"],
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring if is_6u_device else ttnn.Topology.Linear,
         )
+        rs_out.deallocate(True)
+        matmul_out.deallocate(True)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    logger.info("Starting Trace perf test...")
+    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id_warmup)
+    signpost("start")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    signpost("stop")
+    mesh_device.reset_sub_device_stall_group()
 
 
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -568,7 +631,7 @@ def run_multi_core_matmul_1d(
     "device_params",
     [
         {
-            "trace_region_size": 300000,
+            "trace_region_size": 1200000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -587,7 +650,127 @@ def run_multi_core_matmul_1d(
     ],
     indirect=True,
 )
-def test_matmul_1d_ring_llama_with_rs_perf(
+def test_tg_matmul_1d_ring_llama_with_rs_perf(
+    mesh_device,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    grid,
+    in1_is_dram_interleaved,
+    untilize_out,
+    num_iters,
+    function_level_defaults,
+    shard_height,
+    shard_width,
+    input_grid,
+    output_grid,
+    dtype,
+):
+    # Only run these tests on unharvested TG
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
+
+    if in1_is_dram_interleaved:
+        hop_grid = None
+    else:
+        hop_grid = [
+            (3, 6),
+        ]
+
+    run_multi_core_matmul_1d(
+        mesh_device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        None,  # activation,
+        grid,
+        True,
+        num_iters,
+        shard_height,
+        shard_width,
+        input_grid,
+        output_grid,
+        dtype,
+        output_dtype=output_dtype,
+        use_physical_to_logical_mapping=False,
+        hop_grid=hop_grid,
+        in1_is_dram_interleaved=in1_is_dram_interleaved,
+        untilize_out=untilize_out,
+        use_regular_grid=True,
+    )
+
+
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, untilize_out",
+    [
+        (
+            1,
+            32,
+            2048,
+            3584,
+            ttnn.bfloat16,
+            ttnn.bfloat4_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.LoFi,
+            True,
+            False,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+    ],
+    ids=[
+        "ff13",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [50],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 1200000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("shard_height", [32])
+@pytest.mark.parametrize("shard_width", [64])
+@pytest.mark.parametrize("input_grid", [(5, 5)])
+@pytest.mark.parametrize("output_grid", [(5, 1)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 4)
+    ],
+    indirect=True,
+)
+def test_6U_matmul_1d_ring_llama_with_rs_perf(
     mesh_device,
     in0_dtype,
     in1_dtype,
@@ -651,4 +834,5 @@ def test_matmul_1d_ring_llama_with_rs_perf(
         in1_is_dram_interleaved=in1_is_dram_interleaved,
         untilize_out=untilize_out,
         use_regular_grid=True,
+        is_6u_device=True,
     )

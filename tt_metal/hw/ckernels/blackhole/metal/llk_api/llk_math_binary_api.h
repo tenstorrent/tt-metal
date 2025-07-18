@@ -70,7 +70,7 @@ inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A,
     const std::uint32_t operand_B,
     uint dst_index,
-    const bool clear_fp32_dst_acc = true) {
+    const bool clear_fp32_dst_acc) {
     const std::uint32_t operand_id = get_operand_id(operand_A);  // both operands must have same number of faces
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 

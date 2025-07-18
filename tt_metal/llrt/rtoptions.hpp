@@ -90,7 +90,7 @@ struct WatcherSettings {
 
 struct InspectorSettings {
     bool enabled = true;
-    bool initialization_is_important = true;
+    bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
 };
@@ -105,6 +105,9 @@ class RunTimeOptions {
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
     std::string system_kernel_dir;
+
+    bool is_visible_devices_env_var_set = false;
+    std::vector<uint32_t> visible_devices;
 
     bool build_map_enabled = false;
 
@@ -142,7 +145,8 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
-    bool fb_fabric_en = false;
+    bool fd_fabric_en = false;
+    bool using_slow_dispatch = false;
 
     bool enable_dispatch_data_collection = false;
 
@@ -158,6 +162,12 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
+    // a copy for an intermittent period until the environment variable TT_METAL_ENABLE_ERISC_IRAM is removed
+    // we keep a copy so that when we teardown the fabric (which enables erisc iram internally), we can recover
+    // to the user override (if it existed)
+    std::optional<bool> erisc_iram_enabled_env_var = std::nullopt;
+
+    bool fast_dispatch = true;
 
     bool skip_eth_cores_with_retrain = false;
 
@@ -175,6 +185,14 @@ class RunTimeOptions {
     // Force disables using DMA for reads and writes
     bool disable_dma_ops = false;
 
+    // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
+    // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
+    bool force_context_reinit = false;
+
+    // Special case for watcher_dump testing, when we want to keep errors around. TODO: remove this when watcher_dump
+    // goes away.
+    bool watcher_keep_errors = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -190,6 +208,9 @@ public:
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
+
+    inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
+    inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
@@ -311,7 +332,11 @@ public:
     // Returns the string representation for hash computation.
     inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
-            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureDprint: {
+                std::string hash_str = std::to_string(get_feature_enabled(feature));
+                hash_str += std::to_string(get_feature_all_chips(feature));
+                return hash_str;
+            }
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:
             case RunTimeDebugFeatureAtomicDebugDelay:
@@ -325,7 +350,8 @@ public:
         }
     }
     inline std::string get_compile_hash_string() const {
-        std::string compile_hash_str = fmt::format("{}_{}", get_watcher_enabled(), get_kernels_early_return());
+        std::string compile_hash_str =
+            fmt::format("{}_{}_{}", get_watcher_enabled(), get_kernels_early_return(), get_erisc_iram_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -371,7 +397,8 @@ public:
     inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() const { return fb_fabric_en; }
+    inline bool get_fd_fabric() const { return fd_fabric_en && !using_slow_dispatch; }
+    inline void set_fd_fabric(bool enable) { fd_fabric_en = enable; }
 
     inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
@@ -391,7 +418,23 @@ public:
     inline bool get_simulator_enabled() const { return simulator_enabled; }
     inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
-    inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
+    inline bool get_erisc_iram_enabled() const {
+        // Disabled when debug tools are enabled due to IRAM size
+        return erisc_iram_enabled && !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+    }
+    inline bool get_erisc_iram_env_var_enabled() const {
+        return erisc_iram_enabled_env_var.has_value() && erisc_iram_enabled_env_var.value();
+    }
+    inline bool get_erisc_iram_env_var_disabled() const {
+        return erisc_iram_enabled_env_var.has_value() && !erisc_iram_enabled_env_var.value();
+    }
+    inline bool get_fast_dispatch() const { return fast_dispatch; }
+
+    // Temporary API until all multi-device workloads are ported to run on fabric.
+    // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
+    // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
+    // copy to IRAM can noticeably degrade legacy CCL op performance in those cases.
+    inline void set_erisc_iram_enabled(bool enable) { erisc_iram_enabled = enable; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
@@ -400,6 +443,10 @@ public:
 
     inline bool get_disable_dma_ops() const { return disable_dma_ops; }
     inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+
+    inline bool get_force_context_reinit() const { return force_context_reinit; }
+
+    inline bool get_watcher_keep_errors() const { return watcher_keep_errors; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

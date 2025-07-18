@@ -37,10 +37,15 @@ struct ChipSpec {
 };
 
 enum class FabricType {
-    MESH = 0,
-    TORUS_1D = 1,
-    TORUS_2D = 2,
+    MESH = 1 << 0,
+    TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
+    TORUS_Y = 1 << 2,  // Connections along mesh_coord[0]
+    TORUS_XY = (TORUS_X | TORUS_Y),
 };
+
+FabricType operator|(FabricType lhs, FabricType rhs);
+FabricType operator&(FabricType lhs, FabricType rhs);
+bool has_flag(FabricType flags, FabricType test_flag);
 
 enum class RoutingDirection {
     N = 0,
@@ -108,8 +113,9 @@ public:
     chip_id_t coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const;
 
 private:
+    void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
-        chip_id_t src_chip_id, std::uint32_t row_size, std::uint32_t num_chips_in_mesh, FabricType fabric_type) const;
+        const MeshCoordinate& src_mesh_coord, const MeshCoordinateRange& mesh_coord_range, FabricType fabric_type) const;
     void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
 
     void add_to_connectivity(

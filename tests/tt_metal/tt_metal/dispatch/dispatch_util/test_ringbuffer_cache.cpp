@@ -160,7 +160,7 @@ TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
                 << ", pgm_size: " << pgm_size << ", offset: " << result->offset
                 << ", next_block_offset: " << get_next_block_offset() << std::endl;
         }
-        ASSERT_TRUE(get_manager_entry_size() >= std::min(params.initial_manager_size, params.cache_size_blocks))
+        ASSERT_GE(get_manager_entry_size(), std::min(params.initial_manager_size, params.cache_size_blocks))
             << "Manager size: " << get_manager_entry_size() << ", cache size: " << params.cache_size_blocks
             << ", initial manager size: " << params.initial_manager_size << ", oldest_idx: " << get_oldest_idx()
             << ", next_index: " << get_next_idx() << ", oldest_block_offset: " << get_oldest_block_offset()
@@ -172,7 +172,7 @@ TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
     auto end_rbcache = std::chrono::high_resolution_clock::now();
     auto duration_rbcache = std::chrono::duration_cast<std::chrono::milliseconds>(end_rbcache - start_rbcache).count();
     std::cout << "Ringbuffer cache runtime: " << duration_rbcache << " ms, hits: " << hits_count << std::endl;
-    ASSERT_TRUE(get_manager_entry_size() <= params.cache_size_blocks)
+    ASSERT_LE(get_manager_entry_size(), params.cache_size_blocks)
         << "Manager size: " << get_manager_entry_size() << ", cache size: " << params.cache_size_blocks << std::endl;
     std::cout << "Cache size: " << params.cache_size_blocks << ", initial manager size: " << params.initial_manager_size
               << ", final manager size: " << get_manager_entry_size() << std::endl;

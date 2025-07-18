@@ -7,7 +7,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include <magic_enum/magic_enum.hpp>
-#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -15,11 +15,6 @@
 namespace ttnn::operations::unary {
 
 enum class UnaryCompositeOpType {
-    DEG2RAD,
-    RAD2DEG,
-    ACOSH,
-    ASINH,
-    ATANH,
     CBRT,
     COSH,
     DIGAMMA,
@@ -43,7 +38,6 @@ enum class UnaryCompositeOpType {
     TRIL,
     TRIU,
     POLYGAMMA,
-    HARDSHRINK,
     SOFTSHRINK,
     LOGIT,
     CELU,
@@ -52,9 +46,6 @@ enum class UnaryCompositeOpType {
     NORMALIZE_GLOBAL,
     FRAC,
 };
-Tensor _acosh(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _asinh(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _atanh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
@@ -70,8 +61,6 @@ Tensor _std(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std_overload(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _deg2rad(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _rad2deg(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _hardswish(
     const Tensor&,
     float scale = 1.0f / 6.0f,
@@ -96,8 +85,6 @@ Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor _hardshrink(
-    const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _softshrink(
     const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -110,31 +97,6 @@ Tensor _frac(const Tensor&, const std::optional<MemoryConfig>&);
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryCompositeOpType::DEG2RAD> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _deg2rad(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::RAD2DEG> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _rad2deg(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::ACOSH> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _acosh(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::ASINH> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _asinh(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::ATANH> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _atanh(t1, mem_cfg); }
-};
 
 template <>
 struct OpHandler<UnaryCompositeOpType::CBRT> {
@@ -283,13 +245,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::SWIGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg) {
         return _swiglu(t1, dim, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::HARDSHRINK> {
-    static Tensor handle(const Tensor& t1, float lambd, const std::optional<MemoryConfig>& mem_cfg) {
-        return _hardshrink(t1, lambd, mem_cfg);
     }
 };
 

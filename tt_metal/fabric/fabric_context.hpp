@@ -20,20 +20,23 @@ public:
     static constexpr auto routing_directions = {
         RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
-    explicit FabricContext(tt::tt_metal::FabricConfig fabric_config);
+    explicit FabricContext(tt::tt_fabric::FabricConfig fabric_config);
     ~FabricContext() = default;
 
     bool is_wrap_around_mesh(MeshId mesh_id) const;
 
+    static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
+
     tt::tt_fabric::Topology get_fabric_topology() const;
+    tt::tt_fabric::FabricConfig get_fabric_config() const { return fabric_config_; }
 
     size_t get_fabric_packet_header_size_bytes() const;
     size_t get_fabric_max_payload_size_bytes() const;
     size_t get_fabric_channel_buffer_size_bytes() const;
 
     tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type =
-            tt::tt_fabric::FabricEriscDatamoverType::Default) const;
+        tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default,
+        tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short) const;
 
     void set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers);
     uint32_t get_num_fabric_initialized_routers(chip_id_t chip_id) const;
@@ -55,10 +58,10 @@ private:
     size_t get_packet_header_size_bytes() const;
     size_t get_max_payload_size_bytes() const;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType edm_type);
+        tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis);
 
     bool initialized_ = false;
-    tt::tt_metal::FabricConfig fabric_config_{};
+    tt::tt_fabric::FabricConfig fabric_config_{};
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_{};
     tt::tt_fabric::Topology topology_{};
@@ -66,9 +69,13 @@ private:
     size_t max_payload_size_bytes_ = 0;
     size_t channel_buffer_size_bytes_ = 0;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> router_config_ = nullptr;
-    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_router_config_ = nullptr;
-    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_upstream_router_config_ = nullptr;
-    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_upstream_adjcent_router_config_ = nullptr;
+    // these edm types will have different optimizations based on the number of devices along the axis.
+    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_router_config_ = {};
+    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_router_config_ = {};
+    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_adjcent_router_config_ =
+        {};
+    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2>
+        dateline_upstream_adjcent_upstream_router_config_ = {};
 
     // Using vectors. Use Device IDs as indices
     size_t num_devices = 0;

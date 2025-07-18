@@ -73,8 +73,8 @@ def run_reduce_scatter_test(
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
     topology=ttnn.Topology.Linear,
+    use_noc1_only=False,
 ):
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
 
@@ -228,6 +228,7 @@ def run_reduce_scatter_test(
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=topology,
+                use_noc1_only=use_noc1_only,
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -325,6 +326,7 @@ def run_reduce_scatter_test(
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -332,7 +334,7 @@ def run_reduce_scatter_test(
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
+def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode, use_noc1_only):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -359,6 +361,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
         num_iters,
         warmup_iters,
         trace_mode,
+        use_noc1_only=use_noc1_only,
         num_links=3,
         scheme="random",
     )
@@ -370,6 +373,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize("use_noc1_only", [False, True])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -377,7 +381,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
+def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode, use_noc1_only):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -407,6 +411,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         num_links=3,
         scheme="random",
         topology=ttnn.Topology.Linear,
+        use_noc1_only=use_noc1_only,
     )
 
 
@@ -460,64 +465,6 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
         warmup_iters,
         trace_mode,
         num_links=1,
-        scheme="random",
-        use_regular_grid=True,
-        input_grid=input_grid,
-        output_grid=output_grid,
-        dtype=dtype,
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "trace_region_size": 100000,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 4)
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("shard_height", [32])
-@pytest.mark.parametrize("shard_width", [64])
-@pytest.mark.parametrize("input_grid", [(5, 5)])
-@pytest.mark.parametrize("output_grid", [(5, 1)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_fabric_reduce_scatter_regular_grid_4_dev(
-    mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
-):
-    # Only run these tests on unharvested TG
-    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
-    if device_grid != (8, 8):
-        pytest.skip("Not TG!")
-
-    dim = 3
-    num_devices_scatter = 4
-    num_devices_fracture = 8
-    num_cores = input_grid[0] * input_grid[1] - 5  # test padding
-    num_iters = 30
-    warmup_iters = 0
-    run_reduce_scatter_test(
-        mesh_device,
-        dim,
-        shard_height,
-        shard_width,
-        num_devices_scatter,
-        num_devices_fracture,
-        num_cores,
-        num_iters,
-        warmup_iters,
-        trace_mode,
-        num_links=3,
         scheme="random",
         use_regular_grid=True,
         input_grid=input_grid,

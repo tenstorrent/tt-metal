@@ -26,14 +26,12 @@
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
@@ -120,10 +118,10 @@ void EnqueueProgramCommand::process() {
     // Compute the total number of workers this program uses
     uint32_t num_workers = 0;
     if (program.runs_on_noc_multicast_only_cores()) {
-        num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, this->sub_device_id);
+        num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
     if (program.runs_on_noc_unicast_only_cores()) {
-        num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, this->sub_device_id);
+        num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
     // Reserve space for this program in the kernel config ring buffer
     program_dispatch::reserve_space_in_kernel_config_buffer(
@@ -213,6 +211,9 @@ void EnqueueReadBuffer(
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::ReadFromBuffer(buffer_obj, (uint8_t *)dst);
+    }
     BufferRegion region(0, buffer_obj.size());
     EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
 }
@@ -245,6 +246,10 @@ void EnqueueWriteBuffer(
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::WriteToBuffer(buffer_obj,
+            tt::stl::Span<const uint8_t>((const uint8_t *)std::get<const void *>(src), buffer_obj.size()));
+    }
     BufferRegion region(0, buffer_obj.size());
     EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
 }
@@ -265,6 +270,9 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     ZoneScoped;
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::LaunchProgram((IDevice *)&cq, program);
+    }
     detail::DispatchStateCheck(true);
 
     IDevice* device = cq.device();
@@ -309,11 +317,11 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled() &&
-            tt::watcher_server_killed_due_to_error()) {
+            MetalContext::instance().watcher_server()->killed_due_to_error()) {
             TT_FATAL(
                 false,
                 "Command Queue could not complete EventSynchronize. See {} for details.",
-                tt::watcher_get_log_file_name());
+                MetalContext::instance().watcher_server()->log_file_name());
             return;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(5));
@@ -337,17 +345,20 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
 void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return;
+    }
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
     // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
     if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         TT_FATAL(
-            !(DPrintServerHangDetected()),
+            !(MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()),
             "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
         TT_FATAL(
-            !(tt::watcher_server_killed_due_to_error()),
+            !(MetalContext::instance().watcher_server()->killed_due_to_error()),
             "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
-            tt::watcher_get_log_file_name());
+            MetalContext::instance().watcher_server()->log_file_name());
     }
 }
 

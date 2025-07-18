@@ -69,6 +69,7 @@ process_mcast_in0_program_and_create_override_variables(
     bool math_approx_mode,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t M,
     uint32_t N,
@@ -413,9 +414,9 @@ process_mcast_in0_program_and_create_override_variables(
         (std::uint32_t)B  // batch
     };
 
-    std::map<string, string> mm_kernel_defines;
-    std::map<string, string> mm_kernel_in0_sender_writer_defines;
-    std::map<string, string> mm_kernel_in1_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -441,7 +442,8 @@ process_mcast_in0_program_and_create_override_variables(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -914,6 +916,7 @@ process_mcast_in1_program_and_create_override_variables(
     bool math_approx_mode,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t M,
     uint32_t N,
@@ -1193,10 +1196,10 @@ process_mcast_in1_program_and_create_override_variables(
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
 
-    std::map<string, string> mm_kernel_defines;
-    std::map<string, string> mm_kernel_in0_sender_defines;
-    std::map<string, string> mm_kernel_in1_sender_writer_defines;
-    std::map<string, string> mm_kernel_in1_receiver_writer_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -1223,7 +1226,8 @@ process_mcast_in1_program_and_create_override_variables(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -1607,6 +1611,7 @@ process_gather_in0_program_and_create_override_variables(
     bool packer_l1_acc,
     bool dst_full_sync_en,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t base_cb_index,
     uint32_t B,
     uint32_t M,
@@ -1634,7 +1639,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores) {
-    const auto b = b_tensors[0];
+    const auto& b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
     const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
@@ -1955,8 +1960,8 @@ process_gather_in0_program_and_create_override_variables(
     }
 
     /* Kernel defines */
-    std::map<string, string> mm_in1_kernel_defines;
-    std::map<string, string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_in1_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
 
     if (use_global_cb) {
         mm_in1_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
@@ -1980,7 +1985,8 @@ process_gather_in0_program_and_create_override_variables(
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -2439,6 +2445,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -2458,12 +2465,13 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
-    const auto b = b_tensors[0];
-    const auto output = output_tensors[0];
+    const auto& b = b_tensors[0];
+    const auto& output = output_tensors[0];
 
     TT_FATAL(output_tensors.size() == b_tensors.size(), "number of outputs must match number of inputs b");
 
-    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
     auto in1_tile = b.tensor_spec().tile();
     // cannot use the output tensor tile directly as that might be changed by user override
@@ -2559,6 +2567,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
 
     if (gather_in0) {
         std::vector<tt_metal::Buffer*> out_buffers;
+        out_buffers.reserve(output_tensors.size());
         for (const auto& output_tensor : output_tensors) {
             out_buffers.push_back(output_tensor.buffer());
         }
@@ -2573,6 +2582,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             packer_l1_acc,
             dst_full_sync_en,
             compute_with_storage_grid_size,
+            throttle_level,
             start_cb_index,
             B,
             Mt,
@@ -2612,6 +2622,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             math_approx_mode,
             packer_l1_acc,
             compute_with_storage_grid_size,
+            throttle_level,
             B,
             Mt,
             Nt,
@@ -2653,6 +2664,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             math_approx_mode,
             packer_l1_acc,
             compute_with_storage_grid_size,
+            throttle_level,
             B,
             Mt,
             Nt,
@@ -2721,6 +2733,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             broadcast_batch,
             compute_with_storage_grid_size,
             compute_kernel_config,
+            ttnn::get_throttle_level(compute_kernel_config),
             in0_block_w,
             out_subblock_h,
             out_subblock_w,
@@ -2781,6 +2794,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         broadcast_batch,
         config.compute_with_storage_grid_size,
         compute_kernel_config,
+        ttnn::get_throttle_level(compute_kernel_config),
         config.in0_block_w,
         config.out_subblock_h,
         config.out_subblock_w,
