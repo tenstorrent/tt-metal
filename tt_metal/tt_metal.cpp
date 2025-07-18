@@ -1382,7 +1382,7 @@ void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, co
 }
 
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         if (cq_id.has_value()) {
             Finish(device->command_queue(cq_id.value()), sub_device_ids);
         } else {
