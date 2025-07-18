@@ -34,6 +34,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/persistent_kernel_cache.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
@@ -359,6 +360,11 @@ void DevicePool::initialize_host(IDevice* dev) const {
 
 void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
     std::vector<std::shared_future<tt_metal::IDevice*>> events;
+    bool temp_enable_kernel_cache = tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw() &&
+                                    !detail::GetPersistentKernelCacheEnabled();
+    if (temp_enable_kernel_cache) {
+        detail::EnablePersistentKernelCache();
+    }
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         auto& dev = active_devices[i];
         events.emplace_back(detail::async([dev]() {
@@ -379,6 +385,9 @@ void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devic
         if (dev) {
             dev->configure_fabric();
         }
+    }
+    if (temp_enable_kernel_cache) {
+        detail::DisablePersistentKernelCache();
     }
 }
 

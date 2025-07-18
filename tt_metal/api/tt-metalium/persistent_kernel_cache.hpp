@@ -23,4 +23,11 @@ void EnablePersistentKernelCache();
  */
 void DisablePersistentKernelCache();
 
+/**
+ * Returns true if the kernel compilation cache is enabled.
+ *
+ * Return value: bool
+ */
+bool GetPersistentKernelCacheEnabled();
+
 }  // namespace tt::tt_metal::detail

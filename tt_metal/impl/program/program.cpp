@@ -231,6 +231,8 @@ void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
 void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 
+bool GetPersistentKernelCacheEnabled() { return enable_persistent_kernel_cache; }
+
 class Internal_ {
    public:
        using map_type = decltype(detail::ProgramImpl::circular_buffer_by_id_);

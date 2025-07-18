@@ -13,6 +13,7 @@
 #include <string>
 
 #include "assert.hpp"
+#include <tt-metalium/persistent_kernel_cache.hpp>
 #include <umd/device/tt_core_coordinates.h>
 
 using std::vector;
@@ -236,6 +237,10 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_FORCE_REINIT")) {
         force_context_reinit = true;
+    }
+
+    if (getenv("TT_METAL_ENABLE_PERSISTENT_KERNEL_CACHE")) {
+        tt::tt_metal::detail::EnablePersistentKernelCache();
     }
 }
 
