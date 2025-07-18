@@ -42,8 +42,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateInt32) {
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor =
         ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    ttml::core::MeshToXTensorVariant<int32_t> identity_composer = ttml::core::VectorMeshToXTensor<int32_t>(mesh_shape);
-    auto xtensors_back = ttml::core::to_xtensor<int32_t>(tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor<int32_t>(tensor, ttml::core::IdentityComposer{});
 
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[0]));
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
@@ -57,9 +56,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor =
         ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    ttml::core::MeshToXTensorVariant<uint32_t> identity_composer =
-        ttml::core::VectorMeshToXTensor<uint32_t>(mesh_shape);
-    auto xtensors_back = ttml::core::to_xtensor<uint32_t>(tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor<uint32_t>(tensor, ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[0]));
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
 }
@@ -71,8 +68,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicate) {
     xt::xarray<float> xtensor = test_data.reshape({1, 1, 1, 3});
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto xtensors_back = ttml::core::to_xtensor(tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(tensor, ttml::core::IdentityComposer{});
 
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[0]));
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
@@ -88,8 +84,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3) {
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto xtensors_back = ttml::core::to_xtensor(tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(tensor, ttml::core::IdentityComposer{});
 
     xt::xarray<float> chunk0 = xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, 2));
     xt::xarray<float> chunk1 = xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(2, 4));
@@ -108,8 +103,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2) {
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 2);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto xtensors_back = ttml::core::to_xtensor(tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(tensor, ttml::core::IdentityComposer{});
 
     xt::xarray<float> chunk0 = xt::view(xtensor, xt::all(), xt::all(), xt::range(0, 1), xt::all());
     xt::xarray<float> chunk1 = xt::view(xtensor, xt::all(), xt::all(), xt::range(1, 2), xt::all());
@@ -129,9 +123,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
 
     auto sum_tensor = ttnn::experimental::all_reduce(
         tensor, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring);
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
 
-    auto xtensors_back = ttml::core::to_xtensor(sum_tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(sum_tensor, ttml::core::IdentityComposer{});
     auto reduced_tensor = xtensor + xtensor;
 
     std::cout << "xtensors_back[0]: " << xtensors_back[0] << std::endl;
@@ -152,9 +145,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
 
     auto sum_tensor = ttnn::experimental::all_reduce(
         tensor, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring);
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
 
-    auto xtensors_back = ttml::core::to_xtensor(sum_tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(sum_tensor, ttml::core::IdentityComposer{});
     auto reduced_tensor = xtensor + xtensor;
 
     EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
@@ -171,8 +163,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 2);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto out_tensor = ttnn::add(tensor, scalar);
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto xtensors_back = ttml::core::to_xtensor(out_tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(out_tensor, ttml::core::IdentityComposer{});
 
     xt::xarray<float> chunk0 = xt::view(xtensor, xt::all(), xt::all(), xt::range(0, 1), xt::all());
     xt::xarray<float> chunk1 = xt::view(xtensor, xt::all(), xt::all(), xt::range(1, 2), xt::all());
@@ -230,8 +221,7 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
         const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
         auto xtensor_tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
         auto out_tensor = ttnn::experimental::dropout(xtensor_tensor, prob, scale, dropout_seed1);
-        ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-        auto xtensors_back = ttml::core::to_xtensor(out_tensor, identity_composer);
+        auto xtensors_back = ttml::core::to_xtensor(out_tensor, ttml::core::IdentityComposer{});
         EXPECT_FALSE(xt::allclose(xtensors_back[0], xtensors_back[1], /*rtol=*/1e-4, /*atol=*/1e-3));
     }
 }
@@ -258,7 +248,6 @@ TEST_F(N300UtilsTest, MorehClipGradNorm) {
     EXPECT_NO_THROW(do_it());
     xt::xarray<float> expected_res = xt::full_like(xtensor, 0.05F);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto res_back = ttml::core::to_xtensor(tensor, identity_composer)[0];
+    auto res_back = ttml::core::to_xtensor(tensor, ttml::core::IdentityComposer{})[0];
     EXPECT_TRUE(xt::allclose(expected_res, res_back, 2.2e-2F));
 }

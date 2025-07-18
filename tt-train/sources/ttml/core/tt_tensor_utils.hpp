@@ -67,19 +67,6 @@ template <class T = float>
     return xt::adapt(vec, shape_vec);
 }
 
-template <class T = float>
-auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensorVariant<T>& composer) {
-    auto cpu_tensor = tensor.cpu();
-    cpu_tensor = cpu_tensor.to_layout(ttnn::Layout::ROW_MAJOR);
-    auto cpu_tensors = ttnn::distributed::get_device_tensors(cpu_tensor);
-    std::vector<xt::xarray<T>> res;
-    res.reserve(cpu_tensors.size());
-    for (const auto& shard : cpu_tensors) {
-        res.push_back(to_xtensor<T>(shard));
-    }
-    return std::visit([&res](auto&& arg) { return arg.compose(res); }, composer);
-}
-
 std::vector<std::span<std::byte>> get_bytes_from_cpu_tensor(ttnn::Tensor& cpu_tensor);
 
 // Use instead of ConcatMeshToXTensor, create composer with concat_mesh_to_tensor_composer(mesh_device, dim)
