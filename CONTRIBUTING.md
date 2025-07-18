@@ -134,6 +134,31 @@ To set up pre-commit on your local machine, follow these steps:
    pre-commit run --all-files
    ```
 
+### `clangd` setup for IDE Integration
+
+This project uses `clangd` to provide language server features like code completion, navigation, and live error checking. Follow these steps to set it up correctly:
+
+1.  **Install Clangd Extension**:
+    First, install the `clangd` extension for your code editor (e.g., VSCode, Cursor).
+
+2.  **Download Dependencies**:
+    `clangd` requires an external toolchain and several headers from the `tt-metal` project. You can download all the necessary dependencies by running the following script:
+    ```bash
+    cd tests
+    ./setup_testing_env.sh
+    cd ..
+    ```
+    This will download the SFPI toolchain. Headers will be downloaded automatically once you run the tests.
+
+3.  **Generate Compilation Flags**:
+    With the dependencies in place, run the `setup_clangd.sh` script from the repository root. This creates the `compile_flags.txt` file that `clangd` needs. You must specify a target architecture:
+    ```bash
+    ./setup_clangd.sh blackhole
+    ```
+
+4.  **Reload file**:
+    After completing the setup, you might have to reload the file in the editor. That is not always the case.
+
 ### Spell Checking with `codespell`
 
 We use `codespell` to automatically fix common spelling errors in our codebase and documentation. It runs on every commit and also checks commit messages for typos.
