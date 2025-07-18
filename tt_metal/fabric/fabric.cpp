@@ -242,6 +242,16 @@ void SetFabricConfig(
     tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode, num_routing_planes);
 }
 
+std::optional<eth_chan_directions> get_eth_forwarding_direction(
+    FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto routing_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!routing_direction.has_value()) {
+        return std::nullopt;
+    }
+    return control_plane.routing_direction_to_eth_direction(routing_direction.value());
+}
+
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(
