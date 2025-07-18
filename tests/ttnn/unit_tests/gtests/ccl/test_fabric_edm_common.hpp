@@ -1856,6 +1856,7 @@ bool RunPipelinedWorkersTest(
     // Initial setup like worker core assignment, chunk read order, etc.
 
     std::vector<CoreRangeSet> pipeline_stage_worker_cores = {};
+    pipeline_stage_worker_cores.reserve(num_stages);
     for (size_t i = 0; i < num_stages; ++i) {
         pipeline_stage_worker_cores.push_back(
             CoreRangeSet(CoreRange(CoreCoord(0, i), CoreCoord(num_workers_per_stage[i] - 1, i))));
@@ -3937,6 +3938,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     }
 
     std::vector<IDevice*> worker_devices;
+    worker_devices.reserve(num_devices_with_workers);
     for (size_t i = 0; i < num_devices_with_workers; i++) {
         worker_devices.push_back(devices[i]);
     }
