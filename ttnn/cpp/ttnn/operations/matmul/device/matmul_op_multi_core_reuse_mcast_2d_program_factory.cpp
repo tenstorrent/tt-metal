@@ -387,7 +387,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)(num_blocks_x - 1),  // in0_mcast_num_cores
             // batch args
             (std::uint32_t)M * K,  // MtKt
-            (std::uint32_t)B       // batch
+            (std::uint32_t)B,      // batch
+
+            // sparsity args
+            (std::uint32_t)0,      // batchB
+            (std::uint32_t)false,  // sparsity_is_dram
+            (std::uint32_t)0,      // sparsity_log2_of_pagesize
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
@@ -395,6 +400,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
+        (std::uint32_t)false,  // sparsity_is_dram
         (std::uint32_t)out_is_dram,
 
         // READER
@@ -420,6 +426,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)K * N,        // KtNt
         (std::uint32_t)B,            // batch
         (std::uint32_t)bcast_batch,  // bcast_B
+        // sparsity args
+        (std::uint32_t)0,  // batchB
+        (std::uint32_t)0,  // sparsity_log2_of_pagesize
 
         // WRITER
         // out tensor args
@@ -1000,6 +1009,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 mm_in0_sender_args.push_back(out_block_h);
             }
 
+            // sparsity args
+            mm_in0_sender_args.push_back(0);  // sparsity_addr
+
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
@@ -1037,6 +1049,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     (std::uint32_t)in1_mcast_start.y,  // in1_mcast_dest_noc_start_y
                     (std::uint32_t)in1_mcast_end.x,    // in1_mcast_dest_noc_end_x
                     (std::uint32_t)in1_mcast_end.y,    // in1_mcast_dest_noc_end_y
+
+                    // sparsity args
+                    (std::uint32_t)0,  // sparsity_addr
 
                     // WRITER
                     // out tensor args
