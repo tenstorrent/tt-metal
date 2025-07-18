@@ -153,6 +153,24 @@ flatbuffer::ShardMode to_flatbuffer(tt::tt_metal::ShardMode shard_mode) {
     TT_THROW("Unsupported ShardMode to flatbuffer.");
 }
 
+flatbuffer::ShardDistributionStrategy to_flatbuffer(tt::tt_metal::ShardDistributionStrategy strategy) {
+    switch (strategy) {
+        case tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D:
+            return flatbuffer::ShardDistributionStrategy::ROUND_ROBIN_1D;
+        case tt::tt_metal::ShardDistributionStrategy::GRID_2D: return flatbuffer::ShardDistributionStrategy::GRID_2D;
+    }
+    TT_THROW("Unsupported ShardDistributionStrategy to flatbuffer.");
+}
+
+tt::tt_metal::ShardDistributionStrategy from_flatbuffer(flatbuffer::ShardDistributionStrategy strategy) {
+    switch (strategy) {
+        case flatbuffer::ShardDistributionStrategy::ROUND_ROBIN_1D:
+            return tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D;
+        case flatbuffer::ShardDistributionStrategy::GRID_2D: return tt::tt_metal::ShardDistributionStrategy::GRID_2D;
+    }
+    TT_THROW("Unsupported ShardDistributionStrategy from flatbuffer.");
+}
+
 tt::tt_metal::ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec) {
     CoreRangeSet grid = from_flatbuffer(spec->grid());
     std::array<uint32_t, 2> shape = {spec->shape_h(), spec->shape_w()};
@@ -180,6 +198,25 @@ flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
         to_flatbuffer(spec.orientation),
         to_flatbuffer(spec.mode),
         physical_shard_shape);
+}
+
+flatbuffers::Offset<flatbuffer::NdShardSpec> to_flatbuffer(
+    const tt::tt_metal::NdShardSpec& spec, flatbuffers::FlatBufferBuilder& builder) {
+    auto flat_shape = builder.CreateVector(spec.shard_shape.view().data(), spec.shard_shape.rank());
+    return flatbuffer::CreateNdShardSpec(
+        builder,
+        flat_shape,
+        to_flatbuffer(builder, spec.grid),
+        to_flatbuffer(spec.orientation),
+        to_flatbuffer(spec.shard_distribution_strategy));
+}
+
+tt::tt_metal::NdShardSpec from_flatbuffer(const flatbuffer::NdShardSpec* spec) {
+    return tt::tt_metal::NdShardSpec(
+        Shape(SmallVector<uint32_t>(spec->shard_shape()->cbegin(), spec->shard_shape()->cend())),
+        from_flatbuffer(spec->grid()),
+        from_flatbuffer(spec->orientation()),
+        from_flatbuffer(spec->shard_distribution_strategy()));
 }
 
 tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layout) {
@@ -237,23 +274,37 @@ flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
 flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
     const tt::tt_metal::MemoryConfig& config, flatbuffers::FlatBufferBuilder& builder) {
     flatbuffers::Offset<flatbuffer::ShardSpec> shard_spec = 0;
+    flatbuffers::Offset<flatbuffer::NdShardSpec> nd_shard_spec = 0;
     if (config.shard_spec().has_value()) {
         shard_spec = to_flatbuffer(*config.shard_spec(), builder);
     }
+    if (config.nd_shard_spec().has_value()) {
+        nd_shard_spec = to_flatbuffer(*config.nd_shard_spec(), builder);
+    }
     return flatbuffer::CreateMemoryConfig(
-        builder, to_flatbuffer(config.memory_layout()), to_flatbuffer(config.buffer_type()), shard_spec);
+        builder,
+        to_flatbuffer(config.memory_layout()),
+        to_flatbuffer(config.buffer_type()),
+        shard_spec,
+        nd_shard_spec,
+        config.created_with_nd_shard_spec());
 }
 
 tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* config) {
     std::optional<tt::tt_metal::ShardSpec> shard_spec;
+    std::optional<tt::tt_metal::NdShardSpec> nd_shard_spec;
     if (config->shard_spec()) {
         shard_spec = from_flatbuffer(config->shard_spec());
     }
-    return tt::tt_metal::MemoryConfig{
+    if (config->nd_shard_spec()) {
+        nd_shard_spec = from_flatbuffer(config->nd_shard_spec());
+    }
+    return tt::tt_metal::MemoryConfig::create_with_prepopulated_shard_specs(
         from_flatbuffer(config->memory_layout()),
         from_flatbuffer(config->buffer_type()),
         shard_spec,
-    };
+        nd_shard_spec,
+        config->created_with_nd_shard_spec());
 }
 
 flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(

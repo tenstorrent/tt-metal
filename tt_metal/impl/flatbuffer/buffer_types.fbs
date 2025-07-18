@@ -50,6 +50,12 @@ table ShardSpecBuffer {
   tensor2d_shape_in_pages_w: uint32;
 }
 
+table BufferDistributionSpec {
+  tensor_shape_in_pages: [uint32];
+  shard_shape_in_pages: [uint32];
+  cores: [CoreCoord];
+}
+
 struct CBConfigPageSize {
   index: uint32;  // The index in the array
   size: uint32;   // The page-size value for this index
