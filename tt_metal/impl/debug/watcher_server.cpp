@@ -145,6 +145,14 @@ void WatcherServer::Impl::detach_devices() {
     }
 
     if (server_thread_) {
+        // Let one full watcher dump happen so we can catch anything between the last scheduled dump and teardown.
+        // Don't do this in test mode, to keep the tests running quickly.
+        if (!MetalContext::instance().rtoptions().get_test_mode_enabled() and !server_killed_due_to_error_) {
+            int target_count = dump_count() + 1;
+            while (dump_count() < target_count) {
+                ;
+            }
+        }
         // Signal the server thread to finish
         stop_server_ = true;
         stop_server_cv_.notify_all();
