@@ -23,9 +23,15 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
+
+    const auto& input_shape = input_tensor.get_padded_shape();
     TT_FATAL(
-        this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-        "Worker cores used by links are parallelizaed over rows");
+        (input_shape[this->dim] / tt::constants::TILE_WIDTH) % this->ring_size == 0,
+        "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number of "
+        "tiles is {} and the ring_size is {}",
+        this->dim,
+        input_shape[this->dim] / tt::constants::TILE_WIDTH,
+        this->ring_size);
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -101,12 +107,19 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
+    // TODO: FIXME!
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[this->dim] *= this->ring_size;
-    return {TensorSpec(
-        shape,
-        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+    const auto& inter_shape = input_tensor.get_padded_shape();
+    auto output_shape = inter_shape;
+    output_shape[this->dim] /= this->ring_size;
+    return {
+        TensorSpec(
+            inter_shape,
+            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config)),
+        TensorSpec(
+            output_shape,
+            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config)),
+    };
 }
 
 std::vector<Tensor> ReduceScatterMinimalAsync::create_output_tensors(
@@ -205,8 +218,7 @@ namespace ccl {
 namespace {
 Tensor reduce_scatter_minimal_async_impl(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
-    Tensor& persistent_output_buffer,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -218,13 +230,30 @@ Tensor reduce_scatter_minimal_async_impl(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
-    uint32_t num_devices = devices.size();
+
+    // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
+    // Since we don't have a specific coordinate here, we use the maximum possible devices
+    uint32_t num_devices;
+    if (cluster_axis.has_value()) {
+        auto mesh_device = input_tensor.mesh_device();
+        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
+        const auto& mesh_view = mesh_device->get_view();
+        // Use the mesh dimensions to determine the ring size
+        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    } else {
+        num_devices = devices.size();
+    }
+
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2) {
         ccl_topology = ttnn::ccl::Topology::Linear;
+    }
+    uint32_t ring_size = num_devices;
+    if (cluster_axis.has_value()) {
+        ring_size = (cluster_axis.value() == 0) ? 8 : 4;
     }
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
@@ -233,15 +262,17 @@ Tensor reduce_scatter_minimal_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
-    std::vector<std::optional<Tensor>> optional_output_tensors = {
-        persistent_intermediate_buffer, persistent_output_buffer};
+    std::vector<std::optional<Tensor>> optional_output_tensors =
+        persistent_output_buffers
+            ? std::vector<std::optional<Tensor>>(persistent_output_buffers->begin(), persistent_output_buffers->end())
+            : std::vector<std::optional<Tensor>>{};
 
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
                    devices,
                    dim,
                    num_links,
-                   num_devices,
+                   ring_size,
                    memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
                    multi_device_global_semaphore,
@@ -256,8 +287,7 @@ Tensor reduce_scatter_minimal_async_impl(
 
 Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
-    Tensor& persistent_output_buffer,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -268,8 +298,7 @@ Tensor reduce_scatter_minimal_async(
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     return reduce_scatter_minimal_async_impl(
         input_tensor,
-        persistent_intermediate_buffer,
-        persistent_output_buffer,
+        persistent_output_buffers,
         dim,
         multi_device_global_semaphore,
         num_links,

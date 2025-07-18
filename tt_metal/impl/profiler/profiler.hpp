@@ -335,6 +335,8 @@ public:
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
+    void dumpRoutingInfo();
+
     // Push device results to tracy
     void pushTracyDeviceResults();
 
@@ -353,8 +355,6 @@ void writeToCoreControlBuffer(
 bool onlyProfileDispatchCores(ProfilerDumpState state);
 
 bool isGalaxyMMIODevice(const IDevice* device);
-
-void waitForDeviceCommandsToFinish(IDevice* device);
 
 }  // namespace tt_metal
 

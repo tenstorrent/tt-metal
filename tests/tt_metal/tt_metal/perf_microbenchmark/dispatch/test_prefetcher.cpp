@@ -833,6 +833,7 @@ void gen_host_test(
     // Read data from a worker so we can get reasonable BW measurements
     // TODO: extend the DRAM mechanism for pre-fill to workers
     vector<uint32_t> data;
+    data.reserve(max_data_size / sizeof(uint32_t));
     for (uint32_t i = 0; i < max_data_size / sizeof(uint32_t); i++) {
         data.push_back(i);
     }

@@ -84,8 +84,7 @@ RunTimeOptions::RunTimeOptions() {
         ParseFeatureEnv((RunTimeDebugFeatures)i);
     }
 
-    // Test mode has no env var, default is disabled
-    test_mode_enabled = false;
+    test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
 
     profiler_enabled = false;
     profile_dispatch_cores = false;
@@ -180,7 +179,6 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     using_slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-    fd_fabric_en = getenv(TT_METAL_FD_FABRIC_DEMO) != nullptr;
 
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
@@ -209,7 +207,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
-        bool disabled = str[0] == '0';
+        bool disabled = strcmp(str, "0") == 0;
         this->erisc_iram_enabled = !disabled;
         this->erisc_iram_enabled_env_var = !disabled;
     }
@@ -233,6 +231,14 @@ RunTimeOptions::RunTimeOptions() {
         if (disable_dma_ops_str[0] == '1') {
             this->disable_dma_ops = true;
         }
+    }
+
+    if (getenv("TT_METAL_FORCE_REINIT")) {
+        force_context_reinit = true;
+    }
+
+    if (getenv("TT_METAL_WATCHER_KEEP_ERRORS")) {
+        watcher_keep_errors = true;
     }
 }
 

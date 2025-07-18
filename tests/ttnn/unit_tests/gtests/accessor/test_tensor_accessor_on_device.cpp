@@ -30,7 +30,8 @@ struct InputOutputBufferParams {
     Shape tensor_shape;
     Layout layout;
     DataType dtype;
-    BufferType buffer_type;
+    BufferType input_buffer_type;
+    BufferType output_buffer_type;
 
     std::optional<NdShardSpec> input_shard_spec;
     std::optional<NdShardSpec> output_shard_spec;
@@ -38,14 +39,14 @@ struct InputOutputBufferParams {
 };
 
 template <typename T>
-void test_single_core_reshard(
+static void test_single_core_reshard(
     const InputOutputBufferParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
     MemoryConfig input_mem_config = params.input_shard_spec
-                                        ? MemoryConfig(params.buffer_type, *params.input_shard_spec)
-                                        : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
+                                        ? MemoryConfig(params.input_buffer_type, *params.input_shard_spec)
+                                        : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.input_buffer_type);
     MemoryConfig output_mem_config = params.output_shard_spec
-                                         ? MemoryConfig(params.buffer_type, *params.output_shard_spec)
-                                         : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
+                                         ? MemoryConfig(params.output_buffer_type, *params.output_shard_spec)
+                                         : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.output_buffer_type);
 
     TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
     TensorSpec output_spec(
@@ -123,15 +124,81 @@ void test_single_core_reshard(
     EXPECT_EQ(output_vec, src);
 }
 
+struct CopyParams {
+    Shape tensor_shape;
+    Layout layout;
+    DataType dtype;
+    BufferType buffer_type;
+
+    std::optional<NdShardSpec> input_shard_spec;
+};
+
+template <typename T>
+static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
+    TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
+
+    const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
+
+    auto input_tensor = Tensor::from_vector(src, input_spec, mesh_device);
+    auto output_tensor = Tensor::from_vector(std::vector<T>(params.tensor_shape.volume()), input_spec, mesh_device);
+
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto aligned_page_size = input_buffer->aligned_page_size();
+
+    auto program = CreateProgram();
+    auto core_groups = input_buffer->buffer_distribution_spec().value().core_groups();
+    auto cores_with_data = corerange_to_cores(
+        core_groups.cores_with_data, std::nullopt, params.input_shard_spec->orientation == ShardOrientation::ROW_MAJOR);
+    auto num_cores = cores_with_data.size();
+    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
+    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
+
+    std::vector<uint32_t> compile_time_args{aligned_page_size};
+    input_accessor_args.append_args(compile_time_args);
+    output_accessor_args.append_args(compile_time_args);
+
+    KernelHandle kernel_id = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local.cpp",
+        core_groups.cores_with_data,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args,
+        });
+
+    for (size_t core_idx = 0; core_idx < num_cores; ++core_idx) {
+        const auto& core = cores_with_data[core_idx];
+        std::vector<uint32_t> runtime_args = input_accessor_args.get_common_runtime_args();
+        auto n_shards = core_groups.cores_in_group_1.contains(core) ? core_groups.num_shards_per_core_in_group_1
+                                                                    : core_groups.num_shards_per_core_in_group_2;
+        runtime_args.push_back(input_buffer->address());
+        runtime_args.push_back(output_buffer->address());
+        runtime_args.push_back(core_idx);   // First shard_id = core_id
+        runtime_args.push_back(num_cores);  // Stride for shard_id = num cores
+        runtime_args.push_back(n_shards);   // Number of shards to copy for this core
+        SetRuntimeArgs(program, kernel_id, core, runtime_args);
+    }
+
+    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+
+    auto output_vec = output_tensor.template to_vector<T>();
+    EXPECT_EQ(output_vec, src);
+}
+
 }  // namespace tensor_accessor_device_tests
 
 using namespace tensor_accessor_device_tests;
 using namespace tt::tt_metal;
 
-class ShardedAccessorTestsOnDevice : public GenericMeshDeviceFixture,
-                                     public ::testing::WithParamInterface<InputOutputBufferParams> {};
+class ShardedAccessorTestsReshardOnDevice : public GenericMeshDeviceFixture,
+                                            public ::testing::WithParamInterface<InputOutputBufferParams> {};
 
-TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
+TEST_P(ShardedAccessorTestsReshardOnDevice, SingleCoreReshard) {
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -147,7 +214,8 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .tensor_shape = tt::tt_metal::Shape{4, 64, 96},
             .layout = Layout::TILE,
             .dtype = DataType::UINT16,
-            .buffer_type = BufferType::L1,
+            .input_buffer_type = BufferType::L1,
+            .output_buffer_type = BufferType::L1,
 
             .input_shard_spec =
                 NdShardSpec{
@@ -166,7 +234,8 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .tensor_shape = tt::tt_metal::Shape{18, 128, 64},
             .layout = Layout::TILE,
             .dtype = DataType::UINT8,
-            .buffer_type = BufferType::L1,
+            .input_buffer_type = BufferType::L1,
+            .output_buffer_type = BufferType::L1,
 
             .input_shard_spec =
                 NdShardSpec{
@@ -186,7 +255,8 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .tensor_shape = tt::tt_metal::Shape{2, 3, 256},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::UINT8,
-            .buffer_type = BufferType::L1,
+            .input_buffer_type = BufferType::L1,
+            .output_buffer_type = BufferType::L1,
 
             .input_shard_spec =
                 NdShardSpec{
@@ -205,7 +275,8 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .tensor_shape = tt::tt_metal::Shape{3, 2, 2, 3, 4},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::UINT8,
-            .buffer_type = BufferType::L1,
+            .input_buffer_type = BufferType::L1,
+            .output_buffer_type = BufferType::L1,
 
             .input_shard_spec =
                 NdShardSpec{
@@ -224,7 +295,8 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .tensor_shape = tt::tt_metal::Shape{5, 2, 2, 64, 96},
             .layout = Layout::TILE,
             .dtype = DataType::UINT16,
-            .buffer_type = BufferType::L1,
+            .input_buffer_type = BufferType::L1,
+            .output_buffer_type = BufferType::L1,
 
             .input_shard_spec =
                 NdShardSpec{
@@ -238,6 +310,87 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .shard_shape = tt::tt_metal::Shape{5, 1, 1, 96, 32},
                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                     .orientation = ShardOrientation::ROW_MAJOR,
+                },
+        },
+        InputOutputBufferParams{
+            .tensor_shape = tt::tt_metal::Shape{64, 64},
+            .layout = Layout::TILE,
+            .dtype = DataType::UINT16,
+            .input_buffer_type = BufferType::DRAM,
+            .output_buffer_type = BufferType::L1,
+
+            .input_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{32, 32},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 0})),
+                    .orientation = ShardOrientation::ROW_MAJOR,
+                },
+            .output_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{32, 32},
+                    .grid = CoreRangeSet(CoreRange({4, 4}, {5, 5})),
+                    .orientation = ShardOrientation::ROW_MAJOR,
+                },
+        },
+        InputOutputBufferParams{
+            .tensor_shape = tt::tt_metal::Shape{4, 64, 96},
+            .layout = Layout::TILE,
+            .dtype = DataType::UINT16,
+            .input_buffer_type = BufferType::DRAM,
+            .output_buffer_type = BufferType::L1,
+
+            .input_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{1, 64, 32},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 0})),
+                    .orientation = ShardOrientation::ROW_MAJOR,
+                },
+            .output_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{2, 32, 32},
+                    .grid = CoreRangeSet(CoreRange({4, 4}, {5, 5})),
+                    .orientation = ShardOrientation::ROW_MAJOR,
+                },
+        },
+        InputOutputBufferParams{
+            .tensor_shape = tt::tt_metal::Shape{18, 128, 64},
+            .layout = Layout::TILE,
+            .dtype = DataType::UINT8,
+            .input_buffer_type = BufferType::L1,
+            .output_buffer_type = BufferType::DRAM,
+
+            .input_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{1, 64, 96},
+                    .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                        {CoreRange({4, 6}, {6, 6}), CoreRange({1, 1}, {1, 1}), CoreRange({0, 3}, {3, 3})})),
+                    .orientation = ShardOrientation::ROW_MAJOR,
+                },
+            .output_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{2, 32, 32},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+                    .orientation = ShardOrientation::COL_MAJOR,
+                },
+        },
+        InputOutputBufferParams{
+            .tensor_shape = tt::tt_metal::Shape{2, 3, 256},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::UINT8,
+            .input_buffer_type = BufferType::DRAM,
+            .output_buffer_type = BufferType::DRAM,
+
+            .input_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{2, 4, 16},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+                    .orientation = ShardOrientation::ROW_MAJOR,
+                },
+            .output_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{1, 3, 16},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+                    .orientation = ShardOrientation::COL_MAJOR,
                 },
         }};
 
@@ -265,4 +418,88 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    ShardedAccessorTests, ShardedAccessorTestsOnDevice, testing::ValuesIn(get_sharded_accessor_test_params()));
+    ShardedAccessorTests, ShardedAccessorTestsReshardOnDevice, testing::ValuesIn(get_sharded_accessor_test_params()));
+
+class ShardedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
+                                         public ::testing::WithParamInterface<CopyParams> {};
+
+TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
+    const auto& params = GetParam();
+
+    switch (params.dtype) {
+        case DataType::UINT8: test_multi_core_copy<uint8_t>(params, mesh_device_.get()); break;
+        case DataType::UINT16: test_multi_core_copy<uint16_t>(params, mesh_device_.get()); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ShardedAccessorTests,
+    ShardedAccessorTestsCopyOnDevice,
+    testing::ValuesIn(
+        {CopyParams{
+             .tensor_shape = tt::tt_metal::Shape{4, 64, 96},
+             .layout = Layout::TILE,
+             .dtype = DataType::UINT16,
+             .buffer_type = BufferType::L1,
+
+             .input_shard_spec =
+                 NdShardSpec{
+                     .shard_shape = tt::tt_metal::Shape{1, 32, 64},
+                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                     .orientation = ShardOrientation::ROW_MAJOR,
+                 },
+         },
+         CopyParams{
+             .tensor_shape = tt::tt_metal::Shape{18, 128, 64},
+             .layout = Layout::TILE,
+             .dtype = DataType::UINT8,
+             .buffer_type = BufferType::L1,
+
+             .input_shard_spec =
+                 NdShardSpec{
+                     .shard_shape = tt::tt_metal::Shape{1, 64, 96},
+                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 4})),
+                     .orientation = ShardOrientation::ROW_MAJOR,
+                 },
+         },
+         CopyParams{
+             .tensor_shape = tt::tt_metal::Shape{2, 3, 256},
+             .layout = Layout::ROW_MAJOR,
+             .dtype = DataType::UINT8,
+             .buffer_type = BufferType::L1,
+
+             .input_shard_spec =
+                 NdShardSpec{
+                     .shard_shape = tt::tt_metal::Shape{2, 4, 16},
+                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                     .orientation = ShardOrientation::ROW_MAJOR,
+                 },
+         },
+         CopyParams{
+             .tensor_shape = tt::tt_metal::Shape{3, 2, 2, 3, 4},
+             .layout = Layout::ROW_MAJOR,
+             .dtype = DataType::UINT8,
+             .buffer_type = BufferType::L1,
+
+             .input_shard_spec =
+                 NdShardSpec{
+                     .shard_shape = tt::tt_metal::Shape{1, 1, 2, 2, 4},
+                     .grid = CoreRangeSet(CoreRange({0, 0}, {1, 4})),
+                     .orientation = ShardOrientation::COL_MAJOR,
+                 },
+         },
+         CopyParams{
+             .tensor_shape = tt::tt_metal::Shape{5, 2, 2, 64, 96},
+             .layout = Layout::TILE,
+             .dtype = DataType::UINT16,
+             .buffer_type = BufferType::L1,
+
+             .input_shard_spec =
+                 NdShardSpec{
+                     .shard_shape = tt::tt_metal::Shape{1, 1, 2, 64, 64},
+                     .grid = CoreRangeSet(
+                         tt::stl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
+                     .orientation = ShardOrientation::COL_MAJOR,
+                 },
+         }}));

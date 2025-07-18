@@ -38,3 +38,17 @@ def pytest_addoption(parser):
         type=str,
         help="Provide a JSON file defining per-decoder precision and fidelity settings",
     )
+    parser.addoption(
+        "--token_accuracy",
+        action="store",
+        default=False,
+        type=bool,
+        help="Whether to compute top1 and top5 exact token matching accuracy",
+    )
+    parser.addoption(
+        "--stress_test",
+        action="store",
+        default=False,
+        type=bool,
+        help="Run stress test (same decode iteration over a large number of iterations",
+    )

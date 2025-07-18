@@ -194,17 +194,33 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceEvent>> getDeviceEventsV
     return device_events_vec;
 }
 
+bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+    const auto& dispatch_core_config = get_dispatch_core_config();
+    const std::vector<CoreCoord> logical_dispatch_cores =
+        get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
+
+    std::vector<CoreCoord> virtual_dispatch_cores;
+    for (const CoreCoord& core : logical_dispatch_cores) {
+        const CoreCoord virtual_dispatch_core =
+            device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
+        virtual_dispatch_cores.push_back(virtual_dispatch_core);
+    }
+
+    bool has_dispatch_core_been_found = false;
+    for (const CoreCoord& core : virtual_cores) {
+        if (std::find(virtual_dispatch_cores.begin(), virtual_dispatch_cores.end(), core) !=
+            virtual_dispatch_cores.end()) {
+            has_dispatch_core_been_found = true;
+        } else if (has_dispatch_core_been_found) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool onlyProfileDispatchCores(const ProfilerDumpState state) {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
            state == ProfilerDumpState::ONLY_DISPATCH_CORES;
-}
-
-void waitForDeviceCommandsToFinish(IDevice* device) {
-    if (auto mesh_device = device->get_mesh_device()) {
-        mesh_device->mesh_command_queue().finish();
-    } else {
-        Finish(device->command_queue());
-    }
 }
 
 bool isGalaxyMMIODevice(const IDevice* device) {
@@ -236,7 +252,7 @@ void writeToCoreControlBuffer(
             const distributed::DeviceMemoryAddress address = {
                 device_coord, virtual_core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
             mesh_cq.enqueue_write_shard_to_core(
-                address, data.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, false);
+                address, data.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
         } else {
             dynamic_cast<HWCommandQueue&>(device->command_queue())
                 .enqueue_write_to_core(
@@ -244,7 +260,7 @@ void writeToCoreControlBuffer(
                     data.data(),
                     reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
                     kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    false);
+                    true);
         }
     } else {
         tt::llrt::write_hex_vec_to_core(
@@ -269,7 +285,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                         distributed::DeviceMemoryAddress{device_coord, dram_core, profiler_addr},
                         &(profile_buffer[profile_buffer_idx]),
                         profile_buffer_bank_size_bytes,
-                        false);
+                        true);
             } else {
                 dynamic_cast<HWCommandQueue&>(device->command_queue())
                     .enqueue_read_from_core(
@@ -277,7 +293,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                         &(profile_buffer[profile_buffer_idx]),
                         profiler_addr,
                         profile_buffer_bank_size_bytes,
-                        false);
+                        true);
             }
             profile_buffer_idx += profile_buffer_bank_size_bytes / sizeof(uint32_t);
         }
@@ -323,7 +339,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                     device_coord, worker_core, reinterpret_cast<DeviceAddr>(profiler_msg->buffer)},
                 core_l1_data_buffer.data(),
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
-                false);
+                true);
     } else {
         dynamic_cast<HWCommandQueue&>(device->command_queue())
             .enqueue_read_from_core(
@@ -331,7 +347,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                 core_l1_data_buffer.data(),
                 reinterpret_cast<DeviceAddr>(profiler_msg->buffer),
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
-                false);
+                true);
     }
 }
 
@@ -374,10 +390,6 @@ void DeviceProfiler::readL1DataBuffers(
         std::vector<uint32_t>& core_l1_data_buffer = core_l1_data_buffers[virtual_core];
         readL1DataBufferForCore(device, virtual_core, state, core_l1_data_buffer);
     }
-
-    if (useFastDispatchForDataBuffers(device, state)) {
-        waitForDeviceCommandsToFinish(device);
-    }
 }
 
 void DeviceProfiler::readControlBufferForCore(
@@ -398,7 +410,7 @@ void DeviceProfiler::readControlBufferForCore(
                 address,
                 core_control_buffers[virtual_core].data(),
                 kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                false);
+                true);
         } else {
             core_control_buffers[virtual_core].resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
             dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -407,7 +419,7 @@ void DeviceProfiler::readControlBufferForCore(
                     core_control_buffers[virtual_core].data(),
                     reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
                     kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    false);
+                    true);
         }
     } else {
         core_control_buffers[virtual_core] = tt::llrt::read_hex_vec_from_core(
@@ -423,10 +435,6 @@ void DeviceProfiler::readControlBuffers(
     ZoneScoped;
     for (const CoreCoord& virtual_core : virtual_cores) {
         readControlBufferForCore(device, virtual_core, state);
-    }
-
-    if (useFastDispatchForControlBuffers(device, state)) {
-        waitForDeviceCommandsToFinish(device);
     }
 }
 
@@ -449,17 +457,12 @@ void DeviceProfiler::resetControlBuffers(
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
         writeToCoreControlBuffer(device, virtual_core, state, control_buffer_reset);
     }
-
-    if (useFastDispatchForControlBuffers(device, state)) {
-        waitForDeviceCommandsToFinish(device);
-    }
 }
 
 void DeviceProfiler::readProfilerBuffer(IDevice* device, const ProfilerDumpState state) {
     ZoneScoped;
     if (useFastDispatchForDataBuffers(device, state)) {
         issueFastDispatchReadFromProfilerBuffer(device);
-        waitForDeviceCommandsToFinish(device);
     } else {
         issueSlowDispatchReadFromProfilerBuffer(device);
     }
@@ -923,8 +926,8 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     } else if (packet_type == kernel_profiler::TS_DATA) {
         using EMD = KernelProfilerNocEventMetadata;
         EMD ev_md(data);
-        std::variant<EMD::LocalNocEvent, EMD::FabricNoCEvent, EMD::FabricRoutingFields> ev_md_contents =
-            ev_md.getContents();
+        std::variant<EMD::LocalNocEvent, EMD::FabricNoCEvent, EMD::FabricNoCScatterEvent, EMD::FabricRoutingFields>
+            ev_md_contents = ev_md.getContents();
         if (std::holds_alternative<EMD::LocalNocEvent>(ev_md_contents)) {
             auto local_noc_event = std::get<EMD::LocalNocEvent>(ev_md_contents);
 
@@ -982,12 +985,6 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"timestamp", timestamp},
             };
 
-            // For scatter write operations, include additional scatter information
-            if (ev_md.noc_xfer_type == EMD::NocEventType::FABRIC_UNICAST_SCATTER_WRITE) {
-                data["scatter_address_index"] = fabric_noc_event.mcast_end_dst_x;
-                data["scatter_total_addresses"] = fabric_noc_event.mcast_end_dst_y;
-            }
-
             // handle dst coordinates correctly for different NocEventType
             if (KernelProfilerNocEventMetadata::isFabricUnicastEventType(ev_md.noc_xfer_type)) {
                 auto phys_coord =
@@ -1004,6 +1001,31 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 data["mcast_end_x"] = phys_end_coord.x;
                 data["mcast_end_y"] = phys_end_coord.y;
             }
+
+            noc_trace_json_log.push_back(std::move(data));
+        } else if (std::holds_alternative<EMD::FabricNoCScatterEvent>(ev_md_contents)) {
+            EMD::FabricNoCScatterEvent fabric_noc_scatter_event = std::get<EMD::FabricNoCScatterEvent>(ev_md_contents);
+
+            nlohmann::ordered_json data = {
+                {"run_host_id", run_host_id},
+                {"op_name", opname},
+                {"proc", risc_name},
+                {"sx", core_x},
+                {"sy", core_y},
+                {"type", magic_enum::enum_name(ev_md.noc_xfer_type)},
+                {"routing_fields_type", magic_enum::enum_name(fabric_noc_scatter_event.routing_fields_type)},
+                {"timestamp", timestamp},
+            };
+
+            // add dst coordinates
+            auto phys_coord = getPhysicalAddressFromVirtual(
+                device_id, {fabric_noc_scatter_event.dst_x, fabric_noc_scatter_event.dst_y});
+            data["dx"] = phys_coord.x;
+            data["dy"] = phys_coord.y;
+
+            // For scatter write operations, include additional scatter information
+            data["num_chunks"] = fabric_noc_scatter_event.num_chunks;
+            data["chunk_size"] = fabric_noc_scatter_event.chunk_size;
 
             noc_trace_json_log.push_back(std::move(data));
         } else if (std::holds_alternative<EMD::FabricRoutingFields>(ev_md_contents)) {
@@ -1186,12 +1208,24 @@ void DeviceProfiler::serializeJsonNocTraces(
             }
 
             if (KernelProfilerNocEventMetadata::isFabricUnicastEventType(noc_xfer_type.value())) {
-                modified_write_event["dx"] = fabric_event.at("dx").get<int>();
-                modified_write_event["dy"] = fabric_event.at("dy").get<int>();
+                modified_write_event["dst"] = {
+                    {{"dx", fabric_event.at("dx").get<int>()},
+                     {"dy", fabric_event.at("dy").get<int>()},
+                     {"num_bytes", modified_write_event.at("num_bytes").get<int>()}}};
+            } else if (KernelProfilerNocEventMetadata::isFabricScatterEventType(noc_xfer_type.value())) {
+                // add all chunks for scatter write and compute last chunk size
+                modified_write_event["dst"] = fabric_event.at("chunks");
+                int last_chunk_size = modified_write_event.at("num_bytes").get<int>();
+                for (auto chunk : fabric_event.at("chunks")) {
+                    last_chunk_size -= chunk.at("num_bytes").get<int>();
+                }
+                modified_write_event["dst"].back()["num_bytes"] = last_chunk_size;
             } else {
                 log_error(tt::LogMetal, "[profiler noc tracing] Noc multicasts in fabric events are not supported!");
                 return std::nullopt;
             }
+            modified_write_event.erase("dx");
+            modified_write_event.erase("dy");
 
             // replace the type with fabric event type
             modified_write_event["type"] = fabric_event["type"];
@@ -1215,14 +1249,33 @@ void DeviceProfiler::serializeJsonNocTraces(
     for (auto& [runtime_id, events] : events_by_opname) {
         nlohmann::json::array_t coalesced_events;
         for (size_t i = 0; i < events.size(); /* manual increment */) {
-            const auto& current_event = events[i];
+            auto& current_event = events[i];
 
             bool fabric_event_group_detected =
                 (current_event.contains("type") && current_event["type"].get<std::string>().starts_with("FABRIC_") &&
                  (i + 2 < events.size()));
+            bool fabric_scatter_event_detected =
+                current_event.contains("type") &&
+                current_event["type"].get<std::string>() == "FABRIC_UNICAST_SCATTER_WRITE" &&
+                (i + current_event["num_chunks"].get<int>() + 1 < events.size());
             if (fabric_event_group_detected) {
+                if (fabric_scatter_event_detected) {
+                    int num_chunks = current_event["num_chunks"].get<int>();
+                    nlohmann::ordered_json chunks = nlohmann::json::array();
+                    for (int j = 0; j < num_chunks; j++) {
+                        chunks.push_back({
+                            {"dx", events[i + j]["dx"]},
+                            {"dy", events[i + j]["dy"]},
+                            {"num_bytes", events[i + j]["chunk_size"]},
+                        });
+                    }
+                    current_event["chunks"] = chunks;
+                    current_event.erase("dx");
+                    current_event.erase("dy");
+                    i += num_chunks - 1;
+                }
                 if (auto maybe_fabric_event =
-                        process_fabric_event_group_if_valid(events[i], events[i + 1], events[i + 2]);
+                        process_fabric_event_group_if_valid(current_event, events[i + 1], events[i + 2]);
                     maybe_fabric_event) {
                     coalesced_events.push_back(maybe_fabric_event.value());
                 }
@@ -1434,6 +1487,10 @@ void DeviceProfiler::dumpResults(
     // create nlohmann json log object
     nlohmann::ordered_json noc_trace_json_log = nlohmann::json::array();
 
+    // Dispatch cores must be added after non-dispatch cores as they must be profiled after non-dispatch cores in order
+    // to minimize the amount of dispatch data that is lost
+    TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
+
     if (data_source == ProfilerDataBufferSource::DRAM) {
         readControlBuffers(device, virtual_cores, state);
 
@@ -1484,11 +1541,20 @@ void DeviceProfiler::dumpResults(
     if (state == ProfilerDumpState::NORMAL && rtoptions.get_profiler_noc_events_enabled()) {
         serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id, routing_lookup);
         dumpClusterCoordinatesAsJson(std::filesystem::path(rpt_path) / "cluster_coordinates.json");
-        dumpRoutingInfo(std::filesystem::path(rpt_path) / "topology.json");
     }
 
     log_file_ofs.close();
 #endif
+}
+
+void DeviceProfiler::dumpRoutingInfo() {
+    // if defined, used profiler_noc_events_report_path to to dump routing info. otherwise use output_dir
+    std::string rpt_path = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
+    if (rpt_path.empty()) {
+        rpt_path = output_dir.string();
+    }
+
+    tt::tt_metal::dumpRoutingInfo(std::filesystem::path(rpt_path) / "topology.json");
 }
 
 bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {

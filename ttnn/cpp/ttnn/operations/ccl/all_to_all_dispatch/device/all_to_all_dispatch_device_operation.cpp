@@ -54,6 +54,7 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             metadata_tensor.get_tensor_spec(),
             output_specs[1]);
     }
+    TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
 
     auto input_shape = input_tensor.get_tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
@@ -74,8 +75,6 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.cross_device_semaphore.has_value(),
         "Cross device semaphore must be specified at the moment");
-
-    TT_FATAL(operation_attributes.num_links == 1, "Number of links must be 1, got {}", operation_attributes.num_links);
 
     TT_FATAL(operation_attributes.topology == tt::tt_fabric::Topology::Linear, "Topology must be linear at the moment");
 }
@@ -172,7 +171,8 @@ AllToAllDispatchDeviceOperation::invoke(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     tt::tt_metal::SubDeviceId subdevice_id,
-    const std::optional<GlobalSemaphore>& global_semaphore) {
+    const std::optional<GlobalSemaphore>& global_semaphore,
+    AllToAllTransferType impl) {
     return {
         operation_attributes_t{
             .subdevice_id = std::move(subdevice_id),
@@ -180,7 +180,8 @@ AllToAllDispatchDeviceOperation::invoke(
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .cross_device_semaphore = global_semaphore},
+            .cross_device_semaphore = global_semaphore,
+            .impl = impl},
         tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

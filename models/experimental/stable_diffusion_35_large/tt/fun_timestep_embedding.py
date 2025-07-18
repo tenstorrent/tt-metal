@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import torch
 import ttnn
 from models.experimental.stable_diffusion_35_large.tt.fun_linear import sd_linear, TtLinearParameters
-
+from .parallel_config import DiTParallelConfig
 from .substate import substate
 
 
@@ -26,13 +26,25 @@ class TtEmbeddingParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        hidden_dim_padding: int,
+        parallel_config: DiTParallelConfig,
     ) -> TtEmbeddingParameters:
         return cls(
             linear_1=TtLinearParameters.from_torch(
-                substate(state, "linear_1"), dtype=dtype, device=device, shard_dim=None
+                substate(state, "linear_1"),
+                dtype=dtype,
+                device=device,
+                shard_dim=None,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
             linear_2=TtLinearParameters.from_torch(
-                substate(state, "linear_2"), dtype=dtype, device=device, shard_dim=None
+                substate(state, "linear_2"),
+                dtype=dtype,
+                device=device,
+                shard_dim=None,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
         )
 
@@ -51,13 +63,23 @@ class TtCombinedTimestepTextProjEmbeddingsParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
         guidance_cond: int,
+        hidden_dim_padding: int,
+        parallel_config: DiTParallelConfig,
     ) -> TtCombinedTimestepTextProjEmbeddingsParameters:
         return cls(
             timestep_embedder=TtEmbeddingParameters.from_torch(
-                substate(state, "timestep_embedder"), dtype=dtype, device=device
+                substate(state, "timestep_embedder"),
+                dtype=dtype,
+                device=device,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
             text_embedder=TtEmbeddingParameters.from_torch(
-                substate(state, "text_embedder"), dtype=dtype, device=device
+                substate(state, "text_embedder"),
+                dtype=dtype,
+                device=device,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
             time_proj_factor=cls._create_time_proj_factor(num_channels=256, batch_size=guidance_cond, device=device),
         )
@@ -73,7 +95,11 @@ class TtCombinedTimestepTextProjEmbeddingsParameters:
         exponent = exponent / half_dim
         factor = torch.exp(exponent).unsqueeze(0).repeat(batch_size, 1)  # TODO: Can this broadcast be handled by ttnn?
 
-        return ttnn.from_torch(factor, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device))
+        return ttnn.from_torch(
+            factor,
+            device=device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None]),
+        )
 
 
 def sd_combined_timestep_embed(
