@@ -73,6 +73,10 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     bool count_include_pad,
     std::optional<int32_t> divisor_override);
 
+std::tuple<uint32_t, bool, uint32_t, tt::DataFormat, uint32_t, bool, uint32_t, bool, uint32_t, bool>
+get_factory_parameters(
+    uint32_t num_shards_c, const Tensor& input, uint32_t kernel_h, uint32_t kernel_w, Pool2DType pool_type);
+
 uint32_t calculate_L1_usage(
     const Tensor& input,
     uint32_t pad_h,
