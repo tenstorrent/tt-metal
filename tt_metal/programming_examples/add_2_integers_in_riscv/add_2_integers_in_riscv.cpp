@@ -54,7 +54,7 @@ int main() {
     auto src1_dram_buffer = CreateBuffer(dram_config);
     auto dst_dram_buffer = CreateBuffer(dram_config);
     auto src0_l1_buffer = CreateBuffer(l1_config);
-    auto src1_l1_buffer = CreateBuffer(dram_config);
+    auto src1_l1_buffer = CreateBuffer(l1_config);
     auto dst_l1_buffer = CreateBuffer(l1_config);
 
     // Create source data and write to DRAM
