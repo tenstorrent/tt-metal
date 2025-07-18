@@ -144,6 +144,8 @@ def map_hf_to_meta_keys(loaded_weights):
             template_key = "model.layers.{layer}." + ".".join(parts[3:])
             if template_key in hf_to_meta:
                 meta_state_dict[hf_to_meta[template_key].format(layer=layer_num)] = tensor
+            else:
+                meta_state_dict[key[len("model.") :]] = tensor
 
     return meta_state_dict
 

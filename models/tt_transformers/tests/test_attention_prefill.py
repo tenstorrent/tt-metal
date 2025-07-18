@@ -80,8 +80,7 @@ def test_attention_inference(
         mesh_device,
         max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
 
@@ -158,7 +157,7 @@ def test_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
+        model_args.rope_scaling["factor"],
     )[positions]
     attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
