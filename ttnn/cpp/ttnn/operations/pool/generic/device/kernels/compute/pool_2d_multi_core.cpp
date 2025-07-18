@@ -39,7 +39,7 @@ inline void reduce_h_fused(
     }
     tile_regs_wait();
     tile_regs_commit();
-    pack_untilize_dst<num_output_tiles>(
+    pack_untilize_dest<num_output_tiles>(
         out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
     cb_push_back(out_cb_id, num_output_tiles * num_output_faces);
