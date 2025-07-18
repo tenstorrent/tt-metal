@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_CI_WEIGHTS_PATH
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 def prepare_ttnn_tensors(
@@ -81,15 +81,14 @@ def run_unet_model(
     iterations=1,
 ):
     model_location = model_location_generator(
-        "stable-diffusion-xl-base-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=30 * 60
+        "stable-diffusion-xl-base-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        # subfolder="unet",
         local_files_only=is_ci_env or is_ci_v2_env,
-        cache_dir=SDXL_CI_WEIGHTS_PATH if is_ci_env else None,
+        subfolder="unet" if is_ci_env else None,
     )
     unet.eval()
     state_dict = unet.state_dict()

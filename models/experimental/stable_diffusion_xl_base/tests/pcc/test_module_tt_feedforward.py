@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import gc
 from loguru import logger
 import torch
@@ -13,7 +12,6 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFee
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_CI_WEIGHTS_PATH
 
 
 @pytest.mark.parametrize(
@@ -25,8 +23,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     ],
 )
 def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds):
-    if is_ci_env:
-        os.environ["HF_HOME"] = SDXL_CI_WEIGHTS_PATH
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
