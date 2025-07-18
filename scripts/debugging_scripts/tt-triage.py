@@ -358,7 +358,12 @@ def format_callstack(cs):
         if frame.function_name is not None:
             line += f"{ORANGE}{frame.function_name}{RST} () "
         if frame.file is not None:
-            line += f"at {GREEN}{frame.file} {frame.line}:{frame.column}{RST}"
+            line += f"at {GREEN}{frame.file}{RST}"
+            if frame.line is not None:
+                line += f" {GREEN}{frame.line}{RST}"
+                if frame.column is not None:
+                    line += f"{GREEN}:{frame.column}{RST}"
+
         result.append(line)
     return result
 
@@ -479,8 +484,6 @@ def get_running_ops_table(
                 else:
                     kernel_offset = kernel_config_base + kernel_text_offset
                 if VVERBOSE:
-                    if USE_GDB:
-                        print("Using GDB to obtain callstack. This might take few minutes.")
                     print(f".", end="", flush=True)
                     # Get callstack using GDB
                     if USE_GDB:
@@ -491,7 +494,7 @@ def get_running_ops_table(
                                     process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset
                                 )
                                 if proc_name != "NCRISC"
-                                else "GDB callstack for NCRISC is not supported"
+                                else f"{RED}GDB callstack for NCRISC is not supported{RST}"
                             )
                     # Get callstack using tt-exalens
                     else:
@@ -515,7 +518,7 @@ def get_running_ops_table(
                             cs = (
                                 get_callstack_with_gdb(process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
                                 if proc_name != "NCRISC"
-                                else "GDB callstack for NCRISC is not supported"
+                                else f"{RED}GDB callstack for NCRISC is not supported{RST}"
                             )
                     # Get callstack using tt-exalens
                     else:
@@ -556,10 +559,32 @@ def get_running_ops_table(
     return printout_table
 
 
-def extract_callstack_from_gdb(gdb_client, start: str, end: str) -> list[str]:
-    cs = []
+def get_callstack_entry(line: str) -> CallstackEntry:
+    pattern = re.compile(
+        r"#\d+\s+"  # Skip the frame number
+        r"(?:(?P<pc>0x[0-9a-fA-F]+)\s+in\s+)?"
+        r"(?P<fcn_name>\w+)"  # Capture only function name (e.g., 'main')
+        r"(?:\s*\(.*?\))?"  # Ignore arguments in parentheses
+        r"\s+at\s+"
+        r"(?P<file_path>.*?):(?P<line>\d+)"
+    )
+
+    entry = CallstackEntry()
+    match = pattern.match(line)
+    if match:
+        entry.pc = int(match.groupdict()["pc"], 16) if match.groupdict()["pc"] is not None else None
+        entry.function_name = match.groupdict()["fcn_name"]
+        entry.file = match.groupdict()["file_path"]
+        entry.line = match.groupdict()["line"]
+
+    return entry
+
+
+def extract_callstack_from_gdb(gdb_client, start: str, end: str) -> list[CallstackEntry]:
+    cs: list[CallstackEntry] = []
     is_cs = False
 
+    current_line = ""
     for line in gdb_client.communicate()[0].splitlines():
         if start in line:
             is_cs = True
@@ -568,14 +593,18 @@ def extract_callstack_from_gdb(gdb_client, start: str, end: str) -> list[str]:
         else:
             if is_cs:
                 if "#" in line:
-                    cs.append(line[line.find("#") :])
+                    if current_line != "":
+                        cs.append(get_callstack_entry(current_line))
+                        current_line = ""
+
+                    current_line += line[line.find("#") :]
                 # Ensure every callstack entry is in one line
                 else:
-                    cs[-1] += " "
-                    cs[-1] += line.strip()
+                    current_line += " "
+                    current_line += line.strip()
 
-    # Skipping last line since it is message not callstack entry
-    return cs[:-1]
+    # We implicitly skip last line since it is message not callstack entry
+    return cs
 
 
 def get_callstack_with_gdb(
@@ -611,30 +640,7 @@ def get_callstack_with_gdb(
     )
     gdb_client.stdin.flush()
 
-    cs = extract_callstack_from_gdb(gdb_client, start_callstack, end_callstack)
-
-    pattern = re.compile(
-        r"#\d+\s+"  # Skip the frame number
-        r"(?:(?P<pc>0x[0-9a-fA-F]+)\s+in\s+)?"
-        r"(?P<fcn_name>\w+)"  # Capture only function name (e.g., 'main')
-        r"(?:\s*\(.*?\))?"  # Ignore arguments in parentheses
-        r"\s+at\s+"
-        r"(?P<file_path>.*?):(?P<line>\d+)"
-    )
-
-    cs_entries: list[CallstackEntry] = []
-    for line in cs:
-        entry = CallstackEntry()
-        match = pattern.match(line)
-        if match:
-            entry.pc = int(match.groupdict()["pc"], 16) if match.groupdict()["pc"] is not None else None
-            entry.function_name = match.groupdict()["fcn_name"]
-            entry.file = match.groupdict()["file_path"]
-            entry.line = match.groupdict()["line"]
-
-        cs_entries.append(entry)
-
-    return cs_entries
+    return extract_callstack_from_gdb(gdb_client, start_callstack, end_callstack)
 
 
 def get_process_ids(ui_state: UIState):
