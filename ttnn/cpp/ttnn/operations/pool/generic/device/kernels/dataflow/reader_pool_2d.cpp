@@ -268,8 +268,8 @@ void kernel_main() {
         if constexpr (reader_id == 1) {
             cb_wait_front(clear_value_cb_id, 1);
         }
-        // for average pool clear out tiles runs in loop, no need to initialize here
-        if constexpr (!is_avg_pool) {
+        // for average pool with large kernels clear out tiles runs in loop, no need to initialize here
+        if constexpr (!is_avg_pool || !is_large_kernel) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
         }
     }
