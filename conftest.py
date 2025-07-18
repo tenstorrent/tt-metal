@@ -112,7 +112,7 @@ class CIv2ModelDownloadUtils_:
         model_path,
         timeout_in_s,
         download_dir_suffix="",
-        endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+        endpoint_prefix="http://aus2-lfcache.aus2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface",
     ):
         assert model_path, f"model_path cannot be empty when downloading - what is wrong with you?: {model_path}"
 
