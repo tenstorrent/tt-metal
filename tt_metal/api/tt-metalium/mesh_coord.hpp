@@ -408,13 +408,18 @@ public:
     template <typename CoordSystem>
     void populate_local_region(const CoordSystem& coord_sys, const std::vector<T>& local_values) {
         TT_FATAL(
-            local_values.size() == this->shape().mesh_size(),
+            local_values.size() <= this->shape().mesh_size(),
             "Number of local values {} does not match mesh size {}",
             local_values.size(),
             this->shape().mesh_size());
         size_t idx = 0;
-        for (const auto& local_coord : this->coord_range()) {
-            this->at(local_coord) = MaybeRemote<T>::local(local_values[idx++]);
+        for (const auto& coord : this->coord_range()) {
+            // If local_values size equals mesh size, treat all coordinates as local
+            // Otherwise, only populate coordinates that are actually local
+            // TODO: Does not support reshaping. Implementation generalized to support this in PR #25190.
+            if (local_values.size() == this->shape().mesh_size() || coord_sys.is_local(coord)) {
+                this->at(coord) = MaybeRemote<T>::local(local_values[idx++]);
+            }
         }
     }
 
