@@ -1842,6 +1842,12 @@ FORCE_INLINE void teardown(
         receiver_channel_1_trid_tracker.all_buffer_slot_transactions_acked();
     }
 
+    // at minimum, the below call must be updated because in dynamic noc mode, the counters would be shared, so you'd
+    // want a sync before this and coordination about which erisc should do the reset (only one of them should do it)
+    static_assert(
+        noc_mode != DM_DYNAMIC_NOC,
+        "The fabric router implementation doesn't support dynamic noc mode. The implementation must be updated to "
+        "support this");
     // re-init the noc counters as the noc api used is not incrementing them
     ncrisc_noc_counters_init();
 
@@ -1858,6 +1864,9 @@ FORCE_INLINE void teardown(
         }
     }
 
+    // write barrier should be coordinated for dynamic noc mode. Safest is probably to do a `wait_for_other_local_erisc`
+    // followed by master core doing barrier
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Update here when enabling dynamic noc mode");
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
@@ -2344,6 +2353,9 @@ void kernel_main() {
                     receiver_channel_forwarding_sync_cmd_buf_ids[1]);
 
             // Only receiver channel servicing cores should be setting up the noc cmd buf.
+            // If there is only one active erisc, then it is guaranteed we are the receiver channel
+            // servicing core. Otherwise, in multi-erisc mode, this initialization happens later due
+            // to a noc dependency. See the comment for the initialization that happens later in multi-erisc mode.
             if constexpr (NUM_ACTIVE_ERISCS == 1) {
                 downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
                     .template setup_edm_noc_cmd_buf<
@@ -2396,6 +2408,7 @@ void kernel_main() {
 #endif
 
     if constexpr (!is_2d_fabric) {
+        // We can check just the first index because all receiver channels are serviced by the same core
         if constexpr (is_receiver_channel_serviced[0]) {
             const size_t start = !has_downstream_edm_vc0_buffer_connection;
             const size_t end = has_downstream_edm_vc1_buffer_connection + 1;
@@ -2410,6 +2423,16 @@ void kernel_main() {
     }
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        // This barrier is here just in case the initialization process of any of the sender/receiver channel
+        // implementations require any assumptions about channel contents or anything similar. Without it there
+        // is possibility of a race. The race would be where the the risc core responsible for Ethernet level handshake
+        // completes before the other risc finishes setup of channel/credit datastructures. If that happened, then
+        // it would be possible for the other (remote) Ethernet core to start sending packets/credits to our core before
+        // all of our cores are done setup, leading to potentially undefined behavior.
+        //
+        // Whether or not there truly is a race in a given snapshot/commit hash is not relevant. The intention with this
+        // is to avoid all possible footguns as implementations of underlying datastructures potenntially change over
+        // time.
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
