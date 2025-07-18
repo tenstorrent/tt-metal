@@ -68,7 +68,7 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    riscv_wait(1000000000);
+    // riscv_wait(1000000000);
 
     mm_init(cb_q_in, cb_k_in, cb_out);
 
