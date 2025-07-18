@@ -401,6 +401,10 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
+        case BinaryOpType::XLOGY:
+            new_defines.insert({"BINOP_INIT", fmt::format("xlogy_binary_tile_init();")});
+            op_name = "xlogy_binary_tile";
+            break;
         default:
             log_debug(tt::LogOp, "Undefined op type {}", op_type);
             TT_FATAL(false, "Undefined op type for binary sfpu operation {}", op_type);

@@ -17,6 +17,7 @@
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/gcd.h"
 #include "compute_kernel_api/lcm.h"
+#include "compute_kernel_api/xlogy.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"

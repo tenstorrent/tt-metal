@@ -53,6 +53,7 @@ namespace utils {
         case BinaryOpType::BITWISE_AND: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
+        case BinaryOpType::XLOGY:
         case BinaryOpType::POWER: return true;
         default: return false;
     }

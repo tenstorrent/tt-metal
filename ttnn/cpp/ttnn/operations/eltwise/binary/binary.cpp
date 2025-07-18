@@ -786,6 +786,7 @@ template struct BinaryOperation<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperation<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperation<BinaryOpType::RIGHT_SHIFT>;
 template struct BinaryOperation<BinaryOpType::LOGICAL_RIGHT_SHIFT>;
+template struct BinaryOperation<BinaryOpType::XLOGY>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;
@@ -816,6 +817,7 @@ template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::MINIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::GCD>;
 template struct BinaryOperationSfpu<BinaryOpType::LCM>;
+template struct BinaryOperationSfpu<BinaryOpType::XLOGY>;
 
 template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
