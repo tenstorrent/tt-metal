@@ -11,7 +11,7 @@ import torch
 import itertools
 import os
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+from conftest import is_6u
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
@@ -233,7 +233,6 @@ def run_multi_core_matmul_1d(
     warmup_iters = 10
     num_iters = 75
     warmup_iters = 10
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
     compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
@@ -596,7 +595,7 @@ def run_multi_core_matmul_1d(
     mesh_device.reset_sub_device_stall_group()
 
 
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -716,7 +715,7 @@ def test_tg_matmul_1d_ring_llama_with_rs_perf(
     )
 
 
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -787,7 +786,6 @@ def test_6U_matmul_1d_ring_llama_with_rs_perf(
     in1_is_dram_interleaved,
     untilize_out,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     shard_height,
     shard_width,
