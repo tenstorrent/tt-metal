@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import pytest
 import torch
 from tqdm import tqdm
@@ -14,7 +13,6 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
-    SDXL_CI_WEIGHTS_PATH,
     retrieve_timesteps,
     run_tt_iteration,
 )
@@ -111,11 +109,10 @@ def run_torch_denoising(
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, classifier_free_guidance=True):
+def run_unet_inference(
+    ttnn_device, is_ci_env, prompts, num_inference_steps, model_location_generator, classifier_free_guidance=True
+):
     torch.manual_seed(0)
-
-    if is_ci_env:
-        os.environ["HF_HOME"] = SDXL_CI_WEIGHTS_PATH
 
     if isinstance(prompts, str):
         prompts = [prompts]
@@ -136,8 +133,11 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
     width = 1024
 
     # 1. Load components
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
@@ -470,5 +470,8 @@ def test_unet_loop(
     prompt,
     loop_iter_num,
     classifier_free_guidance,
+    model_location_generator,
 ):
-    return run_unet_inference(device, is_ci_env, prompt, loop_iter_num, classifier_free_guidance)
+    return run_unet_inference(
+        device, is_ci_env, prompt, loop_iter_num, model_location_generator, classifier_free_guidance
+    )

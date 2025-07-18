@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import gc
 from loguru import logger
 import torch
@@ -12,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_CI_WEIGHTS_PATH
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -35,11 +34,13 @@ def test_upblock(
     block_id,
     is_ci_env,
     reset_seeds,
+    model_location_generator,
 ):
-    if is_ci_env:
-        os.environ["HF_HOME"] = SDXL_CI_WEIGHTS_PATH
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         subfolder="unet",
