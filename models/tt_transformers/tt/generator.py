@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from itertools import count
 
 import torch
 from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
@@ -56,66 +57,55 @@ class Generator:
         self.data_parallel = len(self.model)
 
     # Note: This function is called by vLLM
-    def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward_text(
+        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None
+    ):
+        assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+
         batch_size, batch_seq_len = tokens.shape
-        max_batch_size_per_model, batch_size_per_model = self._get_batch_size_per_model(batch_size)
+        max_batch_size_per_model = self.model_args[0].max_batch_size
 
         # Each model expected to run the same model, safe to use 1st vocab size
         output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
 
-        if page_table is not None:
-            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
-            page_table = torch.split(page_table, batch_size_per_model)
+        if empty_slots is None:
+            empty_slots = list(range(batch_size))
 
         out_list = []
-        for group_user_id in range(max_batch_size_per_model):
-            for model_id in range(self.data_parallel):
-                if group_user_id >= batch_size_per_model[model_id]:
-                    # Skip users that are not in this model's batch size
-                    continue
+        for idx, user_id in enumerate(empty_slots):
+            logger.info(f"Prefilling User {user_id + 1}")
 
-                user_id = group_user_id + model_id * max_batch_size_per_model
-                logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = int(prompt_lens[user_id])
-                last_token_idx = seq_len - 1
+            model_id = user_id // max_batch_size_per_model
+            group_user_id = user_id % max_batch_size_per_model
 
-                prefill_seq_len = get_padded_prefill_len(seq_len)
-                prefill_ids = torch.cat(
-                    [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
-                )
-                if page_table is not None:
-                    page_table_user = self._get_prefill_user_page_table(
-                        page_table[model_id], kv_cache[model_id], seq_len
-                    )
+            seq_len = int(prompt_lens[idx])
+            last_token_idx = seq_len - 1
 
-                logits = self.prefill_forward_single_user_text(
-                    prefill_ids,
-                    page_table=page_table_user if page_table is not None else None,
-                    user_id=group_user_id,
-                    last_token_idx=last_token_idx,
-                    kv_cache=kv_cache[model_id] if kv_cache is not None else None,
-                    model_id=model_id,
-                )
-                out_list.append(logits)
+            prefill_seq_len = get_padded_prefill_len(seq_len)
+            prefill_ids = torch.cat(
+                [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+            )
+            if page_table is not None:
+                page_table_user = self._get_prefill_user_page_table(page_table[idx:], kv_cache[model_id], seq_len)
 
-        # We gather data back to how at the end of prefill
-        for group_user_id in range(max_batch_size_per_model):
-            for model_id in range(self.data_parallel):
-                if group_user_id >= batch_size_per_model[model_id]:
-                    # Skip users that are not in this model's batch size
-                    continue
+            logits = self.prefill_forward_single_user_text(
+                prefill_ids,
+                page_table=page_table_user if page_table is not None else None,
+                user_id=0 if page_table is not None else group_user_id,
+                last_token_idx=last_token_idx,
+                kv_cache=kv_cache[model_id] if kv_cache is not None else None,
+                model_id=model_id,
+            )
+            out_list.append(logits)
 
-                user_id = group_user_id + model_id * max_batch_size_per_model
-                out = out_list[user_id]
-
-                seq_len = int(prompt_lens[user_id])
-                last_token_idx = seq_len - 1
-
-                # Since we give unpadded_seq_len, only the tile containing the last token is returned
-                output_logits[user_id] = self.model[model_id].process_output_prefill(
-                    out, last_token_idx=(last_token_idx % 32)
-                )
+        for idx, out in enumerate(out_list):
+            seq_len = int(prompt_lens[idx])
+            last_token_idx = seq_len - 1
+            user_id = empty_slots[idx]
+            model_id = user_id // max_batch_size_per_model
+            # Since we give unpadded_seq_len, only the tile containing the last token is returned
+            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
@@ -499,82 +489,80 @@ class Generator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
+        empty_slots=None,
     ):
         """
         Batched version of _prefill_forward_single_user for vision model.
         """
+        assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+        assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
+
         batch_size, batch_seq_len = tokens.shape
-        max_batch_size_per_model, batch_size_per_model = self._get_batch_size_per_model(batch_size)
+        max_batch_size_per_model = self.model_args[0].max_batch_size
 
         output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
 
-        out_list = [[] for _ in range(self.data_parallel)]
+        out_list = [[None for _ in range(max_batch_size_per_model)] for _ in range(self.data_parallel)]
         prefill_output_xattn_masks = [None for _ in range(batch_size)]
         prefill_output_full_text_row_masked_out_masks = [None for _ in range(batch_size)]
         decode_output_xattn_masks = [None for _ in range(batch_size)]
         decode_output_full_text_row_masked_out_masks = [None for _ in range(batch_size)]
 
-        if page_table is not None:
-            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
-            page_table = torch.split(page_table, batch_size_per_model)
+        if empty_slots is None:
+            empty_slots = list(range(batch_size))
 
-        if cross_page_table is not None:
-            assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
-            cross_page_table = torch.split(cross_page_table, batch_size_per_model)
+        for idx, user_id in enumerate(empty_slots):
+            logger.info(f"Prefilling User {user_id + 1}")
 
-        for group_user_id in range(max_batch_size_per_model):
-            for model_id in range(self.data_parallel):
-                if group_user_id >= batch_size_per_model[model_id]:
-                    # Skip users that are not in this model's batch size
-                    continue
+            model_id = user_id // max_batch_size_per_model
+            group_user_id = user_id % max_batch_size_per_model
 
-                user_id = group_user_id + model_id * max_batch_size_per_model
-                logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = int(prompt_lens[user_id])
-                user_page_table = page_table[model_id] if page_table is not None else None
-                user_kv_cache = kv_cache[model_id] if kv_cache is not None else None
-                user_cross_page_table = cross_page_table[model_id] if kv_cache is not None else None
-                xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
-                (
-                    xattn_cache,
-                    prefill_cross_attention_masks,
-                    prefill_full_text_row_masked_out_mask,
-                    decode_cross_attention_masks,
-                    decode_full_text_row_masked_out_mask,
-                    logits,
-                ) = self._prefill_forward_single_user(
-                    vision_images=vision_images[user_id],
-                    vision_mask=vision_masks[user_id],
-                    tokens=tokens[user_id : user_id + 1, :seq_len],  # Keep batch dimension
-                    xattn_caches=xattn_cache,
-                    user_id=group_user_id,
-                    total_len=total_lens[user_id],
-                    prefill_len=seq_len,
-                    page_table=user_page_table,
-                    kv_cache=user_kv_cache,
-                    cross_page_table=user_cross_page_table,
-                    model_id=model_id,
-                )
-                if xattn_caches is not None:
-                    xattn_caches[model_id] = xattn_cache
-                out_list[model_id].append(logits)
-                prefill_output_xattn_masks[user_id] = prefill_cross_attention_masks
-                prefill_output_full_text_row_masked_out_masks[user_id] = prefill_full_text_row_masked_out_mask
-                decode_output_xattn_masks[user_id] = decode_cross_attention_masks
-                decode_output_full_text_row_masked_out_masks[user_id] = decode_full_text_row_masked_out_mask
+            seq_len = int(prompt_lens[idx])
+            user_page_table = page_table[idx : idx + 1] if page_table is not None else None
+            user_kv_cache = kv_cache[model_id] if kv_cache is not None else None
+            user_cross_page_table = cross_page_table[idx : idx + 1] if kv_cache is not None else None
+            xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
+
+            (
+                xattn_cache,
+                prefill_cross_attention_masks,
+                prefill_full_text_row_masked_out_mask,
+                decode_cross_attention_masks,
+                decode_full_text_row_masked_out_mask,
+                logits,
+            ) = self._prefill_forward_single_user(
+                vision_images=vision_images[idx],
+                vision_mask=vision_masks[idx],
+                tokens=tokens[idx : idx + 1, :seq_len],  # Keep batch dimension
+                xattn_caches=xattn_cache,
+                user_id=0 if page_table is not None else group_user_id,
+                total_len=total_lens[idx],
+                prefill_len=seq_len,
+                page_table=user_page_table,
+                kv_cache=user_kv_cache,
+                cross_page_table=user_cross_page_table,
+                model_id=model_id,
+            )
+
+            if xattn_caches is not None:
+                xattn_caches[model_id] = xattn_cache
+
+            out_list[model_id][group_user_id] = logits
+            prefill_output_xattn_masks[idx] = prefill_cross_attention_masks
+            prefill_output_full_text_row_masked_out_masks[idx] = prefill_full_text_row_masked_out_mask
+            decode_output_xattn_masks[idx] = decode_cross_attention_masks
+            decode_output_full_text_row_masked_out_masks[idx] = decode_full_text_row_masked_out_mask
 
         # We gather prefill output at the end of prefill to reduce unnecessary device sync
-        for group_user_id in range(max_batch_size_per_model):
-            for model_id in range(self.data_parallel):
-                if group_user_id >= batch_size_per_model[model_id]:
-                    # Skip users that are not in this model's batch size
-                    continue
+        for idx in range(batch_size):
+            user_id = empty_slots[idx]
+            model_id = user_id // max_batch_size_per_model
+            group_user_id = user_id % max_batch_size_per_model
 
-                user_id = group_user_id + model_id * max_batch_size_per_model
-                last_token_idx = prompt_lens[user_id] - 1
-                output_logits[user_id] = self.model[model_id].process_output_prefill(
-                    out_list[model_id][group_user_id], 1, last_token_idx=(last_token_idx % 32)
-                )
+            last_token_idx = prompt_lens[idx] - 1
+            output_logits[idx] = self.model[model_id].process_output_prefill(
+                out_list[model_id][group_user_id], 1, last_token_idx=(last_token_idx % 32)
+            )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -651,26 +639,45 @@ class Generator:
         else:
             return tt_logits
 
+    def _get_mask_and_perm_tensors(self, unpadded_batch, empty_slots=None, perm_tensor=None):
+        max_batch_size_per_model = self.model_args[0].max_batch_size
+        padded_batch_size = max_batch_size_per_model * self.data_parallel
+
+        if empty_slots is None:
+            empty_slots = list(range(unpadded_batch, padded_batch_size))
+
+        if perm_tensor is None:
+            perm_tensor = torch.arange(padded_batch_size)
+
+        empty_slots_set = set(empty_slots)
+        mask = torch.tensor([i not in empty_slots_set for i in range(padded_batch_size)], dtype=torch.bool)
+
+        counter = count()
+        positions = [(next(counter) if m else -1) for m in mask]
+        unpadded_perm_tensor = torch.tensor(positions, dtype=torch.int32)[perm_tensor][:unpadded_batch]
+
+        return torch.chunk(mask, self.data_parallel, 0), unpadded_perm_tensor
+
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
+    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False, empty_slots=None, perm_tensor=None):
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        _, batch_size_per_model = self._get_batch_size_per_model(unpadded_batch)
+        masks, unpadded_perm_tensor = self._get_mask_and_perm_tensors(unpadded_batch, empty_slots, perm_tensor)
 
         logits = []
         for i in range(self.data_parallel):
-            if batch_size_per_model[i] == 0:
+            B = masks[i].sum().item()
+            if B == 0:
                 continue
-            logits_i = self.model[i].process_output_decode(
-                tt_out[i], B=batch_size_per_model[i], S=1, is_tokens=is_tokens
-            )
+
+            logits_i = self.model[i].process_output_decode(tt_out[i], B, S=1, is_tokens=is_tokens, mask=masks[i])
             logits.append(logits_i)
 
         logits = torch.cat(logits, 0)
         assert logits.shape[0] == unpadded_batch
 
-        return logits
+        return logits[unpadded_perm_tensor]
 
     def _decode_forward_no_trace(
         self,
@@ -1253,19 +1260,6 @@ class Generator:
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         return page_table[:, :num_blocks]
-
-    def _get_batch_size_per_model(self, batch_size):
-        """
-        Returns the maximum batch size per model and a list of batch sizes for each model.
-        """
-        max_batch_size_per_model = self.model_args[0].max_batch_size
-
-        # The logic ensures that the total batch size is divided as evenly as possible
-        # among the models, with any remainder distributed to the earlier models in the list.
-        return max_batch_size_per_model, [
-            max(min(max_batch_size_per_model, batch_size - i * max_batch_size_per_model), 0)
-            for i in range(self.data_parallel)
-        ]
 
     ## Destructor
 

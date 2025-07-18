@@ -245,7 +245,7 @@ class Transformer(LightweightModule):
         )[0, 0, last_token_idx, : self.vocab_size]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, mask=None):
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
@@ -264,6 +264,10 @@ class Transformer(LightweightModule):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
+
+        if mask is not None:
+            tt_out = tt_out[:, :, mask, :]
+
         tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
         return tt_out
 
