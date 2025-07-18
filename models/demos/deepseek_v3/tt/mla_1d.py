@@ -422,6 +422,7 @@ class MLA1D(AbstractModule):
         """
 
         grid_size = mesh_device.compute_with_storage_grid_size()
+        num_cores = grid_size.x * grid_size.y
 
         # Extract dimensions from HF config
         num_heads = hf_config.num_attention_heads
@@ -520,7 +521,7 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for kvpe
-        kvpe_shape = (1, MLA1D.MAX_BATCH_SIZE, 1, kv_lora_rank + qk_rope_head_dim)
+        kvpe_shape = (1, MLA1D.MAX_BATCH_SIZE // mesh_shape[1], 1, kv_lora_rank + qk_rope_head_dim)
         kvpe_shard_height = nearest_y(kvpe_shape[2], ttnn.TILE_SIZE)
         kvpe_shard_width = kvpe_shape[3]
         kvpe_num_cores = kvpe_shape[1]
@@ -553,8 +554,9 @@ class MLA1D(AbstractModule):
             packer_l1_acc=False,
         )
 
-        q_num_cores = MLA1D.MAX_BATCH_SIZE  # TODO: How to use non-padded batch size here? (might need to be dynamic)
-        block_height = nearest_y((MLA1D.MAX_BATCH_SIZE * num_heads_local) // q_num_cores, ttnn.TILE_SIZE)
+        q_num_cores = num_cores
+        q_num_cores = min(MLA1D.MAX_BATCH_SIZE // mesh_shape[1] * num_heads, q_num_cores)
+        block_height = nearest_y((MLA1D.MAX_BATCH_SIZE // mesh_shape[1] * num_heads) // q_num_cores, ttnn.TILE_SIZE)
         block_width = kv_lora_rank + qk_rope_head_dim
 
         q_core_grid = ttnn.num_cores_to_corerangeset(q_num_cores, grid_size, row_wise=True)
@@ -619,6 +621,28 @@ class MLA1D(AbstractModule):
             topology=ttnn.Topology.Linear,
         )
 
+        # Q all-to-all
+        config["wq_a2a_ag"] = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=1,
+            multi_device_global_semaphore=ccl.get_semaphore(1),
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        config["wq_a2a_rs"] = ReduceScatterAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=1,
+            from_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            to_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            math_op=ttnn.ReduceType.Sum,
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+
         # KV
         config["wkv_a_ag"] = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
@@ -639,6 +663,39 @@ class MLA1D(AbstractModule):
                 packer_l1_acc=True,
             ),
         }
+        config["wkv_a_rs"] = ReduceScatterAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=1,
+            from_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            to_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            math_op=ttnn.ReduceType.Sum,
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+
+        # FlashMLA all-to-all
+        config["flash_mla_ag"] = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=1,
+            multi_device_global_semaphore=ccl.get_semaphore(1),
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        config["flash_mla_rs"] = ReduceScatterAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=1,
+            from_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            to_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            math_op=ttnn.ReduceType.Sum,
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
 
         # WO
         config["wo_ag"] = AllGatherAsyncConfig(
@@ -658,6 +715,7 @@ class MLA1D(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        mode: str,
     ) -> Any:
         kv_lora_rank = hf_config.kv_lora_rank
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -668,9 +726,11 @@ class MLA1D(AbstractModule):
         kvpe_cache_layout = ttnn.TILE_LAYOUT
         kvpe_cache_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
+        mesh_shape = list(mesh_device.shape)
+
         cache = torch.zeros(
             (
-                MLA1D.MAX_BATCH_SIZE,  # TODO: Split batch when addign DP support
+                MLA1D.MAX_BATCH_SIZE // (mesh_shape[1] if mode == "decode" else 1),  # Prefill does not support DP yet
                 1,  # 1 latent kv heads
                 max_seq_len,
                 kvpe_dim,
@@ -717,7 +777,7 @@ class MLA1D(AbstractModule):
         kvpe_cache = cfg["kvpe_cache"]
 
         bsz = x.shape[2]
-        bsz_local = bsz // 1  # TODO: Use this when adding DP support (MLA1D.TG_GRID[0])
+        scale = 1.0 / cfg["mesh_shape"][1]
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
@@ -754,26 +814,38 @@ class MLA1D(AbstractModule):
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
 
+        # FIXME: All-to-All here!! (tt_q)
+        # The following code does the following:
+        # [1, bsz, num_heads_local, kv_lora_rank + qk_rope_head_dim] -> [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
+        # Using the following algorithm: 1. AG on in_dim, 2. Scale by number of devices, 3. RS on out_dim
+        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, bsz_local, kv_lora_rank + qk_rope_head_dim]
+        tt_q = ttnn.experimental.all_gather_async(
+            tt_q, **cfg["wq_a2a_ag"]
+        )  # [1, num_heads, bsz_local, kv_lora_rank + qk_rope_head_dim]
+        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
+        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a2a_rs"])
+        tt_q = tt_q * scale  # Scale the input tensor
+
         # KVPE Stuff
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
 
         # AG + Reduce b/c sub-tile RS not supported
         tt_kv = ttnn.experimental.all_gather_async(
             tt_kv, **cfg["wkv_a_ag"]
-        )  # [1, num_devices, bsz_local, kv_lora_rank + qk_rope_head_dim]
+        )  # [1, num_devices, bsz, kv_lora_rank + qk_rope_head_dim]
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r"]
-        )  # [1, 1, bsz_local, kv_lora_rank + qk_rope_head_dim]
+        )  # [1, 1, bsz, kv_lora_rank + qk_rope_head_dim]
 
-        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, bsz_local, kv_lora_rank])
-        tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz_local, kv_lora_rank + qk_rope_head_dim])
+        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank])
+        tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim])
         ttnn.deallocate(tt_kv)
 
         # KV Norm
         tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
 
         # KV RoPE
-        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz_local, 1, qk_rope_head_dim]
+        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz, 1, qk_rope_head_dim]
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
         # TODO: Use DP tensors
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
@@ -784,10 +856,17 @@ class MLA1D(AbstractModule):
             is_decode_mode=True,
         )
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
-        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, 1, bsz_local, qk_rope_head_dim]
+        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, 1, bsz, qk_rope_head_dim]
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
-        tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
+
+        # FIXME: Reduce-Scatter here!! (tt_kvpe)
+        tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
+        tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
+        tt_kvpe = ttnn.experimental.reduce_scatter_async(tt_kvpe, **cfg["wkv_a_rs"])
+        tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
+        tt_kvpe = tt_kvpe * scale  # Scale the input tensor
+
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
@@ -806,9 +885,20 @@ class MLA1D(AbstractModule):
             kvpe_cache,
             cur_pos_tensor=position_idxs,
             **cfg["flash_mla"],
-        )  #  [1, bsz, num_heads_local, kv_lora_rank]
+        )  #  [1, bsz_local, num_heads, kv_lora_rank]
         ttnn.deallocate(tt_q)
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
+
+        # FIXME: All-to-All here!! (attn_out)
+        attn_out = ttnn.experimental.all_gather_async(
+            attn_out, **cfg["flash_mla_ag"]
+        )  # [1, bsz, num_heads, kv_lora_rank]
+        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads, bsz, kv_lora_rank]
+        attn_out = ttnn.experimental.reduce_scatter_async(
+            attn_out, **cfg["flash_mla_rs"]
+        )  # [1, num_heads_local, bsz, kv_lora_rank]
+        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, bsz, num_heads_local, kv_lora_rank]
+        attn_out = attn_out * scale  # Scale the output tensor
 
         # wkv_b2
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]

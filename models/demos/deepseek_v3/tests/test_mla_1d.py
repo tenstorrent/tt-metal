@@ -130,7 +130,7 @@ def test_forward_pass(
         model_config = MLA1D.decode_model_config(hf_config, mesh_row, ccl)
 
     # Create a new model state
-    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row)
+    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row, mode=mode)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -192,7 +192,7 @@ def test_forward_pass(
             torch.tensor(position_idxs),
             device=mesh_row,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_row, dims=(None, None), mesh_shape=mesh_shape
+                mesh_row, dims=(None, 0), mesh_shape=mesh_shape
             ),  # TODO: Shard on batch when DP
             dtype=ttnn.int32,
         )
