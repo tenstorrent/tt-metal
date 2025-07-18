@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Any, Dict
+
 import torch
 
 import ttnn
@@ -11,8 +13,8 @@ from models.utility_functions import nearest_32
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 
 
-def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, position_ids):
-    cos, sin = precompute_freqs(dhead, end, theta, scale_factor, orig_context_len)
+def compute_gather_cos_sin(dhead, end, theta, rope_scaling, position_ids):
+    cos, sin = precompute_freqs(dhead, end, theta, rope_scaling)
     return gather_cos_sin(position_ids, cos, sin)
 
 
@@ -24,8 +26,7 @@ class RotarySetup(LightweightModule):
         head_dim: int,
         max_seq_len: int,
         rope_theta: float,
-        scale_factor: float,  # use None to disable rope scaling
-        orig_context_len: int,  # only used if scaling enabled
+        rope_scaling: Dict[str, Any],
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -46,8 +47,7 @@ class RotarySetup(LightweightModule):
             dhead=head_dim,
             end=max_seq_len * 2,
             theta=rope_theta,
-            scale_factor=scale_factor,
-            orig_context_len=orig_context_len,
+            rope_scaling=rope_scaling,
             position_ids=torch.arange(max_seq_len),
         )
 

@@ -4,6 +4,7 @@
 
 import math
 import re
+from typing import Any, Dict
 
 import torch
 from loguru import logger
@@ -162,7 +163,7 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
     # Values obtained from grid search
     low_freq_factor = 1
@@ -184,7 +185,54 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+def try_scaling(freqs: torch.Tensor, rope_scaling: Dict[str, Any]):
+    """
+    Apply different types of RoPE scaling
+
+    Args:
+        freqs: Base frequencies
+        scaling_type: Type of scaling ("none", "linear", "ntk", "dynamic", "yarn")
+        scale_factor: Scaling factor
+        orig_context_len: Original context length
+        **kwargs: Additional parameters for specific scaling types
+    """
+    if not (
+        isinstance(rope_scaling, dict)
+        and rope_scaling.get("type") is not None
+        and rope_scaling.get("factor") is not None
+    ):
+        # If parameters are not provided, no scaling is applied
+        return freqs
+
+    elif rope_scaling["type"] == "default":
+        # No scaling applied
+        return freqs
+
+    elif rope_scaling["type"] == "linear":
+        # Simple linear scaling
+        return freqs / rope_scaling["factor"]
+
+    elif rope_scaling["type"] == "dynamic":
+        # Dynamic NTK scaling
+        raise NotImplementedError("Dynamic NTK scaling is not implemented")
+
+    elif rope_scaling["type"] == "yarn":
+        # YaRN implementation
+        raise NotImplementedError("YaRN scaling is not implemented")
+
+    elif rope_scaling["type"] == "longrope":
+        # Longrope implementation
+        raise NotImplementedError("Longrope scaling is not implemented")
+
+    elif rope_scaling["type"] == "llama3":
+        # Llama3 implementation
+        return apply_llama3_scaling(freqs, rope_scaling["factor"], rope_scaling["orig_context_len"])
+
+    else:
+        raise ValueError(f"Unknown RoPE scaling type: {rope_scaling['type']}")
+
+
+def precompute_freqs(dim: int, end: int, theta: float, rope_scaling: Dict[str, Any]):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -198,8 +246,7 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
-    if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+    freqs = try_scaling(freqs, rope_scaling)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -229,10 +276,8 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0):
-    cos, sin = precompute_freqs(
-        head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len
-    )
+def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, rope_scaling, start_pos=0):
+    cos, sin = precompute_freqs(head_dim, seq_len * 2, theta=theta, rope_scaling=rope_scaling)
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
     assert sin_gathered.size() == (1, 1, seq_len, head_dim)
@@ -272,13 +317,11 @@ def get_single_rot_mat(
     num_devices,
     start_pos,
     theta,
-    scale_factor,
-    orig_context_len,
+    rope_scaling,
     on_host=False,
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
-    if scale_factor is not None:
-        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len)
+    freqs = try_scaling(freqs_unscaled, rope_scaling)
     rot_matrix = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
     sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
@@ -290,8 +333,7 @@ def get_single_rot_mat(
 
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
-    if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+    freqs = try_scaling(freqs, rope_scaling)
     current_rot_mat = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
     sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)
