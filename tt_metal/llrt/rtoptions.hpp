@@ -189,6 +189,10 @@ class RunTimeOptions {
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
 
+    // Special case for watcher_dump testing, when we want to keep errors around. TODO: remove this when watcher_dump
+    // goes away.
+    bool watcher_keep_errors = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -441,6 +445,8 @@ public:
     inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
 
     inline bool get_force_context_reinit() const { return force_context_reinit; }
+
+    inline bool get_watcher_keep_errors() const { return watcher_keep_errors; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

@@ -44,13 +44,6 @@ void dump_data(
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
     std::filesystem::create_directories(cq_dir);
 
-    if (dump_cqs) {
-        cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
-    }
-    if (dump_watcher) {
-        cout << "Dumping Watcher Log into: " << MetalContext::instance().watcher_server()->log_file_name() << endl;
-    }
-
     // Only look at user-specified devices
     vector<IDevice*> devices;
     for (chip_id_t id : device_ids) {
@@ -63,6 +56,7 @@ void dump_data(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
         devices.push_back(device);
         if (dump_cqs) {
+            cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
             std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
             internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
@@ -70,6 +64,7 @@ void dump_data(
 
     // Watcher doesn't have kernel ids since we didn't create them here, need to read from file.
     if (dump_watcher) {
+        cout << "Dumping Watcher Log into: " << MetalContext::instance().watcher_server()->log_file_name() << endl;
         MetalContext::instance().watcher_server()->isolated_dump(device_ids);
     }
 
