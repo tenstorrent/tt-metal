@@ -74,7 +74,7 @@ protected:
         if (MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()) {
             // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
             // when watcher_dump is removed.
-            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
+            if (!MetalContext::instance().rtoptions().get_watcher_keep_errors()) {
                 MetalContext::instance().reinitialize();
             }
         }
@@ -182,7 +182,7 @@ protected:
             reset_server) {
             // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
             // when watcher_dump is removed.
-            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
+            if (!MetalContext::instance().rtoptions().get_watcher_keep_errors()) {
                 MetalContext::instance().reinitialize();
                 reset_server = false;
             }
@@ -197,7 +197,9 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(test_mode_previous);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
         if (MetalContext::instance().watcher_server()) {
-            MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
+            if (!MetalContext::instance().rtoptions().get_watcher_keep_errors()) {
+                MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
+            }
         }
     }
 
