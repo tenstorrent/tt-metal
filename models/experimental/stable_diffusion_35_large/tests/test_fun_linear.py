@@ -157,7 +157,7 @@ def test_fun_linear(
 
     dims_out = [None, None]
     dims_out[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2  # Always set sequence dim
-    dims_out[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 3   # Always set tensor parallel dim
+    dims_out[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 3  # Always set tensor parallel dim
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
