@@ -98,7 +98,6 @@ def test_print(device, dtype, layout, profile, deallocate):
     else:
         # To generate golden output, use the following line
         # print("\\n".join(str(tensor).split("\n")))
-
         assert tensor_as_string == GOLDEN_TENSOR_STRINGS[(dtype, layout)]
 
 
