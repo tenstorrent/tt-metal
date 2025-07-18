@@ -252,10 +252,12 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, tt::tt_fabric::worker_handshake_noc);
     }
 
+    template <uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
     FORCE_INLINE void cache_producer_noc_addr() {
         invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
-        uint64_t worker_semaphore_address = get_noc_addr(
+        uint64_t worker_semaphore_address;
+        worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
     }

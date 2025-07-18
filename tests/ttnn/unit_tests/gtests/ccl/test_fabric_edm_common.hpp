@@ -1238,6 +1238,7 @@ void setup_test_with_persistent_fabric(
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
+    bool credit_address_fixed = true,
     std::optional<size_t> num_links = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
@@ -1255,6 +1256,18 @@ void setup_test_with_persistent_fabric(
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
         devices, fabric_program_ptrs, num_links.value_or(1), false, topology, is_galaxy, edm_buffer_config);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
+    if (!credit_address_fixed) {
+        for (auto& edm_builder : line_fabric->edm_builders_forward_direction) {
+            for (auto& builder : edm_builder.second) {
+                builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+            }
+        }
+        for (auto& edm_builder : line_fabric->edm_builders_backward_direction) {
+            for (auto& builder : edm_builder.second) {
+                builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+            }
+        }
+    }
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
             log_trace(
@@ -1308,7 +1321,8 @@ int TestLineFabricEntrypoint(
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
-    setup_test_with_persistent_fabric(devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
+    setup_test_with_persistent_fabric(
+        devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric, false);
 
     auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
         bool success = false;
@@ -1410,9 +1424,11 @@ int TestLoopbackEntrypoint(
     auto chip_0_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         sender_device, fabric_sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
     chip_0_edm_builder.set_firmware_context_switch_interval(0);
+    chip_0_edm_builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
     auto chip_1_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         receiver_device, fabric_receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
     chip_1_edm_builder.set_firmware_context_switch_interval(0);
+    chip_1_edm_builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
@@ -2783,6 +2799,7 @@ void Run1DFabricPacketSendTest(
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
+            true,
             params.num_links,
             topology,
             fabric_context_switch_interval,

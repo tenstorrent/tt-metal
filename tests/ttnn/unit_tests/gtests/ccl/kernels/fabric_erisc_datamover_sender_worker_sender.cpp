@@ -112,7 +112,7 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
         StreamId{std::numeric_limits<uint32_t>::max()});
 
-    sender.open();
+    sender.open<true>();
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
