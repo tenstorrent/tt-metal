@@ -9,6 +9,8 @@
 #include "core/xtensor_utils.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
 
+// TODO: Delete this file
+
 namespace ttml::core {
 
 template <typename T>

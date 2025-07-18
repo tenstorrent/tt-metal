@@ -208,8 +208,8 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
         /* compute_kernel_config */ ttml::core::ComputeKernelConfig::precise(),
         /* core_grid */ ttnn::CoreGrid{7, 8},
         /* output_tile */ std::nullopt);
-    ttml::core::MeshToXTensorVariant<float> composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3);
-    auto xtensors_back = ttml::core::to_xtensor(mul_tensor, composer);
+    auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3);
+    auto xtensors_back = ttml::core::to_xtensor(mul_tensor, *composer);
     xt::xarray<float> mul_res = xt::linalg::dot(xtensor_a, xtensor_b);
 
     // (128, 64) X (64, 256) => (128, 256)

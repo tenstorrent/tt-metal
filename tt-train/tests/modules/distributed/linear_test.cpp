@@ -15,6 +15,7 @@
 #include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 
 namespace {
 
@@ -74,15 +75,15 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
     EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer);
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer);
     auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), identity_composer);
 
-    auto weight_xtensor_shape = weight_xtensor[0].shape();
+    auto weight_xtensor_shape = weight_xtensor.shape();
     auto test_data_shape = test_data.shape();
 
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     if (has_bias) {
         expected_output += bias_xtensor[0];
     }
@@ -117,14 +118,15 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
     EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    // ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer);
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer);
 
-    auto weight_xtensor_shape = weight_xtensor[0].shape();
+    auto weight_xtensor_shape = weight_xtensor.shape();
     auto test_data_shape = test_data.shape();
 
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 };
