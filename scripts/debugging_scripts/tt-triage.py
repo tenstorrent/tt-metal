@@ -486,16 +486,13 @@ def get_running_ops_table(
                         if pid is not None:
                             cs = (
                                 get_callstack_with_gdb(
-                                    process_ids[loc][risc_name], loc, risc_name, kernel_path, kernel_offset
+                                    process_ids[loc][risc_name], [fw_elf_path, kernel_path], [None, kernel_offset]
                                 )
                                 if proc_name != "NCRISC"
                                 else f"{RED}GDB callstack for NCRISC is not supported{RST}"
                             )
-                            # If we found nothing in kernel elf try firmware elf
-                            if not cs:
-                                cs = get_callstack_with_gdb(process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
                         else:
-                            cs = f"{RED}Process not available{RST}"
+                            cs = f"{RED}Core in reset. Process not available.{RST}"
                     # Get callstack using tt-exalens
                     else:
                         pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -516,12 +513,12 @@ def get_running_ops_table(
                         pid = process_ids.get(loc, {}).get(risc_name, None)
                         if pid is not None:
                             cs = (
-                                get_callstack_with_gdb(process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
+                                get_callstack_with_gdb(process_ids[loc][risc_name], [fw_elf_path])
                                 if proc_name != "NCRISC"
                                 else f"{RED}GDB callstack for NCRISC is not supported{RST}"
                             )
                         else:
-                            cs = f"{RED}Process not available{RST}"
+                            cs = f"{RED}Core in reset. Process not available{RST}"
                     # Get callstack using tt-exalens
                     else:
                         pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -610,8 +607,11 @@ def extract_callstack_from_gdb(gdb_client, start: str, end: str) -> list[Callsta
 
 
 def get_callstack_with_gdb(
-    pid: int, loc, risc_name: str, elf_path: str, kernel_offset: int = None
+    pid: int, elf_paths: list[str], kernel_offsets: list[int | None] | None = None
 ) -> list[CallstackEntry]:
+    if kernel_offsets is None:
+        kernel_offsets = [None for _ in range(len(elf_paths))]
+
     # Start GDB client
     gdb_client = subprocess.Popen(
         ["tt-exalens", "--gdb"],
@@ -621,10 +621,13 @@ def get_callstack_with_gdb(
         text=True,  # ensures strings instead of bytes
     )
 
-    # Giving 0 as kernel_offset does not work
-    add_symbol_file_cmd = (
-        f"add-symbol-file {elf_path} {kernel_offset}" if kernel_offset is not None else f"add-symbol-file {elf_path}"
-    )
+    add_symbol_file_cmd = ""
+    for kernel_path, kernel_offset in zip(elf_paths, kernel_offsets):
+        add_symbol_file_cmd += (
+            f"add-symbol-file {kernel_path} {kernel_offset}"
+            if kernel_offset is not None
+            else f"add-symbol-file {kernel_path}\n"
+        )
 
     start_callstack = "CALLSTACK START"
     end_callstack = "CALLSTACK END"
