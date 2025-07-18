@@ -190,13 +190,16 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
     uint32_t num_runtime_args_for_cr1 = 35;
     // Initialize RTA data across core_ranges
     uint32_t start_idx = 25;
+    dummy_cr0_args.reserve(num_runtime_args_for_cr0);
     for (uint32_t i = 0; i < num_runtime_args_for_cr0; i++) {
         dummy_cr0_args.push_back(start_idx++);
     }
+    dummy_cr1_args.reserve(num_runtime_args_for_cr1);
     for (uint32_t i = 0; i < num_runtime_args_for_cr1; i++) {
         dummy_cr1_args.push_back(start_idx++);
     }
     // Initialize Semaphore values
+    dummy_sems.reserve(NUM_SEMAPHORES);
     for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
         dummy_sems.push_back(i + 1);
     }

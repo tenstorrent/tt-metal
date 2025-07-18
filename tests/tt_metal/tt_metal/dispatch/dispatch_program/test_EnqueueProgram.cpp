@@ -374,6 +374,7 @@ bool test_dummy_EnqueueProgram_with_sems(
     Program program;
 
     vector<uint32_t> expected_semaphore_values;
+    expected_semaphore_values.reserve(program_config.num_sems);
     for (uint32_t initial_sem_value = 0; initial_sem_value < program_config.num_sems; initial_sem_value++) {
         expected_semaphore_values.push_back(initial_sem_value);
     }
@@ -932,12 +933,14 @@ bool test_increment_runtime_args_sanity(
 
     // Generate Runtime Args.
     std::vector<uint32_t> unique_runtime_args;
+    unique_runtime_args.reserve(num_unique_rt_args);
     for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         unique_runtime_args.push_back(i * 0x10101010);
     }
 
     // Generate Common Runtime Args.
     std::vector<uint32_t> common_runtime_args;
+    common_runtime_args.reserve(num_common_rt_args);
     for (uint32_t i = 0; i < num_common_rt_args; i++) {
         common_runtime_args.push_back(1000 + 0x10101010);
     }
