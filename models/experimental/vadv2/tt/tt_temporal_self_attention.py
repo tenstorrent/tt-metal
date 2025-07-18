@@ -4,73 +4,7 @@
 
 import ttnn
 import warnings
-import torch.nn.functional as F
-
-
-def multi_scale_deformable_attn(
-    value, value_spatial_shapes, sampling_locations, attention_weights, device, reshape=False
-):
-    bs, _, num_heads, embed_dims = value.shape
-    _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
-    value_list = []
-    value_list.append(value)
-    sampling_grids = 2 * sampling_locations - 1
-    sampling_value_list = []
-
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
-        value_l_ = value_list[level]
-        print(value_l_.shape)
-
-        value_l_ = ttnn.reshape(value_l_, [value_l_.shape[0], value_l_.shape[1], value_l_.shape[2] * value_l_.shape[3]])
-        value_l_ = ttnn.permute(value_l_, (0, 2, 1))
-        print(value_l_.shape)
-        print(bs)
-        print(num_heads)
-        print(embed_dims)
-
-        if reshape:
-            value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, 12, 20])  # 24751
-
-        else:
-            value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, 100, 100])  # 24751
-
-        sampling_grid_l_ = sampling_grids[:, :, :, level]
-        sampling_grid_l_ = ttnn.permute(sampling_grid_l_, (0, 2, 1, 3, 4))
-
-        sampling_grid_l_ = ttnn.reshape(
-            sampling_grid_l_,
-            [
-                sampling_grid_l_.shape[0] * sampling_grid_l_.shape[1],
-                sampling_grid_l_.shape[2],
-                sampling_grid_l_.shape[3],
-                sampling_grid_l_.shape[4],
-            ],
-        )
-        value_l_ = ttnn.to_torch(value_l_).float()
-        sampling_grid_l_ = ttnn.to_torch(sampling_grid_l_).float()
-        sampling_value_l_ = F.grid_sample(
-            value_l_, sampling_grid_l_, mode="bilinear", padding_mode="zeros", align_corners=False
-        )
-        sampling_value_l_ = ttnn.from_torch(sampling_value_l_, device=device, dtype=ttnn.bfloat16)
-        sampling_value_list.append(sampling_value_l_)
-
-        attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))
-
-        attention_weights = ttnn.reshape(attention_weights, [bs * num_heads, 1, num_queries, num_levels * num_points])
-
-    output = ttnn.stack(sampling_value_list, -2)
-    output = ttnn.reshape(
-        output, [output.shape[0], output.shape[1], output.shape[2], output.shape[3] * output.shape[4]]
-    )
-    output = output * attention_weights
-    output = ttnn.sum(output, 3)
-    output = ttnn.reshape(output, [bs, num_heads * embed_dims, num_queries])
-    output = ttnn.permute(output, (0, 2, 1))
-    ttnn.deallocate(attention_weights)
-    ttnn.deallocate(sampling_grids)
-    ttnn.deallocate(sampling_value_l_)
-    ttnn.deallocate(value)
-    return output
+from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
 
 
 class TtTemporalSelfAttention:
@@ -194,19 +128,35 @@ class TtTemporalSelfAttention:
         if reference_points.shape[-1] == 2:
             offset_normalizer = ttnn.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], dim=-1)
             bs_r, num_query, num_levels, _ = reference_points.shape
-            reference_xy = ttnn.reshape(reference_points, (bs_r, num_query, 1, num_levels, 1, 2))
+            reference_points_shape = reference_points.shape
+            reference_points = ttnn.reshape(reference_points, (bs_r, num_query, 1, num_levels, 1, 2))
             offset_normalizer_xy = ttnn.reshape(
                 offset_normalizer, (1, 1, 1, offset_normalizer.shape[0], 1, offset_normalizer.shape[1])
             )
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
             offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
-            sampling_offsets = ttnn.to_torch(sampling_offsets)
-            offset_normalizer_xy = ttnn.to_torch(offset_normalizer_xy)
-            sampling_locations = sampling_offsets / offset_normalizer_xy
-            reference_xy = ttnn.to_torch(reference_xy)
-            sampling_locations = reference_xy + sampling_locations
-            sampling_locations = ttnn.from_torch(sampling_locations, device=self.device, dtype=ttnn.bfloat16)
 
+            sampling_offsets_shape = sampling_offsets.shape
+            sampling_offsets = ttnn.reshape(
+                sampling_offsets, (sampling_offsets.shape[0], -1, sampling_offsets.shape[4], sampling_offsets.shape[5])
+            )  # [2, 10000*8*1, 4, 2]
+            offset_normalizer_xy = ttnn.reshape(
+                offset_normalizer_xy,
+                (
+                    offset_normalizer_xy.shape[0],
+                    offset_normalizer_xy.shape[1],
+                    offset_normalizer_xy.shape[2],
+                    offset_normalizer_xy.shape[-1],
+                ),
+            )
+            # sampling_offsets_reshaped = ttnn.to_memory_config(sampling_offsets_reshaped, ttnn.L1_MEMORY_CONFIG)
+            # offset_normalizer_xy = ttnn.to_memory_config(offset_normalizer_xy, ttnn.L1_MEMORY_CONFIG)
+            sampling_locations = ttnn.div(sampling_offsets, offset_normalizer_xy)
+            sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets_shape)
+            sampling_locations = reference_points + sampling_locations  # reference_xy + sampling_locations_reshaped
+            ttnn.deallocate(offset_normalizer_xy)
+            # ttnn.deallocate(reference_xy)
+            reference_points = ttnn.reshape(reference_points, reference_points_shape)
         elif reference_points.shape[-1] == 4:
             reference_points_reshape = ttnn.reshape(
                 reference_points,
@@ -221,11 +171,12 @@ class TtTemporalSelfAttention:
             )
         # ttnn.deallocate(reference_points)
 
-        output = multi_scale_deformable_attn(
-            value, spatial_shapes, sampling_locations, attention_weights, self.device, reshape=False
-        )
+        output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
         ttnn.deallocate(attention_weights)
         # ttnn.deallocate(reference_xy)
+        ttnn.deallocate(sampling_locations)
+        ttnn.deallocate(sampling_offsets)
+        ttnn.deallocate(value)
         output = ttnn.permute(output, (1, 2, 0))
         output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
         output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
@@ -239,4 +190,5 @@ class TtTemporalSelfAttention:
             output = ttnn.permute(output, (1, 0, 2))
 
         output = ttnn.add(output, identity)
+        ttnn.deallocate(identity)
         return output

@@ -102,6 +102,7 @@ class TtBEVFormerEncoder:
             ref_x = ref_x.reshape(-1)[None] / W
             ref_2d = torch.stack((ref_x, ref_y), -1)
             ref_2d = ref_2d.repeat(bs, 1, 1).unsqueeze(2)
+
         return ref_2d
 
     def point_sampling(self, reference_points, pc_range, img_metas):  # TODO Handle fp32
@@ -209,6 +210,10 @@ class TtBEVFormerEncoder:
         else:
             hybird_ref_2d = ttnn.stack([ref_2d, ref_2d], 1)
             hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
+        ttnn.deallocate(ref_2d)
+        ttnn.deallocate(shift)
+        ttnn.deallocate(shift_ref_2d)
+
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
@@ -327,7 +332,7 @@ class TtBEVFormerLayer:
         prev_bev=None,
         **kwargs,
     ):
-        bev_mask = kwargs.get("bev_mask", None)
+        # bev_mask = kwargs.get("bev_mask", None)
         norm_index = 0
         attn_index = 0
         ffn_index = 0
