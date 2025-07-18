@@ -316,7 +316,7 @@ class MLA1D(AbstractModule):
         k_chunk_size = 128  # TODO: Make dynamic?
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 7),
+            compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
