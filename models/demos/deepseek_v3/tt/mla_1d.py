@@ -268,10 +268,12 @@ class MLA1D(AbstractModule):
         original_seq_len = hf_config.rope_scaling["original_max_position_embeddings"]
         max_seq_len = hf_config.max_seq_len
 
+        mesh_shape = list(mesh_device.shape)
+
         config: ModelPrefillConfig = {}
 
         config["hf_config"] = hf_config
-        config["mesh_shape"] = list(mesh_device.shape)
+        config["mesh_shape"] = mesh_shape
 
         config["wq_a"] = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -345,6 +347,63 @@ class MLA1D(AbstractModule):
         # Norms
         config["q_norm"] = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category="q_norm")
         config["kv_norm"] = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category="k_norm")
+
+        # Set up CCLs
+        # **Must be in order of execution**
+
+        # Q
+        config["wq_a_rs"] = ReduceScatterAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=3,
+            from_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            to_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            math_op=ttnn.ReduceType.Sum,
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        config["wq_a_ag"] = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=3,
+            multi_device_global_semaphore=ccl.get_semaphore(1),
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+
+        # KV
+        config["wkv_a_ag"] = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=1,
+            multi_device_global_semaphore=ccl.get_semaphore(1),
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        config["wkv_a_r"] = {
+            "dims": [1],
+            "output": None,
+            "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+        }
+
+        # WO
+        config["wo_ag"] = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=1,
+            multi_device_global_semaphore=ccl.get_semaphore(1),
+            num_links=ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
 
         return config
 
@@ -540,33 +599,33 @@ class MLA1D(AbstractModule):
 
         # Q
         config["wq_a_rs"] = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(list(mesh_device.shape)),
+            mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=3,
-            from_remote_multi_device_global_semaphore=ccl.get_semaphore(0),
-            to_remote_multi_device_global_semaphore=ccl.get_semaphore(0),
+            from_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
+            to_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
             math_op=ttnn.ReduceType.Sum,
-            num_links=ccl.get_max_links(0),
+            num_links=ccl.get_max_links(1),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
         config["wq_a_ag"] = AllGatherAsyncConfig(
-            mesh_device=MeshDeviceStub(list(mesh_device.shape)),
+            mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=3,
-            multi_device_global_semaphore=ccl.get_semaphore(0),
-            num_links=ccl.get_max_links(0),
+            multi_device_global_semaphore=ccl.get_semaphore(1),
+            num_links=ccl.get_max_links(1),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
 
         # KV
         config["wkv_a_ag"] = AllGatherAsyncConfig(
-            mesh_device=MeshDeviceStub(list(mesh_device.shape)),
+            mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=1,
-            multi_device_global_semaphore=ccl.get_semaphore(0),
-            num_links=ccl.get_max_links(0),
+            multi_device_global_semaphore=ccl.get_semaphore(1),
+            num_links=ccl.get_max_links(1),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -583,11 +642,11 @@ class MLA1D(AbstractModule):
 
         # WO
         config["wo_ag"] = AllGatherAsyncConfig(
-            mesh_device=MeshDeviceStub(list(mesh_device.shape)),
+            mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=1,
-            multi_device_global_semaphore=ccl.get_semaphore(0),
-            num_links=ccl.get_max_links(0),
+            multi_device_global_semaphore=ccl.get_semaphore(1),
+            num_links=ccl.get_max_links(1),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -779,10 +838,10 @@ class MLA1D(AbstractModule):
         Returns:
             Output tensor after MLP computation
         """
-        assert False, "MLA1D prefill forward is untested!"
 
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
+        num_heads_local = num_heads // cfg["mesh_shape"][1]
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -795,18 +854,21 @@ class MLA1D(AbstractModule):
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
-        # TODO: Add norm
+
+        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs"])
+        tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag"])
+
+        tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
-        # TODO: Use local heads here
-        tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads, qk_head_dim))
-        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads, seq_len, qk_head_dim]
+        tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
+        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
 
-        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads, seq_len, qk_nope_head_dim])
-        tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads, seq_len, qk_head_dim])
+        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
+        tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
 
         # wkv_b1
-        tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads, seq_len, kv_lora_rank]
+        tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, seq_len, kv_lora_rank]
 
         # Q RoPE
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
@@ -822,9 +884,20 @@ class MLA1D(AbstractModule):
 
         # KVPE Stuff
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
+
+        tt_kv = ttnn.experimental.all_gather_async(
+            tt_kv, **cfg["wkv_a_ag"]
+        )  # [1, 1, seq_len / num_devices, kv_lora_rank + qk_rope_head_dim]
+        tt_kv = ttnn.experimental.fast_reduce_nc(
+            tt_kv, **cfg["wkv_a_r"]
+        )  # [1, 1, seq_len, kv_lora_rank + qk_rope_head_dim]
+
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len, kv_lora_rank])
         tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, seq_len, kv_lora_rank + qk_rope_head_dim])
         ttnn.deallocate(tt_kv)
+
+        # KV Norm
+        tt_kv_nope = RMSNorm.forward_prefill(tt_kv_nope, cfg["kv_norm"])
 
         # KV RoPE
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
@@ -854,14 +927,15 @@ class MLA1D(AbstractModule):
             tt_q,
             tt_kvpe,
             **cfg["flash_mla"],
-        )  # [1, num_heads, seq_len, kv_lora_rank]
+        )  # [1, num_heads_local, seq_len, kv_lora_rank]
         ttnn.deallocate(tt_q)
 
         # wkv_b2
-        v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads, seq_len, v_head_dim]
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads, v_head_dim]
+        v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
+        v_out = ttnn.experimental.all_gather_async(v_out, **cfg["wo_ag"])  # [1, num_heads, seq_len, v_head_dim]
 
         # wo
+        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads, v_head_dim]
         v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
 
