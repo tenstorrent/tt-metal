@@ -125,8 +125,9 @@ int main() {
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {0, i};
         uint32_t idx_h = i * shard_height;
+        // stick_id is the index of the first stick in the shard (recall a stick is 2 bfloat16 values in this example)
         uint32_t stick_id = idx_h * shard_width / values_per_stick;
-        tt_metal::SetRuntimeArgs(program, reader_id, core, {src_addr, shard_size, padded_offset_bytes, stick_id, i});
+        tt_metal::SetRuntimeArgs(program, reader_id, core, {src_addr, shard_size, padded_offset_bytes, stick_id});
     }
 
     fmt::print("Original tensor values: ");
