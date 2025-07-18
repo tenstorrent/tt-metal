@@ -53,6 +53,7 @@ enum watcher_features_t {
     SanitizeZeroL1Write,
     SanitizeMailboxWrite,
     SanitizeInlineWriteDram,
+    SanitizeLinkedTransaction,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -171,6 +172,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     // Write runtime args - update to a core that doesn't exist or an improperly aligned address,
     // depending on the flags passed in.
     bool use_inline_dw_write = false;
+    bool bad_linked_transaction = false;
     switch(feature) {
         case SanitizeAddress:
             output_buf_noc_xy.x = 26;
@@ -191,6 +193,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
             break;
         case SanitizeInlineWriteDram: use_inline_dw_write = true; break;
+        case SanitizeLinkedTransaction: bad_linked_transaction = true; break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -209,7 +212,8 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
          output_buf_noc_xy.x,
          output_buf_noc_xy.y,
          buffer_size,
-         use_inline_dw_write});
+         use_inline_dw_write,
+         bad_linked_transaction});
 
     // Run the kernel, expect an exception here
     try {
@@ -335,6 +339,23 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 virtual_core.y,
                 risc_name,
                 0,
+                output_core_virtual_coords.str(),
+                output_buffer_addr);
+        } break;
+        case SanitizeLinkedTransaction: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
+                "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (submitting a "
+                "non-mcast transaction when there's a linked transaction).",
+                device->id(),
+                (is_eth_core) ? "acteth" : "worker",
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                buffer_size,
+                buffer_addr,
                 output_core_virtual_coords.str(),
                 output_buffer_addr);
         } break;
@@ -496,5 +517,14 @@ TEST_F(WatcherFixture, IdleEthTestWatcherSanitizeInlineWriteDram) {
     }
     this->RunTestOnDevice(
         [](WatcherFixture* fixture, IDevice* device) { RunTestIEth(fixture, device, SanitizeInlineWriteDram); },
+        this->devices_[0]);
+}
+
+TEST_F(WatcherFixture, DISABLED_SanitizeLinkedTransaction) {
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false, SanitizeLinkedTransaction);
+        },
         this->devices_[0]);
 }
