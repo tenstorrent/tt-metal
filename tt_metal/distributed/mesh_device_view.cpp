@@ -109,6 +109,7 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
 std::vector<std::vector<IDevice*>> MeshDeviceView::get_row_views() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     std::vector<std::vector<IDevice*>> row_views;
+    row_views.reserve(shape_2d_->height());
     for (size_t row = 0; row < shape_2d_->height(); ++row) {
         row_views.push_back(get_devices_on_row(row));
     }
@@ -118,6 +119,7 @@ std::vector<std::vector<IDevice*>> MeshDeviceView::get_row_views() const {
 std::vector<std::vector<IDevice*>> MeshDeviceView::get_column_views() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     std::vector<std::vector<IDevice*>> column_views;
+    column_views.reserve(shape_2d_->width());
     for (size_t col = 0; col < shape_2d_->width(); ++col) {
         column_views.push_back(get_devices_on_column(col));
     }
