@@ -9,13 +9,14 @@ from models.experimental.swin_s.tt.tt_swin_transformer_block import TtSwinTransf
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 from models.utility_functions import skip_for_grayskull
-from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_layernorm_parameter
+from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.integration_tests.swin_s.test_ttnn_shifted_window_attention import (
-    create_custom_preprocessor as create_custom_preprocessor_shifted_window_attention,
+    create_custom_mesh_preprocessor as create_custom_mesh_preprocessor_shifted_window_attention,
 )
 from tests.ttnn.integration_tests.swin_s.test_ttnn_mlp import (
-    create_custom_preprocessor as create_custom_preprocessor_mlp,
+    create_custom_mesh_preprocessor as create_custom_mesh_preprocessor_mlp,
 )
+from models.experimental.swin_s.tt.common import get_mesh_mappers
 import pytest
 
 
@@ -61,30 +62,37 @@ def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, devic
     return attn_mask_tuple
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(torch_model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(torch_model, SwinTransformerBlock):
-            parameters["norm1"] = {}
-            parameters["norm1"]["weight"] = preprocess_layernorm_parameter(
-                torch_model.norm1.weight, dtype=ttnn.bfloat16
-            )
-            parameters["norm1"]["bias"] = preprocess_layernorm_parameter(torch_model.norm1.bias, dtype=ttnn.bfloat16)
-            parameters["attn"] = {}
-            shifted_window_attention_preprocessor = create_custom_preprocessor_shifted_window_attention(device)
-            parameters["attn"] = shifted_window_attention_preprocessor(torch_model.attn, None, None)
-            parameters["norm2"] = {}
-            parameters["norm2"]["weight"] = preprocess_layernorm_parameter(
-                torch_model.norm2.weight, dtype=ttnn.bfloat16
-            )
-            parameters["norm2"]["bias"] = preprocess_layernorm_parameter(torch_model.norm2.bias, dtype=ttnn.bfloat16)
-            parameters["mlp"] = {}
-            mlp_preprocessor = create_custom_preprocessor_mlp(device)
-            parameters["mlp"] = mlp_preprocessor(torch_model.mlp, None, None)
+def preprocess_layernorm_parameter(parameter, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    parameter = parameter.reshape((1, -1))
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return parameter
 
-        return parameters
 
-    return custom_preprocessor
+def custom_preprocessor(torch_model, name, mesh_mapper=None):
+    parameters = {}
+    if isinstance(torch_model, SwinTransformerBlock):
+        parameters["norm1"] = {}
+        parameters["norm1"]["weight"] = preprocess_layernorm_parameter(
+            torch_model.norm1.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["norm1"]["bias"] = preprocess_layernorm_parameter(
+            torch_model.norm1.bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["attn"] = {}
+        shifted_window_attention_preprocessor = create_custom_mesh_preprocessor_shifted_window_attention(mesh_mapper)
+        parameters["attn"] = shifted_window_attention_preprocessor(torch_model.attn, None)
+        parameters["norm2"] = {}
+        parameters["norm2"]["weight"] = preprocess_layernorm_parameter(
+            torch_model.norm2.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["norm2"]["bias"] = preprocess_layernorm_parameter(
+            torch_model.norm2.bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["mlp"] = {}
+        mlp_preprocessor = create_custom_mesh_preprocessor_mlp(mesh_mapper)
+        parameters["mlp"] = mlp_preprocessor(torch_model.mlp, None)
+
+    return parameters
 
 
 @skip_for_grayskull()
@@ -140,8 +148,11 @@ def test_swin_transformer_block(
     torch_input_tensor = torch.randn(batch_size, seq_len, seq_len, dim)
     torch_output = torch_model(torch_input_tensor)
 
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
+        initialize_model=lambda: torch_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
 
     ttnn_model = TtSwinTransformerBlock(
@@ -153,3 +164,10 @@ def test_swin_transformer_block(
     tt_output = ttnn_model(input_tensor)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.99)
+
+
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    return custom_mesh_preprocessor

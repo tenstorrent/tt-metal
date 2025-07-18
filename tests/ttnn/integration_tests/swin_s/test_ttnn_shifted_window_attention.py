@@ -10,7 +10,8 @@ from models.experimental.swin_s.reference.shifted_window_attention import Shifte
 from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedWindowAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
+from ttnn.model_preprocessing import preprocess_model_parameters
+from models.experimental.swin_s.tt.common import get_mesh_mappers
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):
@@ -55,23 +56,43 @@ def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, devic
     return attn_mask_tuple
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(torch_model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(torch_model, ShiftedWindowAttention):
-            parameters["qkv"] = {}
-            parameters["proj"] = {}
-            parameters["qkv"]["weight"] = preprocess_linear_weight(torch_model.qkv.weight, dtype=ttnn.bfloat16)
-            parameters["qkv"]["bias"] = preprocess_linear_bias(torch_model.qkv.bias, dtype=ttnn.bfloat16)
-            parameters["relative_position_bias"] = ttnn.from_torch(
-                torch_model.get_relative_position_bias(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            parameters["proj"]["weight"] = preprocess_linear_weight(torch_model.proj.weight, dtype=ttnn.bfloat16)
-            parameters["proj"]["bias"] = preprocess_linear_bias(torch_model.proj.bias, dtype=ttnn.bfloat16)
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    weight = weight.T.contiguous()
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return weight
 
-        return parameters
 
-    return custom_preprocessor
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    bias = bias.reshape((1, -1))
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return bias
+
+
+def custom_preprocessor(torch_model, name, mesh_mapper=None):
+    parameters = {}
+    if isinstance(torch_model, ShiftedWindowAttention):
+        parameters["qkv"] = {}
+        parameters["proj"] = {}
+        parameters["qkv"]["weight"] = preprocess_linear_weight(
+            torch_model.qkv.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["qkv"]["bias"] = preprocess_linear_bias(
+            torch_model.qkv.bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["relative_position_bias"] = ttnn.from_torch(
+            torch_model.get_relative_position_bias(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+        parameters["proj"]["weight"] = preprocess_linear_weight(
+            torch_model.proj.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["proj"]["bias"] = preprocess_linear_bias(
+            torch_model.proj.bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+
+    return parameters
 
 
 @skip_for_grayskull()
@@ -127,8 +148,12 @@ def test_shifted_window_attention(
     torch_input_tensor = torch.randn(batch_size, seq_len, seq_len, dim)
     torch_output = torch_model(torch_input_tensor)
 
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
+        initialize_model=lambda: torch_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
 
     ttnn_model = TtShiftedWindowAttention(
@@ -141,3 +166,10 @@ def test_shifted_window_attention(
 
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.99)
+
+
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    return custom_mesh_preprocessor
