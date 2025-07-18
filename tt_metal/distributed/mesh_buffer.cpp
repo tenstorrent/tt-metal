@@ -129,7 +129,11 @@ void MeshBuffer::initialize_device_buffers() {
     };
 
     for (auto& [coord, device_buffer] : buffers_) {
-        device_buffer = init_device_buffer_at_address(coord);
+        if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
+            if (mesh_device->is_local(coord)) {
+                device_buffer = init_device_buffer_at_address(coord);
+            }
+        }
     }
 }
 
