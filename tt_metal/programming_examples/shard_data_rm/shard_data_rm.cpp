@@ -55,6 +55,7 @@ int main() {
     // For instance in this example, each stick is 2 bfloat16 values (4 bytes).
     // core X: x      x      x      x
     //         |  stick 0 | stick 1 |
+    // Thus in our example. Each core handles 4 values, or 2 sticks of 2 bfloat16 values each.
     constexpr uint32_t M = 16;  // Number of columns
     constexpr uint32_t N = 1;   // Number of rows
     // Use 4 cores: (0,0), (0,1), (0,2), (0,3) for sharding.

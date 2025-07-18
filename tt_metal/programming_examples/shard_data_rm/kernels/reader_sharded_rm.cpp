@@ -21,7 +21,7 @@ void kernel_main() {
     cb_reserve_back(cb_id_in0, shard_size);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-    DPRINT << "Core (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y() << "):";
+    DPRINT << "Core (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y() << "): ";
     const uint32_t n_sticks = shard_size / element_per_stick;
     for (uint32_t i = 0; i < n_sticks; i++) {
         uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
