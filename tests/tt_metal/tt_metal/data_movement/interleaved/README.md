@@ -17,14 +17,14 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 | Parameter                 | Data Type             | Description |
 | ------------------------- | --------------------- | ----------- |
 | test_id                   | uint32_t              | Test id for signifying different test cases. Can be used for grouping different tests. |
-| num_of_transactions         | uint32_t             | Number of transactions in test. |
-| num_tiles    | uint32_t             | Size of input data in tiles, and the number of tile read/writes per transaction. |
-| tile_size_bytes         | uint32_t              | Size of a tile in bytes (32 x 32 x size of datatype). |
-| l1_data_format                      | DataFormat                  | Type of data in transaction. |
-| cores                      | CoreRangeSet                  | Logical coordinates of Tensix core running kernels. |
-| is_dram                      | bool                  | True if buffer is interleaved in DRAM, false if interleaved in L1. |
-| read_kernel                      | bool                  | True if test runs reader kernel. |
-| write_kernel                      | bool                  | True if test runs writer kernel. |
+| num_of_transactions       | uint32_t              | Number of transactions in test. |
+| num_tiles                 | uint32_t              | Size of input data in tiles, and the number of tile read/writes per transaction. |
+| tile_size_bytes           | uint32_t              | Size of a tile in bytes (32 x 32 x size of datatype). |
+| l1_data_format            | DataFormat            | Type of data in transaction. |
+| cores                     | CoreRangeSet          | Logical coordinates of Tensix core running kernels. |
+| is_dram                   | bool                  | True if buffer is interleaved in DRAM, false if interleaved in L1. |
+| read_kernel               | bool                  | True if test runs reader kernel. |
+| write_kernel              | bool                  | True if test runs writer kernel. |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format.
@@ -35,5 +35,7 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 3. DRAM Interleaved Tile Read Numbers: Tests tile reading only with interleaved DRAM buffer over varying number of transactions.
 4. DRAM Interleaved Tile Write Numbers: Tests tile writing only with interleaved DRAM buffer over varying number of transactions.
 5. DRAM Interleaved Tile Directed Ideal: Tests the most optimal transactions for reading/writing tiles by maximizing the number of tiles to amortize initialization overhead and saturate the bandwidth.
+6. DRAM Interleaved Tile Read Noc Swap: Same as Read Numbers, but uses RISC0, NOC0 instead for the reader kernel.
+7. DRAM Interleaved Tile Write Noc Swap: Same as Write Numbers, but uses RISC1, NOC1 instead for the writer kernel.
 
 Each DRAM test has a corresponding test case using L1 interleaved buffers.
