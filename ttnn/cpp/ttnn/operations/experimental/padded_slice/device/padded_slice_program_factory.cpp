@@ -520,6 +520,9 @@ get_padded_slice_runtime_args_tile_sharded_output(
         uint32_t output_end_id = ttnn::operations::data_movement::get_tiled_start_offset(
             actual_output_shape, ttnn::Shape(end_index_per_dim), true);
 
+        int32_t num_full_rows = ((end_index_per_dim[0] - start_index_per_dim[0]) * actual_output_shape[1]) +
+                                end_index_per_dim[1] - start_index_per_dim[1];
+
         if (start_index_per_dim[2] != 0) {
             num_full_rows--;
         }
