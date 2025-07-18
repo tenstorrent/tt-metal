@@ -41,13 +41,13 @@ void kernel_main() {
     }
 
     for (uint32_t row_begin = 0; row_begin < elem_per_core_reader; ++row_begin) {
-        uint32_t cores = config_data[reader_idx++];  // Extract the core coordinates
-        uint16_t corex = cores & 0xFFFF;
-        uint16_t corey = cores >> 16;
+        const uint32_t cores = config_data[reader_idx++];  // Extract the core coordinates
+        const uint16_t corex = cores & 0xFFFF;
+        const uint16_t corey = cores >> 16;
 
-        uint32_t offset_info = config_data[reader_idx++];  // Extract offset start and offset end
-        uint16_t offset_start = offset_info & 0xFFFF;      // Little endian RISCV
-        uint16_t offset_end = offset_info >> 16;
+        const uint32_t offset_info = config_data[reader_idx++];  // Extract offset start and offset end
+        const uint16_t offset_start = offset_info & 0xFFFF;      // Little endian RISCV
+        const uint16_t offset_end = offset_info >> 16;
 
         for (uint32_t offset = offset_start; offset <= offset_end; offset++) {
             uint64_t src_remote_addr = get_noc_addr(corex, corey, l1_read_addr + offset * stick_nbytes);

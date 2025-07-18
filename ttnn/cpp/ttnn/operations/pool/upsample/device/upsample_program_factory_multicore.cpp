@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <sys/types.h>
 #include <cstdint>
 #include <vector>
 
@@ -111,10 +112,10 @@ static Tensor create_config_tensor(
                     }
                     insert_new_interval = false;
                     if (is_height_sharded) {
-                        logical_core_to_stick_map.push_back(
-                            StickInterval(logical_cores[core_idx].x, logical_cores[core_idx].y, stick_offset));
+                        logical_core_to_stick_map.emplace_back(
+                            logical_cores[core_idx].x, logical_cores[core_idx].y, stick_offset);
                     } else {
-                        logical_core_to_stick_map.push_back(StickInterval(0, nhw_start_core + core_idx, stick_offset));
+                        logical_core_to_stick_map.emplace_back(0, nhw_start_core + core_idx, stick_offset);
                     }
                 }
                 if (j < scale_factor_h - 1) {
@@ -316,7 +317,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
         scale_factor_h,
         scale_factor_w,
         // number of intervals in config tensor per core, 4 is number of bfloat16 elements per entry
-        (uint32_t)config_tensor.logical_shape()[-1] / 4,
+        static_cast<uint32_t>(config_tensor.logical_shape()[-1] / 4),
     };
     std::string writer_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
