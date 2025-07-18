@@ -53,7 +53,7 @@ enum class RoutingDirection {
     S = 4,
     W = 8,
     C = 16,     // Centre, means that destination is same as source
-    G = 32,     // Graph, for intermesh connections
+    M = 32,     // Graph, for intermesh connections
     NONE = 64,  // No direction, means that destination is not reachable
 };
 

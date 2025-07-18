@@ -116,7 +116,6 @@ RoutingDirection find_unused_routing_direction(
     const FabricNodeId& fabric_node_id,
     size_t max_channels_per_direction) {
     // Loop through NESW directions in order of preference
-    // FIXME: Find an automatic way to determine this
     const std::vector<RoutingDirection> directions = {
         RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W};
 
@@ -699,6 +698,9 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // Target direction is the direction to the destination mesh for all ethernet channesl
                 const auto& target_direction = router_inter_mesh_routing_table[src_mesh_id][src_chip_id][dst_mesh_id];
 
+                const std::unordered_set<RoutingDirection> valid_directions = {
+                    RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination mesh as the ethernet channel on the same plane
@@ -717,7 +719,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                             // Set to an invalid channel id
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id] =
                                 eth_chan_magic_values::INVALID_DIRECTION;
-                        } else if (target_direction == direction) {
+                        } else if (target_direction == RoutingDirection::M && valid_directions.contains(direction)) {
                             // This entry represents an outgoing eth channel
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id] =
                                 src_chan_id;
@@ -1902,7 +1904,7 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
             routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
 
         // Special case for non-directional intermesh links
-        if (direction == RoutingDirection::G) {
+        if (direction == RoutingDirection::M) {
             direction = find_unused_routing_direction(
                 this->router_port_directions_to_physical_eth_chan_map_,
                 fabric_node_id,
@@ -1981,7 +1983,7 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
         }
 
         // Use helper function to find unused direction
-        if (intermesh_routing_direction == RoutingDirection::G) {
+        if (intermesh_routing_direction == RoutingDirection::M) {
             std::uint32_t num_ports_per_side =
                 routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
             intermesh_routing_direction = find_unused_routing_direction(

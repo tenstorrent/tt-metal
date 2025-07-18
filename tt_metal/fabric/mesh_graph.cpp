@@ -323,9 +323,9 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
     auto convert_yaml_to_chip_id = [](const YAML::Node& node) -> std::pair<MeshId, chip_id_t> {
         std::string node_str = node.as<std::string>();
 
-        // Parse format like "G0D1" where G0 is graph_id and D1 is device_id
+        // Parse format like "M0D1" where M0 is Mesh ID and D1 is device_id
         // Using regex to match pattern: G followed by digits, then D followed by digits
-        std::regex pattern(R"(G(\d+)D(\d+))");
+        std::regex pattern(R"(M(\d+)D(\d+))");
         std::smatch matches;
 
         TT_FATAL(
@@ -347,7 +347,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         const auto& [dst_mesh_id, dst_chip_id] = convert_yaml_to_chip_id(mesh_connection[1]);
         const unsigned int num_chans = mesh_connection[2].as<std::uint32_t>();
 
-        const auto port_direction = RoutingDirection::G;
+        const auto port_direction = RoutingDirection::M;
 
         for (unsigned int i = 0; i < num_chans; i++) {
             this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, port_direction);
