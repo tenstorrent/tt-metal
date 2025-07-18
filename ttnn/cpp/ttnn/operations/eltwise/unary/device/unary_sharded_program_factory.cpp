@@ -32,7 +32,6 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     }
 
     tt::tt_metal::Program program = CreateProgram();
-    tt::tt_metal::IDevice* device = input.device();
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -89,7 +88,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
-        auto cb_tmp0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
     }
 
     // output sharded CB
