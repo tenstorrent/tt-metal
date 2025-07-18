@@ -475,7 +475,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
     if (new_shape.is_line_topology()) {
-        return view_->get_line_devices();
+        return view_->get_snake_devices();
     }
 
     auto new_physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(new_shape);

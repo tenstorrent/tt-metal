@@ -85,22 +85,37 @@ public:
     [[nodiscard]] DeviceViews get_row_views() const;
     [[nodiscard]] DeviceViews get_column_views() const;
 
-    // These utility methods linearize the set of devices in a mesh into a line or ring.
-    // Linearizing a mesh into a line asserts the condition that device[i-1] is connected to device[i].
-    // Linearizing a mesh into a ring asserts the condition that device[i-1] is connected to device[i] and device[0] is
-    // connected to device[-1].
+    // These utility methods linearize the set of devices in a mesh using either a snake- or ring-based iteration
+    // patterns:
     //
-    // Given a starting coordinate, get the coordinates of a line of devices where device[i-1] is connected to device[i]
-    // The current support only provides left-to-right and right-to-left snaking of the line.
+    // 1. Linearizing a mesh using a snake pattern asserts the condition that device[i-1] is connected to device[i];
+    //    that is, "line" topology. For example, for 3x3 mesh:
     //
-    // Important: these utilities currently only support 2D meshes.
-    // TODO: #17477 - Remove the methods that assume 2D mesh.
-    [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(
-        size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset);
+    //    0 1 2
+    //    5 4 3
+    //    6 7 8
+    //
+    // 2. Linearizing a mesh using a ring pattern asserts the condition that device[i-1] is connected to device[i] and
+    //    device[0] is connected to device[-1], resulting in "ring" topology. The line is formed by iterating over the
+    //    edges of 2D mesh, for example:
+    //
+    //    0 1 2
+    //    7   3
+    //    6 5 4
+    //
+    //    The coordinate in the middle is skipped, to preserve ring connectivity.
+    //
+    // Important: these utility methods currently only support 2D meshes.
+    // TODO: #17477 - Remove the methods that assume 2D mesh, or update them to support ND. Ideally, lower them to
+    // `mesh_coord.hpp` infra.
+    [[nodiscard]] static std::vector<MeshCoordinate> get_snake_coordinates(
+        const Shape2D& mesh_shape,
+        const std::optional<Shape2D>& mesh_offset = std::nullopt,
+        std::optional<size_t> length = std::nullopt);
+    [[nodiscard]] std::vector<IDevice*> get_snake_devices() const;
     [[nodiscard]] static std::vector<MeshCoordinate> get_ring_coordinates(
         const Shape2D& ring_shape, const Shape2D& mesh_shape);
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
-    [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
     // Distributed mesh support
     // Returns the offset of this host's portion of the mesh within the global distributed mesh.
