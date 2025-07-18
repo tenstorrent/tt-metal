@@ -10,17 +10,9 @@ runs:
   steps:
     - run: |
         export PYTHONPATH=$(pwd)
-        ls
-        cd tests
-        ls
-        cd scripts
-        ls
-        # ls ${{ github.workspace }}/tests/scripts
-        # cd ${{ github.workspace }}
+        ls tests/scripts
         set -x
         export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-
-        
 
         ${{ inputs.commands }}
 
