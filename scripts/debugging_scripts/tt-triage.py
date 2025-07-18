@@ -599,7 +599,7 @@ def extract_callstack_from_gdb(gdb_client, start: str, end: str) -> list[Callsta
                         cs.append(get_callstack_entry(current_line))
                         current_line = ""
 
-                    current_line += line[line.find("#") :]
+                    current_line += line.strip()
                 # Ensure every callstack entry is in one line
                 else:
                     current_line += " "
@@ -631,6 +631,7 @@ def get_callstack_with_gdb(
     gdb_client.stdin.write(
         f"""\
     target extended-remote localhost:{PORT}
+    set prompt
     attach {pid}
     {add_symbol_file_cmd}
     printf "{start_callstack}\\n"
