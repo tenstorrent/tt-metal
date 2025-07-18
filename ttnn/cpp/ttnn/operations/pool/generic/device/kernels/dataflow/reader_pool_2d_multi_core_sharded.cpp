@@ -57,12 +57,13 @@ FORCE_INLINE void read_window_with_top_left_index(
     } else {
         cb_reserve_back(in_cb_id, 1);
         uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
-        uint32_t h_multiples = 0;
-        for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
-            const uint32_t stick_offset = ind + h_multiples;
-            const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
-            noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
-            out_l1_write_addr += in_nbytes_c * window_w;
+        for (uint32_t h = 0; h < window_h; ++h) {
+            for (uint32_t w = 0; w < window_w; ++w) {
+                const uint32_t stick_offset = ind + w + h * in_w_padded;
+                const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
+                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
+                out_l1_write_addr += in_nbytes_leftover;
+            }
         }
         noc_async_read_barrier();
         cb_push_back(in_cb_id, 1);
@@ -244,13 +245,13 @@ void kernel_main() {
                 in_cb_id,
                 MAX_BYTES_PER_REDUCTION,
                 full_dest_width,
-                in_nbytes_leftover,
+                in_aligned_nbytes_c,
                 clear_value_cb_id,
                 leftover_num_tiles,
                 window_h,
                 window_w,
                 in_w_padded,
-                in_nbytes_c>(clear_value_addr, in_l1_read_base_addr, ind);
+                in_nbytes_padded_c>(clear_value_addr, in_l1_read_base_addr, ind);
 
             if (split_reader && ind == end) {
                 first_row_value = false;
