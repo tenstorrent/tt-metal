@@ -9,6 +9,9 @@ runs:
   using: "composite"
   steps:
     - run: |
+        cd repo
+        ls
+        ./build_metal.sh --enable-profiler
         export PYTHONPATH=$(pwd)
         ls tests/scripts
         set -x

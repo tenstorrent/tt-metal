@@ -54,6 +54,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          path: repo
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
