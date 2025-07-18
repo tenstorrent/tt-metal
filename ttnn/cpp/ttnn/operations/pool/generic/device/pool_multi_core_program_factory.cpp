@@ -254,7 +254,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const auto& input_shape = input.padded_shape();
     const auto& output_shape = output.padded_shape();
-    const uint32_t in_nbytes_c = input_shape[3] / num_shards_c * params.nbytes;  // row of input (channels)
+    const uint32_t in_nbytes_c = in_c / num_shards_c * params.nbytes;  // row of input (channels)
+    const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * in_nbytes;
 
     TT_FATAL(
         input_shape[3] % num_shards_c == 0,
