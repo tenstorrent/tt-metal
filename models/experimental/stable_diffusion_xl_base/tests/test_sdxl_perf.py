@@ -29,6 +29,8 @@ def test_unet(
     time_ids_shape,
     iterations,
     is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
     reset_seeds,
 ):
     run_unet_model(
@@ -39,6 +41,8 @@ def test_unet(
         temb_shape,
         time_ids_shape,
         is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
         iterations=iterations,
     )
 

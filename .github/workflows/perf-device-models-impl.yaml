@@ -47,7 +47,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -107,7 +107,7 @@ jobs:
             # # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov10/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov7/tests/perf/test_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            WH_ARCH_YAML=$MAGIC_ENV HF_HOME=/mnt/MLPerf/tt_dnn-models/stable_diffusion_xl_base pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
           fi
 
