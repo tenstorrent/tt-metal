@@ -2624,9 +2624,9 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
 
 void SparseMatmul::validate(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
-    // TODO: Implement
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+    const auto& sparsity = input_tensors.at(2);
 
     const auto& ashape = input_tensor_a.padded_shape();
     const auto& bshape = input_tensor_b.padded_shape();
@@ -2693,6 +2693,13 @@ void SparseMatmul::validate(
         this->nnz <= batch_length,
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
         this->nnz,
+        batch_length);
+
+    // Check that sparsity has enough entries
+    TT_FATAL(
+        sparsity.logical_volume() == batch_length,
+        "sparsity.logical_volume() ({}) must be equal to the product of all batch dimensions ({})",
+        sparsity.logical_volume(),
         batch_length);
 }
 
@@ -2762,24 +2769,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
     return std::visit(
         [&](const auto& program_config) -> tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
-                auto sparse_bmm_program = sparse_bmm_multi_core_reuse(
-                    input_tensor_a,
-                    input_tensor_b,
-                    sparsity,
-                    this->nnz,
-                    output_tensor,
-                    program_config.compute_with_storage_grid_size,
-                    this->output_dtype.value(),
-                    this->compute_kernel_config.value(),
-                    program_config.in0_block_w,
-                    program_config.out_subblock_h,
-                    program_config.out_subblock_w,
-                    program_config.per_core_M,
-                    program_config.per_core_N);
-
-                return create_homogenous_mesh_workload(sparse_bmm_program, tensor_coords);
-            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 auto sparse_mcast_mm_program = sparse_matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
                     input_tensor_b,
