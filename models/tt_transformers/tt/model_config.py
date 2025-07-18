@@ -1356,6 +1356,26 @@ class ModelArgs:
         else:
             return ""
 
+    def _get_hidden_activation_type(self, config):
+        activation_map = {
+            "gelu": ttnn.UnaryOpType.GELU,
+            "gelu_pytorch_tanh": ttnn.UnaryOpType.GELU,
+            "relu": ttnn.UnaryOpType.RELU,
+            "silu": ttnn.UnaryOpType.SILU,
+            "swish": ttnn.UnaryOpType.SILU,
+        }
+
+        hidden_activation = config.get("hidden_act") or config.get("hidden_activation")
+        if not hidden_activation:
+            # Default to SILU if no activation is specified
+            return ttnn.UnaryOpType.SILU
+
+        hidden_activation = hidden_activation.lower()
+        if hidden_activation not in activation_map:
+            logger.warning(f"Warning: Unsupported activation '{hidden_activation}', defaulting to SILU")
+
+        return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
+
     def _set_model_specific_params(self):
         # Gemma3 specific params
         self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
@@ -1447,6 +1467,9 @@ class ModelArgs:
             self.orig_context_len = None
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+
+        # Configurable MLP activation type
+        self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
         self.vision_chunk_size = config.get("vision_chunk_size", -1)
