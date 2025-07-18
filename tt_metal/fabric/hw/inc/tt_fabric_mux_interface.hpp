@@ -73,7 +73,7 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE void fabric_client_connect(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
-    connection_handle.open();
+    connection_handle.template open<true>();
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
