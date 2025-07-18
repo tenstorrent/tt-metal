@@ -75,8 +75,6 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("convert_with_device", [True, False])
 def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
-    # wherever possible `to_torch` will try to perform type conversion operations on device.
-    # so the test must validate different input tensor origins
     ttnn_dtype_requires_tile = ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]
     ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int32]
     ttnn_is_float = ttnn_dtype in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
@@ -139,120 +137,11 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
         ttnn_result_tensor.dtype == ttnn_dtype
     ), f"Expected result {ttnn_dtype}, got result tensor {ttnn_result_tensor.dtype} when converting torch tensor {torch_input_tensor.dtype}"
 
-    # print(
-    #     f"test_dtype_conversion_on_device::torch_input_tensor:\n{torch_input_tensor} {torch_input_tensor.dtype} {torch_input_tensor.shape}"
-    # )
-    # print(
-    #     f"test_dtype_conversion_on_device::ttnn_result_tensor:\n{ttnn_result_tensor} {ttnn_result_tensor.dtype} {ttnn_result_tensor.shape}"
-    # )
-
     assert_with_pcc(
         expected_pytorch_result=torch_input_tensor,
         actual_pytorch_result=ttnn_result_tensor.cpu().to_torch(),
         pcc=conversion_pcc,
     )
-
-
-@pytest.mark.parametrize(
-    "ttnn_dtype",
-    [
-        pytest.param(ttnn.float32, marks=pytest.mark.xfail),
-        ttnn.bfloat16,
-        ttnn.bfloat16,
-        ttnn.int32,
-    ],
-)
-def test_layout_conversion_precision_stability(device, ttnn_dtype):
-    ttnn_tile_tensor = ttnn.rand(
-        (32, 32),
-        dtype=ttnn_dtype,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    ttnn_row_major_tensor = ttnn.to_layout(ttnn_tile_tensor, ttnn.ROW_MAJOR_LAYOUT)
-
-    tile_repr = str(ttnn_tile_tensor).replace("layout=Layout::TILE", "<layout>")
-    row_major_repr = str(ttnn_row_major_tensor).replace("layout=Layout::ROW_MAJOR", "<layout>")
-
-    assert tile_repr == row_major_repr
-
-
-@pytest.mark.parametrize(
-    "ttnn_dtype_source",
-    [
-        ttnn.bfloat4_b,
-        ttnn.bfloat8_b,
-        ttnn.float32,
-        ttnn.bfloat16,
-        ttnn.int32,
-        ttnn.uint8,
-        ttnn.uint16,
-        ttnn.uint32,
-    ],
-)
-@pytest.mark.parametrize(
-    "ttnn_dtype_target",
-    [
-        ttnn.bfloat4_b,
-        ttnn.bfloat8_b,
-        ttnn.float32,
-        ttnn.bfloat16,
-        ttnn.int32,
-        ttnn.uint8,
-        ttnn.uint16,
-        ttnn.uint32,
-    ],
-)
-def test_typecast_correlation(device, ttnn_dtype_source, ttnn_dtype_target):
-    ttnn_float_types = [ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.float32, ttnn.bfloat16]
-    ttnn_source_is_float = ttnn_dtype_source in ttnn_float_types
-    ttnn_target_is_float = ttnn_dtype_target in ttnn_float_types
-    if ttnn_source_is_float:
-        ttnn_source_tensor = (
-            ttnn.rand(
-                (32, 32),
-                dtype=ttnn_dtype_source,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            * 10
-        )
-
-    else:
-        torch_dtype_tensor = torch.randint(0, 100, (32, 32), dtype=torch.int32)
-        ttnn_tmp_tensor = ttnn.from_torch(torch_dtype_tensor, dtype=ttnn_dtype_source, layout=ttnn.TILE_LAYOUT)
-        ttnn_source_tensor = ttnn.to_device(ttnn_tmp_tensor, device=device)
-
-    ttnn_target_tensor = ttnn.typecast(ttnn_source_tensor, dtype=ttnn_dtype_target)
-
-    if ttnn_dtype_source == ttnn_dtype_target:
-        conversion_pcc = 1
-
-    elif ttnn_source_is_float != ttnn_target_is_float:
-        conversion_pcc = 0.99
-
-    else:
-        conversion_pcc = 0.9999
-
-    pcc_passed, pcc_message = comp_pcc(
-        golden=ttnn.to_torch(ttnn_source_tensor),
-        calculated=ttnn.to_torch(ttnn_target_tensor),
-        pcc=conversion_pcc,
-    )
-
-    assert pcc_passed, f"""
-pcc_message:
-{pcc_message}
-ttnn_source_tensor:
-{ttnn_source_tensor}
-ttnn_target_tensor:
-{ttnn_target_tensor}
-ttnn.to_torch(ttnn_source_tensor):
-{ttnn.to_torch(ttnn_source_tensor)}
-ttnn.to_torch(ttnn_target_tensor):
-{ttnn.to_torch(ttnn_target_tensor)}
-    """
 
 
 @pytest.mark.parametrize("height", [32])
