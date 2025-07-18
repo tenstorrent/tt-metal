@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
         // sending end can get the next piece of data ready to be pushed. Overlapping the operations. Leading to better performance.
         // However there is a trade off, The more tiles in a circular buffer, the more memory is used. And Circular buffers are
         // backed by L1(SRAM) memory and L1 is a precious resource.
-        // The hardware supports up to 16 circular buffers and they all act the same.
+        // The hardware supports up to 32 circular buffers and they all act the same.
         constexpr uint32_t tiles_per_cb = 2;
         tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
         CreateCircularBuffer(program, core, CircularBufferConfig(

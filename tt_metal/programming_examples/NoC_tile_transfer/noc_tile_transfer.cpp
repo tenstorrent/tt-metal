@@ -33,10 +33,10 @@ int main() {
     // Check if the environment variable for kernels print is set
     char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
-        std::cerr
-            << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to (0,0),(0,1) to see the output of "
-               "the Data Movement kernels. Command: export TT_METAL_DPRINT_CORES=(0,0),(0,1)"
-            << std::endl;
+        fmt::print(
+            stderr,
+            "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to (0,0),(0,1) to see the output of "
+            "the Data Movement kernels. Command: export TT_METAL_DPRINT_CORES=(0,0),(0,1)\n");
     }
 
     // Input data preparation
@@ -110,7 +110,7 @@ int main() {
     std::vector<uint16_t> result_vec;
     EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);  // Blocking call to ensure data is read before proceeding
 
-    std::cout << "Result = " << result_vec[0] << " : Expected = " << input_data << std::endl;
+    fmt::print("Result = {} : Expected = {}\n", result_vec[0], input_data);
 
     CloseDevice(device);
 }
