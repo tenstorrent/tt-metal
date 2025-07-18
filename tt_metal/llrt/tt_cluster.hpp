@@ -40,7 +40,6 @@ class RunTimeOptions;
 }
 namespace tt_fabric {
 class ControlPlane;
-class GlobalControlPlane;
 class FabricNodeId;
 }
 namespace tt_metal {
