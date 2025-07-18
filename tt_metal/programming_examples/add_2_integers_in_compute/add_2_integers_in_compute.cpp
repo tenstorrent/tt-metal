@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -13,23 +14,35 @@ using namespace tt::tt_metal;
 #endif
 int main() {
     /* Silicon accelerator setup */
-    IDevice* device = CreateDevice(0);
+
+    //A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a single object,
+    // maintaining uniform memory and runtime state across all physical devices.
+    //A UnitMesh is a 1x1 MeshDevice that allows users to interface with a single physical device.
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(
+        0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
 
     /* Setup program to execute along with its buffers and kernels to use */
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
+
+    const auto device_coord = distributed::MeshCoordinate(0, 0);
     constexpr CoreCoord core = {0, 0};
 
     constexpr uint32_t single_tile_size = 2 * 1024;
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = single_tile_size,
+    distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+        .buffer_type = tt_metal::BufferType::DRAM,
+        .bottom_up = false
+    };
+    const distributed::ReplicatedBufferConfig buffer_config {
+        .size = single_tile_size
+    };
 
-    std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
     uint32_t src0_bank_id = 0;
@@ -85,16 +98,7 @@ int main() {
             .compile_args = compute_kernel_args,
         });
 
-    /* Create source data and write to DRAM */
-    std::vector<uint32_t> src0_vec;
-    std::vector<uint32_t> src1_vec;
-    src0_vec = create_constant_vector_of_bfloat16(single_tile_size, 14.0f);
-    src1_vec = create_constant_vector_of_bfloat16(single_tile_size, 8.0f);
-
-    EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
-
-    /* Configure program and runtime kernel arguments, then execute */
+    /* Configure program and runtime kernel arguments, then add to workload */
     SetRuntimeArgs(
         program,
         binary_reader_kernel_id,
@@ -103,16 +107,32 @@ int main() {
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id});
 
-    EnqueueProgram(cq, program, false);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    /* Create source data and write to DRAM */
+    std::vector<uint32_t> src0_vec;
+    std::vector<uint32_t> src1_vec;
+    src0_vec = create_constant_vector_of_bfloat16(single_tile_size, 14.0f);
+    src1_vec = create_constant_vector_of_bfloat16(single_tile_size, 8.0f);
+
+    // We're writing to a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    distributed::WriteShard(cq, src0_dram_buffer, src0_vec, device_coord);
+    distributed::WriteShard(cq, src1_dram_buffer, src1_vec, device_coord);
+
+    /* Execute the workload */
+    distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
     /* Read in result into a host vector */
     std::vector<uint32_t> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+
+    // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    distributed::ReadShard(cq, result_vec, dst_dram_buffer, device_coord);
 
     printf("Result = %d\n", result_vec[0]);  // 22 = 1102070192
     printf(
         "Expected = %d\n",
         pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfloat16(22.0f), bfloat16(22.0f))));
-    CloseDevice(device);
+    mesh_device.reset();
 }
