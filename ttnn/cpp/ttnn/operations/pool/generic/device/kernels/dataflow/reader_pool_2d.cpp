@@ -147,11 +147,15 @@ FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_r
                 read_elemental_row();
             } else {  // for non-wide reductions the rows can be read contiguously as long as we have space in the in_cb
                       // for another whole row
-                uint32_t mod_remaining_rows = max_rows_for_reduction - (processed_rows % max_rows_for_reduction);
-                if (window_w <= mod_remaining_rows) {
-                    read_contiguous_row();
+                if constexpr (is_large_kernel) {
+                    uint32_t mod_remaining_rows = max_rows_for_reduction - (processed_rows % max_rows_for_reduction);
+                    if (window_w <= mod_remaining_rows) {
+                        read_contiguous_row();
+                    } else {
+                        read_elemental_row();
+                    }
                 } else {
-                    read_elemental_row();
+                    read_contiguous_row();
                 }
             }
         }
