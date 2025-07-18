@@ -373,11 +373,6 @@ def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
     return os.path.realpath(firmware_elf_path)
 
 
-def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
-    firmware_elf_path = a_kernel_path + f"../../../firmware/{risc_name.lower()}/{risc_name.lower()}.elf"
-    return os.path.realpath(firmware_elf_path)
-
-
 def init_running_ops_table(enum_values) -> list[list[str]] | None:
     if VVERBOSE:
         return [["Loc", "Proc", "RD PTR", "Base", "Offset", "Kernel ID:Name", "PC", "Kernel Callstack", "Kernel Path"]]
