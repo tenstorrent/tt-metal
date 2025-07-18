@@ -13,15 +13,22 @@
 #include "tensix_functions.h"
 #include "noc_overlay_parameters.h"
 #include "ckernel_structs.h"
+#include "tensix_dev_map.h"
 
 class c_tensix_core {
 public:
     static const bool is_emulated = false;
 
+#if defined(COMPILE_FOR_BRISC)
+    // Only accessible on brisc
     static vptr_uint instrn_buf_base(uint32_t thread_id) {
-        const uint32_t addr[] = {INSTRN_BUF_BASE, INSTRN1_BUF_BASE, INSTRN2_BUF_BASE};
-        return reinterpret_cast<uint32_t*>(addr[thread_id]);
+        // This must be declared consistently with the global scope,
+        // because of the way GCC handles such declarations. I blame
+        // me and the way I implemented a piece of C++20 modules.
+        extern volatile uint32_t __instrn_buffer[];
+        return &__instrn_buffer[thread_id * (INSTRN_BUF_STRIDE / sizeof(uint32_t))];
     }
+#endif
     static vptr_pc_buf pc_buf_base(uint32_t thread_id) {
         const uint32_t addr[] = {PC_BUF_BASE, PC1_BUF_BASE, PC2_BUF_BASE};
         return reinterpret_cast<uint32_t*>(addr[thread_id]);

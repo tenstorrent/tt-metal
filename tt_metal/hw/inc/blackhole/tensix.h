@@ -13,6 +13,7 @@
 #include <type_traits>
 
 #include "cfg_defines.h"
+#include "tensix_dev_map.h"
 
 // Convenience and type defines
 using uint = std::uint32_t;
@@ -44,13 +45,6 @@ using byte = std::uint8_t;
 // Reads and writes here access the tensix core register set. Each register is four bytes, but subword reads are
 // supported through byte enables. Register indices and contents are defined in local_regs.yaml.
 #define REGFILE_BASE 0xFFE00000  // 0xFFE00000 - 0xFFE3FFFF
-
-// Writes here are appended to the tensix core instruction FIFO. This has priority over incoming instruction fetch
-// returns, which are simply dropped. The instruction will stay in the queue if a loop instruction is in progress. If
-// the FIFO gets overfull, writes are dropped? Additionally, the instruction queue is flushed in some cases.
-#define INSTRN_BUF_BASE 0xFFE40000   // 0xFFE40000 - 0xFFE7FFFF
-#define INSTRN1_BUF_BASE 0xFFE50000  // 0xFFE40000 - 0xFFE7FFFF
-#define INSTRN2_BUF_BASE 0xFFE60000
 
 // PC buffer is used to pass kernel IDs and paramters from Brisc to Triscs, and also as a sync point -- a read from pc
 // buffer+1 address will not return until that thread is idle.

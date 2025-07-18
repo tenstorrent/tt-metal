@@ -183,4 +183,3 @@ SECTIONS
         *(.got.plt) *(.igot.plt) *(.got) *(.igot)
   }
 }
-INCLUDE "tensix-address.ld"
