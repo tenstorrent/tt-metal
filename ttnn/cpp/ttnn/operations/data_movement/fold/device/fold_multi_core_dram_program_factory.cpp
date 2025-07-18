@@ -45,7 +45,6 @@ static Tensor create_fold_mapping_table(
     const uint32_t output_width = input_width / stride_w;
     const uint32_t patch_size = stride_h * stride_w;
     const uint32_t input_hw = input_height * input_width;
-    const uint32_t output_hw = output_height * output_width;
 
     // Create vector to store mapping entries (src_index, dst_index)
     const uint32_t total_entries = total_elems * 2;
@@ -56,15 +55,15 @@ static Tensor create_fold_mapping_table(
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t oh = 0; oh < output_height; oh++) {
             for (uint32_t ow = 0; ow < output_width; ow++) {
+                uint32_t dst_row = (b * output_height + oh) * output_width + ow;
+                uint32_t w = ow * stride_w;
                 for (uint32_t kh = 0; kh < stride_h; kh++) {
                     // Calculate destination index in output tensor
-                    uint32_t dst_row = (b * output_height + oh) * output_width + ow;
                     uint32_t dst_col = kh * stride_w;
                     uint32_t dst_index = dst_row * patch_size + dst_col;
 
                     // Calculate corresponding input position
-                    int h = oh * stride_h + kh;
-                    int w = ow * stride_w;
+                    uint32_t h = oh * stride_h + kh;
 
                     uint32_t src_index = b * input_hw + h * input_width + w;
                     config_vector[entry_idx++] = src_index;
@@ -403,7 +402,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
          src_stick_size_is_power_of_two,
          src_log2_stick_size,
          aligned_stick_nbytes,
-         stride_w});
+         stride_w,
+         work_per_core});
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
@@ -420,10 +420,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     std::vector<CoreCoord> cores_with_rtargs;
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
-        uint32_t start_input_work = i * work_per_core;
-        uint32_t end_input_work = std::min(start_input_work + work_per_core, total_work);
-        std::vector<uint32_t> reader_runtime_args = {src0_buffer->address(), start_input_work, end_input_work};
-        std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), start_input_work, end_input_work};
+        std::vector<uint32_t> reader_runtime_args = {src0_buffer->address()};
+        std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
