@@ -841,70 +841,29 @@ inline void noc_async_write_multicast(
 // this sets the state for issuing a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
-    std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size, vc);
 
     WAYPOINT("NWPW");
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    ncrisc_noc_write_set_state<non_posted, true /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, size, vc);
     WAYPOINT("NWPD");
-
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (non_posted ? NOC_CMD_RESP_MARKED : 0x0);
-
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-#ifdef ARCH_BLACKHOLE
-    // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & NOC_PCIE_MASK);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc,
-        write_cmd_buf,
-        NOC_RET_ADDR_COORDINATE,
-        (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
 }
 
 // TODO: write docs
 // this issues only a single packet with cmd buf state with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
-    std::uint32_t src_local_l1_addr, std::uint32_t dst_noc_addr, uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint32_t dst_local_addr, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
 
-    if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-        }
-    } else {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-        }
-    }
-    WAYPOINT("NWPW");
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-    WAYPOINT("NWPD");
-
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_noc_addr, src_local_l1_addr);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_addr, src_local_l1_addr);
 
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dst_noc_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
-    if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;  // num_dests
-        }
-    } else {
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
-            noc_posted_writes_num_issued[noc] += 1;
-        }
-    }
+    WAYPOINT("NWPW");
+    ncrisc_noc_write_with_state<noc_mode, non_posted, true /* one_packet */>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_local_addr);
+    WAYPOINT("NWPD");
 }
 
 // clang-format off
