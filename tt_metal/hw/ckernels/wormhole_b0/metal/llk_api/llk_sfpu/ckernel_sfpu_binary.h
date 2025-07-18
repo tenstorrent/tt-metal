@@ -14,7 +14,8 @@ namespace ckernel {
 namespace sfpu {
 
 // Helper function for _sfpu_binary_power_
-// This function convert a float32 to int32, given that in >= 0.0f.
+// This function is based _float32_to_int32_, but expects a positive input, which allows us to optimize
+// away several lines (and make it faster)
 sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     sfpi::vInt result;
     sfpi::vInt exp = exexp(in);  // extract exponent
