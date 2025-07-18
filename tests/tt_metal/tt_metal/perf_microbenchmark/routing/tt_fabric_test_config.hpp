@@ -250,8 +250,8 @@ private:
     T parse_scalar(const YAML::Node& yaml_node);
     template <typename T>
     std::vector<T> parse_scalar_sequence(const YAML::Node& yaml_node);
-    template <typename T1>
-    std::vector<std::vector<T1>> parse_2d_array(const YAML::Node& yaml_node);
+    template <typename T>
+    std::vector<std::vector<T>> parse_2d_array(const YAML::Node& yaml_node);
     template <typename T1, typename T2>
     std::pair<T1, T2> parse_pair(const YAML::Node& yaml_sequence);
     template <typename T1, typename T2>
@@ -807,18 +807,18 @@ inline std::vector<std::pair<T1, T2>> YamlConfigParser::parse_pair_sequence(cons
     return pair_sequence;
 }
 
-template <typename T1>
-inline std::vector<std::vector<T1>> YamlConfigParser::parse_2d_array(const YAML::Node& yaml_node) {
-    std::vector<std::vector<T1>> array;
+template <typename T>
+inline std::vector<std::vector<T>> YamlConfigParser::parse_2d_array(const YAML::Node& yaml_node) {
+    std::vector<std::vector<T>> array;
     TT_FATAL(yaml_node.IsSequence(), "Expected a sequence for 2D array");
 
     for (const auto& row : yaml_node) {
         TT_FATAL(row.IsSequence(), "Expected each row to be a sequence");
-        std::vector<T1> row_vector;
+        std::vector<T> row_vector;
         row_vector.reserve(row.size());
         for (const auto& entry : row) {
             // only deals with ethernet core case
-            if constexpr (std::is_same_v<T1, eth_coord_t>) {
+            if constexpr (std::is_same_v<T, eth_coord_t>) {
                 TT_FATAL(entry.size() == 5, "Expected ethernet core coordinates to be a sequence of 5 elements");
                 row_vector.push_back(eth_coord_t{
                     parse_scalar<uint32_t>(entry[0]),

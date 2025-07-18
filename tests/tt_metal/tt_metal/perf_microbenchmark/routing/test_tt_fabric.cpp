@@ -92,9 +92,8 @@ int main(int argc, char** argv) {
 
     std::optional<uint32_t> master_seed = cmdline_parser.get_master_seed();
     log_info(tt::LogTest, "here7");
-    // If master seed is not provided, initialize it
     if (!master_seed.has_value()) {
-        master_seed = test_context.initialize_master_seed();
+        master_seed = test_context.get_randomized_master_seed();
     }
 
     std::mt19937 gen(master_seed.value());

@@ -91,10 +91,11 @@ public:
             *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
     }
 
-    std::optional<uint32_t> initialize_master_seed() {
-        auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-        std::optional<uint32_t> master_seed;
+    uint32_t get_randomized_master_seed() {
+        uint32_t master_seed = std::random_device()();
+        log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed);
 
+        auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         // only need to handshake if we need to generate seed, since each host will have the same commandline arguments.
         if (*(distributed_context->size()) > 1) {
             if (*(distributed_context->rank()) == 0) {
@@ -106,21 +107,16 @@ public:
                         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
                     );
                 }
-                log_info(tt::LogTest, "Master seed generated: {}", master_seed.value());
+                log_info(tt::LogTest, "Master seed generated: {}", master_seed);
             } else {
                 distributed_context->recv(
                     tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
                     tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
                     tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
                 );
-                log_info(tt::LogTest, "Received master seed: {}", master_seed.value());
+                log_info(tt::LogTest, "Received master seed: {}", master_seed);
             }
-
-        } else {
-            master_seed = std::random_device()();
-            log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed.value());
         }
-
         return master_seed;
     }
 
