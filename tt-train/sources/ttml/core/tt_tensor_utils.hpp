@@ -69,17 +69,19 @@ template <class T = float>
 
 std::vector<std::span<std::byte>> get_bytes_from_cpu_tensor(ttnn::Tensor& cpu_tensor);
 
-// Use instead of ConcatMeshToXTensor, create composer with concat_mesh_to_tensor_composer(mesh_device, dim)
+// Converts a tensor distributed across mesh device into a single xtensor
 template <class T = float>
-auto to_xtensor(const tt::tt_metal::Tensor& tensor, const ttnn::distributed::MeshToTensor& composer) {
+[[nodiscard]] xt::xarray<T> to_xtensor(
+    const tt::tt_metal::Tensor& tensor, const ttnn::distributed::MeshToTensor& composer) {
     auto [vec, shape] = composer.compose<T>(tensor);
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(vec, shape_vec);
 }
 
+// Tag type to disambiguate to_xtensor overload that returns a collection of individual device tensors
 struct IdentityComposer {};
 
-// Use instead of VectorMeshToXTensor
+// Converts a tensor distributed across mesh device into a collection of individual xtensors
 template <class T = float>
 auto to_xtensor(const tt::tt_metal::Tensor& tensor, IdentityComposer) {
     auto cpu_tensor = tensor.cpu();
