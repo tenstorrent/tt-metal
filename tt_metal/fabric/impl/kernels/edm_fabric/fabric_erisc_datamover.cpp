@@ -1657,32 +1657,28 @@ template <typename EdmChannelWorkerIFs>
 void __attribute__((noinline)) wait_for_static_connection_to_ready(
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
+    auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
+        if (!sender_ch_live_check_skip[sender_channel_idx]) {
+            return;
+        }
+        while (!connect_is_requested(*interface.connection_live_semaphore)) {
+            invalidate_l1_cache();
+        }
+        establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids_ordered[sender_channel_idx]);
+    };
     if constexpr (multi_txq_enabled) {
         tuple_for_each_constexpr(
             local_sender_channel_worker_interfaces.channel_worker_interfaces, [&](auto& interface, auto idx) {
                 if constexpr (is_sender_channel_serviced[idx]) {
-                    if (!sender_ch_live_check_skip[idx]) {
-                        return;
-                    }
-                    while (!connect_is_requested(*interface.connection_live_semaphore)) {
-                        invalidate_l1_cache();
-                    }
-                    establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids_ordered[idx]);
+                    establish_static_connection_from_receiver_side(interface, idx);
                 }
             });
     } else {
         // Very slight performance regression on WH if we commonize to the above path, so we preserve this path
         // too
         tuple_for_each(
-            local_sender_channel_worker_interfaces.channel_worker_interfaces, [&](auto& interface, size_t idx) {
-                if (!sender_ch_live_check_skip[idx]) {
-                    return;
-                }
-                while (!connect_is_requested(*interface.connection_live_semaphore)) {
-                    invalidate_l1_cache();
-                }
-                establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids_ordered[idx]);
-            });
+            local_sender_channel_worker_interfaces.channel_worker_interfaces,
+            [&](auto& interface, size_t idx) { establish_static_connection_from_receiver_side(interface, idx); });
     }
 }
 
