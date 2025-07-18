@@ -37,6 +37,10 @@ constexpr uint32_t ring_size = get_compile_time_arg_val(11);
 constexpr uint32_t num_batches = get_compile_time_arg_val(12);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(13);
 constexpr bool direction = get_compile_time_arg_val(14);
+constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<15>();
+constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<15 + ccl_routing_utils::num_line_unicast_args>();
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -133,7 +137,7 @@ void kernel_main() {
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    pkt_hdr->to_chip_unicast(1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
 
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
@@ -304,7 +308,7 @@ void kernel_main() {
                     static_cast<uint16_t>(1),  // increment 1
                     32});
                 // Write the unicast packet (forward)
-                pkt_hdr_seminc->to_chip_unicast(1);
+                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
                 fabric_direction_connection->wait_for_empty_write_slot();
                 fabric_direction_connection->send_payload_flush_blocking_from_address(
                     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
@@ -362,8 +366,7 @@ void kernel_main() {
                     32});
                 // Write the mcast packet
                 fabric_direction_connection->wait_for_empty_write_slot();
-                pkt_hdr_seminc->to_chip_multicast(
-                    tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(ring_size - 1)});
+                ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
                 fabric_direction_connection->send_payload_flush_blocking_from_address(
                     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
                 noc_async_writes_flushed();

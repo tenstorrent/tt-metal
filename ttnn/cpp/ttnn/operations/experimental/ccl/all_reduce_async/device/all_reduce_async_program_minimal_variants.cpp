@@ -82,8 +82,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
+    auto [num_targets_forward, num_targets_backward] =
+        ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
+    auto [forward_args, backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology, target_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -333,16 +335,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
-        ring_index,                               // my_chip_id
-        reserved_packet_header_CB_index,          // reserved_packet_header_cb_id
-        num_packet_headers_storable,              // num_packet_headers_storable
-        src0_cb_index,                            // cb0_id
-        num_pages_per_packet,                     // packet_size_in_pages
-        op_config.get_page_size(),                // tensor0_page_size
-        num_targets_forward,                      // num_targets_forward_direction
-        num_targets_backward,                     // num_targets_backward_direction
-        static_cast<uint32_t>(dynamic_alternate)  // dynamic_alternate
+        ring_index,                       // my_chip_id
+        reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
+        num_packet_headers_storable,      // num_packet_headers_storable
+        src0_cb_index,                    // cb0_id
+        num_pages_per_packet,             // packet_size_in_pages
+        op_config.get_page_size(),        // tensor0_page_size
+        num_targets_forward,              // num_targets_forward_direction
+        num_targets_backward,             // num_targets_backward_direction
     };
+    writer_compile_args.insert(writer_compile_args.end(), forward_args.begin(), forward_args.end());
+    writer_compile_args.insert(writer_compile_args.end(), backward_args.begin(), backward_args.end());
     log_trace(tt::LogOp, "Writer Compile Args:");
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -423,7 +426,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             mcast_end_y.push_back(end_core.y);
         }
 
-        uint32_t out_ready_sem_wait_value = dynamic_alternate ? (ring_size + 1) : ring_size;
+        uint32_t out_ready_sem_wait_value = ring_size;
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,                   // tensor_address0
             semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)

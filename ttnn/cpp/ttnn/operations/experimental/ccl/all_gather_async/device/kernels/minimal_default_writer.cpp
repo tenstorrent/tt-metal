@@ -30,10 +30,13 @@ constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(5);
 constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
-constexpr bool fuse_op = get_compile_time_arg_val(10);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(11));
-constexpr bool direction = get_compile_time_arg_val(12);  // 1 is forward, 0 is backward
+constexpr bool fuse_op = get_compile_time_arg_val(9);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(10));
+constexpr bool direction = get_compile_time_arg_val(11);  // 1 is forward, 0 is backward
+constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<12>();
+
+inline constexpr uint32_t sharded_args_start_idx = 12 + ccl_routing_utils::num_line_unicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -62,13 +65,13 @@ void kernel_main() {
 
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(13),   // Memory layout
-        get_compile_time_arg_val(14),   // The number of sharding cores
-        get_compile_time_arg_val(15),   // The page size we offset each write to
-        get_compile_time_arg_val(16),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(17),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(18),   // pages_per_shard_x
-        get_compile_time_arg_val(19)>;  // pages_per_shard_y
+        get_compile_time_arg_val(sharded_args_start_idx),   // Memory layout
+        get_compile_time_arg_val(sharded_args_start_idx + 1),   // The number of sharding cores
+        get_compile_time_arg_val(sharded_args_start_idx + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(sharded_args_start_idx + 3),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(sharded_args_start_idx + 4),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(sharded_args_start_idx + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(sharded_args_start_idx + 6)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
@@ -102,7 +105,7 @@ void kernel_main() {
     cb_push_back(reserved_packet_header_cb_id, 1);
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    pkt_hdr->to_chip_unicast(1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
 
     volatile PACKET_HEADER_TYPE* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
@@ -176,9 +179,9 @@ void kernel_main() {
                     }
 
                     uint64_t remote_noc0_dest_noc_addr_tile_one =
-                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
                     uint64_t remote_noc0_dest_noc_addr_tile_two =
-                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
 
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
@@ -224,7 +227,7 @@ void kernel_main() {
                     }
 
                     uint64_t remote_noc0_dest_noc_addr =
-                        get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                        get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
                             write_for_fabric_write_backward(
@@ -265,14 +268,14 @@ void kernel_main() {
     if (direction == 1) {
         if (num_targets_backward_direction) {
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-            pkt_hdr_sem_inc->to_chip_unicast(1);
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
     } else {
         if (num_targets_forward_direction) {
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            pkt_hdr_sem_inc->to_chip_unicast(1);
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
             fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
@@ -360,9 +363,9 @@ void kernel_main() {
                         }
 
                         uint64_t remote_noc0_dest_noc_addr_tile_one =
-                            get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                            get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
                         uint64_t remote_noc0_dest_noc_addr_tile_two =
-                            get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                            get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
 
                         if (direction == 1) {
                             scatter_write_for_fabric_write_backward(
@@ -397,7 +400,7 @@ void kernel_main() {
                         }
 
                         uint64_t remote_noc0_dest_noc_addr =
-                            get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                            get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
 
                         if (direction == 1) {
                             write_for_fabric_write_backward(
@@ -423,12 +426,10 @@ void kernel_main() {
         // 2. unicast output ready semaphore
         if (direction == 1) {
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-            pkt_hdr_sem_inc->to_chip_unicast(1);
             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         } else {
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            pkt_hdr_sem_inc->to_chip_unicast(1);
             fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }

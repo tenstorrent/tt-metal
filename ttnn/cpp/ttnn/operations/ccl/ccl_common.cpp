@@ -9,6 +9,7 @@
 
 #include "ccl_host_datastructures.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
@@ -1530,6 +1531,136 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
         }
     }
     return std::make_tuple(num_targets_forward, num_targets_backward, dynamic_alternate);
+}
+
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
+    Topology topology,
+    IDevice* src_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device) {
+    std::array<uint32_t, 2> forward_args = {};
+    std::array<uint32_t, 2> backward_args = {};
+
+    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+        TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
+        // TODO: Add asserts that they are same line
+        if (forward_device) {
+            auto forward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());
+            forward_args = {
+                *forward_device_fabric_node_id.mesh_id,  // dst_mesh_id
+                forward_device_fabric_node_id.chip_id,   // dst_chip_id
+            };
+        }
+        if (backward_device) {
+            auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*backward_device)->id());
+            backward_args = {
+                *backward_device_fabric_node_id.mesh_id,  // dst_mesh_id
+                backward_device_fabric_node_id.chip_id,   // dst_chip_id
+            };
+        }
+    } else {
+        if (forward_device) {
+            forward_args = {
+                0,  // dst_mesh_id, unused
+                1,  // distance_in_hops
+            };
+        }
+        if (backward_device) {
+            backward_args = {
+                0,  // dst_mesh_id, unused
+                1,  // distance_in_hops
+            };
+        }
+    }
+    return std::make_tuple(forward_args, backward_args);
+}
+
+std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
+    size_t ring_size, size_t ring_index, Topology topology, bool static_alternate) {
+    size_t num_targets_forward = 0;
+    size_t num_targets_backward = 0;
+    if (topology == Topology::Linear) {
+        LineTopology line_topology(ring_size, ring_index);
+        num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
+        num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
+    } else if (topology == ccl::Topology::Ring) {
+        // TODO: Commonize
+        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_backward = ring_size - 1 - num_targets_forward;
+        if (static_alternate) {
+            if (ring_index % 2 == 0) {
+                std::swap(num_targets_forward, num_targets_backward);
+            }
+        }
+    }
+    return std::make_tuple(num_targets_forward, num_targets_backward);
+}
+
+std::tuple<std::array<uint32_t, 4>, std::array<uint32_t, 4>> get_forward_backward_line_mcast_configuration(
+    Topology topology,
+    IDevice* src_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    uint32_t num_targets_forward,
+    uint32_t num_targets_backward) {
+    std::array<uint32_t, 4> forward_args = {};
+    std::array<uint32_t, 4> backward_args = {};
+    // Used for experimentation for optimal perf
+    // May be uplifted to an op parameter if needed
+    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    // TODO: Assert neighbors are on same line
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+        TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
+        // TODO: Add asserts that they are same line
+        if (forward_device) {
+            auto forward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());
+            auto eth_chan_dir =
+                tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, forward_device_fabric_node_id);
+            forward_args = {
+                static_cast<uint32_t>(eth_chan_dir.value()),  // routing direction
+                *forward_device_fabric_node_id.mesh_id,       // dst_mesh_id
+                forward_device_fabric_node_id.chip_id,        // dst_chip_id
+                num_targets_forward - 1                       // range_hops
+            };
+        }
+        if (backward_device) {
+            auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*backward_device)->id());
+            auto eth_chan_dir =
+                tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, backward_device_fabric_node_id);
+            backward_args = {
+                static_cast<uint32_t>(eth_chan_dir.value()),  // routing direction
+                *backward_device_fabric_node_id.mesh_id,      // dst_mesh_id
+                backward_device_fabric_node_id.chip_id,       // dst_chip_id
+                num_targets_backward - 1                      // range_hops
+            };
+        }
+    } else {
+        if (forward_device) {
+            forward_args = {
+                0,                    // routing direction, unused
+                0,                    // dst_mesh_id, unused
+                1,                    // start_distance_in_hops
+                num_targets_forward,  // range_hops
+            };
+        }
+        if (backward_device) {
+            backward_args = {
+                0,                     // routing direction, unused
+                0,                     // dst_mesh_id, unused
+                1,                     // start_distance_in_hops
+                num_targets_backward,  // range_hops
+            };
+        }
+    }
+    return std::make_tuple(forward_args, backward_args);
 }
 
 }  // namespace ccl

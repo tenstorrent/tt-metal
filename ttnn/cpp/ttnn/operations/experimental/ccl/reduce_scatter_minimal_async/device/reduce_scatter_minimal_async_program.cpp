@@ -169,8 +169,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
 
     // Get worker cores
     // 2 sender (reader + core + writer), 1 forward 1 backward
@@ -284,6 +286,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     std::vector<KernelHandle> writer_kernel_ids;
     std::vector<KernelHandle> reduce_kernel_ids;
     for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
+        auto direction = core_idx % num_senders_per_link;
         std::vector<uint32_t> sender_reader_compile_args = {
             ring_index,                                              // my_chip_id
             static_cast<uint32_t>(input_tensor_buffer_type),         // input_buffer_type
@@ -298,7 +301,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             ring_size,                                               // ring_size
             num_batches,                                             // num_batches
             fuse_op,                                                 // fused op
-            core_idx % num_senders_per_link,                         // direction
+            direction,                                               // direction
         };
         if (input_is_sharded) {
             shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -310,7 +313,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
             "ring_reduce_scatter_minimal_async_reader.cpp",
-            core_idx % num_senders_per_link ? sender_forward_core_ranges : sender_backward_core_ranges,
+            direction ? sender_forward_core_ranges : sender_backward_core_ranges,
             tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
         reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
 
@@ -330,19 +333,35 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             ring_size,                                               // ring_size
             num_batches,                                             // num_batches
             num_tiles_to_write_per_packet,                           // num_tiles_to_write_per_packet
-            core_idx % num_senders_per_link,                         // direction
+            direction,                                               // direction
         };
+        if (direction) {
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(),
+                unicast_forward_args.begin(),
+                unicast_forward_args.end());
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
+        } else {
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(),
+                unicast_backward_args.begin(),
+                unicast_backward_args.end());
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
+        }
         if (intermediate_is_sharded) {
             shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
         }
         if (output_is_sharded) {
             shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
+
         }
         auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
             "ring_reduce_scatter_minimal_async_writer.cpp",
-            core_idx % num_senders_per_link ? sender_forward_core_ranges : sender_backward_core_ranges,
+            direction ? sender_forward_core_ranges : sender_backward_core_ranges,
             tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
         writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
 
@@ -357,13 +376,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             ring_size,
             num_batches,
             num_links,
-            core_idx % num_senders_per_link};
+            direction};
 
         auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
             "ring_reduction.cpp",
-            core_idx % num_senders_per_link ? sender_forward_core_ranges : sender_backward_core_ranges,
+            direction ? sender_forward_core_ranges : sender_backward_core_ranges,
             sender_reduce_kernel_config);
         reduce_kernel_ids.push_back(sender_reduce_kernel_id);
     }
@@ -379,6 +398,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
         for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
             CoreCoord core = sender_worker_cores[link * 2 + core_idx];
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
+            auto direction = core_idx % num_senders_per_link;
 
             CoreCoord supplemental_core = sender_worker_cores[link * 2 + ((core_idx + 1) % 2)];
             opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
@@ -435,7 +455,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             if (output_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
             }
-            if (core_idx % num_senders_per_link) {  // forward
+            if (direction) {  // forward
                 writer_rt_args.push_back(forward_device.has_value());
                 if (forward_device.has_value()) {
                     const auto sender_fabric_node_id =
@@ -573,8 +593,12 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [num_targets_forward, num_targets_backward] =
+        ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
+    auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
     // Get worker cores
     // 2 sender (reader + core + writer), 1 forward 1 backward
@@ -773,6 +797,21 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             num_total_reduction_steps,
             sync_with_other_direction,
         };
+        if (is_forward) {
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(),
+                unicast_forward_args.begin(),
+                unicast_forward_args.end());
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
+        } else {
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(),
+                unicast_backward_args.begin(),
+                unicast_backward_args.end());
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
+        }
         if (intermediate_is_sharded) {
             shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
         }

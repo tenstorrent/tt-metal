@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_op.hpp"
+#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -277,6 +278,11 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
         }
     }
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
+    if (version == AllGatherAsyncVersion::GENERIC) {
+        TT_FATAL(
+            tt::tt_fabric::GetFabricConfig() != tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+            "2D not supported for generic all gather");
+    }
 
     switch (version) {
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED:

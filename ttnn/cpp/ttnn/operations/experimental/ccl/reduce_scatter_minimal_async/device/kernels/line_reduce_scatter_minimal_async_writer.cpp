@@ -41,6 +41,10 @@ constexpr uint32_t num_intermediate_reduction_steps = get_compile_time_arg_val(1
 constexpr bool do_final_reduction = get_compile_time_arg_val(18);
 constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(19);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(20);
+constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<21>();
+constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<21 + ccl_routing_utils::num_line_unicast_args>();
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -134,11 +138,11 @@ void kernel_main() {
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    pkt_hdr->to_chip_unicast(1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
 
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-    pkt_hdr_seminc->to_chip_unicast(1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
     uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
@@ -273,7 +277,7 @@ void kernel_main() {
                 out_ready_sem_noc_addr_in_pkt,
                 static_cast<uint16_t>(1),  // increment 1
                 32});
-            pkt_hdr_seminc->to_chip_unicast(1);
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
             dir_fabric_connection->wait_for_empty_write_slot();
             dir_fabric_connection->send_payload_flush_blocking_from_address(
@@ -366,8 +370,7 @@ void kernel_main() {
                 batch_ready_sem_noc_addr_in_pkt,
                 static_cast<uint16_t>(1),  // increment 1
                 32});
-            pkt_hdr_seminc->to_chip_multicast(
-                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_in_direction)});
+            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
 
             dir_fabric_connection->wait_for_empty_write_slot();
             dir_fabric_connection->send_payload_flush_blocking_from_address(
