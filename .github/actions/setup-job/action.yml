@@ -46,6 +46,14 @@ runs:
       run: tar -xf ttm_any.tar
       shell: bash
 
+    - name: 🛠️ Build with Tracy Profiler
+      if: ${{ inputs.build-artifact-name != '' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Building with Tracy profiler enabled..."
+        ./build_metal.sh --enable-profiler
+      shell: bash
+
     - name: 🧪 Download Python Wheel
       if: ${{ inputs.wheel-artifact-name != '' }}
       uses: actions/download-artifact@v4
