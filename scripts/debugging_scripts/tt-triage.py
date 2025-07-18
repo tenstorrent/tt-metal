@@ -494,6 +494,8 @@ def get_running_ops_table(
                             # If we found nothing in kernel elf try firmware elf
                             if not cs:
                                 cs = get_callstack_with_gdb(process_ids[loc][risc_name], loc, risc_name, fw_elf_path)
+                        else:
+                            cs = f"{RED}Process not available{RST}"
                     # Get callstack using tt-exalens
                     else:
                         pc = pcs[loc][proc_name.lower() + "_pc"]
@@ -518,6 +520,8 @@ def get_running_ops_table(
                                 if proc_name != "NCRISC"
                                 else f"{RED}GDB callstack for NCRISC is not supported{RST}"
                             )
+                        else:
+                            cs = f"{RED}Process not available{RST}"
                     # Get callstack using tt-exalens
                     else:
                         pc = pcs[loc][proc_name.lower() + "_pc"]
