@@ -134,7 +134,7 @@ class CIv2ModelDownloadUtils_:
             model_path = model_path + "/"
 
         endpoint = f"{endpoint_prefix}/{model_path}"
-
+        print("Download path from download_from_ci_v2_cache", endpoint)
         try:
             # TODO: How do we add a timeout here without relying on native timeout command?
             subprocess.run(
@@ -257,6 +257,7 @@ def model_location_generator(is_ci_v2_env):
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
                 model_version, download_dir_suffix="model_weights", timeout_in_s=ci_v2_timeout_in_s
             )
+            print("CIv2 download path output",civ2_download_path)
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
         elif has_internal_weka:
