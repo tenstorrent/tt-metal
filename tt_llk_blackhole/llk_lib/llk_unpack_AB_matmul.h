@@ -35,9 +35,6 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 
     if (reuse_a)
     {
-#if SKIP_UNP == 1
-        load_replay_buf(0, 1, [] { TTI_NOP; });
-#else
         static_assert(kernel_broadcast_b <= 1, "kernel_broadcast>1 on matmul input 1 is not supported with reuse enabled");
         load_replay_buf(
             0,
@@ -105,13 +102,9 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                 // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                 TTI_NOP;
             });
-#endif
     }
     else
     {
-#if SKIP_UNP == 1
-        load_replay_buf(0, 1, [] { TTI_NOP; });
-#else
         static_assert(kernel_broadcast_a <= 1, "kernel_broadcast>1 on matmul input 0 is not supported with reuse enabled");
         load_replay_buf(
             0,
@@ -179,7 +172,6 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                 // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                 TTI_NOP;
             });
-#endif
     }
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -358,9 +350,6 @@ inline void _llk_unpack_AB_matmul_(
 
         if (reuse_a)
         {
-#if SKIP_UNP == 1
-            TTI_NOP;
-#else
             if (unpB_partial_face)
             {
                 TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
@@ -375,13 +364,9 @@ inline void _llk_unpack_AB_matmul_(
             {
                 TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             }
-#endif
         }
         else
         {
-#if SKIP_UNP == 1
-            TTI_NOP;
-#else
             if (unpA_partial_face)
             {
                 // Do face by face unpacking
@@ -396,7 +381,6 @@ inline void _llk_unpack_AB_matmul_(
             {
                 TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             }
-#endif
         }
 
         TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
@@ -407,8 +391,4 @@ inline void _llk_unpack_AB_matmul_(
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
     }
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
 }

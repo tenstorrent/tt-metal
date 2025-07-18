@@ -37,10 +37,6 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 
     if (reuse_a)
     {
-#if SKIP_UNP == 1
-        lltt::record(0, 1);
-        TTI_NOP;
-#else
         static_assert(kernel_broadcast_b <= 1, "kernel_broadcast>1 on matmul input 1 is not supported with reuse enabled!");
         lltt::record(0, replay_buf_prog_len);
         if (unpA_partial_face)
@@ -91,14 +87,9 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
         }
         TTI_NOP;
-#endif
     }
     else
     {
-#if SKIP_UNP == 1
-        lltt::record(0, 1);
-        TTI_NOP;
-#else
         static_assert(kernel_broadcast_a <= 1, "kernel_broadcast>1 on matmul input 0 is not supported with reuse enabled!");
         lltt::record(0, replay_buf_prog_len);
         if (unpB_partial_face)
@@ -149,7 +140,6 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
         }
         TTI_NOP;
-#endif
     }
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -333,9 +323,6 @@ inline void _llk_unpack_AB_matmul_(
 
         if (reuse_a)
         {
-#if SKIP_UNP == 1
-            TTI_NOP;
-#else
             if (unpB_partial_face)
             {
                 TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
@@ -380,13 +367,9 @@ inline void _llk_unpack_AB_matmul_(
                 }
                 t++;
             }
-#endif
         }
         else
         {
-#if SKIP_UNP == 1
-            TTI_NOP;
-#else
             if (unpA_partial_face)
             {
                 // Do face by face unpacking
@@ -431,7 +414,6 @@ inline void _llk_unpack_AB_matmul_(
                 }
                 t++;
             }
-#endif
         }
 
         TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
@@ -442,8 +424,4 @@ inline void _llk_unpack_AB_matmul_(
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
     }
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
 }

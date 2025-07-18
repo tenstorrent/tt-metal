@@ -18,19 +18,12 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const bool unpack_to_dest = false)
 {
-#if SKIP_UNP == 1
-    static constexpr uint unpack_srca            = TT_OP_NOP;
-    static constexpr uint unpack_srca_to_dest    = TT_OP_NOP;
-    static constexpr uint unpack_srcb_zerosrc    = TT_OP_NOP;
-    static constexpr uint unpack_srcb_set_dvalid = TT_OP_NOP;
-#else
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca_to_dest =
         TT_OP_UNPACR(SrcA, 0b00010001 /*CH0/CH1 Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
     static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID); // WA for tenstorrent/budabackend#1230
-#endif
 
     const uint32_t outerloop     = narrow_tile ? 1 : 2;
     constexpr uint32_t innerloop = 1;
@@ -237,10 +230,6 @@ inline void _llk_unpack_tilize_(
         reset_config_context();
         unpack_tilize_to_dest_impl(base_address, unpack_src_format, num_loops, top_face_offset_address, bot_face_offset_address);
     }
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
 }
 
 /*************************************************************************

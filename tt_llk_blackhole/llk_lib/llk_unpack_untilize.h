@@ -16,22 +16,15 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-#ifndef SKIP_UNP
-#define SKIP_UNP (0)
-#endif
-
 inline void _llk_unpack_untilize_mop_config_()
 {
-    constexpr uint replay_buf_len = (SKIP_UNP == 1) ? 1 : 6;
+    constexpr uint replay_buf_len = 6;
     load_replay_buf(
         0,
         replay_buf_len,
         // Lambda function to set up replay buffer
         []
         {
-#if SKIP_UNP == 1
-            TTI_NOP;
-#else
             TTI_DMANOP; // WRCFG that sets offset in previous loop needs additional cycle to complete
             TTI_UNPACR(SrcA, 0b01000001 /*CH1_Y+=1, CH0_Z+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             TTI_UNPACR(SrcA, 0b01000001 /*CH1_Y+=1, CH0_Z+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -40,16 +33,10 @@ inline void _llk_unpack_untilize_mop_config_()
             TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
             // Resets SrcA Z counter CR, which should point to initial Z counter value
             TTI_ADDRCRZW(0b001, 0, 0, 0, 0, 0b0001 /*CH0_Z*/);
-#endif
         });
 
-#if SKIP_UNP == 1
-    static constexpr uint load_offset_addr_cntx0 = TT_OP_NOP;
-    static constexpr uint load_offset_addr_cntx1 = TT_OP_NOP;
-#else
     static constexpr uint load_offset_addr_cntx0 = TT_OP_WRCFG(p_gpr_unpack::TILE_OFFSET, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_address_ADDR32);
     static constexpr uint load_offset_addr_cntx1 = TT_OP_WRCFG(p_gpr_unpack::TILE_OFFSET, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
-#endif
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         true,  // src B
@@ -153,13 +140,9 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
             if ((face_2xr_cnt + rem_blocks_in_row) >= (FACE_HEIGHT / 2))
             {
                 // Run MOP
-                TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
-#if SKIP_UNP == 1
-                TTI_NOP;
-#else
+                TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff);               // Run the MOP
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // set data valid
                 TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-#endif
                 TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000); // Clear srcA addr y cnt
                 rem_blocks_in_row -= (8 - face_2xr_cnt);
                 face_2xr_cnt = 0;
@@ -195,8 +178,4 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
 }

@@ -12,10 +12,6 @@
 #include "ckernel_ops.h"
 #include "cunpack_common.h"
 
-#ifdef PERF_DUMP
-#include "ckernel_perf_api.h"
-#endif
-
 using namespace ckernel;
 using namespace ckernel::unpacker;
 

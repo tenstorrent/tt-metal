@@ -4,10 +4,6 @@
 
 #pragma once
 
-#ifdef PERF_DUMP
-#include "perf_res_decouple.h"
-#endif
-
 // MT: This should be dissolved and moved to the appropriate place
 #include "tensix.h"
 
@@ -17,23 +13,9 @@ namespace ckernel
 
 struct p_setrwc
 {
-#ifdef PERF_DUMP
-
-#if SKIP_UNP == 1
-    constexpr static uint CLR_A  = 0x0;
-    constexpr static uint CLR_B  = 0x0;
-    constexpr static uint CLR_AB = 0x0;
-#else
-    constexpr static uint CLR_A  = 0x1;
-    constexpr static uint CLR_B  = 0x2;
-    constexpr static uint CLR_AB = 0x3;
-#endif
-
-#else
-    constexpr static uint CLR_A  = 0x1;
-    constexpr static uint CLR_B  = 0x2;
-    constexpr static uint CLR_AB = 0x3;
-#endif
+    constexpr static uint CLR_A    = 0x1;
+    constexpr static uint CLR_B    = 0x2;
+    constexpr static uint CLR_AB   = 0x3;
     constexpr static uint CLR_NONE = 0x0;
 
     constexpr static uint SET_A     = 0x1;

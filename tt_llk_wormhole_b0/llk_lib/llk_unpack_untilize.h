@@ -18,19 +18,11 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-#ifndef SKIP_UNP
-#define SKIP_UNP (0)
-#endif
-
 inline void _llk_unpack_untilize_mop_config_()
 {
-    constexpr uint replay_buf_len = (SKIP_UNP == 1) ? 1 : 5;
+    constexpr uint replay_buf_len = 5;
     lltt::record(0, replay_buf_len);
-#if SKIP_UNP == 1
-    TTI_NOP;
-    static constexpr uint load_offset_addr_cntx0 = TT_OP_NOP;
-    static constexpr uint load_offset_addr_cntx1 = TT_OP_NOP;
-#else
+
     TTI_DMANOP; // REG2FLOP that sets offset in previous loop needs additional cycle to complete
     TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -41,7 +33,6 @@ inline void _llk_unpack_untilize_mop_config_()
         TT_OP_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
     static constexpr uint load_offset_addr_cntx1 =
         TT_OP_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
-#endif
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         true,  // src B
@@ -144,14 +135,10 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
             if ((face_2xr_cnt + rem_blocks_in_row) >= (FACE_HEIGHT / 2))
             {
                 // Run MOP
-                TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
-#if SKIP_UNP == 1
-                TTI_NOP;
-#else
+                TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff);               // Run the MOP
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // set data valid
                 TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
-#endif
                 TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000); // Clear srcA addr y cnt
                 rem_blocks_in_row -= (8 - face_2xr_cnt);
                 face_2xr_cnt = 0;
@@ -188,8 +175,4 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
 }
