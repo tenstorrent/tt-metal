@@ -28,8 +28,11 @@ const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_
 };
 
 int main(int argc, char** argv) {
+<<<<<<< HEAD
     log_info(tt::LogTest, "Starting Test");
 
+=======
+>>>>>>> 830a7cc9e8 (Pr 2)
     std::vector<std::string> input_args(argv, argv + argc);
 
     auto fixture = std::make_shared<TestFixture>();
@@ -41,36 +44,25 @@ int main(int argc, char** argv) {
         cmdline_parser.print_help();
         return 0;
     }
-    log_info(tt::LogTest, "here2");
 
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
-    tt::tt_fabric::fabric_tests::PhysicalMeshConfig physical_mesh_config;
+    std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser;
-        log_info(tt::LogTest, "here3");
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
         raw_test_configs = std::move(parsed_yaml.test_configs);
         if (parsed_yaml.allocation_policies.has_value()) {
             allocation_policies = parsed_yaml.allocation_policies.value();
         }
         if (parsed_yaml.physical_mesh_config.has_value()) {
-            physical_mesh_config = parsed_yaml.physical_mesh_config.value();
-            log_info(tt::LogTest, "here4");
+            physical_mesh_config = parsed_yaml.physical_mesh_config;
         }
     } else {
         raw_test_configs = cmdline_parser.generate_default_configs();
     }
 
-    log_info(tt::LogTest, "here5");
-
-    if (!physical_mesh_config.mesh_descriptor_path.empty()) {
-        fixture->init(&physical_mesh_config);
-    } else {
-        fixture->init();
-    }
-
-    log_info(tt::LogTest, "here6");
+    fixture->init(physical_mesh_config);
 
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
@@ -117,7 +109,9 @@ int main(int argc, char** argv) {
         output_stream.open(dump_file_path, std::ios::out | std::ios::trunc);
 
         // dump physical mesh first
-        YamlTestConfigSerializer::dump(physical_mesh_config, output_stream);
+        if (physical_mesh_config.has_value()) {
+            YamlTestConfigSerializer::dump(physical_mesh_config.value(), output_stream);
+        }
 
         // dump allocation policies second
         YamlTestConfigSerializer::dump(allocation_policies, output_stream);

@@ -2077,6 +2077,8 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
 
 const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }
 
+const MeshGraph& ControlPlane::get_mesh_graph() const { return *routing_table_generator_->mesh_graph; }
+
 uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const { return chip_id_to_asic_id_.at(chip_id); }
 
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {

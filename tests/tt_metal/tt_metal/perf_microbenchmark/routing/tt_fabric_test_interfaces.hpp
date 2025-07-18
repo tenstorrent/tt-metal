@@ -38,7 +38,7 @@ public:
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_local_node_ids() const = 0;
     virtual std::vector<FabricNodeId> get_global_node_ids() const = 0;
-    virtual bool is_local_mesh(MeshId mesh_id) const = 0;
+    virtual bool is_local_fabric_node_id(const FabricNodeId& id) const = 0;
     virtual uint32_t get_l1_unreserved_base() const = 0;
     virtual uint32_t get_l1_unreserved_size() const = 0;
     virtual uint32_t get_l1_alignment() const = 0;

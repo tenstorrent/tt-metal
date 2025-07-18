@@ -177,6 +177,9 @@ public:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
 
+    // Get the mesh graph from the routing table
+    const MeshGraph& get_mesh_graph() const;
+
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane

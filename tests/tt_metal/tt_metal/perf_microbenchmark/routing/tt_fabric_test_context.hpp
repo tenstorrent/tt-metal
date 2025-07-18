@@ -152,7 +152,8 @@ public:
             log_info(tt::LogTest, "Ubenchmark mode: {}, ", benchmark_mode_);
 
             for (const auto& sync_sender : config.global_sync_configs) {
-                if (fixture_->is_local_mesh(sync_sender.device.mesh_id)) {
+                // currently initializing our sync configs to be on senders local to the current hos
+                if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
                     CoreCoord sync_core = sync_sender.core.value();
                     const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
 
@@ -295,7 +296,7 @@ public:
 
         // clear the global sync cores in device_global_sync_cores_ using zero_out_buffer_on_cores
         for (const auto& [device_id, global_sync_core] : device_global_sync_cores_) {
-            if (fixture_->is_local_mesh(device_id.mesh_id)) {
+            if (fixture_->is_local_fabric_node_id(device_id)) {
                 const auto& device_coord = fixture_->get_device_coord(device_id);
                 std::vector<CoreCoord> cores = {global_sync_core};
                 // zero out the global sync address for global sync core
@@ -307,7 +308,7 @@ public:
 
         // clear the local sync cores in device_local_sync_cores_ using zero_out_buffer_on_cores
         for (const auto& [device_id, local_sync_cores] : device_local_sync_cores_) {
-            if (fixture_->is_local_mesh(device_id.mesh_id)) {
+            if (fixture_->is_local_fabric_node_id(device_id)) {
                 const auto& device_coord = fixture_->get_device_coord(device_id);
                 fixture_->zero_out_buffer_on_cores(
                     device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
@@ -491,14 +492,14 @@ private:
             .atomic_inc_address = atomic_inc_address,
             .payload_buffer_size = payload_buffer_size};
 
-        if (fixture_->is_local_mesh(src_node_id.mesh_id)) {
+        if (fixture_->is_local_fabric_node_id(src_node_id)) {
             const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
             auto& src_test_device = this->test_devices_.at(src_coord);
             src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
         }
 
         for (const auto& dst_node_id : dst_node_ids) {
-            if (fixture_->is_local_mesh(dst_node_id.mesh_id)) {
+            if (fixture_->is_local_fabric_node_id(dst_node_id)) {
                 const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
                 log_info(tt::LogTest, "added dst {} for sender {}", dst_node_id, src_node_id);
                 this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
