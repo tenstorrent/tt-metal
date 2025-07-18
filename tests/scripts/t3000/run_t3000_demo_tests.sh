@@ -267,6 +267,29 @@ run_t3000_sd35large_tests() {
   fi
 }
 
+run_t3000_flux1_schnell() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_flux1_schnell"
+
+  # Run test_model
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  mesh_device=T3K
+  flux1_schnell=/mnt/MLPerf/tt_dnn-models/FLUX1-schnell/
+  NO_PROMPT=1 MESH_DEVICE=$mesh_device FLUX1_SCHNELL_DIR=$flux1_schnell WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/flux/demo.py  --timeout 600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_flux1_schnell $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+
 run_t3000_llama3_load_checkpoints_tests() {
   # Record the start time
   fail=0
@@ -333,6 +356,9 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+
+  # Run flux1_schnell tests
+  run_t3000_flux1_schnell
 }
 
 fail=0
