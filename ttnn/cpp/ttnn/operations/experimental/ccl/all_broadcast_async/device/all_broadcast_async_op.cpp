@@ -77,6 +77,7 @@ std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std:
     const auto& input_tensor = input_tensors[0];
     const auto& shape = input_tensor.get_padded_shape();
     std::vector<TensorSpec> output_specs;
+    output_specs.reserve(this->ring_size);
     for (uint32_t i = 0; i < this->ring_size; ++i) {
         output_specs.push_back(TensorSpec(
             shape,
