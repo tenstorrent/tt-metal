@@ -323,6 +323,18 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
+    uint32_t dht_granularity = std::min(DHt, dst_size);
+    uint32_t log2_dht_granularity = std::log2(dht_granularity);
+    // Sometimes DHt is not a power of 2, so granularity should be 1
+    if (dht_granularity != (1 << log2_dht_granularity)) {
+        dht_granularity = 1;
+        log2_dht_granularity = 0;
+    }
+    TT_FATAL(
+        dht_granularity == (1 << log2_dht_granularity),
+        "dht_granularity must be a power of 2. Got {}.",
+        dht_granularity);
+
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
     log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
@@ -337,6 +349,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
     log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
     log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
+    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
+    log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
 
     // Create circular buffers
     tt::DataFormat q_df = tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -484,6 +498,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                             .set_page_size(CBIndex::c_10, q_tile_size)
                             .set_tile_dims(CBIndex::c_10, q_tile);
     auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
+
+    // cb_col_identity
+    auto c_in11_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_11, scalar_df}})
+                             .set_page_size(CBIndex::c_11, scalar_tile_size)
+                             .set_tile_dims(CBIndex::c_11, scalar_tile);
+    auto c_in11_id = CreateCircularBuffer(program, core_grid, c_in11_config);
 
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CBIndex::c_24, im_df}})
@@ -744,6 +764,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         tilize_q,
         q_heads_parallel_factor,
         use_half_tile,
+        scale_union.u,
     };
 
     // Determine granularity for compute loops
@@ -771,6 +792,23 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
     compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
+    compute_defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+
+    if (Sk_chunk_t > 0) {
+        // Determine granularity for statistics computation
+        const uint32_t stats_granularity = std::min(Sk_chunk_t, dst_size);
+        // Find log2 of stats_granularity using std
+        const uint32_t log2_stats_granularity = std::log2(stats_granularity);
+        // Assert that this is a power of 2
+        TT_FATAL(
+            stats_granularity == (1 << log2_stats_granularity),
+            "stats_granularity must be a power of 2. Got {}.",
+            stats_granularity);
+
+        compute_defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
+        compute_defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
+    }
 
     // Compute
     auto compute_kernels_id = CreateKernel(
