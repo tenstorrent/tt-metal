@@ -12,9 +12,9 @@
 // Writes here are appended to the tensix core instruction FIFO. This
 // has priority over incoming instruction fetch returns, which are
 // simply dropped. The instruction will stay in the queue if a loop
-// instruction is in progress. If the FIFO gets overfull, writes are
-// dropped? Additionally, the instruction queue is flushed in some
-// cases.
+// instruction is in progress. If the FIFO is full a write will stall
+// the RISC-V core (until there is space). Additionally, the
+// instruction queue is flushed in some cases.
 
 #if !defined(__cplusplus)
 #define INSTRN_BUF_BASE 0xFFE40000
