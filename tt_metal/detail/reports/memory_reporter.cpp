@@ -80,8 +80,12 @@ void write_memory_usage(
     auto stats = device->allocator()->get_statistics(buffer_type);
     memory_usage_summary_report << "," << stats.total_allocatable_size_bytes << "," << stats.total_allocated_bytes
                                 << "," << stats.total_free_bytes << "," << stats.largest_free_block_bytes << "\n";
-
-    detailed_memory_usage_report << "," << (buffer_type == BufferType::DRAM ? "DRAM\n" : "L1\n");
+    switch (buffer_type) {
+        case BufferType::DRAM: detailed_memory_usage_report << "," << "DRAM\n"; break;
+        case BufferType::L1_SMALL: detailed_memory_usage_report << "," << "L1_SMALL\n"; break;
+        case BufferType::L1:
+        default: detailed_memory_usage_report << "," << "L1\n"; break;
+    }
     detailed_memory_usage_report << ",Total allocatable (B):," << (stats.total_allocatable_size_bytes * num_banks)
                                  << "\n"
                                  << ",Total allocated (B):," << (stats.total_allocated_bytes * num_banks) << "\n"
@@ -104,6 +108,13 @@ void populate_reports(
 
     write_memory_usage(
         device, BufferType::L1, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
+
+    write_memory_usage(
+        device,
+        BufferType::L1_SMALL,
+        memory_usage_summary_report,
+        detailed_memory_usage_report,
+        l1_usage_summary_report);
 }
 
 void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const IDevice* device) {
