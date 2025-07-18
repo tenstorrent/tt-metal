@@ -5,6 +5,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     get_prefill_rot_mat,
@@ -20,7 +21,7 @@ from models.utility_functions import profiler
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
-class Emb(torch.nn.Module):
+class Emb(LightweightModule):
     def __init__(self):
         super().__init__()
         self.emb = torch.nn.Embedding(32000, 4096)

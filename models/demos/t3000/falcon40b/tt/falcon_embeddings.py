@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from ttnn import ShardTensorToMesh
 
 
-class TtFalconEmbeddings(torch.nn.Module):
+class TtFalconEmbeddings(LightweightModule):
     def __init__(self, mesh_device, state_dict, cache_path, model_config):
         super().__init__()
 
