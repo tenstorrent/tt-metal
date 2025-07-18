@@ -35,5 +35,6 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run tests on multiple hosts
         run: |
+          sleep 10s
           echo "Running mpirun command on multiple hosts"
-          mpirun --rankfile /etc/rankfile --tag-output bash -c "export LD_LIBRARY_PATH=./build/lib; export TT_METAL_HOME=$(pwd); export PYTHONPATH=$(pwd); export ARCH_NAME=wormhole_b0; ./build/test/tt_metal/multi_host_fabric_tests"
+          mpirun --rankfile /etc/rankfile --mca btl_tcp_if_exclude docker0,lo --tag-output bash -c "export LD_LIBRARY_PATH=./build/lib; export TT_METAL_HOME=$(pwd); export PYTHONPATH=$(pwd); export ARCH_NAME=wormhole_b0; ./build/test/tt_metal/multi_host_fabric_tests"
