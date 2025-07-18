@@ -6,39 +6,38 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
   deploy:
     runs-on:
       - tt-beta-ubuntu-2204-n300-llmbox-large-stable
+    needs: build-artifact
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-      
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
-
-          # Add LLVM repository for Clang 17
-          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main" | sudo tee /etc/apt/sources.list.d/llvm-17.list
-
-          # Add Kitware repository for latest CMake
-          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-          echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main" | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
-
-          sudo apt-get update
-          sudo apt install -y git build-essential cmake ninja-build pkg-config cargo g++-12 pandoc xz-utils python3-dev python3-pip python3-venv libhwloc-dev libnuma-dev libatomic1 libstdc++6 libboost-dev libtbb-dev libcapstone-dev libc++-17-dev libc++abi-17-dev wget openmpi-bin libopenmpi-dev
-
-      - name: Pull docker image
-        run: docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64
-
-      - name: Generate the rankfile
-        run: .github/scripts/multihost/virtualized/generate-rankfile.sh "4"
-
-      - name: Compile mpi allreduce test
-        run: |
-          mpicc mpi.c
-      
+          sudo apt-get install -y --no-install-recommends  openmpi-bin libopenmpi-dev
       - name: Run mpi allreduce test inside docker
         run: |
-          mpirun --rankfile rankfile --tag-output  --mca plm_rsh_agent .github/scripts/multihost/virtualized/docker-wrapper.sh ./a.out
+          .github/scripts/multihost/virtualized/generate-rankfile.sh "2"
+          mpirun --rankfile rankfile --tag-output --mca plm_rsh_agent .github/scripts/multihost/virtualized/docker-wrapper.sh ./build/test/tt_metal/multi_host_fabric_tests
