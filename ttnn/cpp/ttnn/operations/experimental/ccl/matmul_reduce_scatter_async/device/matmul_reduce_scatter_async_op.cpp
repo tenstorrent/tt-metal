@@ -165,9 +165,9 @@ tt::tt_metal::operation::Hash MatmulReduceScatterAsync::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
     uint32_t semaphore_address = this->reduce_scatter_minimal_async_struct.semaphore.at(0).address();
 
@@ -225,7 +225,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     }
 
     /* Matmul setup */
-    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
+    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -239,7 +239,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config_mm.value_or(input_tensor.memory_config()),
-            dtype.value_or(input_tensor.get_dtype()),
+            dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             /*untilize_out=*/false,
             user_core_coord,

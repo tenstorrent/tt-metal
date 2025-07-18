@@ -78,7 +78,7 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     }
 
     ttnn::Shape output_tensor_shape(std::move(out_shape));
-    auto output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
+    auto output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
     auto tensor_layout = TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), this->output_mem_config);
     return {ttnn::TensorSpec(output_tensor_shape, tensor_layout)};
 }

@@ -84,12 +84,12 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
+    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
     return {
         operation_attributes_t{
             rs_struct,
             LlamaReduceScatterDeviceOperation::operation_attributes_t{
-                .dim = (dim < 0 ? uint32_t(rs_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
+                .dim = (dim < 0 ? uint32_t(rs_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
                 .cross_device_semaphore = semaphore,
                 .subdevice_id = subdevice_id,
                 .cluster_axis = cluster_axis,
@@ -106,7 +106,7 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
                     program_config,
                     /*bcast_batch=*/std::nullopt,
                     memory_config_mm.value_or(input_tensor.memory_config()),
-                    dtype.value_or(input_tensor.get_dtype()),
+                    dtype.value_or(input_tensor.dtype()),
                     compute_kernel_config,
                     /*untilize_out=*/false,
                     user_core_coord,
