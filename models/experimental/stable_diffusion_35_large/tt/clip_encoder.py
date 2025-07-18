@@ -14,6 +14,8 @@ from .linear import TtLinear, TtLinearParameters
 from .substate import indexed_substates, substate
 from .utils import from_torch_fast
 
+import math
+
 
 @dataclass
 class TtCLIPConfig:
@@ -25,6 +27,7 @@ class TtCLIPConfig:
     max_position_embeddings: int
     layer_norm_eps: float
     attention_dropout: float
+    hidden_act: str
 
 
 @dataclass
@@ -125,20 +128,31 @@ class TtCLIPMLPParameters:
 
 
 class TtCLIPMLP:
-    def __init__(self, parameters: TtCLIPMLPParameters) -> None:
+    def __init__(self, parameters: TtCLIPMLPParameters, config: TtCLIPConfig) -> None:
         self._fc1 = TtLinear(parameters.fc1)
         self._fc2 = TtLinear(parameters.fc2)
+        self._hidden_act = config.hidden_act
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         hidden_states = self._fc1(hidden_states)
 
-        hidden_states = gelu(hidden_states)
+        if self._hidden_act == "gelu":
+            hidden_states = gelu(hidden_states)  # HF default / standard GELU
+        else:  # quick gelu
+            hidden_states = hidden_states * ttnn.sigmoid(1.702 * hidden_states)
+
         hidden_states = self._fc2(hidden_states)
         return hidden_states
 
 
 def gelu(x: ttnn.Tensor) -> ttnn.Tensor:
-    return x * ttnn.sigmoid(1.702 * x)
+    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+    sqrt_2 = math.sqrt(2.0)
+    x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
+    erf_x = ttnn.erf(x_div_sqrt2)
+    one_plus_erf = ttnn.add(erf_x, 1.0)
+    x_times_bracket = ttnn.multiply(x, one_plus_erf)
+    return ttnn.multiply(x_times_bracket, 0.5)
 
 
 @dataclass
@@ -183,7 +197,7 @@ class TtCLIPEncoderLayer:
         config: TtCLIPConfig,
     ) -> None:
         self._self_attn = TtCLIPAttention(parameters.self_attn, config)
-        self._mlp = TtCLIPMLP(parameters.mlp)
+        self._mlp = TtCLIPMLP(parameters.mlp, config)
         self._layer_norm1 = parameters.layer_norm1_weight
         self._layer_norm1_bias = parameters.layer_norm1_bias
         self._layer_norm2 = parameters.layer_norm2_weight

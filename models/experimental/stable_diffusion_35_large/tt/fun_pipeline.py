@@ -155,6 +155,7 @@ class TtStableDiffusion3Pipeline:
                 max_position_embeddings=77,
                 layer_norm_eps=self._text_encoder_1.config.layer_norm_eps,
                 attention_dropout=self._text_encoder_1.config.attention_dropout,
+                hidden_act=self._text_encoder_1.config.hidden_act,
             ),
         )
         self._text_encoder_2 = TtCLIPTextTransformer(
@@ -168,6 +169,7 @@ class TtStableDiffusion3Pipeline:
                 max_position_embeddings=77,
                 layer_norm_eps=self._text_encoder_2.config.layer_norm_eps,
                 attention_dropout=self._text_encoder_2.config.attention_dropout,
+                hidden_act=self._text_encoder_2.config.hidden_act,
             ),
         )
 
