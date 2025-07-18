@@ -223,7 +223,7 @@ static inline uint32_t largest_power_of_two(std::uint32_t x) { return x == 0 ? 0
  * for the gather, we only need 3 cores per row. Then take cores_per_row = 3 and try to split the height such that the
  * number of cores used is less than or equal to max_cores.
  */
-static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
+static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     uint16_t width,
     uint16_t min_dim,
     uint16_t max_dim,
@@ -232,7 +232,9 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
-    const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
+    // Max cores for first topk reduction is y-1 * x; the last row is used for the final core
+    const auto max_cores =
+        (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
     uint16_t start_split_size = width / largest_power_of_two(max_cores);
     for (uint16_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint16_t rem = width % split_size;
@@ -244,16 +246,41 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
+
+        // Verify that there is a contiguous range of cores with num_cores cores available
+        uint32_t max_x = core_range.end_coord.x - core_range.start_coord.x;
+        uint32_t max_y = core_range.end_coord.y - core_range.start_coord.y - 1;
+        bool contiguous_cores_available = false;
+        uint32_t selected_x = 0;
+        uint32_t selected_y = 0;
+        for (uint32_t y = max_y; y > 0; y--) {
+            for (uint32_t x = max_x; x > 0; x--) {
+                if (x * y == num_cores) {
+                    selected_x = x;
+                    selected_y = y;
+                    contiguous_cores_available = true;
+                    break;
+                }
+            }
+        }
+
+        uint32_t max_cores_available = max_x * max_y;
+        if (num_cores > max_cores_available) {
+            continue;
+        }
+
         if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local * num_cores) < (l1_size * num_cores) &&
-            num_cores > 1 && split_size >= min_dim) {
+            num_cores > 1 && split_size >= min_dim && contiguous_cores_available) {
             return {
                 num_cores + 1,
                 split_size,
                 rem,
-                num_cores * std::max(static_cast<uint32_t>(k), static_cast<uint32_t>(tt::constants::TILE_WIDTH))};
+                num_cores * std::max(static_cast<uint32_t>(k), static_cast<uint32_t>(tt::constants::TILE_WIDTH)),
+                selected_x,
+                selected_y};
         }
     }
-    return {max_cores + 1, width, 0, width * k};
+    return {max_cores + 1, width, 0, width * k, 0, 0};
 }
 
 /**
@@ -298,7 +325,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
 
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
-    const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size] = cores_utilized(
+    const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(
         input_shape[dim],
         64,
         input_shape[dim] / 2,
@@ -308,13 +335,16 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         value_tile_size,
         index_tile_size);
 
-    auto all_cores_range_set = select_from_corerange(first_core_range_set, 0, num_cores - 1u, false);
+    auto local_cores_range =
+        select_contiguous_range_from_corerange(first_core_range_set, selected_x - 1, selected_y - 1, false);
+    auto local_cores_range_set = CoreRangeSet(local_cores_range.value());
+    auto local_cores = corerange_to_cores(local_cores_range_set, local_cores_range_set.num_cores(), false);
 
-    auto local_cores_range_set = select_from_corerange(first_core_range_set, 0, num_cores - 2u, false);
-    auto local_cores = corerange_to_cores(local_cores_range_set, num_cores - 1u, false);
-
-    auto final_cores_range_set = select_from_corerange(first_core_range_set, num_cores - 1u, num_cores - 1u, false);
+    auto final_cores_range_set = select_from_corerange(first_core_range_set, selected_y, selected_y, false);
     auto final_core = corerange_to_cores(final_cores_range_set, 1u, false).at(0);
+
+    auto all_cores_range_set = local_cores_range_set;
+    all_cores_range_set = all_cores_range_set.merge(final_cores_range_set);
 
     uint32_t Wt_local = local_topk_input_size / TILE_WIDTH;
     uint32_t Wt_final = final_topk_input_size / TILE_WIDTH;

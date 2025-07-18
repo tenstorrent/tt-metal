@@ -27,7 +27,8 @@ static inline bool verify_multi_core_cost(
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
     const auto core_range = core_range_set.ranges().at(0);
-    const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
+    const auto max_cores =
+        (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
     uint32_t start_split_size = width / largest_power_of_two(max_cores);
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint32_t rem = width % split_size;
@@ -39,9 +40,26 @@ static inline bool verify_multi_core_cost(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
+        // Verify that there is a contiguous range of cores with num_cores cores available
+        uint32_t max_x = core_range.end_coord.x - core_range.start_coord.x;
+        uint32_t max_y = core_range.end_coord.y - core_range.start_coord.y - 1;
+        bool contiguous_cores_available = false;
+        uint32_t selected_x = 0;
+        uint32_t selected_y = 0;
+        for (uint32_t y = max_y; y > 0; y--) {
+            for (uint32_t x = max_x; x > 0; x--) {
+                if (x * y == num_cores) {
+                    selected_x = x;
+                    selected_y = y;
+                    contiguous_cores_available = true;
+                    break;
+                }
+            }
+        }
+
         if (num_cores <= max_cores &&
             (memory_cost_gather + (memory_cost_local * num_cores)) < (device->l1_size_per_core() * num_cores) &&
-            num_cores > 1 && split_size >= min_dim) {
+            num_cores > 1 && split_size >= min_dim && contiguous_cores_available) {
             return true;
         }
     }
