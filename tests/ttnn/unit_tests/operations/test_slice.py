@@ -290,8 +290,8 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
 @pytest.mark.parametrize(
     "dims, slice_size, core_x, core_y, layout",
     [
-        [[2, 256, 256, 64], 128, 8, 2, ttnn.ROW_MAJOR_LAYOUT],
-        [[2, 256, 128, 32], 16, 4, 4, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 256, 256, 64], 128, 2, 8, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 256, 128, 128], 16, 4, 4, ttnn.ROW_MAJOR_LAYOUT],
         [[2, 32, 32, 128], 32, 2, 2, ttnn.ROW_MAJOR_LAYOUT],
         [[2, 256, 256, 64], 64, 2, 4, ttnn.TILE_LAYOUT],
         [[2, 256, 128, 128], 32, 4, 4, ttnn.TILE_LAYOUT],
