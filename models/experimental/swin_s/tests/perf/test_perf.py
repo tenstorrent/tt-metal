@@ -18,7 +18,7 @@ from models.experimental.swin_s.reference.swin_transformer import SwinTransforme
 
 # from models.experimental.swin_v2.tt.model_preprocessing import create_swinv2_model_parameters, preprocess_attn_mask
 from tests.ttnn.integration_tests.swin_s.test_ttnn_swin_transformer import (
-    create_custom_preprocessor,
+    create_custom_mesh_preprocessor,
     preprocess_attn_mask,
 )
 from models.experimental.swin_s.tt.tt_swin_transformer import TtSwinTransformer
@@ -63,7 +63,7 @@ def test_swin_s(
     batch_size = input_shape[0]
     resolution = input_shape[1:3]
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
+        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_mesh_preprocessor(), device=device
     )
 
     ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, device=device)

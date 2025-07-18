@@ -14,19 +14,26 @@ class SwinSPerformantRunner:
         device_batch_size=1,
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat16,
-        model_location_generator=None,
         resolution=(512, 512),
         torch_input_tensor=None,
+        mesh_mapper=None,
+        weights_mesh_mapper=None,
+        mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
+        self.mesh_mapper = mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.mesh_composer = mesh_composer
         self.runner_infra = SwinSPerformanceRunnerInfra(
             device,
             device_batch_size,
             act_dtype,
             weight_dtype,
-            model_location_generator,
             resolution=resolution,
+            mesh_mapper=mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
+            mesh_composer=mesh_composer,
         )
 
         (
@@ -100,7 +107,6 @@ class SwinSPerformantRunner:
         n, h, w, c = torch_input_tensor.shape
         tt_inputs_host, input_mem_config = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_swins_trace_2cqs_inference(tt_inputs_host)
-        print(output)
         if check_pcc:
             torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
             torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)

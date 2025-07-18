@@ -29,11 +29,19 @@ pytest --disable-warnings tests/ttnn/integration_tests/swin_s/test_ttnn_swin_tra
 ## Model performant running with Trace+2CQ
 Use the following command to run the e2e perf:
 
--  For overall rutime inference (end-2-end), use the following command to run the demo:
+### Single Device (BS=1):
+-  For overall rutime inference (end-2-end), use the following command to run for single device:
 ```sh
-pytest --disable-warnings models/experimental/swin_s/tests/perf/test_e2e_performant.py
+pytest --disable-warnings models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 - end-2-end perf is 5 FPS
+
+### Multi Device (DP=2, N300):
+-  For overall rutime inference (end-2-end), use the following command to run for multi device:
+```sh
+pytest --disable-warnings models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
+```
+- end-2-end perf is 19 FPS
 
 ## Model demo with trace
 
@@ -41,8 +49,16 @@ pytest --disable-warnings models/experimental/swin_s/tests/perf/test_e2e_perform
 - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
 
 - Use the following command to run the demo for Imagenet-1K:
+
+### Single Device (BS=1):
+- Use the following command to run demo for single device:
 ```sh
-pytest --disable-warnings models/demos/swin_s/demo/demo.py::test_run_swin_s_trace_2cqs_inference
+pytest --disable-warnings models/demos/swin_s/demo/demo.py::test_swin_s_demo[resolution0-1-act_dtype0-weight_dtype0-device_params0]
 ```
 
+### Multi Device (DP=2, N300):
+- Use the following command to run demo for multi device:
+```sh
+pytest --disable-warnings models/demos/swin_s/demo/demo.py::test_swin_s_demo_dp[wormhole_b0-resolution0-1-act_dtype0-weight_dtype0-device_params0]
+```
 ### Owner: [HariniMohan0102](https://github.com/HariniMohan0102)

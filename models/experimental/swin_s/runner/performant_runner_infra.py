@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 from torchvision import models
 from tests.ttnn.integration_tests.swin_s.test_ttnn_swin_transformer import (
-    create_custom_preprocessor,
+    create_custom_mesh_preprocessor,
     preprocess_attn_mask,
 )
 from models.experimental.swin_s.reference.swin_transformer import SwinTransformer
@@ -44,6 +44,9 @@ class SwinSPerformanceRunnerInfra:
         model_location_generator=None,
         resolution=(512, 512),
         torch_input_tensor=None,
+        mesh_mapper=None,
+        weights_mesh_mapper=None,
+        mesh_composer=None,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
@@ -55,22 +58,28 @@ class SwinSPerformanceRunnerInfra:
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
+        self.num_devices = self.device.get_num_devices()
+        self.mesh_mapper = mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.mesh_composer = mesh_composer
 
         self.torch_model = load_torch_model()
 
         self.torch_input_tensor = (
-            torch.randn((1, 3, 512, 512), dtype=torch.float32)
+            torch.randn((batch_size * self.num_devices, 3, 512, 512), dtype=torch.float32)
             if self.torch_input_tensor is None
             else self.torch_input_tensor
         )
 
         self.parameters = preprocess_model_parameters(
             initialize_model=lambda: self.torch_model,
-            custom_preprocessor=create_custom_preprocessor(self.device),
+            custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
             device=self.device,
         )
 
-        attn_mask_tuple = preprocess_attn_mask([1, 3, 512, 512], [4, 4], [7, 7], [3, 3], device)
+        attn_mask_tuple = preprocess_attn_mask(
+            [1, 3, 512, 512], [4, 4], [7, 7], [3, 3], device, weights_mesh_mapper=weights_mesh_mapper
+        )
 
         self.ttnn_swin_model = TtSwinTransformer(
             self.device,
@@ -97,12 +106,15 @@ class SwinSPerformanceRunnerInfra:
         n, c, h, w = torch_input_tensor.shape
         if c == 3:
             c = 16
+        n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_inputs_host = ttnn.from_torch(
+            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.mesh_mapper
+        )
 
         return tt_inputs_host, input_mem_config
 
@@ -131,7 +143,7 @@ class SwinSPerformanceRunnerInfra:
     def validate(self, output_tensor=None, torch_output_tensor=None):
         ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
-        output_tensor = ttnn.to_torch(ttnn_output_tensor)
+        output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.mesh_composer)
         self.pcc_passed, self.pcc_message = assert_with_pcc(
             self.torch_output_tensor, output_tensor, pcc=0.95
         )  # PCC:0.953924198820544
