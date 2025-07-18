@@ -630,7 +630,7 @@ def run_multi_core_matmul_1d(
     "device_params",
     [
         {
-            "trace_region_size": 1200000,
+            "trace_region_size": 1075200,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
