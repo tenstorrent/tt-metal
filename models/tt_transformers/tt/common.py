@@ -58,7 +58,7 @@ class RopeScalingLlama3(RopeScaling):
 class RopeScalingYarn(RopeScaling):
     """RoPE scaling configuration for Yarn."""
 
-    # Yarn-specific parameters - we could have a separate class for each type
+    # Yarn-specific parameters
     beta_fast: Optional[int] = 32
     beta_slow: Optional[int] = 1
     mscale: Optional[float] = 1.0
