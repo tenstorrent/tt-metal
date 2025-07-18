@@ -605,6 +605,9 @@ struct SenderKernelTrafficConfig {
                 (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
             if constexpr (!BENCHMARK_MODE) {
+                // avoid race condition where we update the ptrs but fabric write is not done yet.
+                noc_async_writes_flushed();
+
                 if (payload_size_bytes > 0 && payload_buffer_) {
                     payload_buffer_->advance();
                     update_header_for_next_packet();
@@ -633,10 +636,10 @@ struct SenderKernelTrafficConfig {
         fabric_connection_handle->send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
-        // avoid race condition where we update the ptrs but fabric write is not done yet.
-        noc_async_write_barrier();
-
         if constexpr (!BENCHMARK_MODE) {
+            // avoid race condition where we update the ptrs but fabric write is not done yet.
+            noc_async_writes_flushed();
+
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->advance();
                 update_header_for_next_packet();

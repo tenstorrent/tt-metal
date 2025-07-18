@@ -220,7 +220,7 @@ public:
             ring_path = trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, total_hops);
         } else {
             // Use the new non wrap-around mesh logic
-            ring_path = trace_non_wrap_around_mesh_ring_path(src_node_id, initial_direction, total_hops);
+            ring_path = trace_ring_path(src_node_id, initial_direction, total_hops);
         }
 
         std::vector<FabricNodeId> ring_destinations;
@@ -615,7 +615,7 @@ public:
         return std::make_pair(dst_node_forward, dst_node_backward);
     }
 
-    uint32_t get_num_sync_devices(bool wrap_around_mesh = true) const override {
+    uint32_t get_num_sync_devices() const {
         uint32_t num_devices;
         switch (topology_) {
             case tt::tt_fabric::Topology::Linear: {
@@ -623,7 +623,7 @@ public:
                 return num_devices;
             }
             case tt::tt_fabric::Topology::Ring: {
-                if (wrap_around_mesh) {
+                if (wrap_around_mesh_) {
                     // sync using full ring mcast, ie, mcast on both forward/backward path.
                     num_devices = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1);
                 } else {
@@ -886,11 +886,10 @@ public:
         const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const override {
         std::unordered_map<RoutingDirection, uint32_t> multi_directional_hops;
         uint32_t global_sync_val = 0;
-        bool wrap_around_mesh = control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(src_device.mesh_id);
 
         switch (topology_) {
             case tt::tt_fabric::Topology::Ring: {
-                if (wrap_around_mesh) {
+                if (wrap_around_mesh_) {
                     // Get ring neighbors - returns nullopt for non-perimeter devices
                     auto ring_neighbors = this->get_wrap_around_mesh_ring_neighbors(src_device, devices);
                     // Check if the result is valid (has value)
@@ -924,7 +923,7 @@ public:
                     }
                 }
                 // minus 2 because full ring pattern traverse each node twice.
-                auto num_sync_devices = this->get_num_sync_devices(wrap_around_mesh);
+                auto num_sync_devices = this->get_num_sync_devices();
                 global_sync_val =
                     2 * num_sync_devices - 2;  // minus 2 because in a full ring pattern we dont mcast to self (twice).
                 break;
@@ -1170,7 +1169,7 @@ public:
     }
 
     // Helper function to trace ring path with boundary wraparound logic for non wrap-around meshes
-    std::vector<std::pair<FabricNodeId, RoutingDirection>> trace_non_wrap_around_mesh_ring_path(
+    std::vector<std::pair<FabricNodeId, RoutingDirection>> trace_ring_path(
         const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
         std::vector<std::pair<FabricNodeId, RoutingDirection>> path;
         path.reserve(total_hops);
@@ -1245,7 +1244,35 @@ public:
         return path;
     }
 
-    uint32_t get_max_routing_planes_for_device(const FabricNodeId& node_id) const override {
+    bool validate_num_links_supported(uint32_t num_links) const override {
+        // Validate that num_links doesn't exceed available routing planes for any row/column
+        const auto num_pci_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+        const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+
+        std::vector<FabricNodeId> devices = get_all_node_ids();
+        for (const auto& device : devices) {
+            uint32_t max_routing_planes = get_max_routing_planes_for_device(device);
+            // TODO: remove this once we have correct
+            if (num_pci_devices != num_devices) {
+                max_routing_planes -= 1;
+            }
+            if (num_links > max_routing_planes) {
+                log_warning(
+                    LogTest,
+                    "Skipping: Requested num_links ({}) exceeds maximum available routing planes ({}) for "
+                    "device {}. "
+                    "Please reduce num_links or check your fabric configuration.",
+                    num_links,
+                    max_routing_planes,
+                    device.chip_id);
+                return false;  // Indicate test should be skipped
+            }
+        }
+
+        return true;
+    }
+
+    uint32_t get_max_routing_planes_for_device(const FabricNodeId& node_id) const {
         // Find the minimum number of routing planes across all directions for this device
         uint32_t min_routing_planes = std::numeric_limits<uint32_t>::max();
 
@@ -1276,6 +1303,7 @@ private:
     std::unordered_map<FabricNodeId, MeshCoordinate> node_id_to_mesh_coordinate_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     bool are_devices_open_ = false;
+    bool wrap_around_mesh_ = false;
 
     void open_devices_internal(tt::tt_fabric::FabricConfig fabric_config) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
@@ -1308,8 +1336,7 @@ private:
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
 
         // Now fabric context should be initialized, safe to query wrap_around_mesh
-        bool wrap_around_mesh = control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(user_meshes[0]);
-        log_info(LogTest, "wrap_around_mesh {}", wrap_around_mesh);
+        wrap_around_mesh_ = control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(user_meshes[0]);
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 

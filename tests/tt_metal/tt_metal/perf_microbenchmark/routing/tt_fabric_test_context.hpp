@@ -555,7 +555,7 @@ private:
                 ring_path = fixture_->trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, hop_count);
             } else {
                 // Use the new non wrap-around mesh logic
-                ring_path = fixture_->trace_non_wrap_around_mesh_ring_path(src_node_id, initial_direction, hop_count);
+                ring_path = fixture_->trace_ring_path(src_node_id, initial_direction, hop_count);
             }
 
             // Count traffic at each device boundary
@@ -700,23 +700,6 @@ private:
                             link_id);
                     }
                     device_direction_cycles_[device_node_id][direction][link_id] = core_cycles;
-                }
-            }
-        }
-
-        // Print direction-based results
-        log_debug(tt::LogTest, "Performance profiling by direction and link:");
-        // Results are automatically sorted by device ID, direction, and link ID
-        for (const auto& [device_id, direction_map] : device_direction_cycles_) {
-            for (const auto& [direction, link_map] : direction_map) {
-                for (const auto& [link_id, cycles] : link_map) {
-                    log_debug(
-                        tt::LogTest,
-                        "Device {} Direction {} Link {} Cycles: {}",
-                        device_id.chip_id,
-                        direction,
-                        link_id,
-                        cycles);
                 }
             }
         }

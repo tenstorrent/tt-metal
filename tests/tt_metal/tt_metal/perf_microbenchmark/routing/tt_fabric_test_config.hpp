@@ -1314,7 +1314,6 @@ private:
         TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
 
         bool wrap_around_mesh = this->route_manager_.wrap_around_mesh(devices.front());
-        log_info(LogTest, "wrap_around_mesh {}", wrap_around_mesh);
 
         std::unordered_map<RoutingDirection, uint32_t> hops;
         for (const auto& src_node : devices) {
@@ -1424,8 +1423,6 @@ private:
         auto [multi_directional_hops, global_sync_val] =
             this->route_manager_.get_sync_hops_and_val(src_device, devices);
 
-        log_info(tt::LogTest, "src_device: {} multi_directional_hops: {}, ", src_device, multi_directional_hops);
-
         // Split multi-directional hops into single-direction patterns
         auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
 
@@ -1530,21 +1527,8 @@ private:
         log_info(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
 
         // Validate that num_links doesn't exceed available routing planes for any device
-        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
-        for (const auto& device : devices) {
-            uint32_t max_routing_planes = route_manager_.get_max_routing_planes_for_device(device);
-            if (num_links > max_routing_planes) {
-                log_warning(
-                    LogTest,
-                    "Skipping test '{}': Requested num_links ({}) exceeds maximum available routing planes ({}) for "
-                    "device {}. "
-                    "Please reduce num_links or check your fabric configuration.",
-                    test.name,
-                    num_links,
-                    max_routing_planes,
-                    device.chip_id);
-                return false;  // Indicate test should be skipped
-            }
+        if (!route_manager_.validate_num_links_supported(num_links)) {
+            return false;  // Indicate test should be skipped
         }
 
         std::vector<ParsedSenderConfig> new_senders;
