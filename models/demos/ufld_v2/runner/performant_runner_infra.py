@@ -85,7 +85,7 @@ class UFLDPerformanceRunnerInfra:
         self.ttnn_ufld_v2_model = load_ttnn_model(self.device, self.torch_model, self.torch_input_tensor_per_device)
         self.torch_output_tensor_1, self.torch_output_tensor_2 = self.torch_model(self.torch_input_tensor)
 
-    def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=8):
+    def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
@@ -95,18 +95,17 @@ class UFLDPerformanceRunnerInfra:
         # print(f"Time after assigning: {time.time() - start:.6f} sec")
         start = time.time()
         n, c, h, w = torch_input_tensor.shape
+        print("Sudhanshu", n, self.num_devices)
         if c == 3:  # for sharding config of padded input
             c = min_channels
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n // self.num_devices, c, h, w],
+            [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
         # print(f"Time after creating shard config: {time.time() - start:.6f} sec")
         start = time.time()
-        tt_inputs_host = ttnn.from_torch(
-            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
-        )
+        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         print(f"Time after from_torch: {time.time() - start:.6f} sec")
         start = time.time()
         return tt_inputs_host, input_mem_config
