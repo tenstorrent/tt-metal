@@ -27,7 +27,5 @@ int main(int /*argc*/, char** /*argv*/) {
     const auto input_tensor = zeros(shape, DataType::BFLOAT16, TILE_LAYOUT, *device);
     const auto output_tensor = input_tensor + scalar;
 
-    device->close();
-
     return 0;
 }
