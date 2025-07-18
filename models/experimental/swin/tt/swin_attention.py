@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple
-import torch.nn as nn
 
 import ttnn
 
@@ -13,7 +13,7 @@ from models.experimental.swin.tt.swin_self_attention import (
 from models.experimental.swin.tt.swin_self_output import TtSwinSelfOutput
 
 
-class TtSwinAttention(nn.Module):
+class TtSwinAttention(LightweightModule):
     def __init__(
         self,
         config,

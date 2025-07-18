@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import copy
 import torch
 import warnings
@@ -62,7 +63,7 @@ def tuple_tuple_to_torch(inputs):
     return result
 
 
-class TtT5ForConditionalGeneration(nn.Module):
+class TtT5ForConditionalGeneration(LightweightModule):
     _keys_to_ignore_on_load_missing = [
         r"encoder.embed_tokens.weight",
         r"decoder.embed_tokens.weight",
