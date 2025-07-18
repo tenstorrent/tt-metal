@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import time
+
 import ttnn
 from models.demos.ufld_v2.runner.performant_runner_infra import UFLDPerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -18,6 +20,8 @@ class UFLDPerformantRunner:
         model_location_generator=None,
         resolution=(320, 800),
         torch_input_tensor=None,
+        mesh_mapper=None,
+        mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
@@ -30,6 +34,8 @@ class UFLDPerformantRunner:
             model_location_generator,
             resolution=resolution,
             torch_input_tensor=self.torch_input_tensor,
+            mesh_mapper=mesh_mapper,
+            mesh_composer=mesh_composer,
         )
         (
             self.tt_inputs_host,
@@ -80,15 +86,35 @@ class UFLDPerformantRunner:
         assert trace_input_addr == self.input_tensor.buffer_address()
 
     def _execute_ufldv2_trace_2cqs_inference(self, tt_inputs_host=None):
+        start = time.time()
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
+        # print(f"Time after setting tt_inputs_host: {time.time() - start:.6f} sec")
+        start = time.time()
         ttnn.wait_for_event(1, self.op_event)
+        # print(f"Time after wait_for_event {time.time() - start:.6f} sec")
+        start = time.time()
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
+        # print(f"Time after host to device copy {time.time() - start:.6f} sec")
+        start = time.time()
         self.write_event = ttnn.record_event(self.device, 1)
+        # print(f"Time after record event {time.time() - start:.6f} sec")
+        start = time.time()
         ttnn.wait_for_event(0, self.write_event)
+        # print(f"Time after wait event {time.time() - start:.6f} sec")
+        start = time.time()
         if self.input_tensor.is_sharded():
             self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        # print(f"Time after rhesard {time.time() - start:.6f} sec")
+        start = time.time()
         self.op_event = ttnn.record_event(self.device, 0)
+        # print(f"Time after record event {time.time() - start:.6f} sec")
+        start = time.time()
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        # print(f"Time after exc trace event {time.time() - start:.6f} sec")
+        start = time.time()
+        ttnn.synchronize_device(self.device)
+        # print(f"Time after sync {time.time() - start:.6f} sec")
+        start = time.time()
         return self.runner_infra.output_tensor_1
 
     def _validate(self, input_tensor, result_output_tensor):
@@ -96,8 +122,13 @@ class UFLDPerformantRunner:
         assert_with_pcc(torch_output_tensor, result_output_tensor, self.runner_infra.valid_pcc)
 
     def run(self, torch_input_tensor=None):
+        start = time.time()
         tt_inputs_host, _ = self.runner_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
+        # print(f"Time after setup {time.time() - start:.6f} sec")
+        start = time.time()
         output = self._execute_ufldv2_trace_2cqs_inference(tt_inputs_host)
+        # print(f"Time after exec trace whol fun {time.time() - start:.6f} sec")
+        start = time.time()
         return output
 
     def release(self):

@@ -49,7 +49,7 @@ class TtnnResnet34:
             conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False, blk_sharded=True
         )
 
-    def __call__(self, input, batch_size=1, min_channels=8):
+    def __call__(self, input, batch_size=1, min_channels=16):
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
         x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
