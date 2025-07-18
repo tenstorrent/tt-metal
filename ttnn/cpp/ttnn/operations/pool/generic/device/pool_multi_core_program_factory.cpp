@@ -468,35 +468,35 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
     }
     std::vector<uint32_t> reader0_ct_args = {
-        out_nhw_per_core,
-        kernel_size_h,
-        kernel_size_w,
-        pad_w,
-        in_aligned_nbytes_c,
-        in_w,
-        input_shape[3] / num_shards_c,
-        split_reader,  // enable split reader
-        0,             // split reader id
-        bf16_scalar,
-        bf16_init_value,
-        in_nblocks_c,
-        in_cb_sz,
-        max_rows_for_reduction,
-        ceil_pad_w,
-        in_cb_id_0,
-        in_cb_id_1,
-        raw_in_cb_id,
-        in_reader_indices_cb_id,
-        in_scalar_cb_id_0,
-        in_scalar_cb_id_1,
-        clear_value_cb_id,
-        (uint32_t)pool_type,
-        one_scalar_per_core,
-        config_cb_id,
-        in_nbytes_c,
-        in_nbytes_padded_c,
-        multi_buffering_factor,
-        stride_w};
+        out_nhw_per_core,               // 0
+        kernel_size_h,                  // 1
+        kernel_size_w,                  // 2
+        pad_w,                          // 3
+        in_aligned_nbytes_c,            // 4
+        in_w,                           // 5
+        input_shape[3] / num_shards_c,  // 6
+        split_reader,                   // enable split reader //7
+        0,                              // split reader id //8
+        bf16_scalar,                    // 9
+        bf16_init_value,                // 10
+        in_nblocks_c,                   // 11
+        in_cb_sz,                       // 12
+        max_rows_for_reduction,         // 13
+        ceil_pad_w,                     // 14
+        in_cb_id_0,                     // 15
+        in_cb_id_1,                     // 16
+        raw_in_cb_id,                   // 17
+        in_reader_indices_cb_id,        // 18
+        in_scalar_cb_id_0,              // 19
+        in_scalar_cb_id_1,              // 20
+        clear_value_cb_id,              // 21
+        (uint32_t)pool_type,            // 22
+        one_scalar_per_core,            // 23
+        config_cb_id,                   // 24
+        in_nbytes_c,                    // 25
+        in_nbytes_padded_c,             // 26
+        multi_buffering_factor,         // 27
+        stride_w};                      // 28
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
