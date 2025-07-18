@@ -85,6 +85,8 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
+        } else if (num_devices_ == 4) {
+            return MeshShape{1, 4};
         } else {
             return MeshShape{2, 4};
         }
@@ -100,10 +102,22 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
-        if (!(num_devices_ >= 8 &&
-              (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
-            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
-        }
+        switch (arch_) {
+            case tt::ARCH::WORMHOLE_B0:
+                if (!(num_devices_ >= 8 && (tt::tt_metal::GetNumPCIeDevices() == 4 ||
+                                            tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
+                    TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+                }
+                break;
+
+            case tt::ARCH::BLACKHOLE:
+                if (num_devices_ != 4) {
+                    TT_THROW("This suite can only be run on LLMBox");
+                }
+                break;
+
+            default: TT_THROW("Only Wormhole or Blackhole devices are supported in this test suite");
+        };
     }
 
 public:
