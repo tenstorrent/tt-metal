@@ -7,7 +7,7 @@
 Script Name: tt-triage.py
 
 Usage:
-    tt-triage [--halt-on-error] [--inspector-log-path=<inspector_log_path>] [-v | --verbose] [-V | --vverbose] [-g | --gdb [--port=<port>]] [--dev=<device_id>]...
+    tt-triage [--halt-on-error] [--inspector-log-path=<inspector_log_path>] [-v | --verbose] [-V | --vverbose [-g | --gdb [--port=<port>]]] [--dev=<device_id>]...
 
 Options:
     -h --help                                  Show this screen.
