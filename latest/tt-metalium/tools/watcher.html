@@ -158,6 +158,9 @@ the log file is stored as well as a message each time the watcher checks the dev
 <span class="n">export</span> <span class="n">TT_METAL_WATCHER_DISABLE_WAYPOINT</span><span class="o">=</span><span class="mi">1</span>
 <span class="n">export</span> <span class="n">TT_METAL_WATCHER_DISABLE_STACK_USAGE</span><span class="o">=</span><span class="mi">1</span>
 
+<span class="c1"># This feature is opt-in, set the env var to enable it</span>
+<span class="n">export</span> <span class="n">TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION</span><span class="o">=</span><span class="mi">1</span>
+
 <span class="c1"># In certain cases enabling watcher can cause the binary to be too large. In this case, disable inlining.</span>
 <span class="n">export</span> <span class="n">TT_METAL_WATCHER_NOINLINE</span><span class="o">=</span><span class="mi">1</span>
 
