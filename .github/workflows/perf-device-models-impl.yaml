@@ -50,11 +50,11 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: repo
+      # - name: ⬇️ Checkout
+      #   uses: actions/checkout@v4
+      #   with:
+      #     submodules: recursive
+      #     path: repo
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
@@ -74,7 +74,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov11 tests
-        uses: ./.github/actions/device-perf-test
+        uses: ./.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
           test_name: "yolov11_tests"
           commands: |
