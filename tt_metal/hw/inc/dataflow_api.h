@@ -553,6 +553,7 @@ void noc_async_read_one_packet_set_state(uint64_t src_noc_addr, uint32_t size, u
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, -1);
 
     WAYPOINT("NASW");
@@ -620,6 +621,7 @@ void noc_async_read_set_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, 0, -1);
 
     WAYPOINT("NAUW");
@@ -838,6 +840,7 @@ inline void noc_async_write_multicast(
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
     std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size, vc);
 
     WAYPOINT("NWPW");
@@ -1687,6 +1690,7 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
     // The address could be set here or later in noc_inline_dw_write_with_state
 
@@ -1834,6 +1838,7 @@ FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
     uint32_t src_noc_xy = dram_bank_to_noc_xy[noc][bank_id];
     uint64_t src_noc_addr = get_noc_addr_helper(src_noc_xy, src_addr_);
 
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::READ_DRAM_SHARDED_SET_STATE, uint64_t(src_noc_xy) << 32, page_size, (use_vc) ? vc : -1);
 
@@ -1911,6 +1916,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NAWW");
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NAWD");
