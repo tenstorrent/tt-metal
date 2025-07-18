@@ -32,6 +32,12 @@ def pytest_addoption(parser):
         type=int,
         help="How often to reset (default: 200 (images))",
     )
+    parser.addoption(
+        "--loop-iter-num",
+        action="store",
+        default=10,
+        help="Number of iterations of denoising loop (default: 10)",
+    )
 
 
 @pytest.fixture

@@ -10,6 +10,8 @@
 #include <optional>
 #include "umd/device/types/arch.h"
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn {
 
@@ -25,6 +27,8 @@ struct WormholeComputeKernelConfig {
     bool fp32_dest_acc_en = false;
     bool packer_l1_acc = false;
     bool dst_full_sync_en = false;
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
+        ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
 };
 
 using BlackholeComputeKernelConfig = WormholeComputeKernelConfig;
@@ -38,11 +42,15 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     bool default_approx_mode = true,
     bool default_fp32_acc = false,
     bool default_l1_acc = false,
-    bool default_dst_full_sync_en = false);
+    bool default_dst_full_sync_en = false,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level =
+        ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     tt::ARCH arch, DeviceComputeKernelConfig compute_kernel_config);

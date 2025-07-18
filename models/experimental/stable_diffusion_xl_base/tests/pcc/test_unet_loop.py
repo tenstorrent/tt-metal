@@ -18,6 +18,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
+from models.utility_functions import is_wormhole_b0
 
 
 def run_tt_denoising(
@@ -444,14 +445,11 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
+@pytest.mark.skipif(not is_wormhole_b0(), reason="SDXL supported on WH only")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),
-)
-@pytest.mark.parametrize(
-    "num_inference_steps",
-    ((50),),
 )
 @pytest.mark.parametrize(
     "classifier_free_guidance",
@@ -464,7 +462,7 @@ def test_unet_loop(
     device,
     is_ci_env,
     prompt,
-    num_inference_steps,
+    loop_iter_num,
     classifier_free_guidance,
 ):
-    return run_unet_inference(device, is_ci_env, prompt, num_inference_steps, classifier_free_guidance)
+    return run_unet_inference(device, is_ci_env, prompt, loop_iter_num, classifier_free_guidance)
