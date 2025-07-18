@@ -13,7 +13,7 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-SFPU_UNARY_KERNEL_INIT_ONLY(mask)
+SFPU_UNARY_KERNEL_INIT(mask)
 
 SFPU_DIM_DUALTYPE_SWITCH_KERNEL(
     mask, DataFormat, Float16_b, Float16, calculate_mask, Float16, calculate_int_mask, Int32)

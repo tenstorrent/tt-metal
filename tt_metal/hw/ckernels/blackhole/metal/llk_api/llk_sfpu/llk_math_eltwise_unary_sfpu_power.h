@@ -13,7 +13,7 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-SFPU_UNARY_KERNEL_INIT_ONLY(power)
+SFPU_UNARY_KERNEL_INIT(power)
 
 SFPU_UNARY_PARAMS_KERNEL_WITH_CUSTOM_CALC(power, RC, ckernel::sfpu::calculate_power_iterative, int pow, pow)
 
