@@ -22,6 +22,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_simulation_device.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
@@ -43,8 +44,14 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
-    bool targeting_sim = tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
-    if (targeting_sim) {
+    bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
+    if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+        if (init.get_soc_descriptor().grid_size.y <= 2) { // these SOC descriptors declare a 2x2 grid
+            use_small_core_desc_yaml = true;
+        }
+    }
+    if (use_small_core_desc_yaml) {
         switch (arch) {
             default:
                 throw std::runtime_error(
