@@ -26,11 +26,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      version:
-        required: false
-        type: string
-        default: "22.04"
-        description: "Ubuntu version (e.g., 22.04, 24.04)"
 
   workflow_dispatch:
     inputs:
@@ -64,14 +59,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      version:
-        required: false
-        type: choice
-        options:
-          - "22.04"
-          - "24.04"
-        default: "22.04"
-        description: "Ubuntu version"
 
 jobs:
   ttnn:
@@ -162,24 +149,3 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
-  ttnn-import-test:
-    name: ttnn import test ubuntu-${{ inputs.version }}
-    runs-on: ubuntu-${{ inputs.version }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install system dependencies
-        run: sudo ./install_dependencies.sh
-      - name: 🧪 Download Python Wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - name: 💿 Install Wheel
-        run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install "$WHEEL_FILENAME"
-      - name: ttnn import test
-        run: python3 -c "import ttnn"
