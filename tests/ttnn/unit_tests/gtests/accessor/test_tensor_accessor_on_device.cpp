@@ -122,6 +122,7 @@ static void test_single_core_reshard(
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
     auto output_tensor_cpu = output_tensor.cpu(true);
+
     // Data should be only in the first shard
     Tensor output_tensor_shard0 = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
     auto output_vec = output_tensor_shard0.to_vector<T>();
