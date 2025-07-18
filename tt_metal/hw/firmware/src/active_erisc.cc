@@ -152,8 +152,10 @@ void Application() {
     }
 
     // There may be some random data from the base FW
-    // We only use NOC0 here
-    noc_async_full_barrier(0 /* noc */);
+    // Using ncrisc_noc_full_sync() instead of noc_async_full_barrier() to avoid
+    // RECORD_NOC_EVENT()
+    ncrisc_noc_full_sync();
+
     // #18384: This register was left dirty by eth training.
     // It is not used in dataflow api, so it can be set to 0
     // one time here instead of setting it everytime in dataflow_api.
