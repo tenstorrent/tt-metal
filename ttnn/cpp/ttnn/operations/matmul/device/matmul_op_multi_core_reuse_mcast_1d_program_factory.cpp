@@ -340,7 +340,11 @@ process_mcast_in0_program_and_create_override_variables(
             (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
             // batch args
             (std::uint32_t)M * K,  // MtKt
-            (std::uint32_t)B       // batch
+            (std::uint32_t)B,      // batch
+            // sparsity args
+            (std::uint32_t)0,      // batchB
+            (std::uint32_t)false,  // sparsity_is_dram
+            (std::uint32_t)0,      // sparsity_log2_of_pagesize
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
@@ -348,6 +352,7 @@ process_mcast_in0_program_and_create_override_variables(
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
+        (std::uint32_t)false,  // sparsity_is_dram
         (std::uint32_t)out_is_dram,
 
         // READER
@@ -373,6 +378,9 @@ process_mcast_in0_program_and_create_override_variables(
         (std::uint32_t)K * N,        // KtNt
         (std::uint32_t)B,            // batch
         (std::uint32_t)bcast_batch,  // bcast_B
+        // sparsity args
+        (std::uint32_t)0,  // batchB
+        (std::uint32_t)0,  // sparsity_log2_of_pagesize
 
         // WRITER
         // out tensor args
@@ -803,7 +811,10 @@ process_mcast_in0_program_and_create_override_variables(
                 (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
 
                 // padding args
-                (std::uint32_t)out_block_h  // last_block_h
+                (std::uint32_t)out_block_h,  // last_block_h
+
+                // sparsity args
+                (std::uint32_t)0,  // sparsity_addr
             };
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
@@ -837,6 +848,9 @@ process_mcast_in0_program_and_create_override_variables(
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_y
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
+
+                // sparsity args
+                (std::uint32_t)0,  // sparsity_addr
 
                 // WRITER
                 // out tensor args
@@ -1097,13 +1111,19 @@ process_mcast_in1_program_and_create_override_variables(
         (std::uint32_t)0,  // in0_mcast_num_cores
         // batch args
         (std::uint32_t)M * K,  // MtKt
-        (std::uint32_t)B       // batch
+        (std::uint32_t)B,      // batch
+
+        // sparsity args
+        (std::uint32_t)0,      // batchB
+        (std::uint32_t)false,  // sparsity_is_dram
+        (std::uint32_t)0,      // sparsity_log2_of_pagesize
     };
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
+        (std::uint32_t)false,  // sparsity_is_dram
         (std::uint32_t)out_is_dram,
 
         // READER
@@ -1129,6 +1149,9 @@ process_mcast_in1_program_and_create_override_variables(
         (std::uint32_t)K * N,        // KtNt
         (std::uint32_t)B,            // batch
         (std::uint32_t)bcast_batch,  // bcast_B
+        // sparsity args
+        (std::uint32_t)0,  // batchB
+        (std::uint32_t)0,  // sparsity_log2_of_pagesize
 
         // WRITER
         // out tensor args
@@ -1487,6 +1510,9 @@ process_mcast_in1_program_and_create_override_variables(
                 (std::uint32_t)end_core_noc.x,    // in1_mcast_dest_noc_end_x
                 (std::uint32_t)end_core_noc.y,    // in1_mcast_dest_noc_end_y
 
+                // sparsity args
+                (std::uint32_t)0,  // sparsity_addr
+
                 // WRITER
                 // out tensor args
                 (std::uint32_t)out_buffer->address(),
@@ -1583,7 +1609,10 @@ process_mcast_in1_program_and_create_override_variables(
             (std::uint32_t)0,  // in0_mcast_dest_noc_end_y
 
             // padding args
-            (std::uint32_t)per_core_M  // last_block_h
+            (std::uint32_t)per_core_M,  // last_block_h
+
+            // sparsity args
+            (std::uint32_t)0,  // sparsity_addr
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_1_default
     }
@@ -3059,6 +3088,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)in0_block_h,          // in0_block_h
         (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
+
         (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
         (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
         (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
@@ -3074,15 +3104,18 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         // batch args
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)B_A,      // batchA
-        (std::uint32_t)B_B,      // batchB
         // sparsity args
+        (std::uint32_t)B_B,  // batchB
         (std::uint32_t)sparsity_is_dram,
         (std::uint32_t)std::log2(B_B * (uint32_t)sizeof(uint32_t)),  // log2 of page size
+        // fuse op args
+        (std::uint32_t)false,  // fuse_op
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
+        (std::uint32_t)sparsity_is_dram,
         (std::uint32_t)out_is_dram,
 
         // READER
@@ -3107,7 +3140,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         // batch args
         (std::uint32_t)Kt * Nt,  // KtNt
         (std::uint32_t)B_A,      // batchA
-        (std::uint32_t)B_B,      // batchB
+        (std::uint32_t)true,     // bcast_B
+        // sparsity args
+        (std::uint32_t)B_B,                                          // batchB
+        (std::uint32_t)std::log2(B_B * (uint32_t)sizeof(uint32_t)),  // log2 of page size
 
         // WRITER
         // out tensor args
@@ -3123,10 +3159,13 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
         (std::uint32_t)Mt * Nt,  // MtNt
-        // sparsity args
-        (std::uint32_t)sparsity_is_dram,
-        (std::uint32_t)std::log2(B_B * (uint32_t)sizeof(uint32_t)),  // log2 of page size
-    };
+        // fuse op args
+        (std::uint32_t)false,  // fuse_op
+        (std::uint32_t)0,
+        (std::uint32_t)0,
+        (std::uint32_t)0,
+        (std::uint32_t)0,
+        (std::uint32_t)0};
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -3139,7 +3178,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)nnz,  // batch_nnz
+        (std::uint32_t)nnz,  // batch
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -3165,7 +3204,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_sparse_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_mcast_sender_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -3180,7 +3219,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     if (in0_mcast_receivers.num_cores() > 0) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_sparse_bmm_tile_layout_in0_receiver.cpp",
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             in0_mcast_receivers,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -3191,7 +3230,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_sparse_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         all_cores_with_work,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -3414,6 +3453,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
 
+                // sparsity args
+                (std::uint32_t)sparsity_buffer->address(),  // sparsity_addr
+
                 // WRITER
                 // out tensor args
                 (std::uint32_t)out_buffer->address(),
@@ -3457,8 +3499,11 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 mm_in1_sender_writer_args.push_back(out_num_blocks_x);
             }
 
-            // sparsity args
-            mm_in1_sender_writer_args.push_back(sparsity_buffer->address());
+            mm_in1_sender_writer_args.push_back(0);
+            mm_in1_sender_writer_args.push_back(0);
+            mm_in1_sender_writer_args.push_back(0);
+            mm_in1_sender_writer_args.push_back(0);
+            mm_in1_sender_writer_args.push_back(0);
 
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
@@ -3503,7 +3548,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 // in1 sender
                 writer_runtime_args[0] = src_buffer_b->address();
                 writer_runtime_args[6] = dst_buffer->address();
-                writer_runtime_args[20] = sparsity_buffer->address();
+                writer_runtime_args[6] = sparsity_buffer->address();
             }
         };
 
