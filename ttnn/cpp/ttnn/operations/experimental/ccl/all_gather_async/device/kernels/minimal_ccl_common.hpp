@@ -8,6 +8,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include <cstdint>
 #include <utility>
 
