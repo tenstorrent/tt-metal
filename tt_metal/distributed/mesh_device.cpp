@@ -591,12 +591,15 @@ size_t MeshDevice::num_program_cache_entries() { return program_cache_->num_entr
 
 SubDeviceManagerId MeshDevice::create_sub_device_manager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    auto lock = lock_api();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 void MeshDevice::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    auto lock = lock_api();
     sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
 }
 void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    auto lock = lock_api();
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDevice::clear_loaded_sub_device_manager() { sub_device_manager_tracker_->clear_loaded_sub_device_manager(); }
@@ -856,11 +859,17 @@ bool MeshDevice::initialize(
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
-                this, cq_id, dispatch_thread_pool_, reader_thread_pool_, cq_shared_state));
+                this,
+                cq_id,
+                dispatch_thread_pool_,
+                reader_thread_pool_,
+                cq_shared_state,
+                std::bind(&MeshDevice::lock_api, this)));
         }
     } else {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(this, cq_id));
+            mesh_command_queues_.push_back(
+                std::make_unique<SDMeshCommandQueue>(this, cq_id, std::bind(&MeshDevice::lock_api, this)));
         }
     }
     Inspector::mesh_device_initialized(this);

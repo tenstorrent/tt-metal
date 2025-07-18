@@ -714,5 +714,54 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
     }
 }
 
+TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkloadMultiThread) {
+    uint32_t num_programs = 30;
+    uint32_t num_iterations = 1500;
+    auto random_seed = 10;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
+    log_info(tt::LogTest, "Create {} MeshWorkloads", num_programs);
+
+    std::vector<std::thread> threads;
+    for (int thread_idx = 0; thread_idx < 2; thread_idx += 1) {
+        threads.push_back(std::thread([&, thread_idx]() {
+            auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+                num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
+            std::mt19937 rng(seed);
+            std::uniform_int_distribution<int> gen_col(1, mesh_device_->num_cols());
+            std::uniform_int_distribution<int> gen_row(1, mesh_device_->num_rows());
+            std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
+
+            // Create multiple mesh workloads on grids of random sizes.
+            // Compile the workload (lower + send binaries to mesh device here as well)
+            log_info(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
+            for (int i = 0; i < num_programs; i += 1) {
+                // Choose a grid of random dimensions and run a MeshWorkload on it
+                MeshCoordinateRange device_range(
+                    MeshCoordinate{0, 0}, MeshCoordinate{gen_row(rng) - 1, gen_col(rng) - 1});
+                auto random_workload = std::make_shared<MeshWorkload>();
+                AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), device_range);
+                EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+                mesh_workloads.push_back(random_workload);
+            }
+            for (int i = 0; i < num_iterations; i++) {
+                if (i % 100 == 0) {
+                    log_info(tt::LogTest, "Run MeshWorkloads thread {} for iteration {}", thread_idx, i);
+                }
+                for (auto& workload : mesh_workloads) {
+                    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+                }
+            }
+        }));
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    log_info(tt::LogTest, "Calling Finish");
+    Finish(mesh_device_->mesh_command_queue());
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
