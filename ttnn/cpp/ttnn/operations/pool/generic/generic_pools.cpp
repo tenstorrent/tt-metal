@@ -158,7 +158,7 @@ static Tensor pool2d_invoke(
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
     uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * (is_out_tiled ? tt::constants::TILE_WIDTH : 1));
-    uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
+    // uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
         "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}",
@@ -196,9 +196,6 @@ static Tensor pool2d_invoke(
         input_tensor_sharded.memory_config(),
         is_out_tiled,
         in_place_halo);
-
-    const uint32_t pre_allocate_size =
-        haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     const uint32_t pre_allocate_size =
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;

@@ -262,9 +262,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_nbytes = datum_size(in_df);
     const uint32_t out_nbytes = datum_size(out_df);
 
-    const uint32_t in_nbytes_c = in_c / num_shards_c * in_nbytes;  // row of input (channels)
+    const uint32_t in_nbytes_c = in_c / num_shards_c * in_nbytes;                   // row of input (channels)
     const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * in_nbytes;  // row of input (channels)
-    const uint32_t out_nbytes_c = in_c / num_shards_c * out_nbytes;  // row of output (channels)
+    const uint32_t out_nbytes_c = in_c / num_shards_c * out_nbytes;                 // row of output (channels)
 
     constexpr tt::DataFormat indices_df =
         tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.dtype());
@@ -275,6 +275,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / 16);
     const bool last_tile_is_partial = (in_c / num_shards_c) % 32 != 0 && (in_c / num_shards_c) % 32 < 17;
+
+    // Hardware can do reduction of 8 tiles at a time.
+    // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
+    const bool is_large_kernel = last_tile_is_partial ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2
+                                                      : kernel_size_hw > tt::constants::TILE_HEIGHT;
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const uint32_t max_rows_for_reduction =
