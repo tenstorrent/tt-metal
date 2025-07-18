@@ -452,6 +452,7 @@ class ModelArgs:
         self.is_90b = False
         self.fuse_qkv = False
         self.fuse_mlp = False
+        self.trust_remote_code_hf = False
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
@@ -523,6 +524,8 @@ class ModelArgs:
         # Load model params
         if HF_MODEL:
             self.checkpoint_type = CheckpointType.HuggingFace
+            if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+                self.trust_remote_code_hf = True
             self._set_hf_params(self.CKPT_DIR)
         elif not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
@@ -1568,9 +1571,13 @@ class ModelArgs:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                ).to_dict()
             else:
-                config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+                config = AutoConfig.from_pretrained(
+                    self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
+                ).to_dict()
 
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
@@ -1633,10 +1640,12 @@ class ModelArgs:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                )
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -1650,7 +1659,7 @@ class ModelArgs:
             if self.from_hf_url:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf)
                 self.cached_hf_model = model
                 state_dict = model.state_dict()
             else:
@@ -2013,6 +2022,7 @@ class ModelArgs:
                 "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
                 "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
                 "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
+                "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             }
 
             logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -2056,6 +2066,12 @@ class ModelArgs:
                         fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
                     elif "mistral" in model_name_lower and "7b" in model_name_lower:
                         fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+                    elif (
+                        "phi-3-mini" in model_name_lower
+                        and "128k" in model_name_lower
+                        and "instruct" in model_name_lower
+                    ):
+                        fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
 
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
@@ -2119,13 +2135,17 @@ class ModelArgs:
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                )
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
                 if self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
+                    )
                     self.cached_hf_model = model
                 else:
                     model = self.cached_hf_model
