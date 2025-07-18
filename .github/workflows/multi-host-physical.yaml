@@ -37,4 +37,4 @@ jobs:
         run: |
           echo "Running mpirun command on multiple hosts"
           mpirun --rankfile /etc/rankfile --tag-output --mca btl_tcp_if_exclude docker0,lo --mca orte_launch_agent $(pwd)/.github/scripts/multihost/physical/docker-wrapper.sh ./print_env.sh
-          mpirun --rankfile /etc/rankfile --tag-output --mca btl_tcp_if_exclude docker0,lo --mca orte_launch_agent $(pwd)/.github/scripts/multihost/physical/docker-wrapper.sh ./build/test/tt_metal/multi_host_fabric_tests
+          mpirun --rankfile /etc/rankfile --tag-output bash -c "export LD_LIBRARY_PATH=./build/lib; export TT_METAL_HOME=$(pwd); export PYTHONPATH=$(pwd); export ARCH_NAME=wormhole_b0; ./build/test/tt_metal/multi_host_fabric_tests"
