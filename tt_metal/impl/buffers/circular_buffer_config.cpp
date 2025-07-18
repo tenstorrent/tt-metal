@@ -113,6 +113,8 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
             "during config creation",
             buffer_index);
     }
+    log_warning(
+        tt::LogOp, "Total circular buffer size {} B must be divisible by page size {} B", this->total_size_, page_size);
     if (this->total_size_ % page_size != 0) {
         TT_THROW(
             "Failed allocation attempt on buffer index {}. Total circular buffer size {} B must be divisible by page "

@@ -241,11 +241,19 @@ void kernel_main() {
     // const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
     // const auto cu_window_seqlens_tile_shape = TensorTileShape(1, 1, 1, cu_window_seqlens_npages);
 
-    riscv_wait(1000000000);
+    // riscv_wait(1000000000);
 
     // load the entire cu_window_seqlens tensor into a circular buffer
     cb_reserve_back(cb_cu_window_seqlens_in, 1);
-    noc_async_read_tile(0, cu_window_seqlens_reader, get_write_ptr(cb_cu_window_seqlens_in));
+    uint32_t cu_window_seqlens_ptr = get_write_ptr(cb_cu_window_seqlens_in);
+    DPRINT << "cu_window_seqlens_ptr: " << cu_window_seqlens_ptr
+           << " cu_window_seqlens_tile_bytes: " << cu_window_seqlens_tile_bytes << ENDL();
+    switch (cu_window_seqlens_data_format) {
+        case DataFormat::Int32: DPRINT << "cu_window_seqlens_data_format: Int32" << ENDL(); break;
+        case DataFormat::UInt32: DPRINT << "cu_window_seqlens_data_format: UInt32" << ENDL(); break;
+        default: DPRINT << "cu_window_seqlens_data_format: UNKNOWN" << ENDL(); break;
+    }
+    noc_async_read_tile(0, cu_window_seqlens_reader, cu_window_seqlens_ptr);
     noc_async_read_barrier();  // Wait until tile reads are done todo)) try to remove this barrier
     cb_push_back(cb_cu_window_seqlens_in, 1);
     auto cb_cu_window_seqlens_ptr = ArrayView<uint32_t, CBAccessType::CB_BACK_RO>(cb_cu_window_seqlens_in);
@@ -254,6 +262,8 @@ void kernel_main() {
             return cb_cu_window_seqlens_ptr[idx];
         } else if constexpr (cu_window_seqlens_data_format == DataFormat::Int32) {
             return (uint32_t)cb_cu_window_seqlens_ptr[idx];
+        } else {
+            ASSERT(false);
         }
     };
     auto get_window_indices = [&](uint32_t local_mask_idx) {

@@ -404,6 +404,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
             cu_window_seqlens_npages * cu_window_seqlens_page_size, {{tt::CBIndex::c_3, cu_window_seqlens_df}})
             .set_page_size(tt::CBIndex::c_3, cu_window_seqlens_page_size);
     CreateCircularBuffer(program, core_grid, c_in3_config);
+    log_debug(tt::LogOp, "cu_window_seqlens_page_size: {}", cu_window_seqlens_page_size);
 
     // cb_mask_in
     uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
