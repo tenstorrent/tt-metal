@@ -140,6 +140,7 @@ class TtLlamaImageAttention(LightweightModule):
         seq_len = x_11SH.shape[-2]
 
         MAX_MM_SEQ_LEN = self.configuration.VISION_MAX_MM_SEQ
+        num_chunks = seq_len // MAX_MM_SEQ_LEN
 
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
@@ -171,7 +172,10 @@ class TtLlamaImageAttention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
         # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=32 * num_chunks,
+            k_chunk_size=32 * num_chunks,
+            exp_approx_mode=False,
         )
         attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_1QSD,

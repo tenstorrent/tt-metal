@@ -83,8 +83,8 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
         self.vision_projection_bias = as_interleaved_tensor("vision_projection", "bias", ttnn.bfloat16, dim=-1)
         self.vision_projection_bias = ttnn.reshape(self.vision_projection_bias, [1, -1])
 
-    def forward(self, images, ar):
-        vision_tokens = self.vision_encoder(images, ar)
+    def forward(self, images, ar, max_actual_num_chunks):
+        vision_tokens = self.vision_encoder(images, ar, max_actual_num_chunks)
 
         seq_len = vision_tokens.shape[-2]
 
