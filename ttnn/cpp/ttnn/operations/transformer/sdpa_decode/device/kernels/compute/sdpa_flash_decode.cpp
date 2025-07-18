@@ -296,15 +296,9 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
-                reduce_c<
-                    PoolType::MAX,
-                    ReduceDim::REDUCE_ROW,
-                    cb_qk_im,
-                    cb_identity_scale_in,
-                    Sq_chunk_t,
-                    cb_cur_max,
-                    cb_prev_max>(Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
-                
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
+                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
@@ -400,11 +394,11 @@ void MAIN {
 
                     /// l1 = torch.exp((m_2 - m) * scale) * l_2
                     sub_exp_block<scale_fp32>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
-                    mul_block_bcast_cols_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t, DHt);
+                    mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
 
                     /// l2 = torch.exp((m_1 - m)  * scale) * l_1
                     sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    mul_block_bcast_cols_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t, DHt);
+                    mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                     /// l = l1 + l2
                     add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
@@ -425,7 +419,7 @@ void MAIN {
              * Performs final row-reduction on the partial sum.
              */
             matmul_reduce<Sq_chunk_t>(cb_col_identity, cb_prev_sum);
-            copy_block(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
+            move_block<false>(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
 
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(cb_cur_sum, Sq_chunk_t);

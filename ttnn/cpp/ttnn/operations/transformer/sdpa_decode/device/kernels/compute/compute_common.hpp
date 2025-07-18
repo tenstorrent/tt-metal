@@ -68,15 +68,8 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     cb_push_back(out_cb, num_tiles);
 }
 
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t in0_cb,
-    uint32_t scale_cb,
-    uint32_t rows,
-    uint32_t out_cb,
-    uint32_t prev_cb>
-void reduce_c(uint32_t cols, bool do_eltwise_max = false) {
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows>
+void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
