@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/coordinate_translation.hpp"
+#include "tt_metal/distributed/system_mesh_translation_map.hpp"
 
 #include <boost/move/utility_core.hpp>
 #include <optional>
@@ -42,7 +42,8 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
         physical_coordinates.reserve(local_mesh_shape.mesh_size());
 
         for (const auto& coord : local_coord_range) {
-            const auto logical_chip_id = coord.to_linear_index(control_plane.get_physical_mesh_shape(mesh_id, tt::tt_fabric::MeshScope::GLOBAL));
+            const auto logical_chip_id =
+                coord.to_linear_index(control_plane.get_physical_mesh_shape(mesh_id, tt::tt_fabric::MeshScope::GLOBAL));
             // Query the control plane to get the physical chip id from logical chip id
             const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
                 tt::tt_fabric::FabricNodeId(mesh_id, logical_chip_id));
@@ -54,7 +55,11 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
             log_debug(LogDistributed, "Adding logical->physical coordinate: {}, {}", logical_chip_id, physical_chip_id);
             physical_coordinates.push_back(PhysicalMeshCoordinate(mesh_id, /*chip_id=*/physical_chip_id));
         }
-        log_debug(LogDistributed, "SystemMesh local shape: {}, physical coordinates count: {}", local_mesh_shape, physical_coordinates.size());
+        log_debug(
+            LogDistributed,
+            "SystemMesh local shape: {}, physical coordinates count: {}",
+            local_mesh_shape,
+            physical_coordinates.size());
         return MeshContainer<PhysicalMeshCoordinate>(local_mesh_shape, std::move(physical_coordinates));
     }());
     return kTranslationMap.get();

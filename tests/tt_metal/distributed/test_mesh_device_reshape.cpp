@@ -89,7 +89,7 @@ TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
     const auto& shape = GetParam();
 
     auto& system_mesh = SystemMesh::instance();
-    EXPECT_THAT(system_mesh.get_mapped_physical_device_ids(shape), SizeIs(shape.mesh_size()));
+    EXPECT_THAT(system_mesh.get_mapped_physical_device_ids(shape).values(), SizeIs(shape.mesh_size()));
 }
 
 // Test all possible mesh configurations on T3000
@@ -242,7 +242,7 @@ TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
 
     // Fetch the device ids for a physically connected 2x2 mesh.
-    auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshShape(2, 2));
+    auto physical_device_ids = extract_locals(system_mesh.get_mapped_physical_device_ids(MeshShape(2, 2)).values());
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
     // We will create a 1x4 mesh and then reshape it to 2x2.
