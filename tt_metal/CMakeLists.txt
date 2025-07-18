@@ -181,6 +181,8 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary_sfpu.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary_sfpu_params.h
+            # third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_ternary_sfpu_params.h
+            # third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_ternary_sfpu.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpi.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h
@@ -262,11 +264,14 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_trigonometry.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_silu.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_typecast.h
+            # third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_where.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu_params.h
+            # third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_ternary_sfpu_params.h
+            # third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_ternary_sfpu.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpi.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h
