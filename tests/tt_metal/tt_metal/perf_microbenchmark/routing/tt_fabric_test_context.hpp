@@ -463,6 +463,11 @@ private:
                 traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
         } else {
             dst_node_ids = traffic_config.dst_node_ids.value();
+
+            // assign hops for 2d LL and 1D
+            if (!(fixture_->use_dynamic_routing())) {
+                hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+            }
         }
 
         uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_node_ids[0], dst_logical_core);

@@ -71,14 +71,14 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
 
 public:
     void init(const PhysicalMeshConfig* physical_mesh_config = nullptr) {
-        auto local_mesh_id = -1;
         if (physical_mesh_config) {
+            log_info(tt::LogTest, "here51");
             // hacky workaround for now, will change as more multi-host infra is brought up
             const char* mesh_id_str = std::getenv("TT_MESH_ID");
             const char* host_rank_str = std::getenv("TT_HOST_RANK");
-            local_mesh_id = std::stoi(std::string(mesh_id_str));
+            const auto local_mesh_id = std::stoi(std::string(mesh_id_str));
             auto local_host_rank = std::string(host_rank_str);
-
+            log_info(tt::LogTest, "here52");
             const auto& eth_coord_mapping = physical_mesh_config->eth_coord_mapping;
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
@@ -94,6 +94,14 @@ public:
             }
             tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
                 physical_mesh_config->mesh_descriptor_path, chip_to_eth_coord_mapping);
+
+            const auto user_mesh_id =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids()[0];
+            TT_FATAL(
+                *(user_mesh_id) == local_mesh_id,
+                "Local mesh id {} does not not match user mesh id {}",
+                *(user_mesh_id),
+                local_mesh_id);
         }
         control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
@@ -101,11 +109,7 @@ public:
             user_meshes.size() == 1,
             "Only expected a single user mesh for a single host, but got: {}",
             user_meshes.size());
-        TT_FATAL(
-            *(user_meshes[0]) == local_mesh_id,
-            "Local mesh id {} does not not match user mesh id {}",
-            *(user_meshes[0]),
-            local_mesh_id);
+
         available_mesh_ids_.insert(user_meshes[0]);
         mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
         const auto coordinates = MeshCoordinateRange(mesh_shape_);
@@ -114,7 +118,7 @@ public:
         }
 
         for (auto i = 0; i < available_device_coordinates_.size(); i++) {
-            local_available_node_ids_.emplace_back(FabricNodeId(MeshId{local_mesh_id}, i));
+            local_available_node_ids_.emplace_back(FabricNodeId(MeshId{user_meshes[0]}, i));
         }
         if (physical_mesh_config) {  // TOOD: temporary workaround
             for (auto i = 0; i < physical_mesh_config->eth_coord_mapping.size(); i++) {
@@ -125,6 +129,9 @@ public:
                     global_available_node_ids_.emplace_back(FabricNodeId(MeshId{i}, j++));
                 }
             }
+        } else {
+            global_available_node_ids_.insert(
+                global_available_node_ids_.end(), local_available_node_ids_.begin(), local_available_node_ids_.end());
         }
         // to ensure fabric config is set first, which affects mesh graph descriptor selection
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
@@ -546,6 +553,7 @@ public:
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_all_unicast_pairs() const override {
         const auto device_ids = get_global_node_ids();
+        log_info(tt::LogTest, "here");
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
         pairs.reserve(device_ids.size() * (device_ids.size() - 1));
         for (const auto& src_node : device_ids) {
@@ -558,6 +566,7 @@ public:
                         continue;
                     }
                 }
+                log_info(tt::LogTest, "{} -> {}", src_node, dst_node);
                 pairs.push_back({src_node, dst_node});
             }
         }

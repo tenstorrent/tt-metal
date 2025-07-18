@@ -41,12 +41,14 @@ int main(int argc, char** argv) {
         cmdline_parser.print_help();
         return 0;
     }
+    log_info(tt::LogTest, "here2");
 
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     tt::tt_fabric::fabric_tests::PhysicalMeshConfig physical_mesh_config;
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser;
+        log_info(tt::LogTest, "here3");
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
         raw_test_configs = std::move(parsed_yaml.test_configs);
         if (parsed_yaml.allocation_policies.has_value()) {
@@ -54,16 +56,21 @@ int main(int argc, char** argv) {
         }
         if (parsed_yaml.physical_mesh_config.has_value()) {
             physical_mesh_config = parsed_yaml.physical_mesh_config.value();
+            log_info(tt::LogTest, "here4");
         }
     } else {
         raw_test_configs = cmdline_parser.generate_default_configs();
     }
+
+    log_info(tt::LogTest, "here5");
 
     if (!physical_mesh_config.mesh_descriptor_path.empty()) {
         fixture->init(&physical_mesh_config);
     } else {
         fixture->init();
     }
+
+    log_info(tt::LogTest, "here6");
 
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
@@ -84,7 +91,7 @@ int main(int argc, char** argv) {
     }
 
     std::optional<uint32_t> master_seed = cmdline_parser.get_master_seed();
-
+    log_info(tt::LogTest, "here7");
     // If master seed is not provided, initialize it
     if (!master_seed.has_value()) {
         master_seed = test_context.initialize_master_seed();
