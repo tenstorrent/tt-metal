@@ -3,24 +3,37 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import os
+from typing import Optional, Tuple
 
 from loguru import logger
 import pytest
 import random
 import torch
+import math
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import comp_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
+
+TIMEOUT = 50
+
+# Parameters provided to the test vector generator are defined here.
+parameters = {
+    "moe_traces": {
+        "mkn": [(128, 7168, 2048), (128, 2048, 7168)],
+        "num_experts": [8],
+        "num_tokens": [(1, 1), (1, 4), (1, 32)],
+        "tile_h": [32, 16],
+        "tile_w": [32, 16],
+        "in1_dtype": [ttnn.bfloat8_b],
+    },
+}
 
 
-@pytest.mark.parametrize("mkn", [(32, 128, 512)])
-@pytest.mark.parametrize("num_experts", [8])
-@pytest.mark.parametrize("num_tokens", [(1, 4)])
-@pytest.mark.parametrize("tile_h", [16])
-@pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
-def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype):
-    torch.manual_seed(0)
+def run_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype) -> list:
     m, k, n = mkn
     b, s = num_tokens
     in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
@@ -38,6 +51,7 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
     sparsity = sparsity.to(dtype=torch.float32)
 
     nnz = int((sparsity != 0).sum().item())
+
     logger.info(f"nnz: {nnz}")
 
     in0_t = ttnn.from_torch(
@@ -67,6 +81,8 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
     )
 
     output_tile = ttnn.Tile([tile_h, tile_w])
+
+    start_time = start_measuring_time()
     output_t = ttnn.sparse_matmul(
         in0_t,
         in1_t,
@@ -75,18 +91,36 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
     )
-
     output_tensor = ttnn.to_torch(output_t)
-    logger.info(output_tensor.shape)
+    e2e_perf = stop_measuring_time(start_time)
 
     # Compute matmul using torch for each batch and concatenate the results
-    for b, s, e in itertools.product(range(b), range(s), range(num_experts)):
-        if sparsity[0, b, s, e] == 0.0:
+    for b_idx, s_idx, e_idx in itertools.product(range(b), range(s), range(num_experts)):
+        if sparsity[0, b_idx, s_idx, e_idx] == 0.0:
             continue
-        in0_batch = in0[b, s, :, :]
-        in1_batch = in1[0, e, :, :]
+        in0_batch = in0[b_idx, s_idx, :, :]
+        in1_batch = in1[0, e_idx, :, :]
         pt_out = torch.matmul(in0_batch, in1_batch)
+        ttnn_out = output_tensor[b_idx, s_idx, 0, e_idx, :, :]
+        # We only check the first non-zero entry for PCC
+        return get_run_return(pt_out, ttnn_out, 0.999, [in0_t, in1_t, sparsity_t], e2e_perf)
 
-        # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b, s, 0, e, :, :], expected_pcc)
+
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
+def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype):
+    (result, msg), e2e_perf = run_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype)
+    assert result, msg
+    logger.info(f"e2e_perf: {e2e_perf}")
+
+
+def run(
+    mkn,
+    num_experts,
+    num_tokens,
+    tile_h,
+    tile_w,
+    in1_dtype,
+    *,
+    device,
+) -> list:
+    return run_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype)
