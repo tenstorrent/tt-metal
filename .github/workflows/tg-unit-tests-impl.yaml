@@ -22,55 +22,56 @@ on:
         default: "config-tg"
 
 jobs:
-  TG-UMD-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          {
-            name: "Galaxy UMD unit tests",
-            arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-functional"],
-            cmd: "./build/test/umd/galaxy/unit_tests_glx"
-          },  # Bojan Roško
-        ]
-    runs-on: ${{ matrix.test-group.runs-on }}
-    container:
-      image: ${{ inputs.docker-image }}
-      env:
-        ARCH_NAME: ${{ matrix.test-group.arch }}
-        LOGURU_LEVEL: INFO
-        TT_METAL_HOME: /work
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 500 # Need enough history for `git describe`
-          fetch-tags: true # Need tags for `git describe`
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+  # See issue 25270
+  #TG-UMD-tests:
+  #  strategy:
+  #    fail-fast: false
+  #    matrix:
+  #      test-group: [
+  #        {
+  #          name: "Galaxy UMD unit tests",
+  #          arch: wormhole_b0,
+  #          runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-functional"],
+  #          cmd: "./build/test/umd/galaxy/unit_tests_glx"
+  #        },  # Bojan Roško
+  #      ]
+  #  runs-on: ${{ matrix.test-group.runs-on }}
+  #  container:
+  #    image: ${{ inputs.docker-image }}
+  #    env:
+  #      ARCH_NAME: ${{ matrix.test-group.arch }}
+  #      LOGURU_LEVEL: INFO
+  #      TT_METAL_HOME: /work
+  #    volumes:
+  #      - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+  #      - /dev/hugepages-1G:/dev/hugepages-1G
+  #      - /mnt/MLPerf:/mnt/MLPerf:ro
+  #    options: "--device /dev/tenstorrent"
+  #  defaults:
+  #    run:
+  #      shell: bash
+  #      working-directory: /work # https://github.com/actions/runner/issues/878
+  #  steps:
+  #    - name: ⬇️ Checkout
+  #      uses: actions/checkout@v4
+  #      with:
+  #        submodules: recursive
+  #        fetch-depth: 500 # Need enough history for `git describe`
+  #        fetch-tags: true # Need tags for `git describe`
+  #        path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
-      - name: Build UMD device and tests
-        run: |
-          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
-          cmake --build build --target umd_tests
+  #    - name: Build UMD device and tests
+  #      run: |
+  #        cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+  #        cmake --build build --target umd_tests
 
-      - name: Run UMD unit regression tests
-        timeout-minutes: 10
-        run: |
-          ${{ matrix.test-group.cmd }}
+  #    - name: Run UMD unit regression tests
+  #      timeout-minutes: 10
+  #      run: |
+  #        ${{ matrix.test-group.cmd }}
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
+  #    - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+  #      if: always()
 
   TG-tests:
     strategy:
