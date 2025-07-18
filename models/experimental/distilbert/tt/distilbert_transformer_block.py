@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple
-import torch.nn as nn
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -16,7 +16,7 @@ from models.experimental.distilbert.tt.distilbert_multihead_self_attention impor
 from models.experimental.distilbert.tt.distilbert_ffn import TtFFN
 
 
-class TtTransformerBlock(nn.Module):
+class TtTransformerBlock(LightweightModule):
     def __init__(self, config, state_dict=None, base_address="", device=None):
         super().__init__()
         self.config = config

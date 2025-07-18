@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 
 import models.experimental.bloom_old.bloom_utils as bloom_utils
@@ -14,7 +15,7 @@ from fused_ops.layernorm import Layernorm as TtLayernorm
 from typing import Optional, Tuple
 
 
-class TtBloomBlock(torch.nn.Module):
+class TtBloomBlock(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 

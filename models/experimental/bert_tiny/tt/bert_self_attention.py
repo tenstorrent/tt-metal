@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 import math
 import torch
@@ -139,7 +139,7 @@ def mha(
     return mha_
 
 
-class TtBertselfattention(nn.Module):
+class TtBertselfattention(LightweightModule):
     def __init__(self, config, encoder_idx: int, state_dict=None, device=None, mem_config=None):
         super().__init__()
         self.config = config
