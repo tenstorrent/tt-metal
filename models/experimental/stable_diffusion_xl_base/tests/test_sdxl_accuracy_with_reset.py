@@ -71,11 +71,13 @@ def test_accuracy_with_reset(
     for current_start in range(start_from, start_from + num_prompts, reset_period):
         current_num_prompts = min(reset_period, start_from + num_prompts - current_start)
 
-        env = ["env"] if need_yaml_bool or is_galaxy() else []
+        env = ["env"]
         prefix_for_yaml = (
             ["WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml"] if need_yaml_bool else []
         )  # required in CI
-        prefix_for_throttle = ["TT_MM_THROTTLE_PERF=5"] if is_galaxy() else []  # for galaxies, to avoid hangs
+        prefix_for_throttle = [
+            "TT_MM_THROTTLE_PERF=5"
+        ]  # for galaxies it is a must, for other machines beeing super safe
         command = (
             env
             + prefix_for_yaml
@@ -105,12 +107,15 @@ def test_accuracy_with_reset(
         if reset_bool and current_start + reset_period < start_from + num_prompts:
             if is_galaxy():
                 subprocess.run(["tt-smi", "-r", "/opt/tt_metal_infra/host-scripts/reset.json"], check=True)
-                subprocess.run(["sleep", "60"], check=True)
             else:
                 subprocess.run(["tt-smi", "-r"], check=True)
             logger.info(
                 f"reset done for device {DEVICE_NAME_LOCAL} after {current_start + current_num_prompts} prompts"
             )
+            logger.info("sleeping for 60 seconds to allow reset to complete safely")
+            subprocess.run(
+                ["sleep", "60"], check=True
+            )  # for galaxies it is a must, for other machines beeing super safe
 
     images = sdxl_collect_images(start_from, num_prompts)
 
