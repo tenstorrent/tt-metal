@@ -122,12 +122,12 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
 
     // Division by 0 when base is 0 and pow is negative => set to NaN
-    v_if((base == 0.f || base == -0.f) && pow < 0.f) {
+    v_if((base == 0.f) && pow < 0.f) {
         y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
     }
-    v_endif
+    v_endblock;
 
-    v_if(base < -0.0f) {  // negative base
+    v_if(base < 0.0f) {  // negative base
         // Check for integer power
         v_if(pow_rounded == pow) {
             // if pow is odd integer, set result to negative
