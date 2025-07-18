@@ -252,6 +252,16 @@ std::optional<eth_chan_directions> get_eth_forwarding_direction(
     return control_plane.routing_direction_to_eth_direction(routing_direction.value());
 }
 
+bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+}
+
+bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+}
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(

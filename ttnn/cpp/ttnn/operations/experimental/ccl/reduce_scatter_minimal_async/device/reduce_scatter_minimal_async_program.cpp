@@ -231,6 +231,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
 
     // Get worker cores
     // 2 senders per direction (2: forward, backward) per link (num_links)
@@ -518,6 +522,21 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     worker,
                     mux_kernel_config,
                     sender_writer_compile_args);
+                if (dir) {
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(),
+                        unicast_forward_args.begin(),
+                        unicast_forward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
+                } else {
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(),
+                        unicast_backward_args.begin(),
+                        unicast_backward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
+                }
                 if (intermediate_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
                 }
@@ -726,8 +745,12 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [num_targets_forward, num_targets_backward] =
+        ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
+    auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
     // Get worker cores
     // 2 senders (reader + core + writer) per direction (forward, backward) per link
@@ -1057,6 +1080,21 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     worker,
                     mux_kernel_config,
                     sender_writer_compile_args);
+                if (is_forward) {
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(),
+                        unicast_forward_args.begin(),
+                        unicast_forward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
+                } else {
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(),
+                        unicast_backward_args.begin(),
+                        unicast_backward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
+                }
                 if (intermediate_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
                 }
@@ -1179,11 +1217,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                         worker_writer_sender_runtime_args[6] = semaphore.at(2).address();
 
                         if (barrier_semaphore.has_value()) {
-<<<<<<< HEAD
-                        worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
-=======
                             worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
->>>>>>> a323568f83 (#0: Clang-format some ccl files)
                         }
 
                         core_idx++;
