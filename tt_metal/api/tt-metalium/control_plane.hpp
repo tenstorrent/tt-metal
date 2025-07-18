@@ -278,21 +278,4 @@ private:
     LocalMeshBinding local_mesh_binding_;
 };
 
-class GlobalControlPlane {
-public:
-    explicit GlobalControlPlane(const std::string& mesh_graph_desc_yaml_file);
-    explicit GlobalControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-    ~GlobalControlPlane();
-
-    tt::tt_fabric::ControlPlane& get_local_node_control_plane() { return *control_plane_; }
-
-private:
-    std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
-
-    std::string mesh_graph_desc_file_;
-};
-
 }  // namespace tt::tt_fabric
