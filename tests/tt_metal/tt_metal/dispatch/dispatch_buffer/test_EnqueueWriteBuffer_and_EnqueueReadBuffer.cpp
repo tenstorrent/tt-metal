@@ -294,14 +294,14 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             if (config.sharding_args.has_value()) {
                 distributed::DeviceLocalBufferConfig dram_config{
                     .page_size = config.page_size,
-                    .buffer_type = tt_metal::BufferType::DRAM,
+                    .buffer_type = config.buftype,
                     .sharding_args = config.sharding_args.value(),
                     .bottom_up = false};
                 bufa = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
             } else {
                 distributed::DeviceLocalBufferConfig dram_config{
                     .page_size = config.page_size,
-                    .buffer_type = tt_metal::BufferType::DRAM,
+                    .buffer_type = config.buftype,
                     .bottom_up = false,
                 };
                 bufa = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
@@ -626,14 +626,17 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, Sending131072Pages) {
 }
 
 TEST_F(UnitMeshCQSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTransferPage) {
+    std::cout << "beginning TestPageLargerThanAndUnalignedToTransferPage" << std::endl;
     constexpr uint32_t num_round_robins = 2;
     for (const auto& mesh_device : devices_) {
+        std::cout << "iteration: " << num_round_robins << std::endl;
         TestBufferConfig config = {
             .num_pages = num_round_robins * (mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = DispatchSettings::TRANSFER_PAGE_SIZE + 32,
             .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
+        std::cout << "end of iteration: " << num_round_robins << std::endl;
     }
 }
 
