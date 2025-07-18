@@ -27,11 +27,11 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
     auto& output = tensor_return_value;
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
@@ -55,7 +55,7 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
     uint32_t in0_w_tiles = input_shape[3] / TILE_WIDTH;
     uint32_t in1_w_tiles = 0;
     if (read_from_input_tensor_kv) {
-        in1_w_tiles = input_tensor_kv.value().get_padded_shape()[3] / TILE_WIDTH;
+        in1_w_tiles = input_tensor_kv.value().padded_shape()[3] / TILE_WIDTH;
     }
 
     // Per output tensor args
@@ -97,7 +97,7 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in1_is_dram = false;
     if (read_from_input_tensor_kv) {
@@ -336,11 +336,11 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
@@ -509,95 +509,6 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
 
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
     }
-
-    // auto override_runtime_arguments_callback = [
-    //         reader_kernel_id,
-    //         writer_kernel_id,
-    //         num_cores,
-    //         num_cores_y,
-    //         read_from_input_tensor_kv=read_from_input_tensor_kv,
-    //         cb_q_output,
-    //         cb_k_output,
-    //         cb_v_output,
-    //         cores,
-    //         head_size,
-    //         per_risc0_out_q_heads,
-    //         per_risc1_out_q_heads,
-    //         per_core_in_q_heads,
-    //         per_core_out_kv_heads,
-    //         per_core_in_kv_heads,
-    //         head_tiles,
-    //         num_kv_cores,
-    //         single_tile_size
-    //     ]
-    // (
-    //     const void* operation,
-    //     Program &program,
-    //     const std::vector<Tensor>& input_tensors,
-    //     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    //     const std::vector<Tensor>& output_tensors
-    // ) {
-
-    //     auto src_buffer = input_tensors.at(0).buffer();
-
-    //     uint32_t src_kv_buffer_addr = 0;
-    //     if (read_from_input_tensor_kv) {
-    //         src_kv_buffer_addr = optional_input_tensors.at(0).value().buffer()->address();
-    //     }
-
-    //     auto dst_buffer_query = output_tensors.at(0).buffer();
-    //     auto dst_buffer_key = output_tensors.at(1).buffer();
-    //     auto dst_buffer_value = output_tensors.at(2).buffer();
-
-    //     UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
-    //     UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
-    //     UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
-
-    //     uint32_t q_base_addr = input_tensors[0].buffer()->address();
-    //     uint32_t k_base_addr = 0;
-    //     if (read_from_input_tensor_kv) {
-    //         k_base_addr = input_tensor_kv.value().buffer()->address();
-    //     } else {
-    //         k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
-    //     }
-    //     uint32_t v_base_addr = k_base_addr + per_core_in_kv_heads * head_tiles * single_tile_size;
-
-    //     uint32_t remote_q_head_start_idx = 0;
-    //     uint32_t remote_kv_head_start_idx = 0;
-    //     uint32_t q_start_addr = q_base_addr;
-    //     uint32_t k_start_addr = k_base_addr;
-    //     uint32_t v_start_addr = v_base_addr;
-
-    //     for (uint32_t i = 0; i < num_cores; ++i) {
-    //         const auto& core = cores[i];
-    //         bool read_kv_heads = i < num_kv_cores;
-    //         {
-    //             auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-    //             runtime_args[6] = q_base_addr;
-    //             runtime_args[7] = q_start_addr;
-    //             runtime_args[15] = k_base_addr;
-    //             runtime_args[16] = k_start_addr;
-    //             remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
-    //             q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
-    //         }
-    //         {
-    //             auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-    //             runtime_args[6] = q_base_addr;
-    //             runtime_args[15] = v_base_addr;
-    //             if (per_risc1_out_q_heads > 0) {
-    //                 runtime_args[7] = q_start_addr;
-    //                 remote_q_head_start_idx = (remote_q_head_start_idx + per_risc1_out_q_heads) %
-    //                 per_core_in_q_heads; q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
-    //             }
-    //             if (read_kv_heads) {
-    //                 runtime_args[16] = v_start_addr;
-    //                 remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) %
-    //                 per_core_in_kv_heads; k_start_addr = k_base_addr + remote_kv_head_start_idx * head_size;
-    //                 v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;
-    //             }
-    //         }
-    //     }
-    // };
 
     return {
         std::move(program),
