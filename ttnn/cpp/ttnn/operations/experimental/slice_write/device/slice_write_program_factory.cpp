@@ -510,9 +510,9 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     auto output_shape = output_tensor.padded_shape();
     log_debug(tt::LogOp, "Slice Write Output Shape: {}", output_shape);
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     auto shard_spec = input_tensor.shard_spec().value();
@@ -697,9 +697,9 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         actual_input_shape[index] = output_tensor_end[index] - output_tensor_start[index];
     }
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     log_debug(tt::LogOp, "Slice Write Input Shape : {} ,Actual Input Shape: {}", input_shape, input_shape);

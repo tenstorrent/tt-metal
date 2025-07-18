@@ -71,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     uint32_t cb_num_pages = 2;
     uint32_t cb_page_size = fabric_max_payload_size;
 
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     auto src0_cb_index = tt::CBIndex::c_0;
 

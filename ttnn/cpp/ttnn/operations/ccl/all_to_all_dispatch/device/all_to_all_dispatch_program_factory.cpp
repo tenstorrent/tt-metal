@@ -146,9 +146,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto [neighbors, directions] =
         common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
-    auto input_shape = input_tensor.get_tensor_spec().logical_shape();
-    auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
-    auto mapping_shape = mapping_tensor.get_tensor_spec().logical_shape();
+    auto input_shape = input_tensor.tensor_spec().logical_shape();
+    auto indices_shape = indices_tensor.tensor_spec().logical_shape();
+    auto mapping_shape = mapping_tensor.tensor_spec().logical_shape();
 
     uint32_t num_devices = mesh_view.num_devices();
     uint32_t dispatch_devices =
@@ -176,9 +176,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto output_pages = detail::get_num_pages(output_tensor);
     auto metadata_pages = detail::get_num_pages(metadata_tensor);
 
-    auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices_tensor.get_dtype());
-    auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.get_dtype());
+    auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices_tensor.dtype());
+    auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
 
     constexpr uint32_t buffering_factor = 2;
 
