@@ -73,6 +73,20 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        indices_tensor_torch = (
+            torch.arange(self.args.padded_vocab_size, dtype=torch.int32)
+            .view(1, 1, 1, -1)
+            .expand(1, 1, self.max_batch_size, -1)
+        )
+        self.tt_indices_tensor = ttnn.from_torch(
+            indices_tensor_torch,
+            dtype=ttnn.uint16,
+            layout=ttnn.Layout.TILE,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(3, None), mesh_shape=self.args.cluster_shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def forward(
         self,
         x: ttnn.Tensor,
