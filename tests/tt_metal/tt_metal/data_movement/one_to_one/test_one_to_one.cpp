@@ -25,11 +25,11 @@ struct OneToOneConfig {
     uint32_t pages_per_transaction = 0;
     uint32_t bytes_per_page = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
+    uint32_t virtual_channel = 0;  // Virtual channel for the NOC
 
     // TODO: Add the following parameters
-    //  1. Virtual Channel
-    //  2. Which NOC to use
-    //  3. Posted flag
+    //  1. Which NOC to use
+    //  2. Posted flag
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
@@ -75,29 +75,34 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Semaphores
     const uint32_t sem_id = CreateSemaphore(program, combined_core_set, 0);
 
+    // Physical Core Coordinates
+    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    uint32_t packed_subordinate_core_coordinates =
+        physical_subordinate_core.x << 16 | (physical_subordinate_core.y & 0xFFFF);
+
     // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
         (uint32_t)l1_base_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)bytes_per_transaction,
         (uint32_t)test_config.test_id,
-        (uint32_t)sem_id};
+        (uint32_t)sem_id,
+        (uint32_t)packed_subordinate_core_coordinates,
+        (uint32_t)test_config.virtual_channel};
 
     // Kernels
+    std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/";
+    std::string sender_kernel_filename = "sender.cpp";
+    std::string sender_kernel_path = kernels_dir + sender_kernel_filename;
+
     auto sender_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/sender.cpp",
-        master_core_set,
+        sender_kernel_path,
+        test_config.master_core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = sender_compile_args});
-
-    // Physical Core Coordinates
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
-
-    // Runtime Arguments
-    SetRuntimeArgs(program, sender_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -142,13 +147,65 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     return pcc;
 }
 
-}  // namespace unit_tests::dm::core_to_core
+void directed_ideal_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_id,
+    CoreCoord master_core_coord = {0, 0},
+    CoreCoord subordinate_core_coord = {0, 1},
+    uint32_t virtual_channel = 0) {
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
-/* ========== Test case for one to one data movement; Test id = 4 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
-    // Test ID
-    uint32_t test_id = 4;
+    // Adjustable Parameters
+    // Ideal: Less transactions, more data per transaction
+    uint32_t num_of_transactions = 256;
+    uint32_t pages_per_transaction = max_transmittable_pages;
 
+    // Cores
+    // NOTE: May be worth considering the performance of this test with different pairs of adjacent cores
+    //       for a different test case
+
+    // Test Config
+    unit_tests::dm::core_to_core::OneToOneConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_coord = subordinate_core_coord,
+        .num_of_transactions = num_of_transactions,
+        .pages_per_transaction = pages_per_transaction,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .virtual_channel = virtual_channel};
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
+void virtual_channels_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_id,
+    CoreCoord master_core_coord = {0, 0},
+    CoreCoord subordinate_core_coord = {1, 1}) {
+    for (uint32_t virtual_channel = 0; virtual_channel < 4;
+         virtual_channel++) {  // FIND the constant that stores the number of unicast virtual channels
+        directed_ideal_test(
+            arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord, virtual_channel);
+    }
+}
+
+void packet_sizes_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_id,
+    CoreCoord master_core_coord = {0, 0},
+    CoreCoord subordinate_core_coord = {1, 1}) {
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
@@ -157,10 +214,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     uint32_t max_transactions = 256;
     uint32_t max_pages_per_transaction =
         arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
-
-    // Cores
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord subordinate_core_coord = {1, 1};
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
@@ -189,6 +242,16 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     }
 }
 
+}  // namespace unit_tests::dm::core_to_core
+
+/* ========== Test case for one to one data movement; Test id = 4 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
+    // Test ID
+    uint32_t test_id = 4;
+
+    unit_tests::dm::core_to_core::packet_sizes_test(arch_, devices_, num_devices_, test_id);
+}
+
 /* ========== Test case for one to one data movement; Test id = 50 ========== */  // Arbitrary test id
 
 /*
@@ -202,36 +265,85 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 50;
 
-    // Physical Constraints
-    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+    unit_tests::dm::core_to_core::directed_ideal_test(
+        arch_,
+        devices_,
+        num_devices_,
+        test_id,
+        CoreCoord(0, 0),  // Master Core
+        CoreCoord(0, 1)   // Subordinate Core
+    );
+}
 
-    // Adjustable Parameters
-    // Ideal: Less transactions, more data per transaction
-    uint32_t num_of_transactions = 1;
-    uint32_t pages_per_transaction = max_transmittable_pages / num_of_transactions;
+TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {  // May be redundant
+    // Test ID (Arbitrary)
+    uint32_t test_id = 120;
 
-    // Cores
-    // NOTE: May be worth considering the performance of this test with different pairs of adjacent cores
-    //       for a different test case
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord subordinate_core_coord = {0, 1};
+    unit_tests::dm::core_to_core::virtual_channels_test(
+        arch_,
+        devices_,
+        num_devices_,
+        test_id,
+        CoreCoord(0, 0),  // Master Core
+        CoreCoord(0, 1)   // Subordinate Core
+    );
+}
 
-    // Test Config
-    unit_tests::dm::core_to_core::OneToOneConfig test_config = {
-        .test_id = test_id,
-        .master_core_coord = master_core_coord,
-        .subordinate_core_coord = subordinate_core_coord,
-        .num_of_transactions = num_of_transactions,
-        .pages_per_transaction = pages_per_transaction,
-        .bytes_per_page = bytes_per_page,
-        .l1_data_format = DataFormat::Float16_b,
-    };
+TEST_F(DeviceFixture, TensixDataMovementOneToOneCoreLocationsVirtualChannels) {
+    // Test ID (Arbitrary)
+    uint32_t test_id = 132;
 
-    // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    CoreCoord mst_coord;
+    CoreCoord sub_coord;
+
+    CoreCoord stagnant_coord = {0, 0};
+
+    auto grid_size = devices_.at(0)->compute_with_storage_grid_size();  // May need to fix this in a bit
+    log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
+
+    for (unsigned int iteration = 0; iteration < 2; iteration++) {
+        for (unsigned int x = 0; x < grid_size.x; x++) {
+            for (unsigned int y = 0; y < grid_size.y; y++) {
+                if (x == stagnant_coord.x && y == stagnant_coord.y) {
+                    // Skip the first core in the first iteration
+                    continue;
+                }
+
+                if (iteration == 0) {
+                    mst_coord = stagnant_coord;
+                    sub_coord = {x, y};
+                } else {
+                    mst_coord = {x, y};
+                    sub_coord = stagnant_coord;
+                }
+
+                log_info(
+                    tt::LogTest,
+                    "Master Core: ({}, {}), Subordinate Core: ({}, {})",
+                    mst_coord.x,
+                    mst_coord.y,
+                    sub_coord.x,
+                    sub_coord.y);
+
+                unit_tests::dm::core_to_core::virtual_channels_test(
+                    arch_, devices_, num_devices_, test_id, mst_coord, sub_coord);
+            }
+        }
     }
+}
+
+TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannelsParallel) {
+    // Test ID (Arbitrary)
+    uint32_t test_id = 121;
+
+    unit_tests::dm::core_to_core::directed_ideal_test(
+        arch_,
+        devices_,
+        num_devices_,
+        test_id,
+        CoreCoord(0, 0),  // Master Core
+        CoreCoord(0, 1)   // Subordinate Core
+    );
 }
 
 }  // namespace tt::tt_metal
