@@ -363,10 +363,10 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
-    if (!global_control_plane_) {
+    if (!control_plane_) {
         this->initialize_control_plane();
     }
-    return global_control_plane_->get_local_node_control_plane();
+    return *control_plane_;
 }
 
 void MetalContext::set_custom_control_plane_mesh_graph(
@@ -376,7 +376,7 @@ void MetalContext::set_custom_control_plane_mesh_graph(
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
 
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
         mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
     this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
@@ -385,7 +385,7 @@ void MetalContext::set_default_control_plane_mesh_graph() {
     TT_FATAL(
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
-    global_control_plane_.reset();
+    control_plane_.reset();
     this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
@@ -482,8 +482,7 @@ void MetalContext::initialize_control_plane() {
             mesh_graph_desc_path.string());
 
         log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
-        global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-            mesh_graph_desc_path.string());
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
         return;
     }
 
@@ -516,8 +515,7 @@ void MetalContext::initialize_control_plane() {
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-        mesh_graph_desc_path.string());
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
 }
 
 void MetalContext::reset_cores(chip_id_t device_id) {
