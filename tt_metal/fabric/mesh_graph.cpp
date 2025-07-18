@@ -353,7 +353,6 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, port_direction);
         }
     }
-    printf("MeshGraph: Inter Mesh Connectivity: \n");
 }
 
 void MeshGraph::print_connectivity() const {
