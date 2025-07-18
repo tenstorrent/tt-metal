@@ -50,6 +50,7 @@ def make_random_permuted_last_dim_tensor(shape):
         ([2, 2, 2, 2, 2, 2, 2, 2], -1, [2, 2, 2, 2, 2, 2, 2, 2], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        ([1, 128256], -1, [1, 128256], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
         ##################
         # these cases fail due to the int32 transpose issue
         # ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
