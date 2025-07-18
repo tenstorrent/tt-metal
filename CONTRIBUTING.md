@@ -89,6 +89,22 @@ For example,
 TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ```
 
+### Adding new TTNN examples
+
+TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials/2025_dx_rework` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
+
+This hook performs the following actions:
+
+- Detects all staged Jupyter notebook files under the notebooks/ directory.
+- Converts each notebook to a Python script using jupyter nbconvert with a custom template.
+- Writes the output to the python/ directory only if there are changes.
+- Automatically stages new or updated Python scripts for commit.
+- Exits with a non-zero status code if any files were modified, alerting Git to re-check the commit.
+
+This process ensures that all TTNN examples remain synchronized and up-to-date in both formats. **Important:** Always make changes directly to the `.ipynb` notebook files—not the generated Python scripts. Any manual changes made to the Python files will be overwritten the next time the notebook is updated. Python files are considered read-only exports for users or CI pipelines that prefer `.py` formats.
+
+Both the Jupyter notebooks and the exported Python files are tested as part of the CI workflows to ensure correctness and stability.
+
 ### Building and viewing the documentation locally
 
 1. First, ensure that you have [built the project and activated the Python
