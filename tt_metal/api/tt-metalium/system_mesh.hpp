@@ -36,6 +36,9 @@ public:
     // Returns the shape of the system mesh; this is the global mesh shape in distributed context
     const MeshShape& shape() const;
 
+    // Returns the local shape of the system mesh; this is the local mesh shape in distributed context
+    const MeshShape& local_shape() const;
+
     // Returns the physical device ID for a given logical coordinate
     int get_physical_device_id(const MeshCoordinate& coord) const;
 
