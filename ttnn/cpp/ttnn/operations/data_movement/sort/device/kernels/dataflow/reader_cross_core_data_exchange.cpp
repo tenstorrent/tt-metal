@@ -125,7 +125,7 @@ void kernel_main() {
                     const uint32_t other_core_id = j / number_of_tiles_per_core;
                     const std::pair<uint32_t, uint32_t> remote_core_physical =
                         get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
-
+                    // DPRINT << "READER: i: " << i << " j: " << j << ENDL();
                     sort_noc_exchange_Wt_tiles(
                         value_tensor_intermediate_cb_index,
                         index_tensor_intermediate_cb_index,

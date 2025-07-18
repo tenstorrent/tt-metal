@@ -15,6 +15,18 @@
 #include <cstdint>
 
 namespace NAMESPACE {
+uint32_t first_cross_core_stage(uint32_t local, uint32_t total) {
+    uint32_t stage = 1;
+    uint32_t dist = 1;
+    while (dist < local && dist < total) {
+        stage++;
+        dist <<= 1;  // Equivalent to 2^(stage - 1)
+    }
+    if (dist >= total) {
+        return 0;  // No cross-core exchange needed at all
+    }
+    return stage;
+}
 void MAIN {
     // Compile time args
     constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(0);
@@ -41,13 +53,13 @@ void MAIN {
     const uint16_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
     const uint16_t global_tile_start = core_id * number_of_tiles_per_core;
     const uint16_t global_tile_end = global_tile_start + number_of_tiles_per_core;
-
+    UNPACK(DPRINT << "COMPUTE: Start: " << global_tile_start << " End: " << global_tile_end << ENDL());
     const uint16_t number_of_pairs_processed_by_each_core = number_of_tiles_per_core / 2;
     const uint16_t processing_pair_start = core_id * number_of_pairs_processed_by_each_core;
     const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
-
+    const uint32_t exchange_start_stage = first_cross_core_stage(number_of_tiles_per_core, Wt);
     uint32_t global_old_cb = 0;
-
+    UNPACK(DPRINT << "COMPUTE: exchange_start_stage: " << exchange_start_stage << ENDL());
     constexpr uint32_t input_dest_start = 0;
     constexpr uint32_t index_dest_start = 2;
     constexpr uint32_t input_dest_end = 1;
@@ -81,7 +93,7 @@ void MAIN {
         const uint32_t stages = ilog2(Wt);
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
-
+            bool prev_send_start = false;
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
                 for (uint32_t i = 0; i < Wt; i++) {
@@ -101,7 +113,9 @@ void MAIN {
                     if (j >= global_tile_start && j < global_tile_end) {
                         if (j > i) {
                             // Local sorting - both tiles in core memory
-
+                            UNPACK(
+                                DPRINT << "COMPUTE: LOCAL Sorting i: " << i << " j: " << j << " stage: " << stage
+                                       << " sub: " << sub << ENDL());
                             // Get indexes of tiles to compare
                             const uint32_t left_tile_id = i - global_tile_start;
                             const uint32_t right_tile_id = j - global_tile_start;
@@ -153,33 +167,58 @@ void MAIN {
 
                             tile_regs_release();
                             // TODO ----- TO BE CHECKED
-                            // if (sub == 1 && (i + 1) >= global_tile_end) {
-                            //     // Next tile will be processed by the next core
-                            //     // Pack and send to reader the first pair of tiles
-                            //     cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
-                            //     copy_tile_between_cbs(
-                            //         global_old_cb,
-                            //         index_tensor_transposed_cb_index,
-                            //         0,
-                            //         index_tensor_intermediate_cb_index);
-                            //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+                            // UNPACK(DPRINT << "COMPUTE: 1. Processing: left: " << left_tile_id << " and: " <<
+                            // right_tile_id << " sub: " << sub<< ENDL());
+                            if (sub == 1 && j == (uint32_t)(global_tile_end - 1) && stage != stages &&
+                                stage >= (exchange_start_stage - 1)) {
+                                // Last pair of tiles processed - send to reader
+                                UNPACK(
+                                    DPRINT << "COMPUTE: 1. Sending tiles: i: " << i << " and j: " << j << " to reader"
+                                           << ENDL());
+                                // Next tile will be processed by the next core
+                                // Pack and send to reader the first pair of tiles
+                                cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
+                                copy_tile_between_cbs(
+                                    global_old_cb,
+                                    index_tensor_transposed_cb_index,
+                                    0,
+                                    index_tensor_intermediate_cb_index);
+                                cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+                                // UNPACK(DPRINT << "COMPUTE: 1.      > 1.1" << ENDL());
+                                cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                                copy_tile_between_cbs(
+                                    global_old_cb,
+                                    input_tensor_transposed_cb_index,
+                                    0,
+                                    value_tensor_intermediate_cb_index);
+                                cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                                // UNPACK(DPRINT << "COMPUTE: 1.      > 1.2" << ENDL());
 
-                            //     cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                            //     copy_tile_between_cbs(
-                            //         global_old_cb,
-                            //         input_tensor_transposed_cb_index,
-                            //         0,
-                            //         value_tensor_intermediate_cb_index);
-                            //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
-                            // }
+                                cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
+                                copy_tile_between_cbs(
+                                    global_old_cb,
+                                    index_tensor_transposed_cb_index,
+                                    1,
+                                    index_tensor_intermediate_cb_index);
+                                cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+                                // UNPACK(DPRINT << "COMPUTE: 1.      > 1.3" << ENDL());
+                                cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                                // UNPACK(DPRINT << "COMPUTE: 1.      > 1.4" << ENDL());
+                                copy_tile_between_cbs(
+                                    global_old_cb,
+                                    input_tensor_transposed_cb_index,
+                                    1,
+                                    value_tensor_intermediate_cb_index);
+                                // UNPACK(DPRINT << "COMPUTE: 1.      > 1.5" << ENDL());
+                                cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                                // UNPACK(DPRINT << "COMPUTE: 1.      > 1.6" << ENDL());
+                                sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                                prev_send_start = false;
+                                UNPACK(DPRINT << "COMPUTE: 1.   > Sent" << ENDL());
+                            }
                             // ----- TOD BE CHECKED -------------
                         }
                     } else {
-                        // Every two tiles we need to pack them and send them to reader
-                        // if this is the first from the pair send both tiles to the reader, then wait for the one tile,
-                        // process it if this is the second from the pair just wait for the tile from the reader,
-                        // process it
-
                         // --------- DEBUG -------------
                         // auto number_of_pairs_to_exchange = number_of_tiles_per_core / 2;
                         // DPRINT << "COMPUTE: number_of_pairs_to_exchange: " << number_of_pairs_to_exchange << ENDL();
@@ -189,18 +228,75 @@ void MAIN {
                         constexpr uint32_t FIRST_TILE = 0;
 
                         // ---
-                        // if i == global tile_start
-                        // Send current tile_id
-                        // Send next tile_id
-                        // else if i == global_tile_end
-                        // Don't send anything
-                        // else if i % 2 == 0
-                        // Send current tile_id
-                        // Send for next tile_id from reader
-
-                        // ---
                         // // Send tiles to other core
-                        if ((i & 1) == 0) {  // i % 2
+                        // if ((i & 1) == 0) {  // i % 2
+                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         index_tensor_transposed_cb_index,
+                        //         tile_id,
+                        //         index_tensor_intermediate_cb_index);
+                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         input_tensor_transposed_cb_index,
+                        //         tile_id,
+                        //         value_tensor_intermediate_cb_index);
+                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         index_tensor_transposed_cb_index,
+                        //         tile_id + 1,
+                        //         index_tensor_intermediate_cb_index);
+                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     copy_tile_between_cbs(
+                        //         global_old_cb,
+                        //         input_tensor_transposed_cb_index,
+                        //         tile_id + 1,
+                        //         value_tensor_intermediate_cb_index);
+                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                        //     sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                        // }
+                        UNPACK(
+                            DPRINT << "COMPUTE: SORT WITH EXCHANGE. i: " << i << " j: " << j << " prev flag: "
+                                   << U32(prev_send_start) << " stage: " << stage << " sub: " << sub << ENDL());
+
+                        if (stage == 2 && sub == 2 && prev_send_start == false) {
+                            UNPACK(DPRINT << "COMPUTE:      > 2.1 Sending tiles to reader: 0 and 1" << ENDL());
+                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+
+                            copy_tile_between_cbs(
+                                global_old_cb, index_tensor_transposed_cb_index, 0, index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb, input_tensor_transposed_cb_index, 0, value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
+                            copy_tile_between_cbs(
+                                global_old_cb, index_tensor_transposed_cb_index, 1, index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb, input_tensor_transposed_cb_index, 1, value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                            // prev_send_start = true;
+                        } else if (
+                            i % 2 == 0 && i != (uint32_t)global_tile_start && i != (uint32_t)(global_tile_end - 1)) {
+                            UNPACK(
+                                DPRINT << "COMPUTE:      > 2.2 Sending tiles to reader: " << i << " and: " << i + 1
+                                       << ENDL());
                             cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
                             cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
 
@@ -234,84 +330,64 @@ void MAIN {
                                 value_tensor_intermediate_cb_index);
                             cb_push_back(value_tensor_intermediate_cb_index, one_tile);
                             sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                            // prev_send_start = true;
+                        } else if (i % 2 == 0 && i == (uint32_t)(global_tile_end - 1) && (sub - 1) != 1) {
+                            UNPACK(
+                                DPRINT << "COMPUTE:      > 2.3 Sending tiles to reader: " << 0 << " and: " << 1
+                                       << ENDL());
+                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+
+                            copy_tile_between_cbs(
+                                global_old_cb, index_tensor_transposed_cb_index, 0, index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb, input_tensor_transposed_cb_index, 0, value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
+                            copy_tile_between_cbs(
+                                global_old_cb, index_tensor_transposed_cb_index, 1, index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb, input_tensor_transposed_cb_index, 1, value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                            // prev_send_start = true;
+                        } else if (prev_send_start == true && i == (uint32_t)global_tile_start) {
+                            UNPACK(
+                                DPRINT << "COMPUTE:      > 2.4 Sending tiles to reader: " << 0 << " and: " << 1
+                                       << ENDL());
+                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+
+                            copy_tile_between_cbs(
+                                global_old_cb, index_tensor_transposed_cb_index, 0, index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb, input_tensor_transposed_cb_index, 0, value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
+                            copy_tile_between_cbs(
+                                global_old_cb, index_tensor_transposed_cb_index, 1, index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+
+                            // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb, input_tensor_transposed_cb_index, 1, value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                            // prev_send_start = true;
                         }
-                        // NEW VERSION
-                        // if ((sub-- != 1) && i == global_tile_end){
-                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
-                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
-
-                        //     copy_tile_between_cbs(
-                        //         global_old_cb,
-                        //         index_tensor_transposed_cb_index,
-                        //         0,
-                        //         index_tensor_intermediate_cb_index);
-                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
-
-                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                        //     copy_tile_between_cbs(
-                        //         global_old_cb,
-                        //         input_tensor_transposed_cb_index,
-                        //         0,
-                        //         value_tensor_intermediate_cb_index);
-                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
-
-                        //     copy_tile_between_cbs(
-                        //         global_old_cb,
-                        //         index_tensor_transposed_cb_index,
-                        //         1,
-                        //         index_tensor_intermediate_cb_index);
-                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
-
-                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                        //     copy_tile_between_cbs(
-                        //         global_old_cb,
-                        //         input_tensor_transposed_cb_index,
-                        //         1,
-                        //         value_tensor_intermediate_cb_index);
-                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
-                        //     sync_packer_unpacker(packer_unpacker_sync_cb_index);
-                        // } else if ((i % 2 == 0) && (i != (global_tile_end - 1))){
-                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
-                        //     cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
-
-                        //     copy_tile_between_cbs(
-                        //         global_old_cb,
-                        //         index_tensor_transposed_cb_index,
-                        //         tile_id+2,
-                        //         index_tensor_intermediate_cb_index);
-                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
-
-                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                        //     copy_tile_between_cbs(
-                        //         global_old_cb,
-                        //         input_tensor_transposed_cb_index,
-                        //         tile_id+2,
-                        //         value_tensor_intermediate_cb_index);
-                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
-
-                        //     copy_tile_between_cbs(
-                        //         global_old_cb,
-                        //         index_tensor_transposed_cb_index,
-                        //         tile_id+3,
-                        //         index_tensor_intermediate_cb_index);
-                        //     cb_push_back(index_tensor_intermediate_cb_index, one_tile);
-
-                        //     // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                        //     copy_tile_between_cbs(
-                        //         global_old_cb,
-                        //         input_tensor_transposed_cb_index,
-                        //         tile_id+3,
-                        //         value_tensor_intermediate_cb_index);
-                        //     cb_push_back(value_tensor_intermediate_cb_index, one_tile);
-                        //     sync_packer_unpacker(packer_unpacker_sync_cb_index);
-                        // }
-                        // else if(i == global_tile_end) {
-                        //     // Don't send anything
-                        // } else if() {
-                        //     // Send current tile_id
-                        //     // Send for next tile_id from reader
-                        // }
-
+                        prev_send_start = true;
+                        UNPACK(
+                            DPRINT << "COMPUTE:      > Sorting i: " << i << " j: " << j << " stage: " << stage
+                                   << " sub: " << sub << ENDL());
                         // tile_regs_acquire();
 
                         // // Copy index tiles to DST register for exchange
@@ -431,5 +507,6 @@ void MAIN {
         // Indexes tensor
         transpose_and_pack(index_tensor_transposed_cb_index, index_tensor_output_cb_index, number_of_tiles_per_core);
     }  // h loop
+    DPRINT << "COMPUTE: 1. Finished" << ENDL();
 }  // MAIN
 }  // namespace NAMESPACE

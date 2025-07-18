@@ -347,6 +347,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         tensor_args.input_tensor.dtype(),
         output_tensors.at(1).dtype(),
         CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
+    std::cout << "Number of tiles per core: " << number_of_tiles_per_core << std::endl;
     number_of_tiles_per_core = std::min(number_of_tiles_per_core, Wt);
 
     // Calculate the number of cores utilized based on the input tensor shape
@@ -422,7 +423,8 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
             }
         }
     }
-
+    std::cout << "Core range: " << core_range.str() << std::endl;
+    std::cout << "Core range num cores: " << core_range.num_cores() << std::endl;
     // Lookup tensor data with physical core coordinates
     std::vector<uint32_t> physical_core_lookup_table_data;
     for (const auto& core_range : core_range.ranges()) {
