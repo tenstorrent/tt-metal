@@ -358,7 +358,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Determine Tracy build setting
+      - name: Configure Tracy profiler and ttnn wheel import testing
         run: |
           if [ "${{ inputs.tracy }}" = "true" ]; then
             echo "ENABLE_TRACY_BUILD=ON" >> $GITHUB_ENV
