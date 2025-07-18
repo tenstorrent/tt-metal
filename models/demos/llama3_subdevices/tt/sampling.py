@@ -4,10 +4,7 @@
 
 import torch
 import ttnn
-import os
 from models.common.lightweightmodule import LightweightModule
-
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 class TTSampling(LightweightModule):
@@ -96,9 +93,9 @@ class TTSampling(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        ttnn.copy_host_to_device(self.k_tensor_new, self.k_tensor)
-        ttnn.copy_host_to_device(self.p_tensor_new, self.p_tensor)
-        ttnn.copy_host_to_device(self.temp_tensor_new, self.temp_tensor)
+        ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
+        ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
+        ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
     def forward(
         self,
@@ -131,10 +128,6 @@ class TTSampling(LightweightModule):
             memory_config=self.args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"],
             dtype=ttnn.bfloat16,
         )
-
-        # Apply temperature
-        topk_values_gathered_bf16 = ttnn.mul(topk_values_gathered_bf16, self.temperature_reciprocal_tensor)
-
         topk_values_gathered_bf16_interleaved = ttnn.to_memory_config(
             topk_values_gathered_bf16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
