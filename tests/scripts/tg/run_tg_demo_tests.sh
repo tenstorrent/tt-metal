@@ -20,7 +20,7 @@ run_tg_llama3_tests() {
     # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "long-context-batch32" --timeout 1000; fail+=$?;
     # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "long-context-32k" --timeout 1000; fail+=$?;
     # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "pcc-80L" --timeout 1000; fail+=$?;
-
+    done
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
