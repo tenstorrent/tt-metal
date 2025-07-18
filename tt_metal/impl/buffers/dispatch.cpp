@@ -29,6 +29,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 
 enum class CoreType;
 
@@ -698,6 +699,11 @@ void write_to_device_buffer(
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
+
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 

@@ -116,6 +116,13 @@ bool GraphTracker::hook_deallocate(Buffer* buffer) {
     return hooked;
 }
 
+bool GraphTracker::hook_write_to_device(tt::tt_metal::Buffer* buffer) {
+    if (hook == nullptr) {
+        return false;
+    }
+    return hook->hook_write_to_device(buffer);
+}
+
 bool GraphTracker::hook_program(tt::tt_metal::Program* program) {
     if (hook == nullptr) {
         return false;
