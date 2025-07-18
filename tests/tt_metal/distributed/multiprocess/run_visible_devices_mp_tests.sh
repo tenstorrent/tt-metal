@@ -17,7 +17,7 @@ for config in "${DEVICE_CONFIGS[@]}"; do
     echo "------------------------------------------------"
 
     # Run with mpirun, setting the environment variable
-    TT_METAL_VISIBLE_DEVICES="$config" mpirun --allow-run-as-root -np 1 ./build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests
+    TT_METAL_VISIBLE_DEVICES="$config" mpirun --allow-run-as-root -np 1 ./build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*VisibleDevicesMPTest*"
 
     if [ $? -eq 0 ]; then
         echo "✓ [distributed tests] Test passed for configuration: $config"
