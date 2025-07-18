@@ -509,35 +509,6 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{4}, i), physical_chip_ids[i]});
         }
         // This case can be depreciated once we have multi-host testing and validate it working
-    } else if (mesh_graph_desc_filename == "t3k_dual_host_mesh_graph_descriptor.yaml") {
-        // TODO(#24230): This path will soon be deprecated once we generalize logical mesh_chip_id to physical chip_id
-        // mapping
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto chip_eth_coords = cluster.get_user_chip_ethernet_coordinates();
-        std::vector<eth_coord_t> eth_coords;
-        eth_coords.reserve(chip_eth_coords.size());
-        for (const auto& [_, eth_coord] : chip_eth_coords) {
-            eth_coords.push_back(eth_coord);
-        }
-        std::sort(eth_coords.begin(), eth_coords.end(), EthCoordComparator());
-
-        auto mesh_ids = this->get_local_mesh_id_bindings();
-        auto mesh_id = mesh_ids.at(0);  // Use the first mesh ID
-        auto host_rank_id = this->get_local_host_rank_id_binding();
-        auto fabric_chip_ids = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id).values();
-
-        TT_FATAL(
-            fabric_chip_ids.size() == eth_coords.size(),
-            "Number of fabric chip ids {} does not match number of eth coords {}",
-            fabric_chip_ids.size(),
-            eth_coords.size());
-        for (std::uint32_t idx = 0; idx < fabric_chip_ids.size(); idx++) {
-            auto fabric_chip_id = fabric_chip_ids.at(idx);
-            auto eth_coord = eth_coords.at(idx);
-            logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
-                {tt_fabric::FabricNodeId(mesh_id, fabric_chip_id),
-                 cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
-        }
     } else {
         // Iterate over every mesh defined in the mesh-graph descriptor and embed it on top of
         // the physical cluster using the generic helper.

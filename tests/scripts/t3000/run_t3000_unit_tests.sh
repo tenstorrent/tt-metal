@@ -43,6 +43,10 @@ run_t3000_ttmetal_tests() {
   fi
 }
 
+run_t3000_dual_rank_big_mesh_tests() {
+  tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTestT3K*"
+}
+
 run_t3000_ttfabric_tests() {
   # Record the start time
   fail=0
