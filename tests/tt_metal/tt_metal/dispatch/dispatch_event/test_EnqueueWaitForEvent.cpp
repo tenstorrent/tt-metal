@@ -170,6 +170,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
 
     // Store completion queue base address from initial rdptr, for later readback.
     vector<uint32_t> completion_queue_base;
+    completion_queue_base.reserve(cqs.size());
     for (uint i = 0; i < cqs.size(); i++) {
         completion_queue_base.push_back(this->device_->sysmem_manager().get_completion_queue_read_ptr(i));
     }

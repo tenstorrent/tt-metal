@@ -492,6 +492,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
     }
 
     std::vector<IDevice*> new_device_order;
+    new_device_order.reserve(new_physical_device_ids.size());
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
         new_device_order.push_back(this->get_device(new_physical_device_ids[i]));
     }

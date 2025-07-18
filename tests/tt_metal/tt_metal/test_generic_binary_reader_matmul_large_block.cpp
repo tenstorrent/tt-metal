@@ -195,6 +195,7 @@ int main(int argc, char** argv) {
         // Activation is already in tilized layout in DRAM
         // Same source and destination address
         std::vector<uint32_t> source_addresses;
+        source_addresses.reserve(num_addresses);
         for (uint32_t i = 0; i < num_addresses; i++) {
             source_addresses.push_back(i * dram_read_size_bytes);
         }

@@ -52,7 +52,7 @@ MaybeRemoteDeviceId SystemMesh::Impl::get_maybe_remote_device_id(const MeshCoord
     return physical_coordinates_.at(coord).when(
         [&](const auto& physical_coord) {
             auto physical_device_id = get_physical_device_id(coord);
-            log_debug(LogDistributed, "Mesh coordinate: {}, Physical device ID: {}", coord, physical_device_id);
+            log_debug(LogDistributed, "Mesh coordinate: {} is local, Physical device ID: {}", coord, physical_device_id);
             return MaybeRemoteDeviceId::local(physical_device_id);
         },
         [&]() {
@@ -80,6 +80,8 @@ SystemMesh::Impl::Impl() :
     }
 
     // Use populate_local_region to set up the distributed container
+    log_debug(LogDistributed, "SystemMesh: Global shape: {}, Local shape: {}, Local offset: {}", global_shape_, local_coordinates.shape(), local_offset_);
+    log_debug(LogDistributed, "SystemMesh: Populating local region with physical coordinates: {}", ordered_physical_coords);
     physical_coordinates_.populate_local_region(coord_system, ordered_physical_coords);
 }
 

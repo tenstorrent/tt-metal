@@ -103,6 +103,7 @@ std::vector<ttnn::TensorSpec> RingAttentionAllGatherAsync::compute_output_specs(
     auto shape = input_tensor.get_logical_shape();
     shape[this->dim] *= this->ring_size;
     std::vector<ttnn::TensorSpec> output_specs;
+    output_specs.reserve(input_tensors.size());
     for (uint32_t i = 0; i < input_tensors.size(); i++) {
         output_specs.push_back(TensorSpec(
             shape,
@@ -227,6 +228,7 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
         dim);
 
     std::vector<std::optional<Tensor>> optional_output_tensors;
+    optional_output_tensors.reserve(persistent_output_buffer.size());
     for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
         optional_output_tensors.push_back(persistent_output_buffer[i]);
     }

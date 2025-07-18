@@ -144,6 +144,7 @@ int main(int argc, char** argv) {
         CoreCoord core = {0, 0};
         int num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<int> ids;
+        ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
