@@ -382,10 +382,11 @@ void py_bind_conv2d(py::module& module) {
         | Conv2dSliceConfig determines how this slicing happens.
         )doc");
     py_conv_slice_config.def(
-        py::init<Conv2dSliceConfig::SliceType, uint32_t>(),
+        py::init<Conv2dSliceConfig::SliceType, uint32_t, bool>(),
         py::kw_only(),
         py::arg("slice_type"),
-        py::arg("num_slices"));
+        py::arg("num_slices"),
+        py::arg("reshape_output_to_2d") = false);
     py_conv_slice_config.def_readwrite(
         "slice_type",
         &Conv2dSliceConfig::slice_type,
@@ -402,6 +403,15 @@ void py_bind_conv2d(py::module& module) {
         | The output tensor is divided into num_slices slices along the slice_type dimension.
         | The corresponding input tensor needed to calculate that output is determined and sliced.
         | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
+        )doc");
+    py_conv_slice_config.def_readwrite(
+        "reshape_output_to_2d",
+        &Conv2dSliceConfig::reshape_output_to_2d,
+        R"doc(
+        | Default True
+        | Controls if the output is reshaped to a flattened 2D Tensor to match the shapes of Conv2D L1 Sharded Tensors.
+        | Set to False for Conv2D DRAM Slicing to keep the output in the original 4D shape [N, H, W, C].
+        | For Tiled outputs, it is recommended to set this to False.
         )doc");
     py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
         .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
