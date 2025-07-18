@@ -17,7 +17,7 @@ from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
 
 # Copied from DeepseekV3RotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L114
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+    def __init__(self, dim, max_position_embeddings, base, device=None):
         super().__init__()
 
         self.dim = dim
@@ -77,15 +77,15 @@ class YarnRotaryEmbedding(RotaryEmbedding):
     def __init__(
         self,
         dim,
-        max_position_embeddings=2048,
-        base=10000,
+        max_position_embeddings,
+        base,
+        factor,
+        original_max_position_embeddings,
+        beta_fast,
+        beta_slow,
+        mscale,
+        mscale_all_dim,
         device=None,
-        factor=1.0,
-        original_max_position_embeddings=4096,
-        beta_fast=32,
-        beta_slow=1,
-        mscale=1,
-        mscale_all_dim=0,
     ):
         self.scaling_factor = factor
         self.original_max_position_embeddings = original_max_position_embeddings
@@ -97,18 +97,18 @@ class YarnRotaryEmbedding(RotaryEmbedding):
 
     # Inverse dim formula to find dim based on number of rotations
     @staticmethod
-    def yarn_find_correction_dim(num_rotations, dim, base=10000, max_position_embeddings=2048):
+    def yarn_find_correction_dim(num_rotations, dim, base, max_position_embeddings):
         return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
 
     # Find dim range bounds based on rotations
     @staticmethod
-    def yarn_find_correction_range(low_rot, high_rot, dim, base=10000, max_position_embeddings=2048):
+    def yarn_find_correction_range(low_rot, high_rot, dim, base, max_position_embeddings):
         low = math.floor(YarnRotaryEmbedding.yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
         high = math.ceil(YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
         return max(low, 0), min(high, dim - 1)  # Clamp values just in case
 
     @staticmethod
-    def yarn_get_mscale(scale=1.0, mscale=1.0):
+    def yarn_get_mscale(scale, mscale):
         if scale <= 1:
             return 1.0
         return 0.1 * mscale * math.log(scale) + 1.0
@@ -166,12 +166,12 @@ class LlamaRotaryEmbedding(RotaryEmbedding):
     def __init__(
         self,
         dim,
-        max_position_embeddings=2048,
-        base=10000,
-        factor=1.0,
-        original_max_position_embeddings=4096,
-        low_freq_factor=1.0,
-        high_freq_factor=4.0,
+        max_position_embeddings,
+        base,
+        factor,
+        original_max_position_embeddings,
+        low_freq_factor,
+        high_freq_factor,
         device=None,
     ):
         self.scaling_factor = factor
@@ -214,7 +214,7 @@ class LlamaRotaryEmbedding(RotaryEmbedding):
         self.register_buffer("sin_cached", (torch.sin(freqs)).to(dtype), persistent=False)
 
 
-def rotary_embedding_factory(dim, max_position_embeddings=2048, base=10000, rope_scaling=None, device=None):
+def rotary_embedding_factory(dim, max_position_embeddings, base, rope_scaling=None, device=None):
     if rope_scaling is None:
         return RotaryEmbedding(dim, max_position_embeddings, base, device)
     else:
@@ -228,7 +228,7 @@ def rotary_embedding_factory(dim, max_position_embeddings=2048, base=10000, rope
             dim=dim,
             max_position_embeddings=max_position_embeddings,
             base=base,
-            **rope_scaling.model_dump(exclude_unset=True),
+            **rope_scaling.model_dump(),
         )
 
 
