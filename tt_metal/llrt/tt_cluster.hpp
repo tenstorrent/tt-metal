@@ -346,7 +346,8 @@ public:
         return this->frequent_retrain_cores_.at(chip_id);
     }
 
-    const std::unordered_map<CoreCoord, EthRouterMode>& get_eth_routing_info(chip_id_t chip_id) const {
+    std::unordered_map<CoreCoord, EthRouterMode> get_eth_routing_info(chip_id_t chip_id) const {
+        std::lock_guard<std::mutex> lock(mutex_);
         return this->device_eth_routing_info_.at(chip_id);
     }
 
@@ -381,6 +382,8 @@ private:
 
     ARCH arch_;
     TargetDevice target_type_;
+
+    mutable std::mutex mutex_;
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;
