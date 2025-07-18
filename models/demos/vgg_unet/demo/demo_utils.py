@@ -17,7 +17,9 @@ from sklearn.model_selection import train_test_split
 import ttnn
 
 
-def process_single_image(image_path, mask_path, model, output_dir, model_type="torch_model"):
+def process_single_image(
+    image_path, mask_path, model, output_dir, model_type="torch_model", mesh_composer=None, mesh_mapper=None
+):
     """
     Process a single MRI image and its mask using the segmentation model
     """
@@ -41,16 +43,11 @@ def process_single_image(image_path, mask_path, model, output_dir, model_type="t
         with torch.no_grad():
             predict = model(X)
     else:
-        # X = torch.from_numpy(X).float()
-
         n, c, h, w = X.shape
-        X = X.permute(0, 2, 3, 1)
-        X = X.reshape(1, 1, h * w * n, c)
-        ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn_input = ttnn.pad(ttnn_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+        ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper)
 
         predict = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
-        predict = ttnn.to_torch(predict)
+        predict = ttnn.to_torch(predict, mesh_composer=mesh_composer)
         predict = predict.permute(0, 3, 1, 2)
         predict = predict.reshape(1, 1, 256, 256)
         predict = predict.float()
@@ -107,55 +104,64 @@ def pos_neg_diagnosis(mask_path):
         return 0
 
 
-def prediction(test, model, model_type):
-    # empty list to store results
-    mask, image_id, has_mask = [], [], []
+def prediction(test, model, model_type, mesh_mapper=None, mesh_composer=None, batch_size=1):
+    from math import ceil
 
-    # itetrating through each image in test data
-    for i in test.image_path:
-        # Creating a empty array of shape 1,256,256,1
-        X = np.empty((1, 256, 256, 3))
-        # read the image
-        img = io.imread(i)
-        # resizing the image and coverting them to array of type float64
-        img = cv2.resize(img, (256, 256))
-        img = np.array(img, dtype=np.float64)
+    # empty lists to store results
+    mask_list, image_id_list, has_mask_list = [], [], []
 
-        # standardising the image
-        img -= img.mean()
-        img /= img.std()
-        # converting the shape of image from 256,256,3 to 1,256,256,3
-        X[0,] = img
+    num_images = len(test.image_path)
+    num_batches = ceil(num_images / batch_size)
+
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min((batch_idx + 1) * batch_size, num_images)
+        if (end_idx - start_idx) < batch_size:
+            break
+        batch_paths = test.image_path[start_idx:end_idx]
+
+        # Preallocate batch input array
+        X = np.empty((len(batch_paths), 256, 256, 3), dtype=np.float64)
+
+        # Load and preprocess images
+        for j, img_path in enumerate(batch_paths):
+            img = io.imread(img_path)
+            img = cv2.resize(img, (256, 256))
+            img = np.array(img, dtype=np.float64)
+            img -= img.mean()
+            img /= img.std()
+            X[j] = img
+
         if model_type == "torch_model":
-            X = torch.from_numpy(X).permute(0, 3, 1, 2).float()
-            # make prediction of mask
+            X_tensor = torch.from_numpy(X).permute(0, 3, 1, 2).float()
             with torch.no_grad():
-                predict = model(X)
+                predictions = model(X_tensor)
         else:
-            X = torch.from_numpy(X).float()
-            n, h, w, c = X.shape
-            X = X.reshape(1, 1, h * w * n, c)
-            ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn_input = ttnn.pad(ttnn_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-            predict = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
-            predict = ttnn.to_torch(predict)
-            predict = predict.permute(0, 3, 1, 2)
-            predict = predict.reshape(1, 1, 256, 256)
-            predict = predict.float()
+            X_tensor = torch.from_numpy(X).permute(0, 3, 1, 2).float()
+            ttnn_input = ttnn.from_torch(
+                X_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper
+            )
+            predictions = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
+            predictions = ttnn.to_torch(predictions, mesh_composer=mesh_composer)
+            predictions = predictions.permute(0, 3, 1, 2)
+            predictions = predictions.reshape(batch_size, 1, 256, 256).float()
 
-        predict = predict.squeeze().numpy()
-        # if sum of predicted mask is 0 then there is not tumour
-        if predict.round().astype(int).sum() == 0:
-            image_id.append(i)
-            has_mask.append(0)
-            mask.append("No mask :)")
-        else:
-            # if the sum of pixel values are more than 0, then there is tumour
-            image_id.append(i)
-            has_mask.append(1)
-            mask.append(predict)
+        predictions_np = predictions.squeeze().numpy()
 
-    return pd.DataFrame({"image_path": image_id, "predicted_mask": mask, "has_mask": has_mask})
+        if batch_size == 1:
+            predictions_np = [predictions_np]  # Ensure it's iterable for bs=1
+
+        for idx_in_batch, pred_mask in enumerate(predictions_np):
+            img_path = batch_paths.iloc[idx_in_batch]
+            if pred_mask.round().astype(int).sum() == 0:
+                has_mask_list.append(0)
+                mask_list.append("No mask :)")
+            else:
+                has_mask_list.append(1)
+                mask_list.append(pred_mask)
+            image_id_list.append(img_path)
+
+    return pd.DataFrame({"image_path": image_id_list, "predicted_mask": mask_list, "has_mask": has_mask_list})
 
 
 def preprocess(path, mode="default", max_samples=None):
@@ -172,7 +178,7 @@ def preprocess(path, mode="default", max_samples=None):
                 image_path = sub_dir_path + "/" + filename
                 data_map.extend([dir_name, image_path])
         except Exception as e:
-            print(e)
+            logger.info(e)
 
     df = pd.DataFrame({"patient_id": data_map[::2], "path": data_map[1::2]})
     df_imgs = df[~df["path"].str.contains("mask")]  # if have not mask

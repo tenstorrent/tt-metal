@@ -29,7 +29,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])
-def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_weight):
+def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_weight, min_channels=16):
     torch.manual_seed(0)
 
     # Input creation
@@ -57,9 +57,8 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
 
     ttnn_model = Tt_vgg_unet(device, parameters, parameters.conv_args)
 
-    torch_input = torch_input.permute(0, 2, 3, 1)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
-
+    ttnn_input = ttnn_input.to(device, ttnn.L1_MEMORY_CONFIG)
     result = ttnn_model(ttnn_input)
 
     result = ttnn.to_torch(result)

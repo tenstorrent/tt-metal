@@ -62,8 +62,8 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
     parameters = create_vgg_unet_model_parameters(torch_model, torch_input, device)
     ttnn_model = Tt_vgg_unet(device, parameters, parameters.conv_args)
 
-    torch_input = torch_input.permute(0, 2, 3, 1)
-    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
+    ttnn_input_host = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn_input_host.to(device)
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
     result = ttnn_model(ttnn_input)
@@ -78,6 +78,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
     outputs = []
     logger.info(f"Running inference for {iterations} iterations")
     for idx in range(iterations):
+        ttnn_input = ttnn_input_host.to(device)
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
         result = ttnn_model(ttnn_input)
