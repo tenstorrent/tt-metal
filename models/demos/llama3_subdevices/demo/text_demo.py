@@ -377,7 +377,7 @@ def test_demo_text(
         pytest.skip("Skipping test since there is no 6U machines dedicated for APC")
     if apc_test and not pcc_check:
         raise ValueError("APC test requires PCC check to be enabled")
-    if pcc_check:
+    if apc_test:
         demo_targets = load_demo_targets("models/demos/llama3_subdevices/demo/text_demo_targets.json", galaxy_type)
 
     # Override parameters from command line if they are provided
