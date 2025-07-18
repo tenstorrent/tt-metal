@@ -156,8 +156,6 @@ FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
     send_packets_unicast_write_impl<false>(fabric_connection, pkt_hdr_fwd, pkt_hdr_bwd, params, source_buffer_address);
 }
 
-#ifdef ARCH_WORMHOLE
-
 template <>
 FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE>(
     FabricConnectionManager& fabric_connection,
@@ -167,8 +165,6 @@ FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_W
     size_t source_buffer_address) {
     send_packets_unicast_write_impl<true>(fabric_connection, pkt_hdr_fwd, pkt_hdr_bwd, params, source_buffer_address);
 }
-
-#endif
 
 template <>
 void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
@@ -459,12 +455,10 @@ void kernel_main() {
                         send_packets<NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
                             fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
                         break;
-#ifdef ARCH_WORMHOLE
                     case NocSendType::NOC_UNICAST_SCATTER_WRITE:
                         send_packets<NocSendType::NOC_UNICAST_SCATTER_WRITE>(
                             fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
                         break;
-#endif
                     default: ASSERT(false); break;
                 }
             }
