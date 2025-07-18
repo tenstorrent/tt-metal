@@ -1623,6 +1623,7 @@ FORCE_INLINE void noc_inline_dw_write(
 }
 
 // on BH this api can only write to stream register, writing to L1 will cause hangs!
+// Part of the address could be set later in noc_inline_dw_write_with_state
 template <bool posted = false, bool set_val = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr,
@@ -1632,34 +1633,12 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
-    // The address could be set here or later in noc_inline_dw_write_with_state
-
-    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
-                             0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
-
-    uint32_t be32 = be;
-    uint32_t be_shift = (addr & (NOC_WORD_BYTES - 1));
-    // If we're given a misaligned address, don't write to the bytes in the word below the address
-    be32 = (be32 << be_shift);
-
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    if constexpr (set_val) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr & 0xFFFFFFFF);
-#ifdef ARCH_BLACKHOLE
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+    noc_fast_write_dw_inline_set_state<posted, set_val>(noc, cmd_buf, addr, be, vc, val);
     WAYPOINT("NWID");
 }
 
 // on BH this api can only write to stream register, writing to L1 will cause hangs!
+// Either hi or lo address should be getting updated
 template <
     bool update_addr_lo = false,
     bool update_counter = true,
@@ -1668,40 +1647,9 @@ template <
     bool update_val = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
-    // only either hi or lo address should be getting updated
-    static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
-
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (update_counter) {
-            if constexpr (posted) {
-                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-            } else {
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-            }
-        }
-    }
     WAYPOINT("NWIW");
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    if constexpr (update_addr_lo) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr);
-    } else if constexpr (update_addr_hi) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, addr);
-    }
-    if constexpr (update_val) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (update_counter) {
-            if constexpr (posted) {
-                noc_posted_writes_num_issued[noc] += 1;
-            } else {
-                noc_nonposted_writes_num_issued[noc] += 1;
-                noc_nonposted_writes_acked[noc] += 1;
-            }
-        }
-    }
+    noc_fast_write_dw_inline_with_state<update_addr_lo, update_addr_hi, update_val, posted, update_counter>(
+        noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }
 
@@ -1851,6 +1799,35 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTD");
 }
 
+template <bool update_counter = true, bool posted = false>
+FORCE_INLINE void noc_async_write_one_packet_with_trid(
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr,
+    uint32_t size,
+    uint32_t trid,
+    uint8_t cmd_buf = write_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    WAYPOINT("NAWW");
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+
+    ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter>(
+        noc,
+        cmd_buf,
+        src_local_l1_addr,
+        dst_noc_addr,
+        size,
+        vc,
+        false,  // mcast
+        false,  // linked
+        1,      // num_dests
+        true,   // multicast_path_reserve
+        posted,
+        trid);
+    WAYPOINT("NWPD");
+}
+
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     uint64_t dst_noc_addr,
@@ -1882,35 +1859,6 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     ncrisc_noc_set_transaction_id(noc, cmd_buf, trid);
     ncrisc_noc_write_with_state<noc_mode, update_counter, !posted>(
         noc, cmd_buf, src_local_l1_addr, dst_local_addr, size, trid);
-    WAYPOINT("NWPD");
-}
-
-template <bool update_counter = true, bool posted = false>
-FORCE_INLINE void noc_async_write_one_packet_with_trid(
-    uint32_t src_local_l1_addr,
-    uint64_t dst_noc_addr,
-    uint32_t size,
-    uint32_t trid,
-    uint8_t cmd_buf = write_cmd_buf,
-    uint8_t noc = noc_index,
-    uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-
-    ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter>(
-        noc,
-        cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr,
-        size,
-        vc,
-        false,  // mcast
-        false,  // linked
-        1,      // num_dests
-        true,   // multicast_path_reserve
-        posted,
-        trid);
     WAYPOINT("NWPD");
 }
 
