@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -43,12 +42,10 @@ def evaluation_range(request):
         start_from = int(start_from)
     else:
         start_from = 0
-
     if num_prompts is not None:
         num_prompts = int(num_prompts)
     else:
         num_prompts = 5000
-
     return start_from, num_prompts
 
 
@@ -56,17 +53,14 @@ def evaluation_range(request):
 def reset_config(request):
     reset_bool_val = request.config.getoption("--reset-bool")
     reset_period = request.config.getoption("--reset-period")
-
     if reset_bool_val is not None:
         reset_bool = bool(reset_bool_val)
     else:
         reset_bool = True
-
     if reset_period is not None:
         reset_period = int(reset_period)
     else:
         reset_period = 200
-
     return reset_bool, reset_period
 
 
@@ -88,3 +82,8 @@ def get_device_name():
         return "N150x4"
     elif num_devices == 8:
         return "T3K"
+
+
+@pytest.fixture
+def loop_iter_num(request):
+    return int(request.config.getoption("--loop-iter-num"))
