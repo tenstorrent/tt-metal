@@ -213,7 +213,7 @@ void kernel_main() {
     constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
-    constexpr uint32_t cu_window_seqlens_tile_bytes = get_tile_size(cb_cu_window_seqlens_in);
+    constexpr uint32_t cu_window_seqlens_tile_bytes = 1024;  // todo)) fix: get_tile_size(cb_cu_window_seqlens_in);
     constexpr DataFormat cu_window_seqlens_data_format = get_dataformat(cb_cu_window_seqlens_in);
     constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
     constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
