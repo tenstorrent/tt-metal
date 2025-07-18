@@ -45,7 +45,7 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
     TT_FATAL(
         this->all_gather_async_struct.dim == 3, "AllGatherMatmulAsync requires dim=3 for the AllGather operaitons.");
     TT_FATAL(
-        input_tensor.get_padded_shape()[0] == 1 && input_tensor.get_padded_shape()[1] == 1,
+        input_tensor.padded_shape()[0] == 1 && input_tensor.padded_shape()[1] == 1,
         "AllGatherMatmulAsync requires input tensor to have batch size of 1.");
     std::visit(
         [&](const auto& config) {
@@ -176,9 +176,9 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
     uint32_t semaphore_address = this->all_gather_async_struct.semaphore.at(0).address();
 
@@ -254,7 +254,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         all_gather_async_struct.create_output_tensors({input_tensor}, optional_output_tensors)[0];
 
     /* Matmul setup */
-    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
+    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -268,7 +268,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config_mm.value_or(input_tensor.memory_config()),
-            dtype.value_or(input_tensor.get_dtype()),
+            dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             /*untilize_out=*/false,
             user_core_coord,

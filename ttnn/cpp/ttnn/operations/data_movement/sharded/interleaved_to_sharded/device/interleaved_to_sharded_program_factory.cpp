@@ -159,7 +159,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     std::string writer_kernel;
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     if (dst_is_dram) {
-        if (input.get_layout() == Layout::TILE) {
+        if (input.layout() == Layout::TILE) {
             writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_start_id.cpp");
         } else {
             writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_stick_layout_start_id.cpp");

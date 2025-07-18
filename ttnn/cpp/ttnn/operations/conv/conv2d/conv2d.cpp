@@ -443,7 +443,7 @@ Result conv2d_DRAM(
                 sliced_output_tensor,
                 ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
                 ttnn::Shape(
-                    {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.get_padded_shape()[3]}));
+                    {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
         }
         ttnn::experimental::slice_write(
             queue_id,
