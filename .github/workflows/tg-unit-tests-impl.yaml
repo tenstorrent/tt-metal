@@ -23,7 +23,6 @@ on:
 
 jobs:
   # See issue 25270
-
   #TG-UMD-tests:
   #  strategy:
   #    fail-fast: false
