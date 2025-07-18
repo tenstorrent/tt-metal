@@ -26,6 +26,7 @@ struct InterleavedConfig {
     bool is_dram = true;  // else is L1
     bool read_kernel = true;
     bool write_kernel = true;
+    bool default_noc = true;
 };
 
 /// @brief Does Interleaved buffer --> Reader --> L1 --> Writer --> Interleaved buffer
@@ -72,7 +73,8 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
         (uint32_t)test_config.is_dram,
-        (uint32_t)sync};
+        (uint32_t)sync,
+        (uint32_t)test_config.default_noc};
 
     vector<uint32_t> writer_compile_args = {
         (uint32_t)test_config.num_of_transactions,
@@ -81,7 +83,8 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
         (uint32_t)test_config.is_dram,
-        (uint32_t)sync};
+        (uint32_t)sync,
+        (uint32_t)test_config.default_noc};
 
     if (sync) {
         // Create circular buffers
@@ -92,9 +95,15 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
     }
 
     uint32_t l1_addr = get_l1_address_and_size(device, corerange_to_cores(test_config.cores)[0]).base_address;
-
-    assert(l1_addr + total_size_bytes < input_buffer_address);
-    assert(l1_addr + total_size_bytes < output_buffer_address);
+    // log_info(tt::LogTest, "l1 addr: {}, bytes: {}, input buffer addr: {}, output buffer addr: {}", l1_addr,
+    // total_size_bytes, input_buffer_address, output_buffer_address);
+    if (!test_config.is_dram) {
+        assert(
+            (l1_addr + total_size_bytes < input_buffer_address) || (input_buffer_address + total_size_bytes < l1_addr));
+        assert(
+            (l1_addr + total_size_bytes < output_buffer_address) ||
+            (output_buffer_address + total_size_bytes < l1_addr));
+    }
 
     // Kernels
     if (test_config.read_kernel) {
@@ -103,8 +112,8 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
             "tests/tt_metal/tt_metal/data_movement/interleaved/kernels/interleaved_tile_read.cpp",
             test_config.cores,
             DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
+                .processor = test_config.default_noc ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0,
+                .noc = test_config.default_noc ? NOC::RISCV_1_default : NOC::RISCV_0_default,
                 .compile_args = reader_compile_args});
 
         std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addr};
@@ -117,8 +126,8 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
             "tests/tt_metal/tt_metal/data_movement/interleaved/kernels/interleaved_tile_write.cpp",
             test_config.cores,
             DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
+                .processor = test_config.default_noc ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1,
+                .noc = test_config.default_noc ? NOC::RISCV_0_default : NOC::RISCV_1_default,
                 .compile_args = writer_compile_args});
 
         std::vector<uint32_t> writer_run_time_args = {output_buffer_address, l1_addr};
@@ -321,6 +330,70 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
     }
 }
 
+/* ========== Test noc_async_read_tile kernel only with swapped noc; Test id = 72 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileReadNocSwap) {
+    // Parameters
+    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+        // Test config
+        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
+            .test_id = 72,
+            .num_of_transactions = num_of_transactions,
+            .num_tiles = num_tiles,
+            .tile_size_bytes = tile_size_bytes,
+            .l1_data_format = DataFormat::Float16_b,
+            .cores = core_range_set,
+            .is_dram = true,
+            .read_kernel = true,
+            .write_kernel = false,
+            .default_noc = false};
+
+        // Run
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        }
+    }
+}
+
+/* ========== Test noc_async_write_tile kernel only with swapped noc; Test id = 73 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileWriteNocSwap) {
+    // Parameters
+    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+        // Test config
+        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
+            .test_id = 73,
+            .num_of_transactions = num_of_transactions,
+            .num_tiles = num_tiles,
+            .tile_size_bytes = tile_size_bytes,
+            .l1_data_format = DataFormat::Float16_b,
+            .cores = core_range_set,
+            .is_dram = true,
+            .read_kernel = false,
+            .write_kernel = true,
+            .default_noc = false};
+
+        // Run
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        }
+    }
+}
+
 /* ========== INTERLEAVED L1 TESTS ========== */
 
 /* ========== Test case for varying number of tiles using interleaved L1; Test id = 66 ========== */
@@ -469,6 +542,69 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileDirectedIdeal) {
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
+/* ========== Test noc_async_read_tile only with swapped noc; Test id = 74 ========== */
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileReadNocSwap) {
+    // Parameters
+    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+        // Test config
+        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
+            .test_id = 74,
+            .num_of_transactions = num_of_transactions,
+            .num_tiles = num_tiles,
+            .tile_size_bytes = tile_size_bytes,
+            .l1_data_format = DataFormat::Float16_b,
+            .cores = core_range_set,
+            .is_dram = false,
+            .read_kernel = true,
+            .write_kernel = false,
+            .default_noc = false};
+
+        // Run
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        }
+    }
+}
+/* ========== Test noc_async_write_tile only; Test id = 75 ========== */
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileWriteNocSwap) {
+    // Parameters
+    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_tiles = 16;
+    uint32_t max_transactions = 64;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+        // Test config
+        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
+            .test_id = 75,
+            .num_of_transactions = num_of_transactions,
+            .num_tiles = num_tiles,
+            .tile_size_bytes = tile_size_bytes,
+            .l1_data_format = DataFormat::Float16_b,
+            .cores = core_range_set,
+            .is_dram = false,
+            .read_kernel = false,
+            .write_kernel = true,
+            .default_noc = false};
+
+        // Run
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        }
     }
 }
 
