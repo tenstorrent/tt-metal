@@ -53,7 +53,10 @@ template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     return Tensor(
-        input_tensor.host_storage().transform(compute), output_spec, input_tensor.distributed_tensor_config());
+        input_tensor.host_storage().transform(compute),
+        output_spec,
+        input_tensor.distributed_tensor_config(),
+        input_tensor.tensor_topology());
 }
 
 template <typename Func, typename... Args>
@@ -604,7 +607,8 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            conv_weight_tensor.distributed_tensor_config());
+            conv_weight_tensor.distributed_tensor_config(),
+            conv_weight_tensor.tensor_topology());
     };
 
     auto storage = conv_weight_tensor.host_storage();

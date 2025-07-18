@@ -58,7 +58,8 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             tensors.reserve(device_storage.coords.size());
             for (const auto& coord : device_storage.coords) {
                 DeviceStorage shard_storage(mesh_buffer, {coord});
-                tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), AllGatherTensor{}));
+                tensors.push_back(Tensor(
+                    std::move(shard_storage), tensor.tensor_spec(), AllGatherTensor{}, tensor.tensor_topology()));
             }
             return tensors;
         } else {
@@ -85,8 +86,12 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
         distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
     }
 
+    // TODO (#25340): Implement correct logic and add test for this
     return Tensor(
-        HostStorage{std::move(distributed_host_buffer)}, reference_shard.get_tensor_spec(), AllGatherTensor{});
+        HostStorage{std::move(distributed_host_buffer)},
+        reference_shard.get_tensor_spec(),
+        AllGatherTensor{},
+        TensorTopology{});
 }
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
@@ -118,8 +123,12 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
     auto duplicate =
         std::adjacent_find(coords.begin(), coords.end(), [](const auto& a, const auto& b) { return a == b; });
     TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
+    // TODO (#25340): Implement correct logic and add test for this
     return Tensor(
-        DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), AllGatherTensor{});
+        DeviceStorage(std::move(mesh_buffer), std::move(coords)),
+        reference_shard.tensor_spec(),
+        AllGatherTensor{},
+        TensorTopology{});
 }
 
 std::vector<int> get_t3k_physical_device_ids_ring() {

@@ -307,7 +307,8 @@ Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     SerializedStorageType storage_type = SerializedStorageType::HOST;
     safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
     auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device);
-    Tensor tensor(std::move(storage.storage), spec, storage.strategy);
+    // TODO (#25340): Add TensorTopology to serialization and properly handle it in deserialization.
+    Tensor tensor(std::move(storage.storage), spec, storage.strategy, TensorTopology{});
     if (device != nullptr) {
         tensor = tensor.to_device(device, spec.memory_config());
     }

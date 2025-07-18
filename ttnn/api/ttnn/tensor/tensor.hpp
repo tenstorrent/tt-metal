@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -62,7 +63,11 @@ public:
     ~Tensor();
 
     // Constructs a tensor with `Storage` and `TensorSpec`.
-    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    [[nodiscard]] Tensor(
+        Storage storage,
+        TensorSpec tensor_spec,
+        DistributedTensorConfig distributed_tensor_config,
+        TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -226,6 +231,9 @@ public:
     const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
 
+    // Multi-device topology configuration - tracks how tensor is distributed across mesh devices
+    const TensorTopology& tensor_topology() const;
+
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     const std::optional<ShardSpec>& shard_spec() const;
     const std::optional<NdShardSpec>& nd_shard_spec() const;
@@ -277,7 +285,11 @@ public:
     }
 
 private:
-    void init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    void init(
+        Storage storage,
+        TensorSpec tensor_spec,
+        DistributedTensorConfig distributed_tensor_config,
+        TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 

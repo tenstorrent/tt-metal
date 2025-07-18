@@ -74,9 +74,14 @@ Tensor::Tensor(
     const ttnn::Shape& padded_shape,
     DataType dtype,
     Layout layout,
-    const std::optional<Tile>& tile) {
+    const std::optional<Tile>& tile) :
+    Tensor(
+        std::move(buffer),
+        TensorSpec(
+            logical_shape,
+            TensorLayout::fromPaddedShape(
+                dtype, PageConfig(layout, tile), MemoryConfig{}, logical_shape, padded_shape))) {
     using namespace tt::constants;
-
     if (tile.has_value() and  //
         (tile->get_tile_shape()[0] != TILE_WIDTH or tile->get_tile_shape()[1] != TILE_HEIGHT)) {
         log_warning(
@@ -84,26 +89,30 @@ Tensor::Tensor(
             "only matmul op and ccl all-gather currently supports the customized tile shape: {}",
             tile->get_tile_shape());
     }
+}
 
+Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
+    Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), ReplicateTensor{}, TensorTopology{}) {}
+
+Tensor::Tensor(
+    Storage storage,
+    TensorSpec tensor_spec,
+    DistributedTensorConfig distributed_tensor_config,
+    TensorTopology tensor_topology) {
     init(
-        Storage(HostStorage(std::move(buffer))),
-        TensorSpec(
-            logical_shape,
-            TensorLayout::fromPaddedShape(
-                dtype, PageConfig(layout, tile), MemoryConfig{}, logical_shape, padded_shape)),
-        ReplicateTensor{});
+        Storage(std::move(storage)),
+        std::move(tensor_spec),
+        std::move(distributed_tensor_config),
+        std::move(tensor_topology));
 }
 
-Tensor::Tensor(HostBuffer storage, TensorSpec tensor_spec) :
-    Tensor(Storage(HostStorage(std::move(storage))), std::move(tensor_spec), ReplicateTensor{}) {}
-
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) {
-    init(Storage(std::move(storage)), std::move(tensor_spec), std::move(distributed_tensor_config));
-}
-
-void Tensor::init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) {
+void Tensor::init(
+    Storage storage,
+    TensorSpec tensor_spec,
+    DistributedTensorConfig distributed_tensor_config,
+    TensorTopology tensor_topology) {
     tensor_attributes = std::make_shared<TensorAttributes>(
-        std::move(storage), std::move(tensor_spec), std::move(distributed_tensor_config));
+        std::move(storage), std::move(tensor_spec), std::move(distributed_tensor_config), std::move(tensor_topology));
 
     if (auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
         device_storage != nullptr && device_storage->mesh_buffer != nullptr) {
@@ -580,7 +589,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
         output = allocate_tensor_on_device(tensor_spec, mesh_device);
     } else {
         auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-        output = Tensor(DeviceStorage{device_buffer}, tensor_spec, ReplicateTensor{});
+        output = Tensor(DeviceStorage{device_buffer}, tensor_spec, ReplicateTensor{}, TensorTopology{});
     }
     output = tt::tt_metal::set_tensor_id(output);
 
@@ -747,7 +756,8 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
         coords.push_back(coord);
     }
     DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
-    return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
+    // TODO (#25340): Implement correct logic and add test for this
+    return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{}, TensorTopology{});
 }
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
@@ -759,7 +769,8 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
     distributed_host_buffer = distributed_host_buffer.transform(
         [&](const HostBuffer&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, ReplicateTensor{});
+    // TODO (#25340): Implement correct logic and add test for this
+    return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, ReplicateTensor{}, TensorTopology{});
 }
 
 void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) {
@@ -884,5 +895,7 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 const DistributedTensorConfig& Tensor::distributed_tensor_config() const {
     return this->tensor_attributes->get_distributed_tensor_config();
 }
+
+const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
 }  // namespace tt::tt_metal
