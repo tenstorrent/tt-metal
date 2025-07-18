@@ -159,6 +159,7 @@ inline void RunPersistent1dFabricLatencyTest(
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
+            true,
             num_links,
             topology,
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
