@@ -47,12 +47,12 @@ void kernel_main() {
     }
     if constexpr (default_noc) {
         {
-            DeviceZoneScopedN("RISCV0");
+            DeviceZoneScopedN("RISCV1");
             noc_read_helper<num_of_transactions, num_tiles, tile_size_bytes, is_dram>(l1_write_addr, s);
         }
     } else {
         {
-            DeviceZoneScopedN("RISCV1");
+            DeviceZoneScopedN("RISCV0");
             noc_read_helper<num_of_transactions, num_tiles, tile_size_bytes, is_dram>(l1_write_addr, s);
         }
     }
