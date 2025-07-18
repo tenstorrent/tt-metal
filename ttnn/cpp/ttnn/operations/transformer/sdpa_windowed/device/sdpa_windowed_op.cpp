@@ -27,6 +27,7 @@ void WindowedScaledDotProductAttention::validate(const std::vector<Tensor>& inpu
         cu_window_seqlens_shape[0] <= cu_window_seqlens_npages * cu_window_seqlens_page_size,
         "cu_window_seqlens must have less than 1024 elements");
     // First element must be 0
+    // todo)) use uint16_t and int16_t instead of uint32_t and int32_t
     TT_FATAL(
         cu_window_seqlens.dtype() == DataType::UINT32 || cu_window_seqlens.dtype() == DataType::INT32,
         "cu_window_seqlens must be uint32 or int32");
