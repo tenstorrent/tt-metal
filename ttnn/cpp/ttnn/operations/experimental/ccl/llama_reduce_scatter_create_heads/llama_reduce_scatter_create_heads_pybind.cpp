@@ -65,7 +65,6 @@ void py_bind_llama_rs_create_heads(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
                const bool use_noc1_only,
-               const bool use_optimal_ccl_for_llama,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -82,8 +81,7 @@ void py_bind_llama_rs_create_heads(py::module& module) {
                     num_kv_heads,
                     memory_config,
                     qkv_memory_config,
-                    use_noc1_only,
-                    use_optimal_ccl_for_llama);
+                    use_noc1_only);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("intermediate_packet_buffer").noconvert(),
@@ -100,7 +98,6 @@ void py_bind_llama_rs_create_heads(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("qkv_memory_config") = std::nullopt,
             py::arg("use_noc1_only") = false,
-            py::arg("use_optimal_ccl_for_llama") = false,
             py::arg("queue_id") = DefaultQueueId,
         });
 }

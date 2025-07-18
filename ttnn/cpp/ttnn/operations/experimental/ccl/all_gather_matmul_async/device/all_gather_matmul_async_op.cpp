@@ -246,8 +246,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         topology,
         multi_device_global_semaphore,
         sub_device_id,
-        /*cluster_axis=*/std::nullopt,
-        false);
+        /*cluster_axis=*/std::nullopt);
 
     // Create the all gather output tensor used as input (activation) to the matmul
     ttnn::Tensor all_gather_out_tensor =

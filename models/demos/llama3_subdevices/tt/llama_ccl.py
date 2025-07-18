@@ -534,7 +534,6 @@ class TT_CCL:
         lm_head=False,
         buffer_key=None,
         use_noc1_only=False,
-        use_optimal_ccl_for_llama=False,
     ):
         if self.mode == "decode":
             if lm_head:
@@ -556,7 +555,6 @@ class TT_CCL:
                 topology=self.model_config["CCL_TOPOLOGY"],
                 subdevice_id=self.worker_sub_device_id,
                 use_noc1_only=use_noc1_only,
-                use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
             )
 
             if lm_head:
@@ -703,7 +701,6 @@ class TT_CCL:
         dim,
         qkv_memory_config,
         use_noc1_only=False,
-        use_optimal_ccl_for_llama=False,
     ):
         persistent_interim_buffer = self.rs_create_heads_buffers[cluster_axis]
         (
@@ -725,7 +722,6 @@ class TT_CCL:
             memory_config=qkv_memory_config,
             qkv_memory_config=qkv_memory_config,
             use_noc1_only=use_noc1_only,
-            use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
@@ -849,16 +845,7 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
-    def line_all_gather(
-        self,
-        input_tensor_mesh,
-        dim,
-        cluster_axis,
-        memory_config,
-        num_links=1,
-        buffer_key=None,
-        use_optimal_ccl_for_llama=False,
-    ):
+    def line_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
         topology = ttnn.Topology.Linear
         if self.mode == "prefill":
             persistent_buffer = None
@@ -897,26 +884,19 @@ class TT_CCL:
             assert buffer_key is not None, "buffer_key is None"
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
-        semaphores = (
-            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
-            if self.use_ring_ag_prefill
-            else [
-                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-                self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
-            ]
-        )
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
             topology=topology,
-            multi_device_global_semaphore=semaphores,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
+            if self.use_ring_ag_prefill
+            else self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             persistent_output_tensor=persistent_buffer,
             num_links=num_links,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
-            use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
         )
         if self.mode == "prefill" and buffer_key is not None:
             # reshape input back
