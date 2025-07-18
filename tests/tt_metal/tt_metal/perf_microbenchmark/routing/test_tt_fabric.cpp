@@ -108,6 +108,7 @@ int main(int argc, char** argv) {
         const auto& topology = test_config.fabric_setup.topology;
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         log_info(tt::LogTest, "Opening devices with topology: {} and routing type: {}", topology, routing_type);
+
         test_context.open_devices(topology, routing_type);
 
         log_info(tt::LogTest, "Building tests");

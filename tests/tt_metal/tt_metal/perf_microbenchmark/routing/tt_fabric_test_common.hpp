@@ -77,17 +77,20 @@ public:
 
         // TODO: for now we are just dealing with user mesh 0 here
         available_mesh_ids_.insert(user_meshes[0]);
-        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
-        const auto coordinates = MeshCoordinateRange(mesh_shape_);
-        for (const auto& coord : coordinates) {
+        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0], MeshScope::GLOBAL);
+        const auto& local_mesh_coord_range = control_plane_ptr_->get_coord_range(user_meshes[0], MeshScope::LOCAL);
+        for (const auto& coord : local_mesh_coord_range) {
             available_device_coordinates_.push_back(coord);
+            auto fabric_chip_id = coord[0] * mesh_shape_[1] + coord[1];
+            available_node_ids_.emplace_back(FabricNodeId(user_meshes[0], fabric_chip_id));
+            std::cout << "Available device coordinate: " << coord << " " << fabric_chip_id << std::endl;
         }
 
         // TODO: available node ids should be able to capture the node ids for other meshes as well
-        const auto mesh_id = user_meshes[0];
-        for (auto i = 0; i < available_device_coordinates_.size(); i++) {
-            available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
-        }
+        /*        const auto mesh_id = user_meshes[0];
+                for (auto i = 0; i < available_device_coordinates_.size(); i++) {
+                    available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
+                }*/
 
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
     }
@@ -1107,13 +1110,14 @@ private:
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
         for (const auto& coord : available_device_coordinates_) {
-            TT_FATAL(
-                coord.dims() == mesh_shape_.dims(),
-                "Device coordinate {} has different dimensions than mesh shape {}",
-                coord,
-                mesh_shape_);
+            //  TT_FATAL(
+            //     coord.dims() == mesh_shape_.dims(),
+            //      "Device coordinate {} has different dimensions than mesh shape {}",
+            //      coord,
+            //      mesh_shape_);
 
             // Validate coordinate bounds
+            std::cout << " my coord " << coord << std::endl;
             for (size_t i = 0; i < coord.dims(); ++i) {
                 TT_FATAL(
                     coord[i] < mesh_shape_[i],
@@ -1134,6 +1138,7 @@ private:
 
         current_fabric_config_ = fabric_config;
         are_devices_open_ = true;
+        std::cout << " DONE " << std::endl;
     }
 
     MeshCoordinate get_displacement(const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {

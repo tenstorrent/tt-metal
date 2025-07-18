@@ -1,10 +1,10 @@
 ChipSpec: {
   arch: wormhole_b0,
   ethernet_ports: {
-    N: 4,
-    E: 4,
-    S: 4,
-    W: 4,
+    N: 1,
+    E: 1,
+    S: 1,
+    W: 1,
   }
 }
 
