@@ -38,8 +38,8 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
         "Multi-Host Routing tests require multiple hosts in the system");
 }
 
-inline const std::vector<eth_coord_t>& get_eth_coords_for_t3k() {
-    static const std::vector<eth_coord_t> t3k_eth_coords = {
+inline const std::vector<eth_coord_t>& get_eth_coords_for_2x4_t3k() {
+    static const std::vector<eth_coord_t> t3k_2x4_eth_coords = {
         {0, 0, 0, 0, 0},
         {0, 1, 0, 0, 0},
         {0, 2, 0, 0, 0},
@@ -49,7 +49,21 @@ inline const std::vector<eth_coord_t>& get_eth_coords_for_t3k() {
         {0, 2, 1, 0, 0},
         {0, 3, 1, 0, 0}};
 
-    return t3k_eth_coords;
+    return t3k_2x4_eth_coords;
+}
+
+inline const std::vector<eth_coord_t> get_eth_coords_for_1x8_t3k() {
+    static const std::vector<eth_coord_t> t3k_1x8_eth_coords = {
+        {0, 0, 0, 0, 0},
+        {0, 1, 0, 0, 0},
+        {0, 2, 0, 0, 0},
+        {0, 3, 0, 0, 0},
+        {0, 3, 1, 0, 0},
+        {0, 2, 1, 0, 0},
+        {0, 1, 1, 0, 0},
+        {0, 0, 1, 0, 0}};
+
+    return t3k_1x8_eth_coords;
 }
 
 inline const std::vector<std::vector<eth_coord_t>>& get_eth_coords_for_split_2x2_t3k() {
@@ -184,24 +198,41 @@ class Dual2x4FabricFixture : public Fixture {
     }
 
     std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
-        return {get_eth_coords_for_t3k(), get_eth_coords_for_t3k()};
+        return {get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k()};
     }
 };
 
-// Generic Fixture for Nano-Exabox systems using Fabric
+// Generic Fixture for Nano-Exabox systems using Fabric (each T3K is initialized as a 2x4 Mesh)
 template <typename Fixture>
-class NanoExaboxFabricFixture : public Fixture {
+class NanoExabox2x4FabricFixture : public Fixture {
     std::string get_path_to_mesh_graph_desc() override {
         return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml";
     }
 
     std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
         return {
-            get_eth_coords_for_t3k(),
-            get_eth_coords_for_t3k(),
-            get_eth_coords_for_t3k(),
-            get_eth_coords_for_t3k(),
-            get_eth_coords_for_t3k()};
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k()};
+    }
+};
+
+// Generic Fixture for Nano-Exabox systems using Fabric (each T3K is initialized as a 1x8 Mesh)
+template <typename Fixture>
+class NanoExabox1x8FabricFixture : public Fixture {
+    std::string get_path_to_mesh_graph_desc() override {
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_1x8_mesh_graph_descriptor.yaml";
+    }
+
+    std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
+        return {
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k()};
     }
 };
 
@@ -218,8 +249,11 @@ using MeshDeviceDual2x2Fixture = Dual2x2FabricFixture<MultiMeshDeviceFabricFixtu
 using InterMeshDual2x4FabricFixture = Dual2x4FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceDual2x4Fixture = Dual2x4FabricFixture<MultiMeshDeviceFabricFixture>;
 
-using IntermeshNanoExaboxFabricFixture = NanoExaboxFabricFixture<InterMeshRoutingFabric2DFixture>;
-using MeshDeviceNanoExaboxFixture = NanoExaboxFabricFixture<MultiMeshDeviceFabricFixture>;
+using IntermeshNanoExabox2x4FabricFixture = NanoExabox2x4FabricFixture<InterMeshRoutingFabric2DFixture>;
+using MeshDeviceNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<MultiMeshDeviceFabricFixture>;
+
+using IntermeshNanoExabox1x8FabricFixture = NanoExabox1x8FabricFixture<InterMeshRoutingFabric2DFixture>;
+using MeshDeviceNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<MultiMeshDeviceFabricFixture>;
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
