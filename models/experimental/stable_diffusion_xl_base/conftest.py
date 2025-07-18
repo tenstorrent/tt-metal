@@ -33,6 +33,12 @@ def pytest_addoption(parser):
         type=int,
         help="How often to reset (default: 200 (images))",
     )
+    parser.addoption(
+        "--loop-iter-num",
+        action="store",
+        default=10,
+        help="Number of iterations of denoising loop (default: 10)",
+    )
 
 
 @pytest.fixture
@@ -88,3 +94,8 @@ def get_device_name():
         return "N150x4"
     elif num_devices == 8:
         return "T3K"
+      
+      
+@pytest.fixture
+def loop_iter_num(request):
+    return int(request.config.getoption("--loop-iter-num"))
