@@ -419,6 +419,7 @@ class ModelArgs:
         max_batch_size=1,
         max_seq_len=1024 * 128,
         optimizations=None,
+        cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -441,6 +442,7 @@ class ModelArgs:
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
+        self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
         assert not os.getenv(
@@ -1640,8 +1642,15 @@ class ModelArgs:
             if self.from_hf_url:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                self.cached_hf_model = model
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto"
+                    # Note that the default setting is torch.dtype.float32, but the model weights are
+                    # natively in torch.dtype.bfloat16. This would result in 2x memory usage from an
+                    # unnecessary cast.
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
@@ -2109,11 +2118,14 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if self.cached_hf_model is None:
+                if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                     self.cached_hf_model = model
-                else:
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
                     model = self.cached_hf_model
+                else:
+                    # No caching - load fresh each time
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model

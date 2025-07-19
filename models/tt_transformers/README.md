@@ -264,3 +264,48 @@ Max Prefill Chunk Sizes (text-only):
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
+
+## Memory Optimization
+
+### HuggingFace Model Caching Control
+
+To help manage memory usage, you can control whether the HuggingFace model is cached in memory using the `cache_hf` parameter:
+
+```python
+# For memory-constrained environments - disable caching
+model_args = ModelArgs(
+    mesh_device,
+    cache_hf=False,  # Reduces memory usage by not keeping HF model in memory
+    max_batch_size=1,
+    max_seq_len=2048
+)
+
+# Default behavior - enables caching for faster repeated access
+model_args = ModelArgs(
+    mesh_device,
+    cache_hf=True,  # Default: cache HF model for better performance
+    max_batch_size=4,
+    max_seq_len=4096
+)
+```
+
+**When to disable caching (`cache_hf=False`):**
+- Running on systems with limited memory (< 256GB)
+- Loading large models (70B+ parameters)
+- Using the model for single inference runs
+- When you don't need reference model comparisons
+
+**When to keep caching enabled (`cache_hf=True`, default):**
+- Sufficient memory available
+- Multiple inference runs or comparisons needed
+- Performance is prioritized over memory usage
+- Running reference model tests
+
+The `cache_hf` parameter affects:
+- `load_state_dict()` method: Controls whether HF model is cached after loading
+- `reference_transformer()` method: Controls whether to reuse cached model or load fresh
+
+**Memory Impact:**
+- Disabling caching saves approximately the full model size in memory
+- For a 70B model, this can save ~140GB+ of memory usage
+- Slight performance cost as model needs to be reloaded for reference operations
