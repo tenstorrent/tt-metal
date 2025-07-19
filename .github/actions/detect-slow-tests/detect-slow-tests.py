@@ -76,4 +76,4 @@ if __name__ == "__main__":
     except SlowTestDetectionError as e:
         print(e)
         sys.exit(1)
-    print("No slow tests slower than {timeout}s detected.")
+    print(f"No slow tests slower than {timeout}s detected.")
