@@ -15,12 +15,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.persistent_buffers import (
-    PersistentBuffersConfiguration,
-    supported_persistent_buffers_configurations,
-)
 from models.tt_transformers.tt.rope import RotarySetup
-from models.utility_functions import is_wormhole_b0
 
 
 class Transformer(LightweightModule):
@@ -45,17 +40,7 @@ class Transformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
-        persistent_buffers_configuration = PersistentBuffersConfiguration(
-            is_wormhole=is_wormhole_b0(),
-            num_devices=self.mesh_device.get_num_devices(),
-            model_name=self.args.base_model_name,
-        )
-        self.tt_ccl = TT_CCL(
-            self.mesh_device,
-            persistent_buffers_configuration
-            if persistent_buffers_configuration in supported_persistent_buffers_configurations
-            else None,
-        )
+        self.tt_ccl = TT_CCL(self.mesh_device)
 
         self.embd = Embedding(
             mesh_device=mesh_device,
@@ -342,39 +327,34 @@ class Transformer(LightweightModule):
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
             if self.args.is_galaxy:
-                ag_memory_config = tt_logits.memory_config()
-                dim = 3
-                cluster_axis = 0
-                ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
-                    tt_logits.shape, tt_logits.dtype, ag_memory_config, dim, cluster_axis
-                )
                 tt_logits = ttnn.experimental.all_gather_async(
                     tt_logits,
-                    persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
-                    dim=dim,
+                    persistent_output_buffer=None,
+                    dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=2,
-                    memory_config=ag_memory_config,
-                    cluster_axis=cluster_axis,
+                    memory_config=tt_logits.memory_config(),
+                    cluster_axis=0,
                     mesh_device=self.mesh_device,
                     topology=self.args.ccl_topology(),
                     subdevice_id=self.tt_ccl.worker_sub_device_id,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
                 )
             else:
-                ag_memory_config = tt_logits.memory_config()
-                dim = 3
-                ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
-                    tt_logits.shape, tt_logits.dtype, ag_memory_config, dim
-                )
                 tt_logits = ttnn.experimental.all_gather_async(
                     tt_logits,
-                    persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
-                    dim=dim,
+                    persistent_output_buffer=None,
+                    dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=1,
-                    memory_config=ag_memory_config,
+                    memory_config=tt_logits.memory_config(),
                     topology=self.args.ccl_topology(),
                     subdevice_id=self.tt_ccl.worker_sub_device_id,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
                 )
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 

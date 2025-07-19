@@ -73,20 +73,18 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-            ag_memory_config = input_mem_cfg
-            dim = 3
-            ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
-                x.shape, x.dtype, ag_memory_config, dim
-            )
             x = ttnn.experimental.all_gather_async(
                 x,
-                persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
-                dim=dim,
+                persistent_output_buffer=None,
+                dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 topology=self.args.ccl_topology(),
-                memory_config=ag_memory_config,
+                memory_config=input_mem_cfg,
                 subdevice_id=self.tt_ccl.worker_sub_device_id,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
@@ -95,20 +93,18 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):
-            ag_memory_config = x.memory_config()
-            dim = 3
-            ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
-                x.shape, x.dtype, ag_memory_config, dim
-            )
             x = ttnn.experimental.all_gather_async(
                 x,
-                persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
-                dim=dim,
+                persistent_output_buffer=None,
+                dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 topology=self.args.ccl_topology(),
-                memory_config=ag_memory_config,
+                memory_config=x.memory_config(),
                 subdevice_id=self.tt_ccl.worker_sub_device_id,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
         return x
