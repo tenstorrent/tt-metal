@@ -4,13 +4,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TODO: Write documentation
+Script Name: tt-triage.py
+
+Usage:
+    tt-triage [--initialize-with-noc1] [--verbosity=<verbosity>]
+
+Options:
+    --initialize-with-noc1    Initialize tt-exalens with NOC1 enabled. [default: False]
+    --verbosity=<verbosity>   Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
+
+Description:
+    Checking that we can reach all NOC endpoints through NOC0 and NOC1.
 """
 
 # Check if tt-exalens is installed
 import inspect
 import os
-from utils import ORANGE, RED, RST, GREEN
+import utils
 from collections.abc import Iterable
 
 try:
@@ -18,8 +28,8 @@ try:
 except ImportError as e:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     install_script = os.path.join(os.path.dirname(script_dir), "install_debugger.sh")
-    print(f"Module '{e}' not found. Please install tt-exalens by running: {GREEN}")
-    print(f"  {install_script}{RST}")
+    print(f"Module '{e}' not found. Please install tt-exalens by running:")
+    print(f"  {utils.GREEN}{install_script}{utils.RST}")
     exit(1)
 
 # Import necessary libraries
@@ -268,15 +278,14 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
             # If no scripts were deployed, it means there is a circular dependency or disabled script dependency
             remaining_scripts = set(scripts.keys()) - used_scripts
             raise ValueError(
-                f"{RED}Bad dependency detected in scripts:{RST} {', '.join(remaining_scripts)}\n"
-                f"{RED}  Circular dependency, dependency on disabled or non-existing script is not allowed.{RST}\n"
-                f"{RED}  Please check if all dependencies are met and scripts are enabled.{RST}"
+                f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
+                f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
+                f"  Please check if all dependencies are met and scripts are enabled."
             )
     return script_queue
 
 
 def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
-    # TODO: Implement argument parsing for scripts
     from docopt import (
         parse_defaults,
         parse_pattern,
@@ -291,21 +300,27 @@ def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
     )
     import sys
 
+    docs: dict[str, str] = {}
+    if __doc__ is not None:
+        docs["tt-triage"] = __doc__
+    for script in scripts.values():
+        if hasattr(script.module, "__doc__") and script.module.__doc__:
+            docs[script.name] = script.module.__doc__
+
     combined_options = []
     combined_pattern: Required = Required(*[Required(*[])])
 
-    for script in scripts.values():
-        if hasattr(script.module, "__doc__") and script.module.__doc__:
-            try:
-                script_options = parse_defaults(script.module.__doc__)
-                combined_options.extend(script_options)
+    for script_name, doc in docs.items():
+        try:
+            script_options = parse_defaults(doc)
+            combined_options.extend(script_options)
 
-                usage = printable_usage(script.module.__doc__)
-                pattern = parse_pattern(formal_usage(usage), script_options)
-                combined_pattern.children[0].children.extend(pattern.children[0].children)
-            except BaseException as e:
-                print(f"Error parsing arguments for script {script.name}: {e}")
-                continue
+            usage = printable_usage(doc)
+            pattern = parse_pattern(formal_usage(usage), script_options)
+            combined_pattern.children[0].children.extend(pattern.children[0].children)
+        except BaseException as e:
+            utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
+            continue
 
     argv = parse_argv(TokenStream(sys.argv[1:], DocoptExit), list(combined_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
@@ -321,14 +336,14 @@ def serialize_result(script: TriageScript | None, result):
     from dataclasses import fields, is_dataclass
 
     if script is not None:
-        print(f"Script {script.name} results:")
+        print()
+        utils.INFO(f"{script.name}:")
 
     if isinstance(result, list) and len(result) == 0:
-        print("  No results found.")
-        return
+        utils.ERROR("  No results found.")
 
     if not (is_dataclass(result) or (isinstance(result, list) and all(is_dataclass(item) for item in result))):
-        print(f"  {result}")
+        utils.INFO(f"  {result}")
     else:
         if not isinstance(result, list):
             result = [result]
@@ -423,9 +438,17 @@ def run_script(
     if args is None:
         args = parse_arguments(scripts)
 
+    # Setting verbosity level
+    try:
+        verbosity = int(args["--verbosity"])
+        utils.Verbosity.set(verbosity)
+    except:
+        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
+    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+
     # Initialize context if not provided
     if context is None:
-        context = init_ttexalens()
+        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
 
     # Run scripts in order
     result: Any = None
@@ -436,8 +459,11 @@ def run_script(
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"Data provider script {script.name} did not return any data.")
+    script = scripts[script_path] if script_path in scripts else None
     if result is not None:
-        serialize_result(None, result)
+        serialize_result(script, result)
+    else:
+        serialize_result(script, "pass")
 
 
 class TTTriageError(Exception):
@@ -447,9 +473,6 @@ class TTTriageError(Exception):
 
 
 def main():
-    # Initialize tt-exalens
-    init_ttexalens(use_noc1=False)  # TODO: Add command line argument to select NOC
-
     # Enumerate all scripts in application directory
     application_path = os.path.dirname(__file__)
     script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
@@ -459,15 +482,14 @@ def main():
     scripts: dict[str, TriageScript] = {}
     base_path = application_path
     for script in script_files:
-        # TODO: Do this prints only in verbose mode
         script_path = os.path.join(base_path, script)
         try:
             triage_script = TriageScript.load(script_path)
             if triage_script.config.disabled:
-                print(f"{ORANGE}Script {script_path} is disabled{RST}")
+                utils.DEBUG(f"Script {script_path} is disabled, skipping...")
                 continue
         except Exception as e:
-            print(f"{RED}Failed to load script {script_path}: {e}{RST}")
+            utils.DEBUG(f"Failed to load script {script_path}: {e}")
             continue
         scripts[script_path] = triage_script
 
@@ -477,7 +499,7 @@ def main():
             if dep in scripts:
                 script.depends.append(scripts[dep])
             else:
-                print(f"{RED}Dependency {dep} for script {script.name} not found.{RST}")
+                utils.ERROR(f"Dependency {dep} for script {script.name} not found.")
                 script.failed = True
                 script.failure_message = f"Dependency {dep} not found."
 
@@ -486,28 +508,31 @@ def main():
 
     # Parse common command line arguments
     args = parse_arguments(scripts)
-    context = init_ttexalens()
+
+    # Setting verbosity level
+    try:
+        verbosity = int(args["--verbosity"])
+        utils.Verbosity.set(verbosity)
+    except:
+        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
+    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+
+    # Initialize tt-exalens
+    context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
 
     # Execute scripts
     for script in script_queue:
         if not all(not dep.failed for dep in script.depends):
-            print(f"{RED}Cannot run script {script.name} due to failed dependencies.{RST}")
+            utils.WARN(f"Cannot run script {script.name} due to failed dependencies.")
         else:
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
-                print(f"{RED}Data provider script {script.name} did not return any data.{RST}")
-            if not script.config.data_provider and result is not None:
-                serialize_result(script, result)
-
+                utils.ERROR(f"Data provider script {script.name} did not return any data.")
+            if not script.config.data_provider:
+                if result is not None:
+                    serialize_result(script, result)
+                else:
+                    serialize_result(script, "pass")
 
 if __name__ == "__main__":
     main()
-
-
-# TODO:
-# Inspector data - first data provider
-# Devices to check - second data provider (depends on inspector data)
-# Dispatcher data - third data provider (depends on devices to check and inspector data)
-# Callstack printing - (callstack might be data provider, but printing it is not)
-# Binary integrity validation - (state checker, depends on devices, dispatcher data)
-# All other state checkers that are currently present in tt-triage.py

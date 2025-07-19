@@ -37,11 +37,15 @@ class PerDeviceCheck:
         result: list[PerDeviceCheckResult] = []
         for device in self.devices:
             check_result = check(device)
+            if check_result is None:
+                continue
             if isinstance(check_result, list):
                 for item in check_result:
                     result.append(PerDeviceCheckResult(device=device, result=item))
             else:
                 result.append(PerDeviceCheckResult(device=device, result=check_result))
+        if len(result) == 0:
+            return None
         return result
 
 

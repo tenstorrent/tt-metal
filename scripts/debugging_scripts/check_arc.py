@@ -13,8 +13,9 @@ Description:
     Checking that ARC heartbeat is running. Estimating ARC uptime.
 """
 
+from dataclasses import dataclass
 from triage import ScriptConfig, TTTriageError, triage_field, hex_serializer
-from check_per_device import dataclass, run as get_check_per_device
+from check_per_device import run as get_check_per_device
 from datetime import timedelta
 import time
 from ttexalens.coordinate import OnChipCoordinate
