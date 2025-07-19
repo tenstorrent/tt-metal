@@ -114,7 +114,7 @@ def dump_callstacks(
                         risc_name=risc_name,
                         dispatcher_core_data=dispatcher_core_data,
                         pc=callstack[0].pc if len(callstack) > 0 else None,
-                        kernel_callstack=callstack
+                        kernel_callstack=callstack,
                     )
                 )
     return result

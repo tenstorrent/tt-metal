@@ -111,20 +111,32 @@ def triage_field(serialized_name: str | None = None, serializer: Callable[[Any],
     return field(metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer})
 
 
-def combined_field(additional_fields: str | list[str] | None = None, serialized_name: str | None = None, serializer = None):
+def combined_field(
+    additional_fields: str | list[str] | None = None, serialized_name: str | None = None, serializer=None
+):
     if additional_fields is None and serialized_name is None and serializer is None:
         return field(metadata={"recurse": False, "dont_serialize": True})
-    assert additional_fields is not None and serialized_name is not None, "additional_fields and serialized_name must be provided."
+    assert (
+        additional_fields is not None and serialized_name is not None
+    ), "additional_fields and serialized_name must be provided."
     if serializer is None:
         serializer = default_serializer
     # TODO: If serializer accepts single value, it should be wrapped around method that converts arguments to list and passes them to serializer
     if not isinstance(additional_fields, list):
         additional_fields = [additional_fields]
-    return field(metadata={"recurse": False, "additional_fields": additional_fields, "serialized_name": serialized_name, "serializer": serializer})
+    return field(
+        metadata={
+            "recurse": False,
+            "additional_fields": additional_fields,
+            "serialized_name": serialized_name,
+            "serializer": serializer,
+        }
+    )
 
 
 def recurse_field():
     return field(metadata={"recurse": True})
+
 
 @dataclass
 class TriageScript:
@@ -345,12 +357,13 @@ def serialize_result(script: TriageScript | None, result):
                 elif "additional_fields" in metadata:
                     assert all(hasattr(obj, additional_field) for additional_field in metadata["additional_fields"])
                     all_values = [getattr(obj, field.name)]
-                    all_values.extend([getattr(obj, additional_field) for additional_field in metadata["additional_fields"]])
+                    all_values.extend(
+                        [getattr(obj, additional_field) for additional_field in metadata["additional_fields"]]
+                    )
                     assert "serializer" in metadata, "Serializer must be provided for combined field."
                     row.append(metadata["serializer"](all_values))
                 else:
                     row.append(metadata["serializer"](getattr(obj, field.name)))
-
 
         # Create table header
         header = []
@@ -373,7 +386,6 @@ def serialize_result(script: TriageScript | None, result):
                         else:
                             multirow_row.append("")
                     table.append(multirow_row)
-
 
         from tabulate import tabulate
         from utils import DEFAULT_TABLE_FORMAT
