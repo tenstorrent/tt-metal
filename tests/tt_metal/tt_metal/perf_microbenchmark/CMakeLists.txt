@@ -1,5 +1,6 @@
 set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
+    dispatch/benchmark_rw_buffer.cpp
     ethernet/test_ethernet_read_and_send_data.cpp
     ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
@@ -65,9 +66,14 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
+
     if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
+    if(${TEST_SRC} STREQUAL "dispatch/benchmark_rw_buffer.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+    endif()
+
     if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()
