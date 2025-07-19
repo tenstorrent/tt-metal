@@ -273,7 +273,7 @@ models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
 models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/segmentation_evaluation @tenstorrent/cse-developer-ttnn
-models/experimental/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/demos/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
