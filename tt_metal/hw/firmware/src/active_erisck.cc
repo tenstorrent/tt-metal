@@ -24,10 +24,11 @@
 #include <stdint.h>
 
 extern "C" [[gnu::section(".start")]]
-uint32_t _start() {
+void _start() {
+#if 0
     // Enable GPREL optimizations.
     asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
-    mark_stack_usage();
+#endif
     extern uint32_t __kernel_data_lma[];
     do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
@@ -46,6 +47,7 @@ uint32_t _start() {
             ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
             ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
             ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
+
             WAYPOINT("NKFD");
         }
 
@@ -54,5 +56,4 @@ uint32_t _start() {
             ASSERT(erisc_info->channels[i].bytes_sent == 0);
         }
     }
-    return measure_stack_usage();
 }

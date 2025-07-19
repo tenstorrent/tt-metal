@@ -1683,7 +1683,8 @@ void ControlPlane::initialize_intermesh_eth_links() {
 // contains all the cross host links
 bool ControlPlane::is_intermesh_enabled() const {
     // Check if the architecture and system support intermesh routing
-    if (not tt_metal::MetalContext::instance().hal().intermesh_eth_links_enabled()) {
+    if (not tt_metal::MetalContext::instance().hal().get_device_feature_enabled(
+            tt::tt_metal::DeviceFeature::ETH_LINKS_INTERMESH_ROUTING)) {
         return false;
     }
 
