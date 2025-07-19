@@ -91,6 +91,35 @@ public:
             *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
     }
 
+    uint32_t get_randomized_master_seed() {
+        uint32_t master_seed = std::random_device()();
+        log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed);
+
+        auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        // only need to handshake if we need to generate seed, since each host will have the same commandline arguments.
+        if (*(distributed_context->size()) > 1) {
+            if (*(distributed_context->rank()) == 0) {
+                master_seed = std::random_device()();
+                for (int recv_host_rank = 1; recv_host_rank < *(distributed_context->size()); ++recv_host_rank) {
+                    distributed_context->send(
+                        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                        tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
+                        tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
+                    );
+                }
+                log_info(tt::LogTest, "Master seed generated: {}", master_seed);
+            } else {
+                distributed_context->recv(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                    tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
+                    tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
+                );
+                log_info(tt::LogTest, "Received master seed: {}", master_seed);
+            }
+        }
+        return master_seed;
+    }
+
     void setup_devices() {
         const auto& available_coords = this->fixture_->get_available_device_coordinates();
         for (const auto& coord : available_coords) {
@@ -121,58 +150,61 @@ public:
             log_info(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
 
             for (const auto& sync_sender : config.global_sync_configs) {
-                CoreCoord sync_core = sync_sender.core.value();
-                const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
+                // currently initializing our sync configs to be on senders local to the current hos
+                if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
+                    CoreCoord sync_core = sync_sender.core.value();
+                    const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
 
-                // Track global sync core for this device
-                device_global_sync_cores_[sync_sender.device] = sync_core;
+                    // Track global sync core for this device
+                    device_global_sync_cores_[sync_sender.device] = sync_core;
 
-                // Process each already-split sync pattern for this device
-                for (const auto& sync_pattern : sync_sender.patterns) {
-                    // Convert sync pattern to TestTrafficSenderConfig format
-                    const auto& dest = sync_pattern.destination.value();
+                    // Process each already-split sync pattern for this device
+                    for (const auto& sync_pattern : sync_sender.patterns) {
+                        // Convert sync pattern to TestTrafficSenderConfig format
+                        const auto& dest = sync_pattern.destination.value();
 
-                    // Patterns are now already split into single-direction hops
-                    auto single_direction_hops = dest.hops.value();
+                        // Patterns are now already split into single-direction hops
+                        auto single_direction_hops = dest.hops.value();
 
-                    TrafficParameters sync_traffic_parameters = {
-                        .chip_send_type = sync_pattern.ftype.value(),
-                        .noc_send_type = sync_pattern.ntype.value(),
-                        .payload_size_bytes = sync_pattern.size.value(),
-                        .num_packets = sync_pattern.num_packets.value(),
-                        .atomic_inc_val = sync_pattern.atomic_inc_val,
-                        .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
-                        .mcast_start_hops = sync_pattern.mcast_start_hops,
-                        .seed = config.seed,
-                        .topology = config.fabric_setup.topology,
-                        .routing_type = config.fabric_setup.routing_type.value(),
-                        .mesh_shape = this->fixture_->get_mesh_shape(),
-                    };
+                        TrafficParameters sync_traffic_parameters = {
+                            .chip_send_type = sync_pattern.ftype.value(),
+                            .noc_send_type = sync_pattern.ntype.value(),
+                            .payload_size_bytes = sync_pattern.size.value(),
+                            .num_packets = sync_pattern.num_packets.value(),
+                            .atomic_inc_val = sync_pattern.atomic_inc_val,
+                            .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
+                            .mcast_start_hops = sync_pattern.mcast_start_hops,
+                            .seed = config.seed,
+                            .topology = config.fabric_setup.topology,
+                            .routing_type = config.fabric_setup.routing_type.value(),
+                            .mesh_shape = this->fixture_->get_mesh_shape(),
+                        };
 
-                    // For sync patterns, we use a dummy destination core and fixed sync address
-                    // The actual sync will be handled by atomic operations
-                    CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
-                    uint32_t sync_address =
-                        this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
-                    uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(
-                        sync_sender.device, sync_core);  // populate the master coord
+                        // For sync patterns, we use a dummy destination core and fixed sync address
+                        // The actual sync will be handled by atomic operations
+                        CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
+                        uint32_t sync_address =
+                            this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
+                        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(
+                            sync_sender.device, sync_core);  // populate the master coord
 
-                    // for 2d mcast case
-                    auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
-                        sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
+                        // for 2d mcast case
+                        auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
+                            sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
 
-                    TestTrafficSenderConfig sync_config = {
-                        .parameters = sync_traffic_parameters,
-                        .src_node_id = sync_sender.device,
-                        .dst_node_ids = dst_node_ids,   // Empty for multicast sync
-                        .hops = single_direction_hops,  // Use already single-direction hops
-                        .dst_logical_core = dummy_dst_core,
-                        .target_address = sync_address,
-                        .atomic_inc_address = sync_address,
-                        .dst_noc_encoding = dst_noc_encoding};
+                        TestTrafficSenderConfig sync_config = {
+                            .parameters = sync_traffic_parameters,
+                            .src_node_id = sync_sender.device,
+                            .dst_node_ids = dst_node_ids,   // Empty for multicast sync
+                            .hops = single_direction_hops,  // Use already single-direction hops
+                            .dst_logical_core = dummy_dst_core,
+                            .target_address = sync_address,
+                            .atomic_inc_address = sync_address,
+                            .dst_noc_encoding = dst_noc_encoding};
 
-                    // Add sync config to the master sender on this device
-                    this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
+                        // Add sync config to the master sender on this device
+                        this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
+                    }
                 }
             }
 
@@ -261,19 +293,23 @@ public:
 
         // clear the global sync cores in device_global_sync_cores_ using zero_out_buffer_on_cores
         for (const auto& [device_id, global_sync_core] : device_global_sync_cores_) {
-            const auto& device_coord = fixture_->get_device_coord(device_id);
-            std::vector<CoreCoord> cores = {global_sync_core};
-            // zero out the global sync address for global sync core
-            fixture_->zero_out_buffer_on_cores(device_coord, cores, global_sync_address, global_sync_memory_size);
-            // also need to zero out the local sync address for global sync core
-            fixture_->zero_out_buffer_on_cores(device_coord, cores, local_sync_address, global_sync_memory_size);
+            if (fixture_->is_local_fabric_node_id(device_id)) {
+                const auto& device_coord = fixture_->get_device_coord(device_id);
+                std::vector<CoreCoord> cores = {global_sync_core};
+                // zero out the global sync address for global sync core
+                fixture_->zero_out_buffer_on_cores(device_coord, cores, global_sync_address, global_sync_memory_size);
+                // also need to zero out the local sync address for global sync core
+                fixture_->zero_out_buffer_on_cores(device_coord, cores, local_sync_address, global_sync_memory_size);
+            }
         }
 
         // clear the local sync cores in device_local_sync_cores_ using zero_out_buffer_on_cores
         for (const auto& [device_id, local_sync_cores] : device_local_sync_cores_) {
-            const auto& device_coord = fixture_->get_device_coord(device_id);
-            fixture_->zero_out_buffer_on_cores(
-                device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
+            if (fixture_->is_local_fabric_node_id(device_id)) {
+                const auto& device_coord = fixture_->get_device_coord(device_id);
+                fixture_->zero_out_buffer_on_cores(
+                    device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
+            }
         }
 
         log_info(
@@ -405,8 +441,6 @@ private:
         // This function now assumes all allocation has been done by the GlobalAllocator.
         // It is responsible for taking the planned config and setting up the TestDevice objects.
         const auto& src_node_id = traffic_config.src_node_id;
-        const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
-        auto& src_test_device = this->test_devices_.at(src_coord);
 
         CoreCoord src_logical_core = traffic_config.src_logical_core.value();
         CoreCoord dst_logical_core = traffic_config.dst_logical_core.value();
@@ -414,19 +448,22 @@ private:
         uint32_t atomic_inc_address = traffic_config.atomic_inc_address.value_or(0);
 
         std::vector<FabricNodeId> dst_node_ids;
-        std::unordered_map<RoutingDirection, uint32_t> hops;
+        std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops = std::nullopt;
 
         if (traffic_config.hops.has_value()) {
-            hops = traffic_config.hops.value();
+            hops = traffic_config.hops;
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
-                traffic_config.src_node_id, hops, traffic_config.parameters.chip_send_type);
+                traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
         } else {
             dst_node_ids = traffic_config.dst_node_ids.value();
-            hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+
+            // assign hops for 2d LL and 1D
+            if (!(fixture_->use_dynamic_routing())) {
+                hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+            }
         }
 
-        const auto& dst_rep_coord = this->fixture_->get_device_coord(dst_node_ids[0]);
-        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_rep_coord, dst_logical_core);
+        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_node_ids[0], dst_logical_core);
         uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
         // Get payload buffer size from receiver memory map (cached during initialization)
@@ -450,10 +487,18 @@ private:
             .atomic_inc_address = atomic_inc_address,
             .payload_buffer_size = payload_buffer_size};
 
-        src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
+        if (fixture_->is_local_fabric_node_id(src_node_id)) {
+            const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
+            auto& src_test_device = this->test_devices_.at(src_coord);
+            src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
+        }
+
         for (const auto& dst_node_id : dst_node_ids) {
-            const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
-            this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
+            if (fixture_->is_local_fabric_node_id(dst_node_id)) {
+                const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
+                log_info(tt::LogTest, "added dst {} for sender {}", dst_node_id, src_node_id);
+                this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
+            }
         }
     }
 
@@ -531,7 +576,7 @@ private:
         const auto& hops = config.hops;
 
         // Find the initial direction and total hops for ring traversal
-        for (const auto& [initial_direction, hop_count] : hops) {
+        for (const auto& [initial_direction, hop_count] : *hops) {
             if (hop_count == 0) {
                 continue;
             }
@@ -551,7 +596,7 @@ private:
     }
 
     void trace_line_or_mesh_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        auto remaining_hops = config.hops;  // Make a copy to modify
+        auto remaining_hops = config.hops.value();  // Make a copy to modify
         FabricNodeId current_node = src_node_id;
 
         // For mesh topology, use dimension-order routing
@@ -664,7 +709,7 @@ private:
                 // Get unique directions this core sends traffic to
                 std::set<RoutingDirection> core_directions;
                 for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                    RoutingDirection direction = fixture_->get_forwarding_direction(config.hops);
+                    RoutingDirection direction = fixture_->get_forwarding_direction(*config.hops);
                     core_directions.insert(direction);
                 }
 
@@ -736,7 +781,7 @@ private:
                     bool found_connected_core = false;
                     for (const auto& [core, sender] : test_device.get_senders()) {
                         for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                            RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops);
+                            RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
                             if (config_direction == direction) {
                                 uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
                                 num_packets = config.parameters.num_packets;
