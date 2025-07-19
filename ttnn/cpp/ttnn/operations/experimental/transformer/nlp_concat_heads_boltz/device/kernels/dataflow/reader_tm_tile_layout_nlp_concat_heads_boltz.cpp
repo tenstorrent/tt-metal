@@ -12,7 +12,6 @@ void kernel_main() {
     uint32_t num_blocks = get_arg_val<uint32_t>(1);
     uint32_t in0_h_dim = get_arg_val<uint32_t>(2);
     uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(3);
-
     // COMPILE TIME ARGS
     // interleaved accessor args
     constexpr uint32_t in0_is_dram = get_compile_time_arg_val(0);

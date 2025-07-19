@@ -10,7 +10,6 @@
 
 namespace ttnn {
 namespace operations::experimental::transformer {
-
 struct NlpCreateHeadsBoltzOperation {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         QueueId queue_id,

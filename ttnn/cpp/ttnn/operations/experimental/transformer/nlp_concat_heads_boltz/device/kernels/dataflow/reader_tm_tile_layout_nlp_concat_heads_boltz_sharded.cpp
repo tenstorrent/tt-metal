@@ -10,7 +10,6 @@ void kernel_main() {
     uint32_t nheads = get_arg_val<uint32_t>(0);                    // This is per core per risc
     uint32_t start_read_offset_bytes = get_arg_val<uint32_t>(1);   // offset by nheads * in0_HtWt
     uint32_t start_write_offset_bytes = get_arg_val<uint32_t>(2);  // offset by nheads * in0_Wt
-
     // COMPILE TIME ARGS
     // interleaved accessor args
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);

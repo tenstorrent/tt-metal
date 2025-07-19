@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-
 void kernel_main() {
     uint32_t head_size = get_arg_val<uint32_t>(0);
     uint32_t num_q_heads = get_arg_val<uint32_t>(1);

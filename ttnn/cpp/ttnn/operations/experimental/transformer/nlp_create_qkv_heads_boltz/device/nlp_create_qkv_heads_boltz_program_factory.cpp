@@ -9,7 +9,6 @@
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
-
 using namespace tt::constants;
 using namespace tt;
 

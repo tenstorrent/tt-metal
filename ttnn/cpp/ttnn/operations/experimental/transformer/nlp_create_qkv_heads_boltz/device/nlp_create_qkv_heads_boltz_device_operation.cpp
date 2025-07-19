@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
-
 // Generic NLP CreateHeads op
 void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

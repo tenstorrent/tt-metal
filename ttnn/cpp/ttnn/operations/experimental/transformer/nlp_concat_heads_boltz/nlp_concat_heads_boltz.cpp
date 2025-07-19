@@ -10,7 +10,6 @@
 #include <utility>
 
 namespace ttnn::operations::experimental::transformer {
-
 ttnn::Tensor NLPConcatHeadsBoltzOperation::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,

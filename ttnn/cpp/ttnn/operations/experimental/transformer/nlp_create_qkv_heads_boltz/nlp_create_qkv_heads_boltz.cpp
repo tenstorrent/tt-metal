@@ -5,7 +5,6 @@
 #include "nlp_create_qkv_heads_boltz.hpp"
 
 #include <utility>
-
 namespace ttnn::operations::experimental::transformer {
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperation::invoke(
     QueueId queue_id,

@@ -8,7 +8,6 @@
 
 namespace ttnn {
 namespace operations::experimental::transformer {
-
 struct NLPConcatHeadsBoltzOperation {
     static ttnn::Tensor invoke(
         QueueId queue_id,

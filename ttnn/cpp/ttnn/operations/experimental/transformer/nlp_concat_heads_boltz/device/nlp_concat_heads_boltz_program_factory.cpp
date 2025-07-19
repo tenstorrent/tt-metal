@@ -25,7 +25,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
     tt_metal::Buffer* in0_buffer = a.buffer();
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();
-
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
     ////////////////////////////////////////////////////////////////////////////

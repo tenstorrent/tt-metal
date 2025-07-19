@@ -18,7 +18,6 @@ void NLPConcatHeadsBoltzDeviceOperation::validate(const std::vector<Tensor>& inp
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
     TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::TILE, "Error");
-
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, "Error");

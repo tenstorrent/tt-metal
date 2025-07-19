@@ -9,5 +9,4 @@
 namespace ttnn::operations::experimental::transformer::detail {
 
 void bind_nlp_concat_heads_boltz(pybind11::module& module);
-
 }  // namespace ttnn::operations::experimental::transformer::detail

@@ -9,7 +9,6 @@
 namespace ttnn::operations::experimental::transformer::detail {
 
 namespace py = pybind11;
-
 void bind_nlp_concat_heads_boltz(py::module& module) {
     using OperationType = decltype(ttnn::experimental::nlp_concat_heads_boltz);
     ttnn::bind_registered_operation(

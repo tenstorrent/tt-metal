@@ -8,7 +8,6 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_pybind.hpp"
 
 namespace ttnn::operations::experimental::transformer::detail {
-
 template <typename transformer_operation_t>
 void bind_nlp_create_qkv_heads_boltz_template(pybind11::module& module, const transformer_operation_t& operation) {
     ttnn::bind_registered_operation(
