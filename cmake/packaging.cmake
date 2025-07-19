@@ -6,11 +6,13 @@ set(CPACK_PACKAGE_NAME tt)
 # Suppress the summary so that we can have per-component summaries
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
 set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
-set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "devel")
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SECTION "libs")
 set(CPACK_DEBIAN_METALIUM-EXAMPLES_PACKAGE_SECTION "doc")
 set(CPACK_DEBIAN_METALIUM-VALIDATION_PACKAGE_SECTION "utils")
 set(CPACK_DEBIAN_NN_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_NN-DEV_PACKAGE_SECTION "devel")
+set(CPACK_DEBIAN_NN-EXAMPLES_PACKAGE_SECTION "doc")
 set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
 
 set(CPACK_DEB_COMPONENT_INSTALL YES)
@@ -67,6 +69,24 @@ install(
     COMPONENT metalium-dev
 )
 
+write_basic_package_version_file(
+    ${PROJECT_BINARY_DIR}/tt-nn-config-version.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+configure_package_config_file(
+    ${CMAKE_CURRENT_LIST_DIR}/packaging.d/tt-nn-config.cmake.in
+    ${PROJECT_BINARY_DIR}/tt-nn-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn
+)
+install(
+    FILES
+        ${PROJECT_BINARY_DIR}/tt-nn-config.cmake
+        ${PROJECT_BINARY_DIR}/tt-nn-config-version.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn
+    COMPONENT ttnn-dev
+)
+
 get_cmake_property(CPACK_COMPONENTS_ALL COMPONENTS)
 list(
     REMOVE_ITEM
@@ -115,6 +135,21 @@ cpack_add_component(gtest GROUP metalium-validation)
 cpack_add_component_group(nn)
 cpack_add_component(nn DEPENDS metalium GROUP nn DESCRIPTION "TT-NN runtime library")
 cpack_add_component(ttnn-runtime GROUP nn)
+
+cpack_add_component_group(nn-dev)
+cpack_add_component(
+    nn-dev
+    DEPENDS
+        metalium-dev
+        nn
+    GROUP nn-dev
+    DESCRIPTION "TT-NN SDK"
+)
+cpack_add_component(ttnn-dev GROUP nn-dev)
+
+cpack_add_component_group(nn-examples)
+cpack_add_component(nn-examples DEPENDS nn-dev GROUP nn-examples DESCRIPTION "TT-NN examples")
+cpack_add_component(ttnn-examples GROUP nn-examples)
 
 cpack_add_component_group(nn-validation)
 cpack_add_component(
