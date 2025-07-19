@@ -47,6 +47,11 @@ def main():
 
     # List of module names to be tested
     module_names = [
+        "data_movement.backward.concat_bw.concat_bw",
+        "data_movement.concat.concat_interleaved",
+        "data_movement.concat.concat_interleaved_n_tensors",
+        "data_movement.concat.concat_pytorch2",
+        "data_movement.concat.concat_sharded",
         "data_movement.copy.copy",
         "data_movement.embedding.embedding_pytorch2",
         "data_movement.expand.expand_pytorch2",
