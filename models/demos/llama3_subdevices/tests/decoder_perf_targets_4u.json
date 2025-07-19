@@ -387,6 +387,24 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 1.5
         },
+        "BinaryNgDeviceOperation_0": {
+            "op_name": "BinaryDeviceOperation_Temerature_Scaling",
+            "kernel_duration": 5810.90625,
+            "op_to_op": 6990.6666666666666,
+            "non-overlapped-dispatch-time": 47670.785714285715,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.5
+        },
+        "BinaryNgDeviceOperation_1": {
+            "op_name": "BinaryDeviceOperation_Indices_Correction",
+            "kernel_duration": 31390.0291666666667,
+            "op_to_op": 6650.4,
+            "non-overlapped-dispatch-time": 63860.571428571428,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.5
+        },
         "Untilize_0": {
             "op_name": "Untilize_0",
             "kernel_duration": 3792.0738636363635,
