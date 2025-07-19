@@ -468,17 +468,25 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
 
 inline AllocatorPolicies YamlConfigParser::parse_allocator_policies(const YAML::Node& policies_yaml) {
     TT_FATAL(policies_yaml.IsMap(), "Expected 'allocation_policies' to be a map.");
-    AllocatorPolicies policies;  // this will get defaults from constructor
+
+    std::optional<CoreAllocationConfig> sender_config;
     if (policies_yaml["sender"]) {
-        policies.sender_config = parse_core_allocation_config(policies_yaml["sender"], policies.sender_config);
+        sender_config = parse_core_allocation_config(
+            policies_yaml["sender"], CoreAllocationConfig::get_default_sender_allocation_config());
     }
+
+    std::optional<CoreAllocationConfig> receiver_config;
     if (policies_yaml["receiver"]) {
-        policies.receiver_config = parse_core_allocation_config(policies_yaml["receiver"], policies.receiver_config);
+        receiver_config = parse_core_allocation_config(
+            policies_yaml["receiver"], CoreAllocationConfig::get_default_receiver_allocation_config());
     }
+
+    std::optional<uint32_t> default_payload_chunk_size;
     if (policies_yaml["default_payload_chunk_size"]) {
-        policies.default_payload_chunk_size = parse_scalar<uint32_t>(policies_yaml["default_payload_chunk_size"]);
+        default_payload_chunk_size = parse_scalar<uint32_t>(policies_yaml["default_payload_chunk_size"]);
     }
-    return policies;
+
+    return AllocatorPolicies(sender_config, receiver_config, default_payload_chunk_size);
 }
 
 inline CoreAllocationConfig YamlConfigParser::parse_core_allocation_config(
@@ -1772,10 +1780,8 @@ private:
         out << YAML::Key << "receiver";
         out << YAML::Value;
         to_yaml(out, policies.receiver_config);
-        if (policies.default_payload_chunk_size.has_value()) {
-            out << YAML::Key << "default_payload_chunk_size";
-            out << YAML::Value << policies.default_payload_chunk_size.value();
-        }
+        out << YAML::Key << "default_payload_chunk_size";
+        out << YAML::Value << policies.default_payload_chunk_size;
         out << YAML::EndMap;
     }
 
