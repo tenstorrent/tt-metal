@@ -100,6 +100,7 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # issue 24652: https://github.com/tenstorrent/tt-metal/issues/24652
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/mobilenetv2/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov9c/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8x/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vanilla_unet/test -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
