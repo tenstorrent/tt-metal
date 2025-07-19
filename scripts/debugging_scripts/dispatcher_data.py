@@ -12,9 +12,8 @@ Usage:
 
 from dataclasses import dataclass
 import os
-from functools import cache
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import ScriptConfig
+from triage import triage_cache, ScriptConfig
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
@@ -34,6 +33,7 @@ class DispatcherCoreData:
     firmware_path: str
     kernel_path: str | None
     kernel_offset: int | None
+    kernel_name: str | None
     launch_msg_rd_ptr: int
     kernel_config_base: int
     kernel_text_offset: int
@@ -125,32 +125,38 @@ class DispatcherData:
         proc_type = enum_values["ProcessorTypes"][proc_name]
         proc_class = enum_values["dispatch_core_processor_classes"][proc_name]
 
+        # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
 
-        # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
+        try:
+            # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
+            kernel_config_base = mem_access(
+                fw_elf,
+                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",
+                loc_mem_reader,
+            )[0][0]
 
-        # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
-        kernel_config_base = mem_access(
-            fw_elf,
-            f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",
-            loc_mem_reader,
-        )[0][0]
+            # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
+            kernel_text_offset = mem_access(
+                fw_elf,
+                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_text_offset[{proc_type}]",
+                loc_mem_reader,
+            )[0][0]
 
-        # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
-        kernel_text_offset = mem_access(
-            fw_elf,
-            f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_text_offset[{proc_type}]",
-            loc_mem_reader,
-        )[0][0]
+            # enum dispatch_core_processor_classes
+            watcher_kernel_id = mem_access(
+                fw_elf,
+                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
+                loc_mem_reader,
+            )[0][0] & 0xFFFF
 
-        # enum dispatch_core_processor_classes
-        watcher_kernel_id = mem_access(
-            fw_elf,
-            f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
-            loc_mem_reader,
-        )[0][0] & 0xFFFF
+            kernel = self.inspector_data.kernels.get(watcher_kernel_id)
+        except:
+            kernel_config_base = -1
+            kernel_text_offset = -1
+            watcher_kernel_id = -1
+            kernel = None
 
-        kernel = self.inspector_data.kernels.get(watcher_kernel_id)
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
             firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
         elif proc_name.lower() == "erisc1":
@@ -179,6 +185,7 @@ class DispatcherData:
             firmware_path=firmware_path,
             kernel_path=kernel_path,
             kernel_offset=kernel_offset,
+            kernel_name=kernel.name if kernel else None,
             launch_msg_rd_ptr=launch_msg_rd_ptr,
             kernel_config_base=kernel_config_base,
             kernel_text_offset=kernel_text_offset,
@@ -191,15 +198,10 @@ class DispatcherData:
         return os.path.realpath(firmware_elf_path)
 
 
-def get_dispatcher_data(inspector_data: InspectorData, context: Context) -> DispatcherData:
-    return DispatcherData(inspector_data, context)
-
-
-
-@cache
+@triage_cache
 def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
-    return get_dispatcher_data(inspector_data, context)
+    return DispatcherData(inspector_data, context)
 
 
 if __name__ == "__main__":

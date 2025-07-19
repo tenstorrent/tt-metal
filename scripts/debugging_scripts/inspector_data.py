@@ -15,8 +15,7 @@ Options:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from functools import cache
-from triage import ScriptConfig
+from triage import triage_cache, ScriptConfig
 from parse_inspector_logs import get_data as get_logs_data
 
 script_config = ScriptConfig(
@@ -110,7 +109,7 @@ class InspectorData(ABC):
         pass
 
 
-@cache
+@triage_cache
 def run(args, context) -> InspectorData:
     log_directory = args["--inspector-log-path"]
     return get_logs_data(log_directory)

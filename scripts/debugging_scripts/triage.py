@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 import importlib
 import sys
 from ttexalens.context import Context
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 from types import ModuleType
 
 
@@ -45,6 +45,26 @@ class ScriptArguments:
     def __getitem__(self, item: str) -> Any:
         return self.args.get(item, None)
 
+
+# Type variables for the decorator
+T = TypeVar('T')
+
+
+def triage_cache(run_method: Callable[[ScriptArguments, Context], T], /) -> Callable[[ScriptArguments, Context], T]:
+    # Check that run method has two arguments (args, context)
+    assert callable(run_method), "run_method must be a callable function."
+    signature = inspect.signature(run_method)
+    assert len(signature.parameters) == 2 and 'args' in signature.parameters and 'context' in signature.parameters, "run_method must have two arguments (args, context)."
+
+    # Create simple cache
+    cache: dict[tuple[int, int], T] = {}
+    def cache_wrapper(args: ScriptArguments, context: Context) -> T:
+        cache_key = (id(args), id(context))
+        if cache_key not in cache:
+            cache[cache_key] = run_method(args, context)
+        return cache[cache_key]
+
+    return cache_wrapper
 
 @dataclass
 class TriageScript:
@@ -302,7 +322,7 @@ def main():
         if not all(not dep.failed for dep in script.depends):
             print(f"{RED}Cannot run script {script.name} due to failed dependencies.{RST}")
         else:
-            result = script.run(args=args, context=context, log_error=True)
+            result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 print(f"{RED}Data provider script {script.name} did not return any data.{RST}")
 

@@ -13,9 +13,8 @@ Options:
     --dev=<device_id>   Specify the device id. 'all' is also an option  [default: in_use]
 """
 
-from functools import cache
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import ScriptConfig
+from triage import triage_cache, ScriptConfig
 from ttexalens.context import Context
 from utils import ORANGE, RST
 
@@ -44,7 +43,7 @@ def get_devices(devices: list[str], inspector_data: InspectorData | None, contex
     return device_ids
 
 
-@cache
+@triage_cache
 def run(args, context: Context):
     devices = args["--dev"]
     inspector_data = get_inspector_data(args, context)
