@@ -254,7 +254,7 @@ class MLA(nn.Module):
             if param.requires_grad:
                 print(f"Initializing {name} with torch.randn")
                 with torch.no_grad():
-                    param.copy_(torch.randn_like(param))
+                    param.copy_(torch.randn_like(param) * 0.1)
 
     def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor, mask: Optional[torch.Tensor]):
         bsz, seqlen, _ = x.size()

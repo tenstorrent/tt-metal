@@ -47,6 +47,9 @@ Watcher features can be disabled individually using the following environment va
    export TT_METAL_WATCHER_DISABLE_WAYPOINT=1
    export TT_METAL_WATCHER_DISABLE_STACK_USAGE=1
 
+   # This feature is opt-in, set the env var to enable it
+   export TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION=1
+
    # In certain cases enabling watcher can cause the binary to be too large. In this case, disable inlining.
    export TT_METAL_WATCHER_NOINLINE=1
 

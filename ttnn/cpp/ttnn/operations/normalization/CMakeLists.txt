@@ -10,14 +10,22 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels softmax/device/kernels/*)
 target_sources(
     ttnn_op_normalization
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         batch_norm/batch_norm.cpp
         batch_norm/device/batch_norm_device_operation.cpp
         batch_norm/device/batch_norm_program_factory.cpp
         batch_norm/device/running_statistics_device_operation.cpp
         batch_norm/device/running_statistics_program_factory.cpp
+        batch_norm/device/batch_norm_utils.cpp
         groupnorm/device/groupnorm_op.cpp
         groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
         groupnorm/groupnorm.cpp
@@ -31,16 +39,6 @@ target_sources(
         layernorm_distributed/layernorm_post_all_gather.cpp
         layernorm_distributed/layernorm_pre_all_gather.cpp
         rmsnorm/rmsnorm.cpp
-)
-
-file(GLOB_RECURSE kernels softmax/device/kernels/*)
-target_sources(
-    ttnn_op_normalization
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})

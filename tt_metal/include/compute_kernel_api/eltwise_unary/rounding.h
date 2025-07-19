@@ -22,7 +22,7 @@ ALWI void rounding_op_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unused, APPROX)
 
 // clang-format off
 /**
- * Performs ceil operation on each row of a tile.
+ * Performs element-wise ceil computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
@@ -40,7 +40,7 @@ ALWI void ceil_tile(uint32_t idst) {
 
 // clang-format off
 /**
- * Performs ceil operation on each row of a tile.
+ * Performs element-wise ceil computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
@@ -58,7 +58,7 @@ ALWI void ceil_tile_float32(uint32_t idst) {
 
 // clang-format off
 /**
- * Performs floor operation on each row of a tile.
+ * Performs element-wise floor computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
@@ -76,7 +76,7 @@ ALWI void floor_tile(uint32_t idst) {
 
 // clang-format off
 /**
- * Performs floor operation on each row of a tile.
+ * Performs element-wise floor computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
@@ -94,7 +94,7 @@ ALWI void floor_tile_float32(uint32_t idst) {
 
 // clang-format off
 /**
- * Performs trunc operation on each row of a tile.
+ * Performs element-wise trunc computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
@@ -112,7 +112,7 @@ ALWI void trunc_tile(uint32_t idst) {
 
 // clang-format off
 /**
- * Performs trunc operation on each row of a tile.
+ * Performs element-wise trunc computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
@@ -182,5 +182,37 @@ ALWI void frac_tile(uint32_t idst) {
 ALWI void frac_tile_float32(uint32_t idst) {
     MATH((SFPU_TWO_PARAM_KERNEL(_calculate_frac_, APPROX, true, idst, (int)VectorMode::RC)));
 }
+
+// clang-format off
+/**
+ * Performs element-wise frac computation on input x , where x is each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform frac operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void frac_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_frac<APPROX>(idst))); }
+
+// clang-format off
+/**
+ * Performs element-wise frac computation on input x , where x is each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform frac operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void frac_tile_float32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_frac_float32<APPROX>(idst))); }
 
 }  // namespace ckernel

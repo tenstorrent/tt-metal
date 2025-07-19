@@ -1416,6 +1416,16 @@ void build_tt_fabric_program(
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2D_routing = topology == Topology::Mesh;
 
+    const auto device_has_dispatch_tunnel = [&]() -> bool {
+        auto mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+        auto tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+        // results are inclusive of the mmio_device_id so they will never be zero
+        TT_ASSERT(tunnels_from_mmio.size() > 0);
+        return (tunnels_from_mmio.size() - 1) > 0;
+    }();
+
     for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
         auto active_eth_chans =
             control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
@@ -1496,9 +1506,9 @@ void build_tt_fabric_program(
             edm_builders.insert({eth_chan, edm_builder});
         }
 
-        // Last link may be used by dispatch
+        // Last link may be used by dispatch if there is tunneling
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-        if (!active_fabric_eth_channels[direction].empty()) {
+        if (!active_fabric_eth_channels[direction].empty() && device_has_dispatch_tunnel) {
             const auto dispatch_eth_chan = active_fabric_eth_channels[direction].back();
             configure_edm_builder_for_dispatch(edm_builders.at(dispatch_eth_chan));
         }
@@ -1602,7 +1612,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     const auto num_enabled_eth_cores = edm_builders.size();
     const auto num_enabled_risc_cores =
         edm_builders.begin()->second.get_configured_risc_count();  // same across all eth cores
-    size_t num_local_fabric_routers = num_enabled_risc_cores * num_enabled_eth_cores;
+    size_t num_local_fabric_routers = num_enabled_eth_cores;
     for (auto& [eth_chan, edm_builder] : edm_builders) {
         edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
@@ -1621,7 +1631,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
                 "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
                 eth_logical_core,
                 tt::tt_metal::EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0,
+                    .noc = edm_builder.config.risc_configs[risc_id].get_configured_noc(),
                     .processor = static_cast<DataMovementProcessor>(risc_id),
                     .compile_args = ct_args,
                     .defines = defines,
