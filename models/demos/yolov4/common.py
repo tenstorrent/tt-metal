@@ -7,6 +7,8 @@ import os
 import cv2
 import numpy as np
 import torch
+from loguru import logger
+
 
 import ttnn
 from models.demos.yolov4.reference.downsample1 import DownSample1
