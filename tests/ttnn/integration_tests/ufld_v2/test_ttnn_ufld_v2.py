@@ -377,15 +377,8 @@ def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pr
                 new_state_dict[new_key] = value
             torch_model.load_state_dict(new_state_dict)
     n, c, h, w = torch_input_tensor.shape
-    if c == 3:  # for sharding config of padded input
-        c = min_channels
-    input_mem_config = ttnn.create_sharded_memory_config(
-        [n, c, h, w],
-        ttnn.CoreGrid(x=8, y=8),
-        ttnn.ShardStrategy.HEIGHT,
-    )
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    ttnn_input_tensor = ttnn_input_tensor.to(device, input_mem_config)
+    ttnn_input_tensor = ttnn_input_tensor.to(device, ttnn.L1_MEMORY_CONFIG)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
         custom_preprocessor=custom_preprocessor_whole_model,
