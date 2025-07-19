@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     log_debug(tt::LogOp, "Wt: {}", Wt);
     log_debug(tt::LogOp, "St: {}", St);
 
-    std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
     bool row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
     CoreRangeSet all_cores = shard_spec.value().grid;
     uint32_t num_cores = all_cores.num_cores();

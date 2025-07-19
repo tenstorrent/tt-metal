@@ -387,7 +387,7 @@ void RunTestUnicastRaw(
             GTEST_SKIP() << "No active eth chans to connect to";
         }
     } else {
-        auto devices = fixture->get_devices();
+        const auto& devices = fixture->get_devices();
         auto num_devices = devices.size();
         // create a list of available deive ids in a random order
         // In 2D routing the source and desitnation devices can be anywhere on the mesh.

@@ -73,7 +73,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
-    auto output_tensor = output_tensors[0];
+    const auto& output_tensor = output_tensors[0];
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
