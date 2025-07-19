@@ -140,8 +140,7 @@ class MLP(LightweightModule):
             program_config=pc_3,
             memory_config=memory_config,
         )
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-            ttnn.deallocate(x)
+        ttnn.deallocate(x)
 
         if TG:
             # if mode == "decode" and self.dim!=8192:
@@ -150,62 +149,34 @@ class MLP(LightweightModule):
             if self.dim == 8192 or mode == "prefill":
                 input_mem_cfg = w1_out.memory_config()
 
-                dim = 3
-                cluster_axis = 1
-                rs_intermediate_memory_config = ttnn.L1_MEMORY_CONFIG
-                rs_output_memory_config = (
-                    self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None
-                )
-                rs_persistent_buffer_keys = self.tt_ccl.create_rs_persistent_buffer_keys(
-                    w1_out.shape,
-                    w1_out.dtype,
-                    rs_intermediate_memory_config,
-                    rs_output_memory_config,
-                    dim,
-                    cluster_axis,
-                )
-                rs_persistent_buffers = self.tt_ccl.get_rs_persistent_buffers(rs_persistent_buffer_keys)
                 w1_out = ttnn.experimental.reduce_scatter_minimal_async(
                     w1_out,
-                    persistent_intermediate_buffer=rs_persistent_buffers[0],
-                    persistent_output_buffer=rs_persistent_buffers[1],
-                    dim=dim,
+                    persistent_output_buffers=None,
+                    dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
                     num_links=self.args.num_reduce_scatter_links,
-                    cluster_axis=cluster_axis,
-                    intermediate_memory_config=rs_intermediate_memory_config,
-                    memory_config=rs_output_memory_config,
+                    cluster_axis=1,
+                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
                     topology=ttnn.Topology.Linear,
                     subdevice_id=self.tt_ccl.worker_sub_device_id,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
                 )
 
-                dim = 3
-                cluster_axis = 1
-                rs_intermediate_memory_config = ttnn.L1_MEMORY_CONFIG
-                rs_output_memory_config = (
-                    self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None
-                )
-                rs_persistent_buffer_keys = self.tt_ccl.create_rs_persistent_buffer_keys(
-                    w3_out.shape,
-                    w3_out.dtype,
-                    rs_intermediate_memory_config,
-                    rs_output_memory_config,
-                    dim,
-                    cluster_axis,
-                )
-                rs_persistent_buffers = self.tt_ccl.get_rs_persistent_buffers(rs_persistent_buffer_keys)
                 w3_out = ttnn.experimental.reduce_scatter_minimal_async(
                     w3_out,
-                    persistent_intermediate_buffer=rs_persistent_buffers[0],
-                    persistent_output_buffer=rs_persistent_buffers[1],
-                    dim=dim,
+                    persistent_output_buffers=None,
+                    dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
                     num_links=1,
-                    cluster_axis=cluster_axis,
-                    intermediate_memory_config=rs_intermediate_memory_config,
-                    memory_config=rs_output_memory_config,
+                    cluster_axis=1,
+                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
                     topology=ttnn.Topology.Linear,
                     subdevice_id=self.tt_ccl.worker_sub_device_id,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
                 )
             else:
                 w1_out = tt_all_reduce(
@@ -241,28 +212,24 @@ class MLP(LightweightModule):
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-            ttnn.deallocate(w3_out)
-            ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+        ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == "prefill"):
-            ag_memory_config = input_mem_cfg
-            dim = 3
-            cluster_axis = 1
-            ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
-                w2_in.shape, w2_in.dtype, ag_memory_config, dim, cluster_axis
-            )
             w2_in = ttnn.experimental.all_gather_async(
                 w2_in,
-                persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
-                dim=dim,
+                persistent_output_buffer=None,
+                dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=2,
-                cluster_axis=cluster_axis,
+                cluster_axis=1,
                 mesh_device=self.mesh_device,
                 topology=ttnn.Topology.Linear,
-                memory_config=ag_memory_config,
+                memory_config=input_mem_cfg,
                 subdevice_id=self.tt_ccl.worker_sub_device_id,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
             if mode == "decode":
@@ -280,10 +247,8 @@ class MLP(LightweightModule):
             memory_config=memory_config,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers() or not (
-            TG and (self.dim == 8192 or mode == "prefill")
-        ):
-            ttnn.deallocate(w2_in)
+
+        ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
         w2_out_reduced = tt_all_reduce(

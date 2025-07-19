@@ -411,8 +411,7 @@ class Attention(LightweightModule):
             num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-            ttnn.deallocate(x)
+        ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
@@ -463,8 +462,7 @@ class Attention(LightweightModule):
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
 
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-            ttnn.deallocate(xqkv_fused)
+        ttnn.deallocate(xqkv_fused)
 
         # Q Rotary Embeddings
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
@@ -544,30 +542,24 @@ class Attention(LightweightModule):
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
-            ag_memory_config = self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
-            dim = 3
-            ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
-                attn_output_cat.shape,
-                attn_output_cat.dtype,
-                ag_memory_config,
-                dim,
-            )
             _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
                 attn_output_cat,
                 self.wo,
-                persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
-                dim=dim,
+                persistent_output_buffer=None,
+                dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 all_gather_core_grid_offset=(0, 4),
                 num_links=1,
                 subdevice_id=self.tt_ccl.worker_sub_device_id,
                 program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                memory_config_ag=ag_memory_config,
+                memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                 memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
-            if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-                ttnn.deallocate(attn_output_cat)
+            ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
 
@@ -688,8 +680,7 @@ class Attention(LightweightModule):
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-            ttnn.deallocate(x_11SH)
+        ttnn.deallocate(x_11SH)
 
         # split qkv into heads
         (
@@ -707,8 +698,7 @@ class Attention(LightweightModule):
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
         k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
 
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-            ttnn.deallocate(xqkv_fused)
+        ttnn.deallocate(xqkv_fused)
 
         ###
         # Rotary embeddings
@@ -839,20 +829,18 @@ class Attention(LightweightModule):
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            ag_memory_config = ttnn.DRAM_MEMORY_CONFIG
-            dim = 3
-            ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
-                attn_output_11SH.shape, attn_output_11SH.dtype, ag_memory_config, dim
-            )
             attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
-                persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
-                dim=dim,
+                persistent_output_buffer=None,
+                dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 topology=self.ccl_topology,
-                memory_config=ag_memory_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 subdevice_id=self.tt_ccl.worker_sub_device_id,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
         output_11SH = ttnn.linear(
@@ -866,8 +854,7 @@ class Attention(LightweightModule):
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-            ttnn.deallocate(attn_output_11SH)
+        ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
         if not self.use_fused_all_gather_matmul:

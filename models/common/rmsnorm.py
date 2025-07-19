@@ -175,7 +175,6 @@ class RMSNorm(LightweightModule):
             weight=weight,
             compute_kernel_config=compute_kernel_config,
         )
-        if not self.tt_ccl.is_using_preallocated_persistent_buffers():
-            tt_stats.deallocate(True)
+        tt_stats.deallocate(True)
 
         return tt_out
