@@ -53,7 +53,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
-    const auto input_dtype = input_tensor.get_dtype();
+    const auto input_dtype = input_tensor.dtype();
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
@@ -63,9 +63,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
-    const auto& input_shape = input_tensor.get_tensor_spec().logical_shape();
-    const auto& mapping_shape = mapping_tensor.get_tensor_spec().logical_shape();
-    const auto& metadata_shape = metadata_tensor.get_tensor_spec().logical_shape();
+    const auto& input_shape = input_tensor.tensor_spec().logical_shape();
+    const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
+    const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
 
     const uint32_t num_devices = mesh_view.num_devices();
     const uint32_t hidden_size = input_shape[-1];
@@ -77,9 +77,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     TT_FATAL(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
     const uint32_t experts_per_device = experts / num_devices;
 
-    const auto& input_spec = input_tensor.get_tensor_spec();
-    const auto& mapping_spec = mapping_tensor.get_tensor_spec();
-    const auto& metadata_spec = metadata_tensor.get_tensor_spec();
+    const auto& input_spec = input_tensor.tensor_spec();
+    const auto& mapping_spec = mapping_tensor.tensor_spec();
+    const auto& metadata_spec = metadata_tensor.tensor_spec();
 
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
@@ -97,9 +97,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
-    const auto input_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
-    const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
+    const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.dtype());
+    const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.dtype());
 
     // Anything less will lead to deadlocks. It's clear why, TODO fix it.
     const uint32_t buffering_factor = experts_per_device;
@@ -153,6 +153,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     std::vector<CoreCoord> sender_cores;
 
     // select
+    sender_cores.reserve(num_links);
     for (uint32_t i = 0; i < num_links; i++) {
         sender_cores.push_back(subdevice_cores.at(i));
     }

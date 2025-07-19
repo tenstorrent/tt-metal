@@ -79,7 +79,7 @@ std::shared_ptr<tt_metal::Program> create_receiver_program(
 void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank recv_host_rank) {
     // The following code runs on the sender host
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     constexpr uint32_t num_packets = 100;
 
@@ -207,7 +207,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
 void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank sender_host_rank) {
     // The following code runs on the receiver host
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     constexpr uint32_t num_packets = 100;
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -303,7 +303,7 @@ void run_mcast_sender_step(
     uint32_t recv_rank) {
     // The following code runs on the sender host
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     constexpr uint32_t num_packets = 100;
 
@@ -423,7 +423,7 @@ void run_mcast_recv_step(
     uint32_t sender_rank) {
     // The following code runs on the receiver host
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     constexpr uint32_t num_packets = 100;
 
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -519,7 +519,7 @@ void run_mcast_recv_step(
 }
 
 void RandomizedInterMeshUnicast(BaseFabricFixture* fixture) {
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (*(distributed_context->rank()) == 0) {
         run_unicast_sender_step(fixture, tt::tt_metal::distributed::multihost::Rank{1});
     } else {
@@ -535,7 +535,7 @@ void InterMeshLineMcast(
     const std::vector<FabricNodeId>& mcast_group_node_ids,
     uint32_t sender_rank,
     uint32_t receiver_rank) {
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     if (*(distributed_context->rank()) == sender_rank) {
         run_mcast_sender_step(
