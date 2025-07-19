@@ -58,6 +58,7 @@ def test_whisper_attention(
         dropout=config.attention_dropout,
         is_decoder=is_decode,
         layer_idx=0,
+        config=config,
     ).eval()
 
     if use_encoder_states:
