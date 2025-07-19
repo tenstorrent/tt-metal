@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+        with:
+          submodules: recursive
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
