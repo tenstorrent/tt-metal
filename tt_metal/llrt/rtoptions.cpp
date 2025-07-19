@@ -240,6 +240,10 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_WATCHER_KEEP_ERRORS")) {
         watcher_keep_errors = true;
     }
+
+    if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
+        this->enable_2_erisc_mode_with_fabric = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
