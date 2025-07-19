@@ -112,7 +112,20 @@
 #error "Tensix fabric connections base and size must be 16-byte aligned"
 #endif
 
-#define MEM_MAP_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
+// Packet header pool sizing constants
+#define PACKET_HEADER_MAX_SIZE 64
+#define PACKET_HEADER_MAX_DIRECTIONS \
+    4 * 2 * MaxDMProcessorsPerCoreType  // (EAST, WEST, NORTH, SOUTH) * convention * (DM0, DM1)
+
+// Packet header pool for fabric networking
+// Size: 64 * 4 * 2 * 2 = 1024
+#define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
+#define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * PACKET_HEADER_MAX_DIRECTIONS)
+#if (MEM_PACKET_HEADER_POOL_BASE % 16 != 0) || (MEM_PACKET_HEADER_POOL_SIZE % 16 != 0)
+#error "Packet header pool base and size must be 16-byte aligned"
+#endif
+
+#define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
