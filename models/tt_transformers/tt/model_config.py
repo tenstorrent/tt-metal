@@ -2283,7 +2283,7 @@ class ModelArgs:
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm(self):

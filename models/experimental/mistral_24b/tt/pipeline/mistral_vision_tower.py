@@ -12,7 +12,6 @@ from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt, genera
 from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
 
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
-import torch
 
 
 class MistralVisionTower(LightweightModule):
@@ -23,7 +22,6 @@ class MistralVisionTower(LightweightModule):
         state_dict_prefix,
         dtype,
         configuration,
-        weight_cache_path=None,
         return_intermediate=None,
     ):
         super().__init__()
@@ -89,15 +87,6 @@ class MistralVisionTower(LightweightModule):
         num_patches_per_dim = image_size // patch_size
         num_patches = num_patches_per_dim * num_patches_per_dim
         self.num_patches = num_patches
-        print("MistralVisionTower RotarySetup initialized with:")
-        print("self.dim:", configuration.head_dim)
-        print("image_size:", image_size)
-        print("patch_size:", patch_size)
-        print("dim:", dim)
-        print("num_patches_per_dim:", num_patches_per_dim)
-        print("num_patches:", num_patches)
-        print("self.n_layers:", self.n_layers)
-        print("configuration.n_layers:", configuration.vision_n_layers)
 
         self.patch_positional_embedding = RotarySetup(
             self.mesh_device,
@@ -162,9 +151,7 @@ class MistralVisionTower(LightweightModule):
             max_width=self.config.vision_image_size // self.config.vision_patch_size,
             device=self.mesh_device,
         )
-
-        position_ids = ttnn.to_torch(position_ids).to(torch.long)
-        position_embeddings = self.patch_positional_embedding.get_rot_mats(position_ids)
+        position_embeddings = self.patch_positional_embedding.get_rot_mats(ttnn.to_torch(position_ids))
 
         attention_mask = generate_block_attention_mask_tt(
             [p.shape[-2] * p.shape[-1] for p in patch_embeds_list], patch_embeds, tt_device=self.mesh_device

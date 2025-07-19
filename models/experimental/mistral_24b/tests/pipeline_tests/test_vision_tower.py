@@ -23,7 +23,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     indirect=True,
 )
 def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
-    pcc_required = 0.75
+    pcc_required = 0.98
     dtype = ttnn.bfloat16
 
     model_args = ModelArgs(mesh_device)
