@@ -73,8 +73,9 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, self.args.padded_vocab_size, dtype=torch.int32)
-        for i in range(indices_tensor_torch.shape[3]):
+        assert per_device_vocab_size == 16 * 1024, "Per device vocab size is incorrect (should be 16k)"
+        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, per_device_vocab_size, dtype=torch.int32)
+        for i in range(per_device_vocab_size):
             indices_tensor_torch[:, :, :, i] = i
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
@@ -115,9 +116,9 @@ class TTSampling(LightweightModule):
             k=self.max_top_k,
             dim=-1,
             sub_core_grids=self.args.sub_core_grid_topk,
-            indices_tensor=self.tt_indices_tensor,
+            # indices_tensor=self.tt_indices_tensor,
         )
-
+        breakpoint()
         # Gather values
         # Note: Persistent output buffer used, do not deallocate output!
         topk_values_gathered = self.tt_ccl.line_all_gather(
