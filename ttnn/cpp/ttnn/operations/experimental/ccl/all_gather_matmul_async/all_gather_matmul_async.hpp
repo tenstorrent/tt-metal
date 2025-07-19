@@ -16,7 +16,7 @@ struct ExecuteAllGatherMatmulAsync {
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        ttnn::Tensor& persistent_output_buffer,
+        const std::optional<ttnn::Tensor>& persistent_output_buffer,
         uint32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
         CoreCoord all_gather_core_grid_offset,
