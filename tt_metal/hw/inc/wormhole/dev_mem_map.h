@@ -113,11 +113,12 @@
 #endif
 
 // Packet header pool sizing constants
-#define PACKET_HEADER_MAX_SIZE 64       //
-#define PACKET_HEADER_MAX_DIRECTIONS 4 * 2  // EAST, WEST, NORTH, SOUTH
+#define PACKET_HEADER_MAX_SIZE 64
+#define PACKET_HEADER_MAX_DIRECTIONS \
+    4 * 2 * MaxDMProcessorsPerCoreType  // (EAST, WEST, NORTH, SOUTH) * convention * (DM0, DM1)
 
 // Packet header pool for fabric networking
-// Size: 2 * 64 * 4 = 512
+// Size: 64 * 4 * 2 * 2 = 1024
 #define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 #define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * PACKET_HEADER_MAX_DIRECTIONS)
 #if (MEM_PACKET_HEADER_POOL_BASE % 16 != 0) || (MEM_PACKET_HEADER_POOL_SIZE % 16 != 0)
