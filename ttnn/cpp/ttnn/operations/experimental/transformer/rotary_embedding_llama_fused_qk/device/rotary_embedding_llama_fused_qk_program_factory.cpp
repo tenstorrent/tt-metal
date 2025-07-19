@@ -41,9 +41,9 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_output.dtype());
     const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    std::optional<ShardSpec> q_shard_spec = q_input.shard_spec();
-    std::optional<ShardSpec> k_shard_spec = k_input.shard_spec();
-    std::optional<ShardSpec> cos_sin_shard_spec = cos.shard_spec();
+    const std::optional<ShardSpec>& q_shard_spec = q_input.shard_spec();
+    const std::optional<ShardSpec>& k_shard_spec = k_input.shard_spec();
+    const std::optional<ShardSpec>& cos_sin_shard_spec = cos.shard_spec();
 
     const uint32_t batch = q_input.padded_shape()[1];
     const uint32_t q_n_heads_t = row_major_QK ? 1 : q_shard_spec->shape[0] / constants::TILE_HEIGHT;

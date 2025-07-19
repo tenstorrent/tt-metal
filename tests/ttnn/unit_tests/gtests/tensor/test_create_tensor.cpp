@@ -87,7 +87,7 @@ class CreateTensorTest : public ttnn::TTNNFixtureWithDevice,
                          public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorTest, Tile) {
-    CreateTensorParams params = GetParam();
+    const CreateTensorParams& params = GetParam();
     run_create_tensor_test(device_, params.shape);
 }
 
