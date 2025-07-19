@@ -167,7 +167,6 @@ void create_mux_kernel(
         hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)};
 
     // semaphores needed to build connection with drainer core using the build_from_args API
-    auto worker_flow_control_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
     auto worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
     auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
 
@@ -200,7 +199,6 @@ void create_mux_kernel(
         sender_worker_adapter_spec,
         device->id(),
         {mux_logical_core},
-        worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
         mux_fabric_connection_rt_args);
@@ -223,6 +221,10 @@ void create_drainer_kernel(
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
 
+    // This is dummy channel as drainer kernel terminates incomming packet without forwarding outbound channel
+    // This number can be any in 0-15 (WH), 0-12 (BH)
+    uint32_t dummy_eth_channel = 0;
+
     std::vector<uint32_t> drainer_ct_args = {
         drainer_kernel_config->get_num_buffers(drainer_channel_type),
         drainer_kernel_config->get_buffer_size_bytes(drainer_channel_type),
@@ -231,7 +233,8 @@ void create_drainer_kernel(
         drainer_kernel_config->get_connection_info_address(drainer_channel_type, 0),
         drainer_kernel_config->get_connection_handshake_address(drainer_channel_type, 0),
         drainer_kernel_config->get_flow_control_address(drainer_channel_type, 0),
-        drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0)};
+        drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),
+        dummy_eth_channel};
 
     auto memory_regions_to_clear = drainer_kernel_config->get_memory_regions_to_clear();
     std::vector<uint32_t> memory_regions_to_clear_args;
