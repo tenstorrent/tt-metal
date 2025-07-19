@@ -278,12 +278,14 @@ struct FabricRiscConfig {
     };
     bool is_sender_channel_serviced(int id) const { return is_sender_channel_serviced_[id]; };
     bool is_receiver_channel_serviced(int id) const { return is_receiver_channel_serviced_[id]; };
+    tt::tt_metal::NOC get_configured_noc() const { return noc_; };
 
 private:
+    tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
+    size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
     bool enable_handshake_ = false;
     bool enable_context_switch_ = false;
     bool enable_interrupts_ = false;
-    size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
     std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced_;
     std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced_;
 };
