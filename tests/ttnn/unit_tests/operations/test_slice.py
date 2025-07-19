@@ -1330,3 +1330,63 @@ def test_slice_tensor_args(input_shape, dim, start, end, step, layout, device):
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+def test_slice_output_tensor_rm1(device):
+    torch_input = torch.ones(1, 128, 128, 96)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    torch_zeros = torch.zeros(1, 64, 64, 96)
+    ttnn_output = ttnn.from_torch(torch_zeros, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_output = torch_input[:, :64, :64, :]  # torch_output shape: [1, 3, 320, 320]
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
+    ttnn.slice(ttnn_input, starts=(0, 0, 0, 0), ends=(1, 64, 64, 96), steps=(1, 1, 1, 1), output_tensor=ttnn_output)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+def test_slice_output_tensor_rm1(device):
+    torch_input = torch.ones(1, 128, 128, 96)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_zeros = torch.zeros(1, 64, 64, 96)
+    ttnn_output = ttnn.from_torch(torch_zeros, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_output = torch_input[:, :64, :64, :]  # torch_output shape: [1, 3, 320, 320]
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
+    ttnn.slice(ttnn_input, starts=(0, 0, 0, 0), ends=(1, 64, 64, 96), steps=(1, 1, 1, 1), output_tensor=ttnn_output)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+    torch_input = torch.ones(1, 64, 64, 192)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_zeros = torch.zeros(1, 32, 32, 192)
+    ttnn_output = ttnn.from_torch(torch_zeros, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_output = torch_input[:, :32, :32, :]  # torch_output shape: [1, 3, 320, 320]
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
+    ttnn.slice(ttnn_input, starts=(0, 0, 0, 0), ends=(1, 32, 32, 192), steps=(1, 1, 1, 1), output_tensor=ttnn_output)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+    torch_input = torch.ones(1, 32, 32, 384)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_zeros = torch.zeros(1, 16, 16, 384)
+    ttnn_output = ttnn.from_torch(torch_zeros, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_output = torch_input[:, :16, :16, :]  # torch_output shape: [1, 3, 320, 320]
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
+    ttnn.slice(ttnn_input, starts=(0, 0, 0, 0), ends=(1, 16, 16, 384), steps=(1, 1, 1, 1), output_tensor=ttnn_output)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
