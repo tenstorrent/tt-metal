@@ -14,7 +14,9 @@ void kernel_main() {
     constexpr uint32_t src_log2_stick_size = get_compile_time_arg_val(4);
     constexpr uint32_t aligned_stick_nbytes_dram = get_compile_time_arg_val(5);
     constexpr uint32_t stride_w = get_compile_time_arg_val(6);
-    constexpr uint32_t work_per_core = get_compile_time_arg_val(7);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(7);
+    constexpr uint32_t input_width = get_compile_time_arg_val(8);
+    constexpr uint32_t work_per_core = get_compile_time_arg_val(9);
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     const auto s0 =
@@ -33,11 +35,14 @@ void kernel_main() {
 
         cb_reserve_back(cb_id_in0, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        for (uint32_t i = 0; i < stride_w; i++) {
-            uint64_t src_noc_addr = get_noc_addr(src_index, s0);
-            noc_async_read(src_noc_addr, l1_write_addr, stick_nbytes);
-            src_index++;
-            l1_write_addr += aligned_stick_nbytes_dram;
+        for (uint32_t i = 0; i < stride_h; i++) {
+            for (uint32_t j = 0; j < stride_w; j++) {
+                uint64_t src_noc_addr = get_noc_addr(src_index, s0);
+                noc_async_read(src_noc_addr, l1_write_addr, stick_nbytes);
+                src_index++;
+                l1_write_addr += aligned_stick_nbytes_dram;
+            }
+            src_index += input_width - stride_w;
         }
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, 1);

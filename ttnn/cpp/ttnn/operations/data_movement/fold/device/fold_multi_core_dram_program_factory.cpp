@@ -64,13 +64,8 @@ static Tensor create_fold_mapping_table(
                 const uint32_t w = ow * stride_w;
                 const uint32_t dst_base_index = dst_row * patch_size;
                 const uint32_t src_base_index = b_input_offset + h_base * input_width + w;
-                for (uint32_t kh = 0; kh < stride_h; kh++) {
-                    const uint32_t src_index = src_base_index + kh * input_width;
-                    const uint32_t dst_index = dst_base_index + kh * stride_w;
-
-                    config_vector[entry_idx++] = src_index;
-                    config_vector[entry_idx++] = dst_index;
-                }
+                config_vector[entry_idx++] = src_base_index;
+                config_vector[entry_idx++] = dst_base_index;
             }
         }
     }
@@ -327,7 +322,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
 
     // Calculate total input work
     uint32_t total_work =
-        (output.get_logical_shape()[0] * output.get_logical_shape()[1] * output.get_logical_shape()[2]) / stride_w;
+        (output.get_logical_shape()[0] * output.get_logical_shape()[1] * output.get_logical_shape()[2]) /
+        (stride_h * stride_w);
 
     // Get compute grid size and calculate work distribution
     auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -370,8 +366,9 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     int double_buffer = 2;
     // Create source circular buffer
     auto src_cb_config =
-        CircularBufferConfig(double_buffer * aligned_stick_nbytes * stride_w, {{cb_src0_index, cb_data_format}})
-            .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w);
+        CircularBufferConfig(
+            double_buffer * aligned_stick_nbytes * stride_w * stride_h, {{cb_src0_index, cb_data_format}})
+            .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w * stride_h);
     auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
 
     Tensor config_tensor_device = create_fold_mapping_table(
@@ -405,6 +402,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
          src_log2_stick_size,
          aligned_stick_nbytes,
          stride_w,
+         stride_h,
+         input_width,
          work_per_core});
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
