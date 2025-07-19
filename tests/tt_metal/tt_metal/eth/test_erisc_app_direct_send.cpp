@@ -112,12 +112,15 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program sender_program = tt_metal::Program();
 
+    auto risc = (fixture->GetArch() == tt::ARCH::BLACKHOLE) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0;
+
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
+            .processor = risc,
             .compile_args = {uint32_t(num_bytes_per_send), uint32_t(num_bytes_per_send >> 4)}});
 
     tt_metal::SetRuntimeArgs(
@@ -139,7 +142,7 @@ bool eth_direct_sender_receiver_kernels(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = risc});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
