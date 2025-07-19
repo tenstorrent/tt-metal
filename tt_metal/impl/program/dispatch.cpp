@@ -127,7 +127,7 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             max_rtas[dispatch_class] = 0;
             auto& optional_id = kg->kernel_ids[dispatch_class];
             if (optional_id) {
-                auto kernel = kernels.at(optional_id.value());
+                const auto& kernel = kernels.at(optional_id.value());
                 for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -144,7 +144,7 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             auto& optional_id = kg->kernel_ids[dispatch_class];
             kg->rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
             if (optional_id) {
-                auto kernel = kernels.at(optional_id.value());
+                const auto& kernel = kernels.at(optional_id.value());
                 kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
                 kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
                 offset += max_rtas[dispatch_class] * sizeof(uint32_t);

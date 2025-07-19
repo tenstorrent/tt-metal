@@ -110,7 +110,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = input_tensor;
-    std::vector<Tensor> output_tensors = output_tensor;
+    const std::vector<Tensor>& output_tensors = output_tensor;
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);

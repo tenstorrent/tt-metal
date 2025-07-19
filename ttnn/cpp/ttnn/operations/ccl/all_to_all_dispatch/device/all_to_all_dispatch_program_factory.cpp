@@ -117,8 +117,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
-    auto output_tensor = tensor_return_value.at(0);
-    auto metadata_tensor = tensor_return_value.at(1);
+    const auto& output_tensor = tensor_return_value.at(0);
+    const auto& metadata_tensor = tensor_return_value.at(1);
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
@@ -483,8 +483,8 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
         auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
         auto& cores = shared_variables.cores;
 
-        auto output_tensor = tensor_return_value.at(0);
-        auto metadata_tensor = tensor_return_value.at(1);
+        const auto& output_tensor = tensor_return_value.at(0);
+        const auto& metadata_tensor = tensor_return_value.at(1);
 
         for (auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);

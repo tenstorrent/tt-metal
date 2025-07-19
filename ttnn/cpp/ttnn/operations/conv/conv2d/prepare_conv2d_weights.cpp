@@ -607,7 +607,7 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             conv_weight_tensor.distributed_tensor_config());
     };
 
-    auto storage = conv_weight_tensor.host_storage();
+    const auto& storage = conv_weight_tensor.host_storage();
     switch (dtype) {
         case DataType::FLOAT32: return fold_weights.template operator()<float>(storage);
         case DataType::BFLOAT16: return fold_weights.template operator()<bfloat16>(storage);
