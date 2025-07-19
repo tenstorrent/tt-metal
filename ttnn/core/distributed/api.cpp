@@ -49,7 +49,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         std::vector<ttnn::Tensor> tensors;
         const auto& distributed_buffer = tensor.host_storage().buffer();
         distributed_buffer.apply(
-            [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.get_tensor_spec()}); });
+            [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
         auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
@@ -85,8 +85,7 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
         distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
     }
 
-    return Tensor(
-        HostStorage{std::move(distributed_host_buffer)}, reference_shard.get_tensor_spec(), AllGatherTensor{});
+    return Tensor(HostStorage{std::move(distributed_host_buffer)}, reference_shard.tensor_spec(), AllGatherTensor{});
 }
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
@@ -95,8 +94,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
     for (const auto& shard : tensor_shards) {
         TT_FATAL(shard.storage_type() == StorageType::DEVICE, "All tensor shards must be on device");
         TT_FATAL(
-            shard.get_tensor_spec() == reference_shard.get_tensor_spec(),
-            "All tensor shards must have the same tensor spec");
+            shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
     }
 
     auto mesh_buffer = reference_shard.device_storage().mesh_buffer;
@@ -128,7 +126,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     auto num_devices = instance.shape().mesh_size();
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
-    auto physical_device_ids = instance.get_mapped_physical_device_ids(MeshShape(1, 8));
+    auto physical_device_ids = extract_locals(instance.get_mapped_physical_device_ids(MeshShape(1, 8)).values());
     return physical_device_ids;
 }
 

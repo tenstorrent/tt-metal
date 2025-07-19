@@ -7,6 +7,7 @@
 #include <mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <stdint.h>
+#include <tuple>
 
 namespace tt {
 namespace tt_metal {
@@ -26,10 +27,13 @@ public:
     using chip_id_t = uint32_t;
     using MeshId = tt::tt_fabric::MeshId;
     PhysicalMeshCoordinate() = delete;
-    PhysicalMeshCoordinate(MeshId mesh_id, chip_id_t chip_id)
-        : mesh_id_(mesh_id), chip_id_(chip_id) {}
+    PhysicalMeshCoordinate(MeshId mesh_id, chip_id_t chip_id) : mesh_id_(mesh_id), chip_id_(chip_id) {}
     MeshId mesh_id() const { return mesh_id_; }
     chip_id_t chip_id() const { return chip_id_; }
+
+    // Needed for reflect / fmt
+    static constexpr auto attribute_names = std::forward_as_tuple("mesh_id", "chip_id");
+    auto attribute_values() const { return std::forward_as_tuple(mesh_id_, chip_id_); }
 
 private:
     MeshId mesh_id_{0};

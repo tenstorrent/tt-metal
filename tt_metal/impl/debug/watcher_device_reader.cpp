@@ -433,6 +433,14 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     ValidateKernelIDs(virtual_core, &(mbox_data->launch[launch_msg_read_ptr]));
 
     // Whether or not watcher data is available depends on a flag set on the device.
+    if (mbox_data->watcher.enable != WatcherEnabled and mbox_data->watcher.enable != WatcherDisabled) {
+        TT_THROW(
+            "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
+            core_str,
+            mbox_data->watcher.enable,
+            WatcherEnabled,
+            WatcherDisabled);
+    }
     bool enabled = (mbox_data->watcher.enable == WatcherEnabled);
 
     if (enabled) {
@@ -595,6 +603,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         case DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
+            break;
+        case DebugSanitizeNocLinkedTransactionViolation:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
         default:
             error_msg = fmt::format(

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 // TODO: move routing table here
 namespace tt::tt_fabric {
@@ -95,6 +96,8 @@ struct tensix_routing_l1_info_t {
 // MEM_TENSIX_ROUTING_TABLE_SIZE
 static_assert(sizeof(tensix_routing_l1_info_t) == 2064, "Struct size mismatch!");
 
+constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
+
 struct fabric_connection_info_t {
     uint32_t edm_direction;
     uint32_t edm_noc_xy;  // packed x,y coordinates
@@ -105,18 +108,31 @@ struct fabric_connection_info_t {
     uint32_t edm_worker_location_info_addr;
     uint32_t buffer_size_bytes;
     uint32_t buffer_index_semaphore_id;
-} __attribute__((packed));
+    uint32_t padding[3];
+    // 16-byte aligned semaphore address for flow control
+    uint32_t worker_flow_control_semaphore;
+} __attribute__((aligned(16)));
 
-// Fabric connection metadata stored in worker L1
-// 16 for WH, 12 for BH
+// Ensure worker_flow_control_semaphore is properly aligned for pointer access in all array elements
+static_assert(
+    offsetof(fabric_connection_info_t, worker_flow_control_semaphore) % 16 == 0,
+    "worker_flow_control_semaphore must be 16-byte aligned for safe pointer access");
+
+// Ensure the struct itself is 16-byte aligned so that worker_flow_control_semaphore
+// remains aligned in connections array
+static_assert(
+    sizeof(fabric_connection_info_t) % 16 == 0,
+    "fabric_connection_info_t size must be a multiple of 16 bytes to maintain worker_flow_control_semaphore alignment "
+    "in arrays");
+
 struct tensix_fabric_connections_l1_info_t {
     static constexpr uint8_t MAX_FABRIC_ENDPOINTS = 16;
     // Each index corresponds to ethernet channel index
     fabric_connection_info_t connections[MAX_FABRIC_ENDPOINTS];
     uint32_t valid_connections_mask;  // bit mask indicating which connections are valid
     uint8_t padding[12];              // pad to cache line alignment
-} __attribute__((packed));
+};
 
-static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 592, "Struct size mismatch!");
+static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 1040, "Struct size mismatch!");
 
 }  // namespace tt::tt_fabric

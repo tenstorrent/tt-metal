@@ -289,10 +289,6 @@ void wait_until_cores_done(
         }
         loop_count++;
 
-        // Continuously polling cores on simulator can cause it to run much slower than real hardware.
-        if (is_simulator)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.

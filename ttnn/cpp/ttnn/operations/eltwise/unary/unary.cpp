@@ -317,7 +317,7 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    DataType input_dtype = input_tensor.get_dtype();
+    DataType input_dtype = input_tensor.dtype();
 
     if (input_dtype != DataType::UINT8) {
         return detail::unary_impl(

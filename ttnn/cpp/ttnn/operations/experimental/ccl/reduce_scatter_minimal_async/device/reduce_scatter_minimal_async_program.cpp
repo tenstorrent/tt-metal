@@ -7,6 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
@@ -177,7 +178,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     // Tensor Info
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto& input_tensor_shape = input_tensor.get_padded_shape();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto num_batches = input_tensor_shape[0];
@@ -195,8 +196,11 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
     CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
 
-    // scatter-write currently only supports 2 distinct noc addresses
-    uint32_t max_target_noc_addresses_per_packet = 2;
+    // scatter-write currently only supports 2 distinct noc addresses, and is only supported for wormhole
+    uint32_t max_target_noc_addresses_per_packet = 1;
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0) {
+        max_target_noc_addresses_per_packet = 2;
+    }
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -205,7 +209,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t tile_granularity = num_tiles_to_write_per_packet < 4 ? 4 * num_tiles_to_write_per_packet : 8;
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_input_config =
@@ -537,12 +541,15 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    const uint32_t max_scatter_write_pages = 2;
+    uint32_t max_scatter_write_pages = 1;
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0) {
+        max_scatter_write_pages = 2;
+    }
     const uint32_t max_dst_size = 8;  // TODO: generalize based on arch and fp32 acc
     uint32_t tiles_to_write_per_packet = std::min(num_pages_per_packet, max_scatter_write_pages);
     uint32_t tile_granularity = std::min(4 * num_pages_per_packet, max_dst_size);
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_input_config =
@@ -584,7 +591,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     // Tensor Info
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto& input_tensor_shape = input_tensor.get_padded_shape();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto num_batches = input_tensor_shape[0];

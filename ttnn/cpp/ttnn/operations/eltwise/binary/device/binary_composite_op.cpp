@@ -306,7 +306,6 @@ Tensor ExecuteDiv::invoke(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
-    output_tensor = output_tensor.value_or(ttnn::empty_like(input_a));
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     Tensor result;
@@ -412,6 +411,8 @@ Tensor ExecutePrelu::invoke(
 
 Tensor run_remainder(
     const Tensor& input_a, const Tensor& input_b, float t_nan, const std::optional<MemoryConfig>& output_mem_config) {
+    using FusedActivations = tt::stl::Span<const unary::UnaryWithParam>;
+    // explicitly using binary_ng to avoid fallback to legacy because of row boradcast
     Tensor result = ttnn::subtract(
         input_a,
         ttnn::multiply(
@@ -420,7 +421,12 @@ Tensor run_remainder(
             std::nullopt,
             output_mem_config),
         std::nullopt,
-        output_mem_config);
+        output_mem_config,
+        std::nullopt,
+        FusedActivations{},
+        FusedActivations{},
+        FusedActivations{},
+        false);
     result = ttnn::where(ttnn::ge(result, input_b), ttnn::subtract(result, input_b), result);
     result = ttnn::where(ttnn::ltz(input_b), ttnn::add(result, input_b), result);
     result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);

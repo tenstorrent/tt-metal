@@ -57,7 +57,7 @@ class RMSNorm(AbstractModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=list(mesh_device.shape))
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=list(mesh_device.shape))
             if decoder_norm
             else ttnn.ReplicateTensorToMesh(mesh_device),
         )
@@ -187,7 +187,7 @@ class RMSNorm(AbstractModule):
             tt_stats,
             dim=3,
             num_links=1,
-            cluster_axis=0,
+            cluster_axis=1,
             mesh_device=mesh_device,
             memory_config=stats_memcfg,
             topology=topology,

@@ -18,6 +18,12 @@ def pytest_addoption(parser):
         default=5000,
         help="Number of prompts to process (default: 5000)",
     )
+    parser.addoption(
+        "--loop-iter-num",
+        action="store",
+        default=10,
+        help="Number of iterations of denoising loop (default: 10)",
+    )
 
 
 @pytest.fixture
@@ -35,3 +41,8 @@ def evaluation_range(request):
         num_prompts = 5000
 
     return start_from, num_prompts
+
+
+@pytest.fixture
+def loop_iter_num(request):
+    return int(request.config.getoption("--loop-iter-num"))

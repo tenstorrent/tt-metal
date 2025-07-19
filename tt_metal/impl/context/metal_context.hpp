@@ -25,7 +25,6 @@
 #include <vector>
 
 namespace tt::tt_fabric {
-class GlobalControlPlane;
 class ControlPlane;
 }  // namespace tt::tt_fabric
 
@@ -143,7 +142,7 @@ private:
     std::unique_ptr<DPrintServer> dprint_server_;
     std::unique_ptr<WatcherServer> watcher_server_;
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
-    std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
+    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 

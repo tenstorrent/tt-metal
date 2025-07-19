@@ -154,7 +154,16 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    if (num_pages_to_write == 2) {
+                    if (num_pages_to_write == 1) {
+                        pkt_hdr->to_noc_unicast_write(
+                            tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
+                        dir_fabric_connection->wait_for_empty_write_slot();
+                        dir_fabric_connection->send_payload_without_header_non_blocking_from_address(
+                            l1_read_addr, payload_size_bytes);
+                        dir_fabric_connection->send_payload_flush_non_blocking_from_address(
+                            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+#ifdef ARCH_WORMHOLE
+                    } else if (num_pages_to_write == 2) {
                         uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
                         uint64_t second_remote_noc0_dest_noc_addr =
                             get_noc_addr(second_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
@@ -176,16 +185,9 @@ void kernel_main() {
                             l1_read_addr, payload_size_bytes);
                         dir_fabric_connection->send_payload_flush_non_blocking_from_address(
                             (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-
+#endif
                     } else {
-                        ASSERT(num_pages_to_write == 1);
-                        pkt_hdr->to_noc_unicast_write(
-                            tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
-                        dir_fabric_connection->wait_for_empty_write_slot();
-                        dir_fabric_connection->send_payload_without_header_non_blocking_from_address(
-                            l1_read_addr, payload_size_bytes);
-                        dir_fabric_connection->send_payload_flush_non_blocking_from_address(
-                            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                        ASSERT(false);
                     }
 
                     // Note: Must flush write for correctness

@@ -54,6 +54,9 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         eth_l1_mem::address_map::RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] =
         eth_l1_mem::address_map::RETRAIN_FORCE_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CRC_ERR)] = eth_l1_mem::address_map::CRC_ERR_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORR_CW)] = eth_l1_mem::address_map::CORR_CW_HI_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNCORR_CW)] = eth_l1_mem::address_map::UNCORR_CW_HI_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 

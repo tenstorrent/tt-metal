@@ -197,7 +197,6 @@ FORCE_INLINE
                 tt::tt_fabric::forward_and_local_write_noc_vc);
         } break;
 
-#ifdef ARCH_WORMHOLE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             size_t offset = 0;
             size_t chunk_size;
@@ -218,9 +217,6 @@ FORCE_INLINE
                 offset += chunk_size;
             }
         } break;
-#else
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE:
-#endif
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
         default: {

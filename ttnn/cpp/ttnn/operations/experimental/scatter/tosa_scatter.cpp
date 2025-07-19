@@ -124,9 +124,9 @@ Tensor TOSAScatterOperation::invoke(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config) {
-    const auto& input_shape{input_tensor.get_logical_shape()};
-    const auto& index_shape{index_tensor.get_logical_shape()};
-    const auto& source_shape{source_tensor.get_logical_shape()};
+    const auto& input_shape{input_tensor.logical_shape()};
+    const auto& index_shape{index_tensor.logical_shape()};
+    const auto& source_shape{source_tensor.logical_shape()};
 
     CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_shape, index_shape, source_shape);
 

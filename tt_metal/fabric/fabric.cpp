@@ -176,16 +176,11 @@ void append_fabric_connection_rt_args(
         forwarding_links);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
-    auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     if (core_type == CoreType::WORKER) {
         append_worker_to_fabric_edm_sender_rt_args(
-            fabric_router_channel,
-            worker_flow_control_semaphore_id,
-            worker_teardown_semaphore_id,
-            worker_buffer_index_semaphore_id,
-            worker_args);
+            fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
         //       ethernet core need to have same memory mapping as worker
@@ -211,6 +206,7 @@ void append_fabric_connection_rt_args(
             .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
             .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
             .edm_direction = router_direction};
+        auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
         append_worker_to_fabric_edm_sender_rt_args(
             edm_connection,
             worker_flow_control_semaphore_id,
