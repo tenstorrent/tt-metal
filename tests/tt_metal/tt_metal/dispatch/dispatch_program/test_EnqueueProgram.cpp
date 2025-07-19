@@ -1776,7 +1776,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute)
 namespace stress_tests {
 
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
-    uint32_t NUM_PROGRAMS = 100;
+    uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;
 
@@ -1796,10 +1796,10 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
-    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
+    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_WORKLOADS);
 
     vector<distributed::MeshWorkload> workloads;
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         workloads.push_back(distributed::MeshWorkload());
         distributed::MeshWorkload& workload = workloads.back();
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
@@ -1839,7 +1839,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
             "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
             "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
             i + 1,
-            NUM_PROGRAMS,
+            NUM_WORKLOADS,
             BRISC_OUTER_LOOP,
             BRISC_MIDDLE_LOOP,
             BRISC_INNER_LOOP,
@@ -2059,7 +2059,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
 }
 
 TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
-    uint32_t NUM_PROGRAMS = 100;
+    uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;
 
@@ -2075,12 +2075,12 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set(cr);
 
-    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
+    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_WORKLOADS);
 
     vector<distributed::MeshWorkload> workloads;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         workloads.push_back(distributed::MeshWorkload());
         distributed::MeshWorkload& workload = workloads.back();
 
@@ -2096,7 +2096,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         bool USE_MAX_RT_ARGS;
 
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
+            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_WORKLOADS);
         }
 
         if (i == 0) {
@@ -2122,7 +2122,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
             "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
             "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
             i + 1,
-            NUM_PROGRAMS,
+            NUM_WORKLOADS,
             BRISC_OUTER_LOOP,
             BRISC_MIDDLE_LOOP,
             BRISC_INNER_LOOP,
@@ -2152,7 +2152,6 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
             num_brisc_unique_rtargs,
             num_brisc_common_rtargs,
             page_size};
-
         // ncrisc
         uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
         if (i == 0) {
@@ -2314,107 +2313,149 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     Finish(device->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, TensixTestSimplePrograms) {
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        this->create_kernel(program, CoreType::WORKER, true);
-        EnqueueProgram(device_->command_queue(), program, false);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
+        this->create_kernel(program_, CoreType::WORKER, true);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, ActiveEthTestSimplePrograms) {
-    if (!does_device_have_active_eth_cores(device_)) {
-        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestSimplePrograms) {
+    for (const auto& device : device_->get_devices()) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
     }
 
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        this->create_kernel(program, CoreType::ETH, true);
-        EnqueueProgram(device_->command_queue(), program, false);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
+        this->create_kernel(program_, CoreType::WORKER, true);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, TensixActiveEthTestSimplePrograms) {
-    if (!does_device_have_active_eth_cores(device_)) {
-        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
+    for (const auto& device : device_->get_devices()) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
     }
 
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
 
         bool eth_kernel_added_to_program = false;
         if (rand() % 2 == 0) {
-            this->create_kernel(program, CoreType::ETH, true);
+            this->create_kernel(program_, CoreType::ETH, true);
             eth_kernel_added_to_program = true;
         }
         if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
-            this->create_kernel(program, CoreType::WORKER, true);
+            this->create_kernel(program_, CoreType::WORKER, true);
         }
 
-        EnqueueProgram(device_->command_queue(), program, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, TensixTestPrograms) {
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+TEST_F(UnitMeshRandomProgramFixture, TensixTestPrograms) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        this->create_kernel(program, CoreType::WORKER);
-        EnqueueProgram(device_->command_queue(), program, false);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
+        this->create_kernel(program_, CoreType::WORKER, true);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, ActiveEthTestPrograms) {
-    if (!does_device_have_active_eth_cores(device_)) {
-        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
+    for (const auto& device : device_->get_devices()) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
     }
 
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
         // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
         // and the max kernel size to ensure that the kernel can fit in the ring buffer
         KernelProperties kernel_properties;
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-        this->create_kernel(program, CoreType::ETH, false, kernel_properties);
-        EnqueueProgram(device_->command_queue(), program, false);
+        this->create_kernel(program_, CoreType::WORKER, true);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, TensixActiveEthTestPrograms) {
-    if (!does_device_have_active_eth_cores(device_)) {
-        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
+    for (const auto& device : device_->get_devices()) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
     }
 
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
 
         bool eth_kernel_added_to_program = false;
         if (rand() % 2 == 0) {
@@ -2424,27 +2465,32 @@ TEST_F(RandomProgramFixture, TensixActiveEthTestPrograms) {
             kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
             kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
-            this->create_kernel(program, CoreType::ETH, false, kernel_properties);
+            this->create_kernel(program_, CoreType::ETH, false, kernel_properties);
             eth_kernel_added_to_program = true;
         }
         if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
             KernelProperties kernel_properties;
             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
-            this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+            this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
         }
 
-        EnqueueProgram(device_->command_queue(), program, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
 
         KernelProperties kernel_properties;
         if (i % 2 == 0) {
@@ -2453,19 +2499,24 @@ TEST_F(RandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        EnqueueProgram(device_->command_queue(), program, false);
+        this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
 
         KernelProperties kernel_properties;
         if (i == 0) {
@@ -2474,20 +2525,24 @@ TEST_F(RandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        EnqueueProgram(device_->command_queue(), program, false);
+        this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
-TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
-    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
+    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
         KernelProperties kernel_properties;
         if (i % 6 == 0) {
             kernel_properties = this->get_large_kernel_properties();
@@ -2495,11 +2550,11 @@ TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        EnqueueProgram(device_->command_queue(), program, false);
+        this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
-    Finish(device_->command_queue());
+    Finish(device_->mesh_command_queue());
 }
 
 }  // namespace stress_tests

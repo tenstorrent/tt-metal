@@ -165,13 +165,7 @@ protected:
 
 class UnitMeshMultiCQSingleDeviceProgramFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
-class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-class MultiCommandQueueSingleDeviceTraceFixture : public MultiCommandQueueSingleDeviceFixture {
+class UnitMeshMultiCQSingleDeviceTraceFixture : public UnitMeshMultiCQSingleDeviceFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -179,22 +173,20 @@ protected:
         }
 
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
-        if (this->num_cqs_ != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-            GTEST_SKIP();
-        }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     }
 
-    void CreateDevice(const size_t trace_region_size) {
-        const chip_id_t device_id = 0;
-        const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
-        this->create_device(device_id, trace_region_size, dispatch_core_type);
+    void CreateDevices(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        this->create_devices(trace_region_size);
     }
-
-    DispatchCoreType dispatch_core_type_;
 };
+
+class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
+
+class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {};
+
+class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {};
 
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by
 // UnitMeshMultiCQMultiDeviceFixtures
