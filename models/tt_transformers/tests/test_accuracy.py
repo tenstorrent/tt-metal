@@ -319,6 +319,7 @@ def test_tt_model_acc(
             if tt_model.args.is_galaxy:
                 tt_out_gathered = ttnn.experimental.all_gather_async(
                     tt_out,
+                    persistent_output_buffer=None,
                     dim=3,
                     multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=tt_model.args.num_all_gather_links,
@@ -326,15 +327,22 @@ def test_tt_model_acc(
                     mesh_device=mesh_device,
                     topology=tt_model.args.ccl_topology(),
                     subdevice_id=tt_model.tt_ccl.worker_sub_device_id,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
                 )
             else:
                 tt_out_gathered = ttnn.experimental.all_gather_async(
                     tt_out,
+                    persistent_output_buffer=None,
                     dim=3,
                     multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=1,
                     topology=ttnn.Topology.Linear,
                     subdevice_id=tt_model.tt_ccl.worker_sub_device_id,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
                 )
             ttnn.deallocate(tt_out)
         else:
