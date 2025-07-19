@@ -115,7 +115,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     auto core = device->worker_core_from_logical_core(logical_core);
 
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-    auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+    auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::NOC0);
 
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     smallestHostime.emplace(device_id, 0);

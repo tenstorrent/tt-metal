@@ -869,7 +869,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             auto dram_core = this->dram_core_from_dram_channel(i, noc);
             if (dram_is_virtualized) {
                 tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
-                    tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                    tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
                 dram_core = CoreCoord(umd_dram_coord.x, umd_dram_coord.y);
             }
             dram_phy_coords.push_back(dram_core);
@@ -900,7 +900,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         // Convert to physical worker coordinates to logical. This gets returned to the user.
         for (auto physical_worker_core : physical_worker_cores) {
             tt::umd::CoreCoord logical_coord_translated =
-                soc_desc.translate_coord_to(physical_worker_core, CoordSystem::PHYSICAL, CoordSystem::LOGICAL);
+                soc_desc.translate_coord_to(physical_worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
             this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
                 CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
             TT_ASSERT(

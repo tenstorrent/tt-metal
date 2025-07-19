@@ -954,16 +954,16 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel, noc);
             auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel, noc);
             auto physical_worker_dram_ep =
-                soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
             auto physical_eth_dram_ep =
-                soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
             dram_cores.insert(physical_worker_dram_ep);
             dram_cores.insert(physical_eth_dram_ep);
         }
     }
 
     const std::vector<tt::umd::CoreCoord>& eth_cores =
-        soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);  // make these translated and then convert to physical
+        soc_d.get_cores(CoreType::ETH, CoordSystem::NOC0);  // make these translated and then convert to physical
 
     TT_ASSERT(
         pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,
