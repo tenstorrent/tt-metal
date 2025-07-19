@@ -119,6 +119,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_GH_CI_INFRA=1
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
