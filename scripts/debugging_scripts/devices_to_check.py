@@ -16,6 +16,7 @@ Options:
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import triage_cache, ScriptConfig
 from ttexalens.context import Context
+from ttexalens.device import Device
 from utils import ORANGE, RST
 
 script_config = ScriptConfig(
@@ -24,7 +25,7 @@ script_config = ScriptConfig(
 )
 
 
-def get_devices(devices: list[str], inspector_data: InspectorData | None, context: Context) -> list[int]:
+def get_devices(devices: list[str], inspector_data: InspectorData | None, context: Context) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
         if inspector_data is not None:
             device_ids = list(inspector_data.devices_in_use)
@@ -40,7 +41,7 @@ def get_devices(devices: list[str], inspector_data: InspectorData | None, contex
         device_ids = [int(id) for id in context.devices.keys()]
     else:
         device_ids = [int(id) for id in devices]
-    return device_ids
+    return [context.devices[id] for id in device_ids]
 
 
 @triage_cache

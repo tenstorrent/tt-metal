@@ -20,7 +20,7 @@ from ttexalens.parse_elf import mem_access
 from ttexalens.tt_exalens_lib import parse_elf
 from ttexalens.context import Context
 from utils import ORANGE, RST
-from triage import TTTriageError
+from triage import TTTriageError, combined_field, collection_serializer, triage_field, hex_serializer
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -30,14 +30,14 @@ script_config = ScriptConfig(
 
 @dataclass
 class DispatcherCoreData:
-    firmware_path: str
-    kernel_path: str | None
-    kernel_offset: int | None
-    kernel_name: str | None
-    launch_msg_rd_ptr: int
-    kernel_config_base: int
-    kernel_text_offset: int
-    watcher_kernel_id: int
+    launch_msg_rd_ptr: int = triage_field("RD PTR")
+    kernel_config_base: int = triage_field("Base", hex_serializer)
+    kernel_text_offset: int = triage_field("Offset", hex_serializer)
+    watcher_kernel_id: int = combined_field("kernel_name", "Kernel ID:Name", collection_serializer(":"))
+    kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer)
+    firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
+    kernel_path: str | None = combined_field()
+    kernel_name: str | None = combined_field()
 
 
 class DispatcherData:
@@ -185,7 +185,7 @@ class DispatcherData:
             firmware_path = self._a_kernel_path + "../../../firmware/subordinate_idle_erisc/subordinate_idle_erisc.elf"
         else:
             firmware_path = self._a_kernel_path + f"../../../firmware/{proc_name.lower()}/{proc_name.lower()}.elf"
-            firmware_path = os.path.realpath(firmware_path)
+        firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
             if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":

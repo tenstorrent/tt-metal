@@ -14,18 +14,18 @@ Options:
     --gdb_callstack    Dump callstack using GDB client instead of built-in methods.
 """
 
-from triage import ScriptConfig
-from devices_to_check import run as get_devices_to_check
+from triage import ScriptConfig, recurse_field, triage_field, hex_serializer
+from check_per_device import dataclass, run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
-from tabulate import tabulate
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
+from ttexalens.device import Device
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack, parse_elf
-from utils import BLUE, GREEN, ORANGE, RST, DEFAULT_TABLE_FORMAT
+from utils import BLUE, GREEN, ORANGE, RST
 
 script_config = ScriptConfig(
-    depends=["dispatcher_data"],
+    depends=["check_per_device", "dispatcher_data"],
 )
 
 
@@ -51,7 +51,7 @@ def get_callstack(
         if dispatcher_core_data.kernel_path not in elfs_cache:
             elfs_cache[dispatcher_core_data.kernel_path] = parse_elf(dispatcher_core_data.kernel_path, context)
         elfs.append(elfs_cache[dispatcher_core_data.kernel_path])
-        offsets.append(dispatcher_core_data.kernel_text_offset)
+        offsets.append(dispatcher_core_data.kernel_offset)
     try:
         if not full_callstack:
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
@@ -63,10 +63,10 @@ def get_callstack(
         return []
 
 
-def format_callstack(callstack: list[CallstackEntry]) -> list[str]:
+def format_callstack(callstack: list[CallstackEntry]) -> str:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
-    result = []
+    result = [""]
     for i, frame in enumerate(callstack):
         line = f"  #{i:<{frame_number_width}} "
         if frame.pc is not None:
@@ -76,58 +76,58 @@ def format_callstack(callstack: list[CallstackEntry]) -> list[str]:
         if frame.file is not None:
             line += f"at {GREEN}{frame.file} {frame.line}:{frame.column}{RST}"
         result.append(line)
-    return result
+    return "\n".join(result)
+
+
+@dataclass
+class DumpCallstacksData:
+    location: OnChipCoordinate = triage_field("Loc")
+    risc_name: str = triage_field("Proc")
+    dispatcher_core_data: DispatcherCoreData = recurse_field()
+    pc: int | None = triage_field("PC", hex_serializer)
+    kernel_callstack: list[CallstackEntry] = triage_field("Kernel Callstack", format_callstack)
 
 
 def dump_callstacks(
-    devices: list[int], dispatcher_data: DispatcherData, context: Context, full_callstack: bool, gdb_callstack: bool
-):
+    device: Device, dispatcher_data: DispatcherData, context: Context, full_callstack: bool, gdb_callstack: bool
+) -> list[DumpCallstacksData]:
     blocks_to_test = ["functional_workers", "eth"]
     elfs_cache: dict[str, ParsedElfFile] = {}
-    table = [
-        ["Dev", "Loc", "Proc", "RD PTR", "Base", "Offset", "Kernel ID:Name", "PC", "Kernel Callstack", "Kernel Path"]
-    ]
-    for device_id in devices:
-        device = context.devices[device_id]
-        for block_to_test in blocks_to_test:
-            for location in device.get_block_locations(block_to_test):
-                noc_block = device.get_block(location)
+    result: list[DumpCallstacksData] = []
+    for block_to_test in blocks_to_test:
+        for location in device.get_block_locations(block_to_test):
+            noc_block = device.get_block(location)
 
-                # We support only idle eth blocks for now
-                if noc_block.block_type == "eth" and noc_block not in device.idle_eth_blocks:
-                    continue
+            # We support only idle eth blocks for now
+            if noc_block.block_type == "eth" and noc_block not in device.idle_eth_blocks:
+                continue
 
-                for risc_name in noc_block.risc_names:
-                    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-                    if gdb_callstack:
-                        callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, context)
-                    else:
-                        callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
-                    table.append(
-                        [
-                            str(device_id),
-                            location.to_str("logical"),
-                            risc_name.upper(),
-                            str(dispatcher_core_data.launch_msg_rd_ptr),
-                            f"0x{dispatcher_core_data.kernel_config_base:x}",
-                            f"0x{dispatcher_core_data.kernel_text_offset:x}",
-                            f"{dispatcher_core_data.watcher_kernel_id}:{dispatcher_core_data.kernel_name}",
-                            f"0x{callstack[0].pc:x}" if len(callstack) > 0 and callstack[0].pc is not None else "N/A",
-                            "" if len(callstack) > 0 else "N/A",
-                            dispatcher_core_data.kernel_path if dispatcher_core_data.kernel_path else "N/A",
-                        ]
+            for risc_name in noc_block.risc_names:
+                dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+                if gdb_callstack:
+                    callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, context)
+                else:
+                    callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
+                result.append(
+                    DumpCallstacksData(
+                        location=location,
+                        risc_name=risc_name,
+                        dispatcher_core_data=dispatcher_core_data,
+                        pc=callstack[0].pc if len(callstack) > 0 else None,
+                        kernel_callstack=callstack
                     )
-                    for line in format_callstack(callstack):
-                        table.append(["", "", "", "", "", "", "", "", line])
-    print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+                )
+    return result
 
 
 def run(args, context: Context):
     full_callstack = args["--full_callstack"]
     gdb_callstack = args["--gdb_callstack"]
-    devices = get_devices_to_check(args, context)
+    check_per_device = get_check_per_device(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
-    dump_callstacks(devices, dispatcher_data, context, full_callstack, gdb_callstack)
+    return check_per_device.run_check(
+        lambda device: dump_callstacks(device, dispatcher_data, context, full_callstack, gdb_callstack)
+    )
 
 
 if __name__ == "__main__":

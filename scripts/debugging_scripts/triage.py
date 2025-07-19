@@ -11,6 +11,7 @@ TODO: Write documentation
 import inspect
 import os
 from utils import ORANGE, RED, RST, GREEN
+from collections.abc import Iterable
 
 try:
     from ttexalens.tt_exalens_init import init_ttexalens
@@ -27,7 +28,9 @@ from dataclasses import dataclass, field
 import importlib
 import sys
 from ttexalens.context import Context
-from typing import Any, Callable, TypeVar
+from ttexalens.device import Device
+from ttexalens.coordinate import OnChipCoordinate
+from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
 
@@ -69,6 +72,59 @@ def triage_cache(run_method: Callable[[ScriptArguments, Context], T], /) -> Call
 
     return cache_wrapper
 
+
+# Data serialization
+def serialize_collection(items: Iterable[Any], separator: str = ", ") -> str:
+    return separator.join(default_serializer(item) for item in items)
+
+
+def default_serializer(value) -> str:
+    """Default serializer for fields."""
+    if value is None:
+        return "N/A"
+    if isinstance(value, Device):
+        return str(value._id)
+    elif isinstance(value, OnChipCoordinate):
+        return value.to_user_str()
+    elif isinstance(value, Iterable) and not isinstance(value, str):
+        return serialize_collection(value)
+    else:
+        return str(value)
+
+
+def hex_serializer(value: int | None) -> str:
+    if value is None:
+        return "N/A"
+    return hex(value)
+
+
+def collection_serializer(separator: str):
+    def serializer(item):
+        return serialize_collection(item, separator)
+
+    return serializer
+
+
+def triage_field(serialized_name: str | None = None, serializer: Callable[[Any], str] | None = None):
+    if serializer is None:
+        serializer = default_serializer
+    return field(metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer})
+
+
+def combined_field(additional_fields: str | list[str] | None = None, serialized_name: str | None = None, serializer = None):
+    if additional_fields is None and serialized_name is None and serializer is None:
+        return field(metadata={"recurse": False, "dont_serialize": True})
+    assert additional_fields is not None and serialized_name is not None, "additional_fields and serialized_name must be provided."
+    if serializer is None:
+        serializer = default_serializer
+    # TODO: If serializer accepts single value, it should be wrapped around method that converts arguments to list and passes them to serializer
+    if not isinstance(additional_fields, list):
+        additional_fields = [additional_fields]
+    return field(metadata={"recurse": False, "additional_fields": additional_fields, "serialized_name": serialized_name, "serializer": serializer})
+
+
+def recurse_field():
+    return field(metadata={"recurse": True})
 
 @dataclass
 class TriageScript:
@@ -249,6 +305,82 @@ def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
     return ScriptArguments({})
 
 
+def serialize_result(script: TriageScript | None, result):
+    from dataclasses import fields, is_dataclass
+
+    if script is not None:
+        print(f"Script {script.name} results:")
+
+    if isinstance(result, list) and len(result) == 0:
+        print("  No results found.")
+        return
+
+    if not (is_dataclass(result) or (isinstance(result, list) and all(is_dataclass(item) for item in result))):
+        print(f"  {result}")
+    else:
+        if not isinstance(result, list):
+            result = [result]
+
+        def generate_header(header: list[str], obj, flds):
+            for field in flds:
+                metadata = field.metadata
+                if "dont_serialize" in metadata and metadata["dont_serialize"]:
+                    continue
+                elif "recurse" in metadata and metadata["recurse"]:
+                    value = getattr(obj, field.name)
+                    assert is_dataclass(value)
+                    generate_header(header, value, fields(value))
+                elif "serialized_name" in metadata:
+                    header.append(metadata["serialized_name"])
+
+        def generate_row(row: list[str], obj, flds):
+            for field in flds:
+                metadata = field.metadata
+                if "dont_serialize" in metadata and metadata["dont_serialize"]:
+                    continue
+                elif "recurse" in metadata and metadata["recurse"]:
+                    value = getattr(obj, field.name)
+                    assert is_dataclass(value)
+                    generate_row(row, value, fields(value))
+                elif "additional_fields" in metadata:
+                    assert all(hasattr(obj, additional_field) for additional_field in metadata["additional_fields"])
+                    all_values = [getattr(obj, field.name)]
+                    all_values.extend([getattr(obj, additional_field) for additional_field in metadata["additional_fields"]])
+                    assert "serializer" in metadata, "Serializer must be provided for combined field."
+                    row.append(metadata["serializer"](all_values))
+                else:
+                    row.append(metadata["serializer"](getattr(obj, field.name)))
+
+
+        # Create table header
+        header = []
+        generate_header(header, result[0], fields(result[0]))
+        table = [header]
+        for item in result:
+            row = []
+            generate_row(row, item, fields(item))
+            multilined_row = [r.splitlines() for r in row]
+            multirow = max([len(r) for r in multilined_row])
+            if multirow == 1:
+                table.append(row)
+            else:
+                # If multirow, add empty rows for each line in the row
+                for i in range(multirow):
+                    multirow_row = []
+                    for lines in multilined_row:
+                        if i < len(lines):
+                            multirow_row.append(lines[i])
+                        else:
+                            multirow_row.append("")
+                    table.append(multirow_row)
+
+
+        from tabulate import tabulate
+        from utils import DEFAULT_TABLE_FORMAT
+
+        print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+
+
 def run_script(
     script_path: str | None = None, args: ScriptArguments | None = None, context: Context | None = None
 ) -> Any:
@@ -292,8 +424,8 @@ def run_script(
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"Data provider script {script.name} did not return any data.")
-    if scripts[script_path].config.data_provider:
-        print(result)
+    if result is not None:
+        serialize_result(None, result)
 
 
 class TTTriageError(Exception):
@@ -352,6 +484,8 @@ def main():
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 print(f"{RED}Data provider script {script.name} did not return any data.{RST}")
+            if not script.config.data_provider and result is not None:
+                serialize_result(script, result)
 
 
 if __name__ == "__main__":
