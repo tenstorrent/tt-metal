@@ -6,9 +6,45 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "ckernel_sfpu_dropout.h"
+#include "ckernel_sfpu_elu.h"
+#include "ckernel_sfpu_erf_erfc.h"
+#include "ckernel_sfpu_erfinv.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_fmod.h"
+#include "ckernel_sfpu_gelu.h"
+#include "ckernel_sfpu_i0.h"
+#include "ckernel_sfpu_i1.h"
+#include "ckernel_sfpu_identity.h"
+#include "ckernel_sfpu_int_sum.h"
+#include "ckernel_sfpu_isinf_isnan.h"
+#include "ckernel_sfpu_log1p.h"
+#include "ckernel_sfpu_logical_not_noti.h"
+#include "ckernel_sfpu_negative.h"
+#include "ckernel_sfpu_rand.h"
+#include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_relu.h"
+#include "ckernel_sfpu_remainder.h"
+#include "ckernel_reverseops.h"
+#include "ckernel_sfpu_softplus.h"
+#include "ckernel_sfpu_sqrt.h"
+#include "ckernel_sfpu_trigonometry.h"
+#include "ckernel_sfpu_unary_comp.h"
 
 // For ops that require only the init function
 #define SFPU_UNARY_KERNEL_INIT(OP, APPROXIMATE) llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>();
+
+// For ops that need a custom init callback
+#define SFPU_INIT_KERNEL_CALL(OP, INIT_CB, APPROXIMATE) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>)
+
+// For ops that need a custom init callback but takes one extra init-parameter
+#define SFPU_ONE_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, EXTRA_ARG) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, EXTRA_ARG);
+
+// For ops that need a custom init callback and take two extra init-parameters
+#define SFPU_TWO_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, ARG0, ARG1) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, ARG0, ARG1)
 
 // For ops that require only an init function with a custom SfpuType and init callback
 #define SFPU_INIT_ONLY_WITH_TYPE(NAME, TYPE, INIT_CB)                                        \
@@ -16,6 +52,10 @@
     inline void llk_math_eltwise_unary_sfpu_##NAME##_init() {                                \
         llk_math_eltwise_unary_sfpu_init<SfpuType::TYPE, APPROXIMATE>(INIT_CB<APPROXIMATE>); \
     }
+
+// For ops where init takes multiple template parameters (e.g., approximate, fast_approx, scale).
+#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, FAST_APPROX, SCALE>)
 
 // For ops that require only the compute function
 #define SFPU_UNARY_KERNEL_NO_INIT(OP)                                                                     \
@@ -42,54 +82,6 @@
         llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(CALC_CB<APPROXIMATE>, dst_index, vector_mode, EXTRA_PASS); \
     }
 
-// For init-only kernels using SfpuType::unused
-#define SFPU_UNARY_KERNEL_INIT_UNUSED(OP)                                  \
-    template <bool APPROXIMATE>                                            \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>(); \
-    }
-
-// For rounding ops with explicit ITERATIONS/USE_FP32 template params
-#define SFPU_ROUNDING_OP_KERNEL(NAME)                                                                        \
-    template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = false>                                   \
-    inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index, int vector_mode = (int)VectorMode::RC) {  \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                   \
-            ckernel::sfpu::_calculate_##NAME##_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode); \
-    }
-
-// For float32 rounding variants (USE_FP32 = true)
-#define SFPU_ROUNDING_OP_KERNEL_FLOAT32(NAME)                                                                         \
-    template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = true>                                             \
-    inline void llk_math_eltwise_unary_sfpu_##NAME##_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                            \
-            ckernel::sfpu::_calculate_##NAME##_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);          \
-    }
-
-// For truncation ops with no extra template params
-#define SFPU_TRUNC_OP_KERNEL(NAME)                                                                          \
-    template <bool APPROXIMATE>                                                                             \
-    inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                  \
-            ckernel::sfpu::_calculate_##NAME##_<APPROXIMATE>, dst_index, vector_mode);                      \
-    }
-
-// For float32 truncation variant (USE_FP32 = true)
-#define SFPU_TRUNC_OP_KERNEL_FLOAT32(NAME)                                                                            \
-    template <bool APPROXIMATE>                                                                                       \
-    inline void llk_math_eltwise_unary_sfpu_##NAME##_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                            \
-            ckernel::sfpu::_calculate_##NAME##_<APPROXIMATE, true>, dst_index, vector_mode);                          \
-    }
-
-// For round op with int decimals arg and custom callback
-#define SFPU_ROUND_WITH_DECIMALS_KERNEL(OP)                                                    \
-    template <bool APPROXIMATE>                                                                \
-    inline void llk_math_eltwise_unary_sfpu_##OP(                                              \
-        uint dst_index, int decimals, int vector_mode = (int)VectorMode::RC) {                 \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                     \
-            ckernel::sfpu::_calculate_##OP##_<APPROXIMATE>, dst_index, vector_mode, decimals); \
-    }
-
 // For unary ops that also need an _int32 variant
 #define SFPU_UNARY_INT32_KERNEL(OP)                                                                               \
     template <bool APPROXIMATE>                                                                                   \
@@ -106,15 +98,6 @@
         uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {         \
         llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                   \
             CALC_CB<APPROXIMATE, EXTRA_TEMPLATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
-    }
-
-// For ops where compute takes extra args, and no special init
-#define SFPU_UNARY_PARAMS_KERNEL_ONLY_COMPUTE(OP, MODE, EXTRA_ARG_DECL, EXTRA_ARG_PASS)          \
-    template <bool APPROXIMATE>                                                                  \
-    inline void llk_math_eltwise_unary_sfpu_##OP(                                                \
-        uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {               \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                       \
-            ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }
 
 // For ops with two implementations that select compute callback based on an enum argument
@@ -155,35 +138,19 @@
     }
 
 // For the int32 comparison variants
-#define SFPU_COMP_INT32_KERNEL(OP, TYPE)                                                                           \
-    template <bool APPROXIMATE>                                                                                    \
-    inline void llk_math_eltwise_unary_sfpu_unary_##OP##_int32(                                                    \
-        uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {                                      \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                         \
-            ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::TYPE>, dst_index, vector_mode, param0); \
-    }
+#define SFPU_COMP_INT32_KERNEL(OP, MODE, APPROXIMATE, DST_IDX, PARAM0) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                 \
+        ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::OP>, DST_IDX, (int)VectorMode::MODE, PARAM0);
 
 // For the int32 comparison variants with underscore in callback
-#define SFPU_COMP_INT32_KERNEL_UNDERSCORE(OP, TYPE)                                                                  \
-    template <bool APPROXIMATE>                                                                                      \
-    inline void llk_math_eltwise_unary_sfpu_unary_##OP##_int32(                                                      \
-        uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {                                        \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
-            ckernel::sfpu::_calculate_comp_unary_int_<APPROXIMATE, SfpuType::TYPE>, dst_index, vector_mode, param0); \
-    }
+#define SFPU_COMP_INT32_KERNEL_UNDERSCORE(OP, MODE, APPROXIMATE, DST_IDX, PARAM0) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                            \
+        ckernel::sfpu::_calculate_comp_unary_int_<APPROXIMATE, SfpuType::OP>, DST_IDX, (int)VectorMode::MODE, PARAM0);
 
-// For the "normal" comparison ops
-#define SFPU_COMP_KERNEL(OP)                                                                   \
-    template <bool APPROXIMATE>                                                                \
-    inline void llk_math_eltwise_unary_sfpu_unary_##OP##_init() {                              \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unary_##OP, APPROXIMATE>();                 \
-    }                                                                                          \
-    template <bool APPROXIMATE>                                                                \
-    inline void llk_math_eltwise_unary_sfpu_unary_##OP(                                        \
-        uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {                  \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                     \
-            ckernel::sfpu::calculate_unary_##OP<APPROXIMATE>, dst_index, vector_mode, param0); \
-    }
+// For the int32 comparison variants with underscores in callback(ge, le)
+#define SFPU_COMP_KERNEL(OP, MODE, APPROXIMATE, DST_IDX, PARAM0) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(           \
+        ckernel::sfpu::_calculate_comp_unary_<APPROXIMATE, SfpuType::OP>, DST_IDX, (int)VectorMode::MODE, PARAM0);
 
 #define SFPU_TOPK_LOCAL_SORT_KERNEL(OP)                                      \
     template <bool APPROXIMATE>                                              \
@@ -295,260 +262,87 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                      \
         ckernel::sfpu::calculate_##OP<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0)
 
+// For ops where the compute functor is not "calculate_<OP>", but an arbitrary function name (e.g., relu_min, relu_max,
+// etc.),and which take one extra runtime uint parameter
+#define SFPU_UNARY_ONE_PARAM_KERNEL_FN(FN, MODE, APPROXIMATE, DST_IDX, PARAM0) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                         \
+        ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0)
+
+// For ops with exactly two extra uint parameters (and no custom init callback)
+#define SFPU_UNARY_TWO_PARAM_KERNEL(OP, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                              \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1)
+
+// For ops with exactly three extra uint parameters (and no custom init callback)
+#define SFPU_UNARY_THREE_PARAM_KERNEL(OP, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1, PARAM2) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                        \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1, PARAM2)
+
+// For ops without extra uint parameter
+#define SFPU_UNARY_NO_PARAM_KERNEL(OP, MODE, APPROXIMATE, DST_IDX) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(             \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE)
+
+// For ops without extra uint parameter with type
+#define SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(OP, TYPE, MODE, APPROXIMATE, DST_IDX) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                             \
+        ckernel::sfpu::calculate_##OP<SfpuType::TYPE, APPROXIMATE>, DST_IDX, (int)VectorMode::MODE)
+
 // For unary ops with one extra uint parameter AND an additional template param (ITERATIONS)
-#define SFPU_UNARY_ONE_PARAM_KERNEL_ITER(OP, MODE, APPROXIMATE, ITER, DST_IDX, PARAM0) \
+#define SFPU_UNARY_ONE_PARAM_KERNEL_ITER(FN, MODE, APPROXIMATE, ITER, DST_IDX, PARAM0) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                 \
-        ckernel::sfpu::_calculate_##OP##_<APPROXIMATE, ITER>, DST_IDX, (int)VectorMode::MODE, PARAM0)
+        ckernel::sfpu::FN<APPROXIMATE, ITER>, DST_IDX, (int)VectorMode::MODE, PARAM0)
 
-// For ops needing an init with callback and compute with a required param0, RC mode fixed
-#define SFPU_INIT_AND_ONE_PARAM_RC_KERNEL(OP, INIT_CB)                                           \
-    template <bool APPROXIMATE>                                                                  \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                      \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>);       \
-    }                                                                                            \
-    template <bool APPROXIMATE>                                                                  \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, uint param0) {                  \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                       \
-            ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0); \
-    }
+// For kernels with two template params and an extra integer template param (e.g., 8).
+#define SFPU_THREE_TEMPLATE_PARAM_KERNEL(OP, APPROXIMATE, DST_ACCUM_MODE, DEFAULT_INT, DST_IDX, VECTOR_MODE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                       \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE, DST_ACCUM_MODE, DEFAULT_INT>, DST_IDX, VECTOR_MODE)
 
-// For ops that need a custom init callback but takes one extra init-parameter
-#define SFPU_INIT_ONE_PARAM_KERNEL(OP, INIT_CB, EXTRA_ARG_DECL, EXTRA_ARG_PASS)                            \
-    template <bool APPROXIMATE>                                                                            \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init(EXTRA_ARG_DECL) {                                  \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, EXTRA_ARG_PASS); \
-    }
+// For ops where compute takes extra args
+#define SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(OP, MODE, APPROXIMATE, DST_IDX, ARG0, ARG1) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                  \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, ARG0, ARG1);
 
-// Trig ops with exactly one dst_index argument and RC mode
-#define SFPU_TRIG_KERNEL(OP)                                                                                \
-    template <bool APPROXIMATE>                                                                             \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                                 \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>();                                      \
-    }                                                                                                       \
-    template <bool APPROXIMATE>                                                                             \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_op(uint dst_index) {                                     \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                  \
-            ckernel::sfpu::calculate_sfpu_trig<SfpuType::OP, APPROXIMATE>, dst_index, (int)VectorMode::RC); \
-    }
+// For ops with multiple template parameters and one runtime parameter (e.g., scale)
+#define SFPU_TEMPLATE_PARAMS_KERNEL(                                                                        \
+    OP, APPROXIMATE, FAST_APPROX, SCALE_EN, SKIP_POSITIVE_CHECK, ITERATIONS, DST_IDX, VECTOR_MODE, SCALE)   \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                      \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE, FAST_APPROX, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>, \
+        DST_IDX,                                                                                            \
+        VECTOR_MODE,                                                                                        \
+        SCALE)
 
-// Inverse-hyperbolic (acosh/asinh): single init + single compute
-#define SFPU_INVERSE_HYPERBOLIC_KERNEL(OP, ITER)                                                          \
-    /* init */                                                                                            \
-    template <bool APPROXIMATE>                                                                           \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                               \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(                                      \
-            ckernel::sfpu::_init_inverse_hyperbolic_<APPROXIMATE>);                                       \
-    }                                                                                                     \
-    /* compute */                                                                                         \
-    template <bool APPROXIMATE, int ITERATIONS = ITER>                                                    \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
-            ckernel::sfpu::_calculate_##OP##_<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);          \
-    }
+// For kernels with one template parameter and one extra runtime argument.
+#define SFPU_UNARY_ONE_PARAM_KERNEL_FN(FN, MODE, APPROXIMATE, DST_IDX, PARAM0) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                         \
+        ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0)
 
-#define SFPU_ATANH_KERNEL()                                                                                          \
-    template <bool APPROXIMATE>                                                                                      \
-    inline void llk_math_eltwise_unary_sfpu_atanh_init() {                                                           \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::atanh, APPROXIMATE>(ckernel::sfpu::_init_atanh_<APPROXIMATE>);    \
-    }                                                                                                                \
-    template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>                                        \
-    inline void llk_math_eltwise_unary_sfpu_atanh(uint dst_index, int vector_mode = (int)VectorMode::RC) {           \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
-            ckernel::sfpu::_calculate_atanh_<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode); \
-    }
+// For kernels whose functor takes one template parameter (e.g., <APPROXIMATE>)
+#define SFPU_ONE_PARAM_KERNEL(FN, APPROXIMATE, DST_IDX, VECTOR_MODE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, VECTOR_MODE)
 
-// For ops with exactly one dst_index and RC mode
-#define SFPU_SIMPLE_OP_KERNEL(OP)                                                        \
-    template <bool APPROXIMATE>                                                          \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                              \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>();                   \
-    }                                                                                    \
-    template <bool APPROXIMATE>                                                          \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_op(uint dst_index) {                  \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                               \
-            ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, (int)VectorMode::RC); \
-    }
+// For kernels whose functor takes two template parameters (e.g., <APPROXIMATE, ITER/USE_FP32>)
+#define SFPU_TWO_PARAM_KERNEL(FN, APPROXIMATE, T2, DST_IDX, VECTOR_MODE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE, T2>, DST_IDX, VECTOR_MODE)
 
-// For compute kernels named ..._op(uint dst_index), with fixed RC mode
-#define SFPU_OP_SUFFIX_KERNEL(OP)                                                                  \
-    template <bool APPROXIMATE>                                                                    \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                        \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(sfpu::OP##_init<APPROXIMATE>); \
-    }                                                                                              \
-    template <bool APPROXIMATE>                                                                    \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_op(uint dst_index) {                            \
-        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                           \
-            ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, (int)VectorMode::RC);           \
-    }
-// For erf and erfc which share one compute callback
-#define SFPU_ERF_ERFC_KERNEL(NAME, TYPE)                                                                          \
-    template <bool APPROXIMATE>                                                                                   \
-    inline void llk_math_eltwise_unary_sfpu_##NAME##_init() {                                                     \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::TYPE, APPROXIMATE>();                                          \
-    }                                                                                                             \
-    template <bool APPROXIMATE>                                                                                   \
-    inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index, int param0 /*= 0*/) {                          \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                        \
-            ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::TYPE, APPROXIMATE>, dst_index, (int)VectorMode::RC); \
-    }
+// For kernels whose functor takes two template parameters (e.g., <APPROXIMATE, ITER>) and one extra runtime param.
+#define SFPU_TWO_PARAM_KERNEL_ONE_RUNTIME(FN, APPROXIMATE, T2, DST_IDX, VECTOR_MODE, EXTRA) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE, T2>, DST_IDX, VECTOR_MODE, EXTRA)
 
-#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB)                                                                 \
-    template <bool APPROXIMATE, bool FAST_APPROX, uint32_t scale = 0x3F800000>                                 \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                                    \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, FAST_APPROX, scale>); \
-    }
+// For kernels whose functor takes three template parameters (e.g., <APPROXIMATE, ITER, USE_FP32>)
+#define SFPU_THREE_PARAM_KERNEL_ITER_FIRST(FN, APPROXIMATE, ITER, USE_FP32, DST_IDX, VECTOR_MODE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                            \
+        ckernel::sfpu::FN<APPROXIMATE, ITER, USE_FP32>, DST_IDX, VECTOR_MODE)
 
-#define SFPU_TEMPLATE_PARAMS_KERNEL(                                                                            \
-    OP,                                                                                                         \
-    MODE,                                                                                                       \
-    FAST_ARG_DECL,                                                                                              \
-    SCALE_ARG_DECL,                                                                                             \
-    SKIP_ARG_DECL,                                                                                              \
-    IT_ARG_DECL,                                                                                                \
-    FAST_ARG_PASS,                                                                                              \
-    SCALE_ARG_PASS,                                                                                             \
-    SKIP_ARG_PASS,                                                                                              \
-    IT_ARG_PASS)                                                                                                \
-    namespace ckernel {                                                                                         \
-    template <bool APPROXIMATE, bool FAST_APPROX, bool SCALE_EN, bool SKIP_POSITIVE_CHECK, int ITERATIONS>      \
-    inline void llk_math_eltwise_unary_sfpu_##OP(                                                               \
-        uint dst_index,                                                                                         \
-        int vector_mode = (int)VectorMode::MODE,                                                                \
-        IT_ARG_DECL param0 = ITERATIONS,                                                                        \
-        SCALE_ARG_DECL param1 = 0x3F80) {                                                                       \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                      \
-            ckernel::sfpu::calculate_##OP<APPROXIMATE, FAST_APPROX, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>, \
-            dst_index,                                                                                          \
-            vector_mode,                                                                                        \
-            IT_ARG_PASS,                                                                                        \
-            SCALE_ARG_PASS);                                                                                    \
-    }                                                                                                           \
-    }
+// For functors with <APPROXIMATE, USE_FP32, ITER>
+#define SFPU_THREE_PARAM_KERNEL_USEFP32_FIRST(FN, APPROXIMATE, USE_FP32, ITER, DST_IDX, VECTOR_MODE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                               \
+        ckernel::sfpu::FN<APPROXIMATE, USE_FP32, ITER>, DST_IDX, VECTOR_MODE)
 
-#define SFPU_INIT_PARAMS_KERNEL(OP, INIT_CB, EXTRA_ARG_DECL, EXTRA_ARG_PASS)                               \
-    template <bool APPROXIMATE>                                                                            \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init(EXTRA_ARG_DECL) {                                  \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, EXTRA_ARG_PASS); \
-    }
-
-// For a simple compute‐only kernel for ops whose sfpu::calculate_<OP> takes two template parameters: <APPROXIMATE,
-// LITERAL_ITERATIONS>
-#define SFPU_SIMPLE_TWO_PARAM_KERNEL_SUFFIX(OP, FN, ITER)                                                 \
-    template <bool APPROXIMATE>                                                                           \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
-            ckernel::sfpu::FN<APPROXIMATE, ITER>, dst_index, vector_mode);                                \
-    }
-
-// For a trivial no‐compute init for identity‐style ops
-#define SFPU_IDENTITY_INIT()                                               \
-    namespace ckernel {                                                    \
-    template <bool APPROXIMATE>                                            \
-    inline void llk_math_eltwise_unary_sfpu_identity_init() {              \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>(); \
-    }                                                                      \
-    }
-
-#define SFPU_INIT_KERNEL_NOARG(OP, INIT_CB)                                                    \
-    template <bool APPROXIMATE>                                                                \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                    \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>(INIT_CB<APPROXIMATE>); \
-    }
-
-#define SFPU_DIM_SWITCH_KERNEL(OP, ENUM, CALC0, MODE0, CALC1, MODE1)                   \
-    template <bool APPROXIMATE>                                                        \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, ENUM sum_int_dim) {   \
-        if (sum_int_dim == ENUM::SUM_COL) {                                            \
-            _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                         \
-                ckernel::sfpu::CALC0<APPROXIMATE>, dst_index, (int)VectorMode::MODE0); \
-        } else if (sum_int_dim == ENUM::SUM_ROW) {                                     \
-            _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                         \
-                ckernel::sfpu::CALC1<APPROXIMATE>, dst_index, (int)VectorMode::MODE1); \
-        }                                                                              \
-    }
-
-#define SFPU_ONE_PARAM_CONST_ITERS_KERNEL(OP, ITERS)                                              \
-    template <bool APPROXIMATE>                                                                   \
-    inline void llk_math_eltwise_unary_sfpu_##OP(                                                 \
-        uint dst_index, uint dst_offset, int iterations, int vector_mode = (int)VectorMode::RC) { \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                        \
-            ckernel::sfpu::OP<APPROXIMATE, ITERS>, dst_index, vector_mode, dst_offset);           \
-    }
-
-// For isinf / isposinf / isneginf / isnan / isfinite - they all share the same calculate_sfpu_isinf_isnan<...> callback
-#define SFPU_ISINF_ISNAN_KERNEL(NAME, TYPE)                                                                          \
-    template <bool APPROXIMATE>                                                                                      \
-    inline void llk_math_eltwise_unary_sfpu_##NAME##_init() {                                                        \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::TYPE, APPROXIMATE>();                                             \
-    }                                                                                                                \
-    template <bool APPROXIMATE>                                                                                      \
-    inline void llk_math_eltwise_unary_sfpu_##NAME(uint dst_index) {                                                 \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
-            ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::TYPE, APPROXIMATE>, dst_index, (int)VectorMode::RC); \
-    }
-
-// For logical_not_unary (float + int32 variants) which share one init and two custom callbacks
-#define SFPU_LOGICAL_NOT_NOTI_KERNEL(NAME, VT0, ET0, VT1, ET1)                          \
-    template <bool APPROXIMATE>                                                         \
-    inline void llk_math_eltwise_unary_sfpu_##NAME##_init() {                           \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::NAME, APPROXIMATE>();                \
-    }                                                                                   \
-    template <bool APPROXIMATE>                                                         \
-    inline void llk_math_eltwise_unary_sfpu_##NAME##_op(uint dst_index) {               \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                              \
-            ckernel::sfpu::calculate_##NAME<VT0, ET0>, dst_index, (int)VectorMode::RC); \
-    }                                                                                   \
-    template <bool APPROXIMATE>                                                         \
-    inline void llk_math_eltwise_unary_sfpu_##NAME##_op_int32(uint dst_index) {         \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                              \
-            ckernel::sfpu::calculate_##NAME<VT1, ET1>, dst_index, (int)VectorMode::RC); \
-    }
-
-// For a rand kernel needs both a custom init(seed) and a fixed-RC compute(from,scale)
-#define SFPU_RAND_KERNEL(OP, INIT_CB)                                                                 \
-    template <bool APPROXIMATE>                                                                       \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init(uint32_t seed = 0) {                          \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>(INIT_CB<APPROXIMATE>, seed);  \
-    }                                                                                                 \
-    template <bool APPROXIMATE>                                                                       \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint32_t dst_index, uint32_t from, uint32_t scale) { \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                            \
-            ckernel::sfpu::OP<APPROXIMATE>, dst_index, (int)VectorMode::RC, from, scale);             \
-    }
-
-// For ops with two template parameters <APPROXIMATE, is_fp32_dest_acc_en> and a fixed third template arg = 8
-#define SFPU_TEMPLATE_TWO_PARAM_KERNEL(OP, INIT_CB)                                                       \
-    template <bool APPROXIMATE>                                                                           \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                               \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>);                \
-    }                                                                                                     \
-    template <bool APPROXIMATE, bool is_fp32_dest_acc_en>                                                 \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, int vector_mode = (int)VectorMode::RC) { \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                \
-            ckernel::sfpu::calculate_##OP<APPROXIMATE, is_fp32_dest_acc_en, 8>, dst_index, vector_mode);  \
-    }
-
-// For cases where the OP name does NOT match the SfpuType and/or callback
-#define SFPU_UNARY_OP_INIT(OP, TYPE)                                     \
-    template <bool APPROXIMATE>                                          \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {              \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::TYPE, APPROXIMATE>(); \
-    }
-
-// For compute functions with custom callback (param0=0 default)
-#define SFPU_UNARY_OP_COMPUTE(OP, CB)                                                \
-    template <bool APPROXIMATE>                                                      \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, uint param0 = 0) {  \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                           \
-            ckernel::sfpu::CB<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0); \
-    }
-
-#define SFPU_RELU_KERNEL()                                                            \
-    template <bool APPROXIMATE>                                                       \
-    inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {                    \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                            \
-            ckernel::sfpu::relu_min<APPROXIMATE>, dst_index, (int)VectorMode::RC, 0); \
-    }
+// For kernels which takes two extra template parameters (e.g., <V, T>)
+#define SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(OP, APPROXIMATE, V, T, DST_IDX) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                        \
+        ckernel::sfpu::calculate_##OP<V, T>, DST_IDX, static_cast<int>(VectorMode::RC));
 
 // For a kernel with exactly two extra uint parameters (init and compute)
 #define SFPU_UNARY_TWO_PARAM_KERNEL(OP, MODE, INIT_CB, EXTRA1_DECL, EXTRA2_DECL, EXTRA1_PASS, EXTRA2_PASS)           \
@@ -563,19 +357,6 @@
         uint dst_index, EXTRA1_DECL, EXTRA2_DECL, int vector_mode = (int)VectorMode::MODE) {                         \
         _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA1_PASS, EXTRA2_PASS);           \
-    }
-
-#define SFPU_RSUB_KERNEL()                                                                             \
-    /* init */                                                                                         \
-    template <bool APPROXIMATE>                                                                        \
-    inline void llk_math_eltwise_unary_sfpu_rsub_init() {                                              \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>(sfpu::rsub_init<APPROXIMATE>); \
-    }                                                                                                  \
-    /* compute(dst, param0=0) */                                                                       \
-    template <bool APPROXIMATE>                                                                        \
-    inline void llk_math_eltwise_unary_sfpu_rsub(uint dst_index, uint param0 = 0) {                    \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                             \
-            ckernel::sfpu::calculate_rsub<APPROXIMATE, 8>, dst_index, (int)VectorMode::RC, param0);    \
     }
 
 // For ops where the compute callback takes an extra template parameter (e.g., bool flag)
@@ -603,19 +384,6 @@
         uint dst_index, int vector_mode = (int)VectorMode::MODE, EXTRA_ARG_DECL = EXTRA_ARG_DEFAULT) {               \
         _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                           \
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS);                     \
-    }
-
-// For ops with extra args, but default init (no callback)
-#define SFPU_UNARY_PARAMS_KERNEL_NO_INITCB(OP, MODE, EXTRA_ARG_DECL, EXTRA_ARG_PASS)             \
-    template <bool APPROXIMATE>                                                                  \
-    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                      \
-        llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>();                           \
-    }                                                                                            \
-    template <bool APPROXIMATE>                                                                  \
-    inline void llk_math_eltwise_unary_sfpu_##OP(                                                \
-        uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {               \
-        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                       \
-            ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }
 
 // For kernels that only have non-approximate (false) implementation

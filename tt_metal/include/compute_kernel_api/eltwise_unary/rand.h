@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_rand.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -29,14 +29,16 @@ namespace ckernel {
  * | from           | Random range lowerbound(inclusive)                                         | uint     | Any number                                            | True      | 
  * | scale          | Random scale rand float in range [from, from + scale]                      | uint     | Must be greater than 0                                | True      |
  */
- // clang-format on
+// clang-format on
 ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
-    MATH((llk_math_eltwise_unary_sfpu_rand<APPROX>(idst, from, scale)));
+    MATH((SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(rand, RC, APPROX, idst, from, scale)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rand_tile_init(uint32_t seed) { MATH((llk_math_eltwise_unary_sfpu_rand_init<APPROX>(seed))); }
+ALWI void rand_tile_init(uint32_t seed = 0) {
+    MATH((SFPU_ONE_PARAM_KERNEL_INIT(unused, sfpu::rand_init, APPROX, seed)));
+}
 
 }  // namespace ckernel

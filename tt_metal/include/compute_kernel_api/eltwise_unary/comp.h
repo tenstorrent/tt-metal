@@ -7,7 +7,6 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_math_eltwise_unary_sfpu_unary_comp.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -33,13 +32,13 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void unary_ne_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_ne<APPROX>(idst, param0)));
+    MATH((SFPU_UNARY_ONE_PARAM_KERNEL(unary_ne, RC, APPROX, idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_ne_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_ne_init<APPROX>())); }
+ALWI void unary_ne_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unary_ne, APPROX))); }
 
 // unary ne : if x != value --> 1, else 0
 // clang-format off
@@ -58,7 +57,7 @@ ALWI void unary_ne_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_ne_init
  */
 // clang-format on
 ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_ne_int32<APPROX>(idst, param0)));
+    SFPU_COMP_INT32_KERNEL(unary_ne, RC, APPROX, idst, param0);
 }
 
 // unary eq : if x == value --> 1.0, else 0.0
@@ -78,13 +77,13 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_eq_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_eq<APPROX>(idst, param0)));
+    MATH((SFPU_UNARY_ONE_PARAM_KERNEL(unary_eq, RC, APPROX, idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_eq_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_eq_init<APPROX>())); }
+ALWI void unary_eq_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unary_eq, APPROX))); }
 
 // unary eq : if x == value --> 1, else 0
 // clang-format off
@@ -103,7 +102,7 @@ ALWI void unary_eq_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_eq_init
  */
 // clang-format on
 ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_eq_int32<APPROX>(idst, param0)));
+    SFPU_COMP_INT32_KERNEL(unary_eq, RC, APPROX, idst, param0);
 }
 
 // unary gt : if x > value --> 1.0, else 0.0
@@ -123,13 +122,13 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_gt<APPROX>(idst, param0)));
+    MATH((SFPU_UNARY_ONE_PARAM_KERNEL(unary_gt, RC, APPROX, idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_gt_init<APPROX>())); }
+ALWI void unary_gt_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unary_gt, APPROX))); }
 
 // unary gt : if x > value --> 1, else 0
 // clang-format off
@@ -148,7 +147,7 @@ ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_gt_init
  */
 // clang-format on
 ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_gt_int32<APPROX>(idst, param0)));
+    SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_gt, RC, APPROX, idst, param0);
 }
 
 // unary ge : if x >= value --> 1.0, else 0.0
@@ -167,9 +166,7 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_ge_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_ge<APPROX>(idst, param0)));
-}
+ALWI void unary_ge_tile(uint32_t idst, uint32_t param0) { SFPU_COMP_KERNEL(unary_ge, RC, APPROX, idst, param0); }
 
 /**
  * Please refer to documentation for any_init.
@@ -193,7 +190,7 @@ ALWI void unary_ge_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_ge_init
  */
 // clang-format on
 ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_ge_int32<APPROX>(idst, param0)));
+    SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_ge, RC, APPROX, idst, param0);
 }
 
 // unary lt : if x < value --> 1.0, else 0.0
@@ -213,7 +210,7 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_lt<APPROX>(idst, param0)));
+    MATH((SFPU_UNARY_ONE_PARAM_KERNEL(unary_lt, RC, APPROX, idst, param0)));
 }
 
 // unary lt : if x < value --> 1, else 0
@@ -233,13 +230,13 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_lt_int32<APPROX>(idst, param0)));
+    SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_lt, RC, APPROX, idst, param0);
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_lt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_lt_init<APPROX>())); }
+ALWI void unary_lt_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unary_lt, APPROX))); }
 
 // unary le : if x <= value --> 1.0, else 0.0
 // clang-format off
@@ -257,9 +254,7 @@ ALWI void unary_lt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_lt_init
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_le<APPROX>(idst, param0)));
-}
+ALWI void unary_le_tile(uint32_t idst, uint32_t param0) { SFPU_COMP_KERNEL(unary_le, RC, APPROX, idst, param0); }
 
 // unary le : if x <= value --> 1, else 0
 // clang-format off
@@ -278,13 +273,13 @@ ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_le_int32<APPROX>(idst, param0)));
+    SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_le, RC, APPROX, idst, param0);
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_le_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_le_init<APPROX>())); }
+ALWI void unary_le_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unary_le, APPROX))); }
 
 // clang-format off
 /**

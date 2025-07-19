@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_exp.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -24,7 +24,7 @@ namespace ckernel {
  */
 template <bool approx = false, bool fast_and_approx = true, uint32_t scale = 0x3F800000>
 ALWI void exp_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_exponential_init<approx, fast_and_approx, scale>()));
+    MATH((SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, approx, fast_and_approx, scale)));
 }
 
 // clang-format off
@@ -57,9 +57,9 @@ template <
     bool scale_en = false,
     bool skip_positive_check = false,
     int iterations = 8>
-ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = 0x3F80) {
-    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx, scale_en, skip_positive_check, iterations>(
-        idst, vector_mode, iterations, scale)));
+ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    MATH((SFPU_TEMPLATE_PARAMS_KERNEL(
+        exponential, approx, fast_and_approx, scale_en, skip_positive_check, iterations, idst, vector_mode, scale)));
 }
 
 }  // namespace ckernel

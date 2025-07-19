@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_gelu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -20,7 +20,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_gelu_init<fast_and_approx>()));
+    MATH((SFPU_INIT_KERNEL_CALL(gelu, sfpu::gelu_init, fast_and_approx)));
 }
 
 // clang-format off
@@ -37,10 +37,12 @@ ALWI void gelu_tile_init() {
  * | tile_index       | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
  * | fast_and_approx  | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_gelu<fast_and_approx>(idst)));
+    MATH((SFPU_UNARY_NO_PARAM_KERNEL(gelu, RC, fast_and_approx, idst)));
 }
+
+// TODO: Add gelu_derivative
 
 }  // namespace ckernel
