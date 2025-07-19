@@ -152,20 +152,18 @@ class RMSNorm(LightweightModule):
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
         # AllGather stats
-        ag_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        dim = 3
-        ag_peristent_buffer_key = self.tt_ccl.create_ag_persistent_buffer_key(
-            tt_stats.shape, tt_stats.dtype, ag_memory_config, dim
-        )
         tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
-            persistent_output_buffer=self.tt_ccl.get_ag_persistent_buffer(ag_peristent_buffer_key),
-            dim=dim,
+            persistent_output_buffer=None,
+            dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
             topology=self.ccl_topology,
-            memory_config=ag_memory_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=self.tt_ccl.worker_sub_device_id,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
