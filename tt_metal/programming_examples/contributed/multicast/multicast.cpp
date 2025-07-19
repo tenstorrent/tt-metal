@@ -199,7 +199,7 @@ int main(int argc, char **argv) {
 
         ////////// COMPUTE KERNEL SETUP //////////
         vector<uint32_t> compute_kernel_args = {};
-        KernelHandle comp_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
             receiver_cores_logical,
@@ -207,9 +207,7 @@ int main(int argc, char **argv) {
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
-                .compile_args = compute_kernel_args
-            }
-        );
+                .compile_args = compute_kernel_args});
 
         ////////// SEMAPHORE SETUP //////////
         uint32_t sender = CreateSemaphore(program, all_cores_logical, 0);
@@ -220,8 +218,8 @@ int main(int argc, char **argv) {
         uint32_t dram_bank_id = 0;
         auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
         auto output_dram_buffer = MakeBufferBFP16(device, num_dests * num_tiles, false);
-        auto cb_src0 = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
-        auto cb_output = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
 
         ////////// IDENTITY MATRIX TILE SETUP //////////
         std::vector<bfloat16> identity_tile = create_identity_matrix(TILE_WIDTH, TILE_HEIGHT, TILE_WIDTH);

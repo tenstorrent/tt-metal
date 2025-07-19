@@ -34,7 +34,6 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
@@ -45,7 +44,7 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // intermediate buffers
 
@@ -54,49 +53,49 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     tt::tt_metal::CircularBufferConfig cb_im1_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im1_cb_index, cb_data_format}})
             .set_page_size(im1_cb_index, single_tile_size);
-    auto cb_im1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im1_config);
 
     // exp(2x)
     uint32_t im2_cb_index = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_im2_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im2_cb_index, cb_data_format}})
             .set_page_size(im2_cb_index, single_tile_size);
-    auto cb_im2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im2_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im2_config);
 
     // exp(2x) - 1
     uint32_t im3_cb_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_im3_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im3_cb_index, cb_data_format}})
             .set_page_size(im3_cb_index, single_tile_size);
-    auto cb_im3 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im3_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im3_config);
 
     // recip(exp(2x) + 1)
     uint32_t im4_cb_index = tt::CBIndex::c_5;
     tt::tt_metal::CircularBufferConfig cb_im4_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im4_cb_index, cb_data_format}})
             .set_page_size(im4_cb_index, single_tile_size);
-    auto cb_im4 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im4_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im4_config);
 
     // exp(2x) - 1 * recip(exp(2x) - 1)
     uint32_t im5_cb_index = tt::CBIndex::c_6;
     tt::tt_metal::CircularBufferConfig cb_im5_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im5_cb_index, cb_data_format}})
             .set_page_size(im5_cb_index, single_tile_size);
-    auto cb_im5 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im5_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im5_config);
 
     // output for x > 3.5
     uint32_t im6_cb_index = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig cb_im6_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im6_cb_index, cb_data_format}})
             .set_page_size(im6_cb_index, single_tile_size);
-    auto cb_im6 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im6_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im6_config);
 
     // output for x <= 3.5
     uint32_t im7_cb_index = tt::CBIndex::c_8;
     tt::tt_metal::CircularBufferConfig cb_im7_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im7_cb_index, cb_data_format}})
             .set_page_size(im7_cb_index, single_tile_size);
-    auto cb_im7 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im7_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im7_config);
 
     // output buffer
     uint32_t output_cb_index = tt::CBIndex::c_2;
@@ -105,7 +104,7 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
             .set_page_size(output_cb_index, single_tile_size_output);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
@@ -141,7 +140,7 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     std::map<std::string, std::string> unary_defines;
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         path,
         core_group_1,
@@ -160,7 +159,7 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
             1                            // per_core_block_size
         };
 
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             path,
             core_group_2,
@@ -213,7 +212,7 @@ void TanhAccurateProgramFactory::override_runtime_arguments(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
