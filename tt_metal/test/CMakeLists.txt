@@ -19,7 +19,12 @@ install(TARGETS tt-metalium-validation-smoke RUNTIME COMPONENT metalium-validati
 # Basic
 add_executable(tt-metalium-validation-basic)
 
-target_link_libraries(tt-metalium-validation-basic PRIVATE TT::Metalium::Test::Dispatch::Basic)
+target_link_libraries(
+    tt-metalium-validation-basic
+    PRIVATE
+        TT::Metalium::Test::API
+        TT::Metalium::Test::Dispatch::Basic
+)
 
 install(TARGETS tt-metalium-validation-basic RUNTIME COMPONENT metalium-validation)
 
