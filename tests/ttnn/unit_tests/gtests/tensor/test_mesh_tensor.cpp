@@ -110,7 +110,7 @@ TEST(MeshTensorHostTest, FromHostShards) {
         MeshShape(2));
 
     EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
-    EXPECT_EQ(tensor.storage_type(), StorageType::MULTI_DEVICE_HOST);
+    EXPECT_EQ(tensor.storage_type(), StorageType::HOST);
 
     auto tensors = get_device_tensors(tensor);
     ASSERT_THAT(tensors, SizeIs(2));
@@ -122,7 +122,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
         TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
-    Tensor input_tensor = allocate_tensor_on_mesh(tensor_spec, mesh_device_.get());
+    Tensor input_tensor = allocate_tensor_on_device(tensor_spec, mesh_device_.get());
 
     EXPECT_TRUE(input_tensor.is_allocated());
 
@@ -174,7 +174,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
 
     // Read the tensor back, and compare it with input data.
     Tensor output_host_tensor = tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);
-    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::HOST);
     EXPECT_EQ(output_host_tensor.tensor_spec().logical_shape(), shape);
 
     for (const auto& tensor : get_device_tensors(output_host_tensor)) {
@@ -276,7 +276,9 @@ TEST_F(MeshTensorTestT3K, CombineDeviceTensors) {
 
 struct MeshTensorWriteTestParams {
     ttnn::Shape shape;
-    bool use_pre_allocated_tensor = false;
+
+    // If true, uses pre-allocated tensor APIs (allocate_tensor_on_device/device + write_tensor).
+    bool use_pre_allocated_tensor_api = false;
 
     // Shape of the resulting shards.
     ttnn::Shape sharded_shape;
@@ -307,16 +309,16 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
-    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::MULTI_DEVICE_HOST);
+    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::HOST);
     EXPECT_EQ(input_host_tensor_sharded.distributed_tensor_config(), mapper->config());
     EXPECT_EQ(input_host_tensor_sharded.tensor_spec().logical_shape(), sharded_shape);
 
     std::vector<Tensor> input_host_shards = get_device_tensors(input_host_tensor_sharded);
 
     auto device_tensor = [&]() {
-        if (GetParam().use_pre_allocated_tensor) {
-            Tensor device_tensor = allocate_tensor_on_mesh(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
-            write_tensor(input_host_tensor_sharded, device_tensor);
+        if (GetParam().use_pre_allocated_tensor_api) {
+            Tensor device_tensor = allocate_tensor_on_device(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
+            write_tensor(input_host_tensor_sharded, device_tensor, /*blocking=*/false);
             return device_tensor;
         } else {
             return tensor_impl::to_device_mesh_tensor_wrapper(
@@ -330,8 +332,15 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     ASSERT_NE(device_storage, nullptr);
     EXPECT_THAT(device_storage->coords, ElementsAreArray(coord_matchers));
 
-    // Read the tensor back, and compare it with input data.
-    auto output_host_tensor = tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);
+    auto output_host_tensor = [&]() {
+        if (GetParam().use_pre_allocated_tensor_api) {
+            Tensor host_tensor = allocate_tensor_on_host(device_tensor.tensor_spec(), mesh_device_.get());
+            write_tensor(device_tensor, host_tensor, /*blocking=*/true);
+            return host_tensor;
+        } else {
+            return tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);
+        }
+    }();
     EXPECT_EQ(output_host_tensor.distributed_tensor_config(), mapper->config());
 
     std::vector<Tensor> output_host_shards = get_device_tensors(output_host_tensor);
@@ -403,9 +412,9 @@ auto get_mesh_tensor_write_test_params() {
 
     std::vector<MeshTensorWriteTestParams> params;
     for (auto param : base_params) {
-        param.use_pre_allocated_tensor = false;
+        param.use_pre_allocated_tensor_api = false;
         params.push_back(param);
-        param.use_pre_allocated_tensor = true;
+        param.use_pre_allocated_tensor_api = true;
         params.push_back(param);
     }
     return params;

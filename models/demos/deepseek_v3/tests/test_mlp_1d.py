@@ -1,4 +1,3 @@
-# models/demos/deepseek_v3/tests/test_mlp.py
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +15,7 @@ import ttnn
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
 from models.demos.deepseek_v3.tt.mlp_1d import MLP1D
+from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
 
@@ -41,14 +41,15 @@ def reference_model(hf_config):
     return DeepseekV3MLP(hf_config)
 
 
+mesh_device_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (1, 8)}.get(
+    os.environ.get("MESH_DEVICE"), (1, min(ttnn.get_num_devices(), 8))
+)
+
+
 # Unit Tests
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
+    [mesh_device_shape],
     indirect=True,
 )
 def test_convert_weights(reference_model, hf_config, temp_dir, mesh_device):
@@ -70,11 +71,14 @@ def test_convert_weights(reference_model, hf_config, temp_dir, mesh_device):
     assert Path(weight_config["w3"]["input_tensor_b"]).exists()
 
     # Load and verify a weight
-    w1_ttnn = ttnn.load_tensor(weight_config["w1"]["input_tensor_b"])
-    w1_torch = ttnn.to_torch(w1_ttnn)
+    w1_ttnn = ttnn.load_tensor(weight_config["w1"]["input_tensor_b"], device=mesh_device)
+    w1_torch = ttnn.to_torch(
+        w1_ttnn,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+    )
 
     # Weight should be transposed from PyTorch format
-    expected_shape = (hf_config.hidden_size, hf_config.intermediate_size // mesh_device.get_num_devices())
+    expected_shape = (hf_config.hidden_size, hf_config.intermediate_size)
     assert w1_torch.shape[-2:] == expected_shape
 
     # Verify the values match (accounting for transpose and bfloat8 conversion)
@@ -88,11 +92,7 @@ def test_convert_weights(reference_model, hf_config, temp_dir, mesh_device):
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
+    [mesh_device_shape],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -120,14 +120,17 @@ def test_forward_pass(
     # Setup: Convert weights and get weight_config
     weight_config = MLP1D.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
 
-    # Generate appropriate configs
-    model_prefill_config = MLP1D.prefill_model_config(hf_config, mesh_device)
-    model_decode_config = MLP1D.decode_model_config(hf_config, mesh_device)
+    # Generate appropriate config
+    if mode == "prefill":
+        model_config = MLP1D.prefill_model_config(hf_config, mesh_device)
+    else:
+        model_config = MLP1D.decode_model_config(hf_config, mesh_device)
+
+    # Create a new model state
+    model_state = MLP1D.create_state(hf_config, mesh_device=mesh_device)
 
     # Create RunConfig using both weight_config and model_config
-    run_prefill_config, run_decode_config = MLP1D.run_config(
-        model_prefill_config, model_decode_config, weight_config, mesh_device
-    )
+    run_config = create_run_config(model_config, weight_config, model_state)
 
     # Create input tensor
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
@@ -147,13 +150,13 @@ def test_forward_pass(
 
     # TTNN forward pass
     if mode == "prefill":
-        tt_input = ttnn.to_memory_config(tt_input, run_prefill_config["input_memory_config"])
-        tt_output = MLP1D.forward_prefill(tt_input, run_prefill_config)
-        expected_output_memory_config = run_prefill_config["output_memory_config"]
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+        tt_output = MLP1D.forward_prefill(tt_input, run_config)
+        expected_output_memory_config = run_config["output_memory_config"]
     else:
-        tt_input = ttnn.to_memory_config(tt_input, run_decode_config["input_memory_config"])
-        tt_output = MLP1D.forward_decode(tt_input, run_decode_config)
-        expected_output_memory_config = run_decode_config["output_memory_config"]
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+        tt_output = MLP1D.forward_decode(tt_input, run_config)
+        expected_output_memory_config = run_config["output_memory_config"]
 
     # Verify output memory config matches expected
     actual_output_memory_config = tt_output.memory_config()
@@ -162,7 +165,10 @@ def test_forward_pass(
     ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
     # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+    )
 
     # Compare outputs
     pcc_required = 0.98  # Slightly lower due to bfloat conversions

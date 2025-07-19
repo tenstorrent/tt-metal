@@ -166,6 +166,8 @@ BufferDistributionSpec::BufferDistributionSpec(
     if (tensor_shape_in_pages_.volume() != 0) {
         TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
     }
+
+    init_precomputed_data();
 }
 
 std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
@@ -200,22 +202,9 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
         trimmed_core_grid, trimmed_core_grid.size(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
 }
 
-size_t BufferDistributionSpec::num_shards() const {
-    if (tensor_shape_in_pages_.volume() == 0) {
-        return 0;
-    }
-    size_t num_shards = 1;
-    for (size_t i = 0; i < tensor_shape_in_pages_.size(); i++) {
-        num_shards *= (tensor_shape_in_pages_[i] + shard_shape_in_pages_[i] - 1) / shard_shape_in_pages_[i];
-    }
-    return num_shards;
-}
+size_t BufferDistributionSpec::num_shards() const { return num_shards_; }
 
 size_t BufferDistributionSpec::num_cores_with_data() const { return std::min(num_cores(), num_shards()); }
-
-std::vector<CoreCoord> BufferDistributionSpec::get_cores_with_data() const {
-    return std::vector<CoreCoord>(cores_.begin(), cores_.begin() + num_cores_with_data());
-}
 
 size_t BufferDistributionSpec::max_num_shards_per_core() const {
     if (cores_.size() == 0) {
@@ -224,40 +213,65 @@ size_t BufferDistributionSpec::max_num_shards_per_core() const {
     return (num_shards() + cores_.size() - 1) / cores_.size();
 }
 
-size_t BufferDistributionSpec::max_num_dev_pages_per_core() const {
-    return max_num_shards_per_core() * shard_shape_in_pages_.volume();
-}
+size_t BufferDistributionSpec::max_num_dev_pages_per_core() const { return max_num_shards_per_core() * shard_volume_; }
 
 size_t BufferDistributionSpec::num_shards_per_core(size_t core_idx) const {
-    auto num_shards = this->num_shards();
-    return num_shards / num_cores() + (core_idx < num_shards % num_cores() ? 1 : 0);
+    return num_shards() / num_cores() + (core_idx < num_shards() % num_cores() ? 1 : 0);
 }
 
 size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
-    return num_shards_per_core(core_idx) * shard_shape_in_pages_.volume();
+    return num_shards_per_core(core_idx) * shard_volume_;
 }
 
-std::pair<BufferDistributionSpec::CoreGroup, BufferDistributionSpec::CoreGroup>
-BufferDistributionSpec::get_core_groups_by_num_shards() const {
-    auto num_shards = this->num_shards();
-    if (num_shards == 0) {
-        return {CoreGroup{}, CoreGroup{}};
-    }
-
-    auto num_cores_with_more_shards = num_shards % num_cores();
-    if (num_cores_with_more_shards == 0) {
-        return {CoreGroup{num_shards / num_cores(), cores_}, CoreGroup{}};
-    }
-
-    std::vector<CoreCoord> cores_with_more_shards(cores_.begin(), cores_.begin() + num_cores_with_more_shards);
-    std::vector<CoreCoord> cores_with_less_shards;
-    if (num_shards / num_cores() != 0) {
-        cores_with_less_shards = std::vector<CoreCoord>(cores_.begin() + num_cores_with_more_shards, cores_.end());
-    }
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
+BufferDistributionSpec::core_groups_tuple() const {
     return {
-        CoreGroup{num_shards / num_cores() + 1, std::move(cores_with_more_shards)},
-        CoreGroup{num_shards / num_cores(), std::move(cores_with_less_shards)},
+        core_groups_.cores_with_data.num_cores(),
+        core_groups_.cores_with_data,
+        core_groups_.cores_in_group_1,
+        core_groups_.cores_in_group_2,
+        core_groups_.num_shards_per_core_in_group_1,
+        core_groups_.num_shards_per_core_in_group_2,
     };
+}
+
+void BufferDistributionSpec::init_precomputed_data() {
+    shard_volume_ = shard_shape_in_pages_.volume();
+    if (tensor_shape_in_pages_.volume() != 0) {
+        num_shards_ = 1;
+        for (size_t i = 0; i < tensor_shape_in_pages_.size(); i++) {
+            num_shards_ *= (tensor_shape_in_pages_[i] + shard_shape_in_pages_[i] - 1) / shard_shape_in_pages_[i];
+        }
+    }
+
+    cores_with_data_ = std::vector<CoreCoord>(cores_.begin(), cores_.begin() + num_cores_with_data());
+
+    if (num_shards() != 0) {
+        auto cores_with_data = CoreRangeSet(cores_with_data_);
+
+        auto num_cores_with_more_shards = num_shards() % num_cores();
+        if (num_cores_with_more_shards == 0) {
+            core_groups_ = CoreGroups{
+                .cores_with_data = cores_with_data,
+                .cores_in_group_1 = std::move(cores_with_data),
+                .num_shards_per_core_in_group_1 = num_shards() / num_cores(),
+            };
+        } else {
+            std::vector<CoreCoord> cores_with_more_shards(cores_.begin(), cores_.begin() + num_cores_with_more_shards);
+            std::vector<CoreCoord> cores_with_less_shards;
+            if (num_shards() / num_cores() != 0) {
+                cores_with_less_shards =
+                    std::vector<CoreCoord>(cores_.begin() + num_cores_with_more_shards, cores_.end());
+            }
+            core_groups_ = CoreGroups{
+                .cores_with_data = std::move(cores_with_data),
+                .cores_in_group_1 = CoreRangeSet(cores_with_more_shards),
+                .cores_in_group_2 = CoreRangeSet(cores_with_less_shards),
+                .num_shards_per_core_in_group_1 = num_shards() / num_cores() + 1,
+                .num_shards_per_core_in_group_2 = num_shards() / num_cores(),
+            };
+        }
+    }
 }
 
 namespace detail {
@@ -277,7 +291,6 @@ UncompressedBufferPageMapping compute_page_mapping(
 
     size_t num_shards_per_core = (num_shards + cores.size() - 1) / cores.size();
     size_t shard_pages = shard_shape.volume();
-    size_t dev_pages = cores.size() * num_shards_per_core * shard_pages;
 
     page_mapping.core_host_page_indices.resize(cores.size());
     for (size_t i = 0; i < cores.size(); i++) {

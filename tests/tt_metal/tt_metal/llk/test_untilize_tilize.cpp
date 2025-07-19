@@ -13,15 +13,12 @@
 #include <bit>
 #include <cctype>
 #include <functional>
-#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -158,7 +155,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    string reader_kernel_path;
+    std::string reader_kernel_path;
     if (test_config.untilize_type.has_value()) {
         reader_kernel_path = "tt_metal/kernels/dataflow/reader_unary.cpp";
     } else if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
@@ -186,9 +183,9 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         uint(test_config.num_tiles_c)   // per_core_block_tile_cnt
     };
 
-    string compute_kernel;
+    std::string compute_kernel;
     if (test_config.untilize_type.has_value()) {
-        string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
+        std::string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
             return std::tolower(c);
         });
@@ -204,7 +201,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         log_fatal(tt::LogTest, "Invalid untilize and tilize type value");
     }
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
 
     if (test_config.short_init) {
         defines["SHORT_INIT"] = "1";

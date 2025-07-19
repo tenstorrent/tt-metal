@@ -2,11 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import sys
+
 import torch
 import torch.nn as nn
 import ttnn
+from models.experimental.yolov6l.reference.yolov6l_utils import fuse_model
 from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
 from models.experimental.yolov6l.reference.yolov6l import Model
+
+sys.path.append("models/experimental/yolov6l/reference/")
 
 
 def generate_anchors(
@@ -69,11 +75,11 @@ def create_yolov6l_model_parameters(model: Model, torch_input: torch.Tensor, dev
     )
     parameters["model_args"] = model
 
-    feats = [(80, 60), (40, 30), (20, 15)]
+    feats = [(80, 80), (40, 40), (20, 20)]
     strides = torch.tensor([8.0, 16.0, 32.0])
     anchor_points, stride_tensor = generate_anchors(device, feats, strides)
 
-    ones_tensor = torch.ones((1, 6300, 1), dtype=torch.float32)
+    ones_tensor = torch.ones((1, 8400, 1), dtype=torch.float32)
     ones_tensor = ttnn.from_torch(ones_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     if "detect" in parameters:
         parameters.detect["anchors"] = anchor_points
@@ -95,13 +101,13 @@ def create_yolov6l_model_parameters_detect(model: Model, torch_input: torch.Tens
     )
     parameters["model_args"] = model
 
-    feats = [(80, 60), (40, 30), (20, 15)]
+    feats = [(80, 80), (40, 40), (20, 20)]
     strides = torch.tensor([8.0, 16.0, 32.0])
     anchor_points, stride_tensor = generate_anchors(device, feats, strides)
     parameters["anchors"] = anchor_points
     parameters["strides"] = stride_tensor
 
-    ones_tensor = torch.ones((1, 6300, 1), dtype=torch.float32)
+    ones_tensor = torch.ones((1, 8400, 1), dtype=torch.float32)
     ones_tensor = ttnn.from_torch(ones_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     parameters["ones_tensor"] = ones_tensor
     return parameters
@@ -165,3 +171,14 @@ def create_yolov6l_model_parameters_sppf(model: Model, torch_input: torch.Tensor
     )
     parameters["model_args"] = model
     return parameters
+
+
+def load_torch_model_yolov6l():
+    weights = "tests/ttnn/integration_tests/yolov6l/yolov6l.pt"
+    if not os.path.exists(weights):
+        os.system("bash models/experimental/yolov6l/weights_download.sh")
+
+    ckpt = torch.load(weights, map_location=torch.device("cpu"), weights_only=False)
+    model = ckpt["ema" if ckpt.get("ema") else "model"].float()
+    model = fuse_model(model).eval()
+    return model

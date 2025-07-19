@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
-
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -14,7 +13,8 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import NORM_CATEGORIES, round_to_nearest_tile_size
+from models.demos.deepseek_v3.utils.config_helpers import NORM_CATEGORIES
+from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
 
@@ -107,13 +107,16 @@ def test_rmsnorm_forward_pass(
     )
 
     # Generate appropriate config
-    model_decode_config = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category=norm_category)
-    model_prefill_config = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category=norm_category)
+    if mode == "prefill":
+        model_config = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category=norm_category)
+    else:
+        model_config = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category=norm_category)
+
+    # Create a new model state
+    model_state = RMSNorm.create_state(hf_config, mesh_device=mesh_device)
 
     # Create RunConfig using both weight_config and model_config
-    run_prefill_config, run_decode_config = RMSNorm.run_config(
-        model_prefill_config, model_decode_config, weight_config, mesh_device
-    )
+    run_config = create_run_config(model_config, weight_config, model_state)
 
     # Determine hidden_size based on norm_category
     hidden_size = get_hidden_size_for_norm_category(hf_config, norm_category)
@@ -138,7 +141,7 @@ def test_rmsnorm_forward_pass(
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         sharded_memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                round_to_nearest_tile_size(tt_input.shape[0] * tt_input.shape[1] * tt_input.shape[2]),
+                ttnn.core.roundup(tt_input.shape[0] * tt_input.shape[1] * tt_input.shape[2], ttnn.TILE_SIZE),
                 tt_input.shape[3] // shard_core_grid.num_cores,
             ),
             core_grid=shard_core_grid,
@@ -150,9 +153,9 @@ def test_rmsnorm_forward_pass(
 
     # TTNN forward pass
     if mode == "decode":
-        tt_output = RMSNorm.forward_decode(tt_input, run_decode_config, mesh_device)
+        tt_output = RMSNorm.forward_decode(tt_input, run_config)
     else:
-        tt_output = RMSNorm.forward_prefill(tt_input, run_prefill_config, mesh_device)
+        tt_output = RMSNorm.forward_prefill(tt_input, run_config)
 
     if is_decoder_norm:
         tt_output_torch = ttnn.to_torch(

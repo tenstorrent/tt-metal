@@ -154,12 +154,13 @@ void kernel_main() {
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
     }
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
     noc_async_write_barrier();
