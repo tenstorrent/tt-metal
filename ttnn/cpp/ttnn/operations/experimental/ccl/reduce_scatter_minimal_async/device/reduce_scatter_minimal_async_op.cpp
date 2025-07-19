@@ -125,7 +125,7 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     return {
         TensorSpec(
             inter_shape,
-            TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config)),
+            TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), input_tensor.memory_config())),
         TensorSpec(
             output_shape,
             TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config)),

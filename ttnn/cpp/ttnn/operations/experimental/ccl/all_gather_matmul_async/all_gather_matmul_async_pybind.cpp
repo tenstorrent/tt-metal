@@ -30,7 +30,7 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
-               ttnn::Tensor& persistent_output_buffer,
+               const std::optional<ttnn::Tensor>& persistent_output_buffer,
                const uint32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                const CoreCoord all_gather_core_grid_offset,
