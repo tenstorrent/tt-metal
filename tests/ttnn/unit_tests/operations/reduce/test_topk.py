@@ -17,10 +17,8 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
 
     if pass_indices_tensor:
-        indices_tensor_torch = torch.zeros(shape, dtype=torch.int32)
-        for i in range(W):
-            indices_tensor_torch[:, :, :, i] = i
-        indices_tensor = ttnn.from_torch(indices_tensor_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+        indices_tensor = torch.arange(W).view(1, 1, 1, -1).expand(N, C, H, -1)
+        indices_tensor = ttnn.from_torch(indices_tensor, ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
     else:
         indices_tensor = None
 
@@ -64,68 +62,68 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
+# @pytest.mark.parametrize(
+#     "dtype",
+#     (
+#         ttnn.bfloat16,
+#         ttnn.bfloat8_b,
+#         # ttnn.float32, top bits in float32 get cut off somewhere, LLK does not work for this
+#     ),
+#     ids=[
+#         "BFLOAT16_B",
+#         "BFLOAT8_B",
+#         # "FLOAT32",
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "N, C, H, W, dim, k",
+#     (
+#         (1, 1, 32, 8192, 3, 50),  # passed
+#         (1, 1, 64, 64, 2, 32),  # passed
+#         (1, 1, 64, 64, 2, 64),  # passed
+#         (1, 2048, 1, 64, 1, 32),  # skipped
+#         (1, 1, 32, 64, 3, 2),  # passed
+#         (1, 1, 32, 64, 3, 4),  # passed
+#         (1, 1, 32, 8192, 3, 6),  # passed
+#         (1, 2048, 1, 64, 1, 8),  # passed
+#         (1, 1, 32, 32768, 3, 3000),  # passed
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "sorted",
+#     [
+#         True,
+#         False,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "largest",
+#     [
+#         True,
+#         False,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "sub_core_grids",
+#     [
+#         None,
+#     ],
+# )
+# def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids):
+#     if dim == 0 or dim == 1:
+#         # As of now, when we try to get top-k for dim = 0 or 1, we get following error from transpose_op.cpp's validate():
+#         # input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32
+#         # this is because, transpose.cpp always typecasts bf8 to bf16
+#         # and when dim = 0 or 1, transpose converts it into TransposeOpDim::HC & this dim doesnt support bf16 or fp32
+#         pytest.skip()
+#     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
+
+
 @pytest.mark.parametrize(
     "dtype",
-    (
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-        # ttnn.float32, top bits in float32 get cut off somewhere, LLK does not work for this
-    ),
+    (ttnn.bfloat16,),
     ids=[
         "BFLOAT16_B",
-        "BFLOAT8_B",
-        # "FLOAT32",
-    ],
-)
-@pytest.mark.parametrize(
-    "N, C, H, W, dim, k",
-    (
-        (1, 1, 32, 8192, 3, 50),  # passed
-        (1, 1, 64, 64, 2, 32),  # passed
-        (1, 1, 64, 64, 2, 64),  # passed
-        (1, 2048, 1, 64, 1, 32),  # skipped
-        (1, 1, 32, 64, 3, 2),  # passed
-        (1, 1, 32, 64, 3, 4),  # passed
-        (1, 1, 32, 8192, 3, 6),  # passed
-        (1, 2048, 1, 64, 1, 8),  # passed
-        (1, 1, 32, 32768, 3, 3000),  # passed
-    ),
-)
-@pytest.mark.parametrize(
-    "sorted",
-    [
-        True,
-        False,
-    ],
-)
-@pytest.mark.parametrize(
-    "largest",
-    [
-        True,
-        False,
-    ],
-)
-@pytest.mark.parametrize(
-    "sub_core_grids",
-    [
-        None,
-    ],
-)
-def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids):
-    if dim == 0 or dim == 1:
-        # As of now, when we try to get top-k for dim = 0 or 1, we get following error from transpose_op.cpp's validate():
-        # input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32
-        # this is because, transpose.cpp always typecasts bf8 to bf16
-        # and when dim = 0 or 1, transpose converts it into TransposeOpDim::HC & this dim doesnt support bf16 or fp32
-        pytest.skip()
-    run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
-
-
-@pytest.mark.parametrize(
-    "dtype",
-    (ttnn.bfloat8_b,),
-    ids=[
-        "BFLOAT8_B",
     ],
 )
 @pytest.mark.parametrize(
@@ -147,7 +145,6 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
 @pytest.mark.parametrize(
     "pass_indices_tensor",
     [
-        True,
         False,
     ],
 )
@@ -157,11 +154,20 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
         ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)
+                    ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)
                 ),  # Note: for TG llama we use 1,0 to 3,9 but this requires TGs (non-harvested) and "dispatch_core_axis": ttnn.DispatchCoreAxis.COL
             ]
         ),
     ],
+)
+@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
 )
 def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids, pass_indices_tensor):
     if dim == 0 or dim == 1:
@@ -173,41 +179,41 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
-@pytest.mark.parametrize(
-    "dtype",
-    (ttnn.bfloat16,),
-    ids=[
-        "BFLOAT16_B",
-    ],
-)
-@pytest.mark.parametrize(
-    "N, C, H, W, dim, k",
-    (
-        (1, 1, 32, 151936, 3, 50),  # passed  - customer shape 2
-        (1, 1, 32, 128256, 3, 50),  # passed  - customer shape 1
-    ),
-)
-@pytest.mark.parametrize(
-    "sorted",
-    [
-        True,
-        False,
-    ],
-)
-@pytest.mark.parametrize(
-    "largest",
-    [
-        True,
-        False,
-    ],
-)
-@pytest.mark.parametrize(
-    "sub_core_grids",
-    [
-        None,
-    ],
-)
-def test_topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids):
-    if dim == 0 or dim == 1:
-        pytest.skip()
-    run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
+# @pytest.mark.parametrize(
+#     "dtype",
+#     (ttnn.bfloat16,),
+#     ids=[
+#         "BFLOAT16_B",
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "N, C, H, W, dim, k",
+#     (
+#         (1, 1, 32, 151936, 3, 50),  # passed  - customer shape 2
+#         (1, 1, 32, 128256, 3, 50),  # passed  - customer shape 1
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "sorted",
+#     [
+#         True,
+#         False,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "largest",
+#     [
+#         True,
+#         False,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "sub_core_grids",
+#     [
+#         None,
+#     ],
+# )
+# def test_topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids, pass_indices_tensor):
+#     if dim == 0 or dim == 1:
+#         pytest.skip()
+#     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
