@@ -254,12 +254,22 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     distributed::MeshCommandQueue& cq,
     const TestBufferConfig& config) {
+    std::cout << "entering function" << std::endl;
+
+    std::cout << "about to get device" << std::endl;
+
+    auto device = mesh_device->get_devices()[0];
     // Clear out command queue
     uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(mesh_device->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+
+    std::cout << "got channel" << std::endl;
+
     chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mesh_device->id());
-    auto device = mesh_device->get_devices()[0];
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+
+    std::cout << "got here" << std::endl;
+
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     uint32_t cq_start =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -268,12 +278,15 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
 
     std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
 
+    std::cout << "got ts here" << std::endl;
     tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
         cq_zeros.data(),
         (cq_size - cq_start),
         get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
         mmio_device_id,
         channel);
+
+    std::cout << "finished setup" << std::endl;
 
     for (const bool cq_write : {true, false}) {
         for (const bool cq_read : {true, false}) {
@@ -314,9 +327,9 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             } else {
                 WriteToUnitMeshBuffer(mesh_device, config, src, bufa);
                 if (config.buftype == BufferType::DRAM) {
-                    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(mesh_device->id());
+                    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
                 } else {
-                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->id());
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
                 }
             }
 
@@ -461,9 +474,9 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 } else {
                     detail::WriteToBuffer(*slow_dispatch_buffer, src);
                     if (buftype == BufferType::DRAM) {
-                        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(mesh_device->id());
+                        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
                     } else {
-                        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->id());
+                        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
                     }
                 }
 
@@ -629,14 +642,15 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTransf
     std::cout << "beginning TestPageLargerThanAndUnalignedToTransferPage" << std::endl;
     constexpr uint32_t num_round_robins = 2;
     for (const auto& mesh_device : devices_) {
-        std::cout << "iteration: " << num_round_robins << std::endl;
+        std::cout << "iteration: bruh" << std::endl;
         TestBufferConfig config = {
             .num_pages = num_round_robins * (mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = DispatchSettings::TRANSFER_PAGE_SIZE + 32,
             .buftype = BufferType::DRAM};
+        std::cout << "created config" << std::endl;
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
-        std::cout << "end of iteration: " << num_round_robins << std::endl;
+        std::cout << "end of iteration: bruh" << std::endl;
     }
 }
 
