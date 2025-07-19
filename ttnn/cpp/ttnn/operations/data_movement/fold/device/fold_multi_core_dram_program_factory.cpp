@@ -51,21 +51,23 @@ static Tensor create_fold_mapping_table(
     std::vector<uint32_t> config_vector(total_entries, 0);
     uint32_t entry_idx = 0;
 
-    // Iterate over output dimensions and map back to input
     for (uint32_t b = 0; b < batch_size; b++) {
+        const uint32_t b_input_offset = b * input_hw;
+        const uint32_t b_output_base = b * output_height;
+
         for (uint32_t oh = 0; oh < output_height; oh++) {
+            const uint32_t h_base = oh * stride_h;
+            const uint32_t dst_row_base = (b_output_base + oh) * output_width;
+
             for (uint32_t ow = 0; ow < output_width; ow++) {
-                uint32_t dst_row = (b * output_height + oh) * output_width + ow;
-                uint32_t w = ow * stride_w;
+                const uint32_t dst_row = dst_row_base + ow;
+                const uint32_t w = ow * stride_w;
+                const uint32_t dst_base_index = dst_row * patch_size;
+                const uint32_t src_base_index = b_input_offset + h_base * input_width + w;
                 for (uint32_t kh = 0; kh < stride_h; kh++) {
-                    // Calculate destination index in output tensor
-                    uint32_t dst_col = kh * stride_w;
-                    uint32_t dst_index = dst_row * patch_size + dst_col;
+                    const uint32_t src_index = src_base_index + kh * input_width;
+                    const uint32_t dst_index = dst_base_index + kh * stride_w;
 
-                    // Calculate corresponding input position
-                    uint32_t h = oh * stride_h + kh;
-
-                    uint32_t src_index = b * input_hw + h * input_width + w;
                     config_vector[entry_idx++] = src_index;
                     config_vector[entry_idx++] = dst_index;
                 }
