@@ -129,7 +129,7 @@ std::vector<TensorSpec> TopK::compute_output_specs(
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensors.at(0).logical_shape();
     output_shape[-1] = this->k;
-    ttnn::Shape input_shape = input_tensors.at(0).get_padded_shape();
+    ttnn::Shape input_shape = input_tensors.at(0).padded_shape();
     bool uint16_output = (input_shape[this->dim] < 65536);
 
     auto values_spec =
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks TopK::create_program(
     bool multicore_supported = true;
     multicore_supported &= (input_tensor.padded_shape()[dim] >= topk::constants::multi_core_min_width);
 
-    ttnn::Shape input_shape = input_tensors.at(0).get_padded_shape();
+    ttnn::Shape input_shape = input_tensors.at(0).padded_shape();
     bool uint16_output = (input_shape[this->dim] < 65536);
     multicore_supported &= uint16_output;    // for now multicore does not support uint32 output, so if uint16 is not
                                              // supported, we default to single core

@@ -85,6 +85,8 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
+        } else if (num_devices_ == 4) {
+            return MeshShape{1, 4};
         } else {
             return MeshShape{2, 4};
         }
@@ -100,10 +102,22 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
-        if (!(num_devices_ >= 8 &&
-              (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
-            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
-        }
+        switch (arch_) {
+            case tt::ARCH::WORMHOLE_B0:
+                if (!(num_devices_ >= 8 && (tt::tt_metal::GetNumPCIeDevices() == 4 ||
+                                            tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
+                    TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+                }
+                break;
+
+            case tt::ARCH::BLACKHOLE:
+                if (num_devices_ != 4) {
+                    TT_THROW("This suite can only be run on LLMBox");
+                }
+                break;
+
+            default: TT_THROW("Only Wormhole or Blackhole devices are supported in this test suite");
+        };
     }
 
 public:
@@ -132,7 +146,8 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
+        const auto& physical_device_ids =
+            extract_locals(SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape).values());
         physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
 
         std::vector<IDevice*> devices = {};
@@ -201,7 +216,6 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
         device_open = true;
