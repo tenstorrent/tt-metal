@@ -19,6 +19,9 @@ class ResetUtil:
         if arch not in ["grayskull", "wormhole_b0", "blackhole"]:
             raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
         if self.command is not None:
+            command_parts = self.command.split()
+            self.command = command_parts[0]
+            self.args = command_parts[1:]
             return
 
         self.smi_options = [
