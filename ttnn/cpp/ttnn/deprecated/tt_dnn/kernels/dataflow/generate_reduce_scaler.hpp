@@ -18,7 +18,7 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     // DPRINT << " zeros_noc_addr: " << zeros_noc_addr << ENDL();
     uint32_t write_addr = get_write_ptr(cb_id);
-    DPRINT << " scaler write_addr: " << write_addr << ENDL();
+    // DPRINT << " scaler write_addr: " << write_addr << ENDL();
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
 
     // Fill tile with zeros
@@ -40,19 +40,19 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
         }
     }
 
-    DPRINT << " cb_id: " << cb_id << ENDL();
-    DPRINT << " scaler: " << scaler << ENDL();
-    for (uint8_t iii = 0; iii < 32; ++iii) {
-        DPRINT << TileSlice(
-                      cb_id,
-                      0,
-                      SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                      TSLICE_OUTPUT_CB,
-                      TSLICE_WR_PTR,
-                      true,
-                      true)
-               << ENDL();
-    }
+    // DPRINT << " cb_id: " << cb_id << ENDL();
+    // DPRINT << " scaler: " << scaler << ENDL();
+    // for (uint8_t iii = 0; iii < 32; ++iii) {
+    //     DPRINT << TileSlice(
+    //                   cb_id,
+    //                   0,
+    //                   SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+    //                   TSLICE_OUTPUT_CB,
+    //                   TSLICE_WR_PTR,
+    //                   true,
+    //                   true)
+    //            << ENDL();
+    // }
 
     cb_push_back(cb_id, 1);
 }
