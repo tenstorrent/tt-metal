@@ -72,12 +72,16 @@ def test_decoder_inference(mesh_device, reset_seeds):
         # Run TT model
         tt_out = ttnn.experimental.all_gather_async(
             decode_input,
+            persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
             topology=model_args.ccl_topology(),
             memory_config=mem_cfg,
             subdevice_id=tt_ccl.worker_sub_device_id,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
 
         debug_max = lambda t: ttnn.to_torch(
