@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 class SlidingWindowTestFixture : public testing::TestWithParam<SlidingWindowConfig> {};
 
 TEST_P(SlidingWindowTestFixture, SlidingWindowHash) {
-    auto sliding_window_a = GetParam();
+    const auto& sliding_window_a = GetParam();
 
     // start of same input
     auto sliding_window_b = sliding_window_a;
