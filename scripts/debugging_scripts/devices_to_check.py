@@ -52,4 +52,5 @@ def run(args, context: Context):
 
 if __name__ == "__main__":
     from triage import run_script
+
     run_script()

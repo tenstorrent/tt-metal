@@ -26,7 +26,15 @@ from datetime import datetime, timedelta, timezone
 from docopt import docopt
 
 if TYPE_CHECKING:
-    from inspector_data import InspectorData, KernelData, MeshCoordinate, MeshDeviceData, MeshWorkloadProgramData, MeshWorkloadData, ProgramData
+    from inspector_data import (
+        InspectorData,
+        KernelData,
+        MeshCoordinate,
+        MeshDeviceData,
+        MeshWorkloadProgramData,
+        MeshWorkloadData,
+        ProgramData,
+    )
 
 
 # Note: This method is parsing enty by entry and should be used only for debugging large log files.
@@ -120,6 +128,7 @@ def get_startup_data(log_directory: str) -> StartupData:
 
 def get_programs(log_directory: str, verbose: bool = False) -> dict[int, "ProgramData"]:
     from inspector_data import ProgramData
+
     yaml_path = os.path.join(log_directory, "programs_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:
@@ -193,6 +202,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, "Progra
 
 def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, "MeshDeviceData"]:
     from inspector_data import MeshDeviceData
+
     yaml_path = os.path.join(log_directory, "mesh_devices_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:
@@ -237,6 +247,7 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, "Me
 
 def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, "MeshWorkloadData"]:
     from inspector_data import MeshCoordinate, MeshWorkloadProgramData, MeshWorkloadData
+
     yaml_path = os.path.join(log_directory, "mesh_workloads_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:

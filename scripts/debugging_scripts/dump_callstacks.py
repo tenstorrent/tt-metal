@@ -29,11 +29,19 @@ script_config = ScriptConfig(
 )
 
 
-def get_gdb_callstack(location: OnChipCoordinate, risc_name: str, dispatcher_core_data: DispatcherCoreData, context: Context) -> list[CallstackEntry]:
+def get_gdb_callstack(
+    location: OnChipCoordinate, risc_name: str, dispatcher_core_data: DispatcherCoreData, context: Context
+) -> list[CallstackEntry]:
     raise NotImplementedError("Using GDB callstack is not implemented yet. Please use the built-in callstack methods.")
 
 
-def get_callstack(location: OnChipCoordinate, risc_name: str, dispatcher_core_data: DispatcherCoreData, elfs_cache: dict[str, ParsedElfFile], full_callstack: bool) -> list[CallstackEntry]:
+def get_callstack(
+    location: OnChipCoordinate,
+    risc_name: str,
+    dispatcher_core_data: DispatcherCoreData,
+    elfs_cache: dict[str, ParsedElfFile],
+    full_callstack: bool,
+) -> list[CallstackEntry]:
     context = location._device._context
     if dispatcher_core_data.firmware_path not in elfs_cache:
         elfs_cache[dispatcher_core_data.firmware_path] = parse_elf(dispatcher_core_data.firmware_path, context)
@@ -71,10 +79,14 @@ def format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     return result
 
 
-def dump_callstacks(devices: list[int], dispatcher_data: DispatcherData, context: Context, full_callstack: bool, gdb_callstack: bool):
+def dump_callstacks(
+    devices: list[int], dispatcher_data: DispatcherData, context: Context, full_callstack: bool, gdb_callstack: bool
+):
     blocks_to_test = ["functional_workers", "eth"]
     elfs_cache: dict[str, ParsedElfFile] = {}
-    table = [["Dev", "Loc", "Proc", "RD PTR", "Base", "Offset", "Kernel ID:Name", "PC", "Kernel Callstack", "Kernel Path"]]
+    table = [
+        ["Dev", "Loc", "Proc", "RD PTR", "Base", "Offset", "Kernel ID:Name", "PC", "Kernel Callstack", "Kernel Path"]
+    ]
     for device_id in devices:
         device = context.devices[device_id]
         for block_to_test in blocks_to_test:
@@ -91,18 +103,20 @@ def dump_callstacks(devices: list[int], dispatcher_data: DispatcherData, context
                         callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, context)
                     else:
                         callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
-                    table.append([
-                        str(device_id),
-                        location.to_str("logical"),
-                        risc_name.upper(),
-                        str(dispatcher_core_data.launch_msg_rd_ptr),
-                        f"0x{dispatcher_core_data.kernel_config_base:x}",
-                        f"0x{dispatcher_core_data.kernel_text_offset:x}",
-                        f"{dispatcher_core_data.watcher_kernel_id}:{dispatcher_core_data.kernel_name}",
-                        f"0x{callstack[0].pc:x}" if len(callstack) > 0 and callstack[0].pc is not None else "N/A",
-                        "" if len(callstack) > 0 else "N/A",
-                        dispatcher_core_data.kernel_path if dispatcher_core_data.kernel_path else "N/A",
-                    ])
+                    table.append(
+                        [
+                            str(device_id),
+                            location.to_str("logical"),
+                            risc_name.upper(),
+                            str(dispatcher_core_data.launch_msg_rd_ptr),
+                            f"0x{dispatcher_core_data.kernel_config_base:x}",
+                            f"0x{dispatcher_core_data.kernel_text_offset:x}",
+                            f"{dispatcher_core_data.watcher_kernel_id}:{dispatcher_core_data.kernel_name}",
+                            f"0x{callstack[0].pc:x}" if len(callstack) > 0 and callstack[0].pc is not None else "N/A",
+                            "" if len(callstack) > 0 else "N/A",
+                            dispatcher_core_data.kernel_path if dispatcher_core_data.kernel_path else "N/A",
+                        ]
+                    )
                     for line in format_callstack(callstack):
                         table.append(["", "", "", "", "", "", "", "", line])
     print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
@@ -118,4 +132,5 @@ def run(args, context: Context):
 
 if __name__ == "__main__":
     from triage import run_script
+
     run_script()

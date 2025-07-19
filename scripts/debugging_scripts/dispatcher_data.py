@@ -5,7 +5,7 @@
 
 """
 Script Name: dispatcher_data.py
- 
+
 Usage:
     dispatcher_data
 """
@@ -38,6 +38,7 @@ class DispatcherCoreData:
     kernel_config_base: int
     kernel_text_offset: int
     watcher_kernel_id: int
+
 
 class DispatcherData:
     def __init__(self, inspector_data: InspectorData, context: Context):
@@ -81,11 +82,21 @@ class DispatcherData:
                 "TRISC2": self._brisc_elf.enumerators["TensixProcessorTypes::MATH2"].value,
             },
             "dispatch_core_processor_classes": {
-                "BRISC": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM0"].value,
-                "NCRISC": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM1"].value,
-                "TRISC0": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
-                "TRISC1": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
-                "TRISC2": self._brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
+                "BRISC": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM0"
+                ].value,
+                "NCRISC": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM1"
+                ].value,
+                "TRISC0": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
+                ].value,
+                "TRISC1": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
+                ].value,
+                "TRISC2": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
+                ].value,
             },
         }
 
@@ -96,15 +107,23 @@ class DispatcherData:
                 "ERISC0": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
             },
             "dispatch_core_processor_classes": {
-                "ERISC": self._idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value,
-                "ERISC0": self._idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value,
-                "ERISC1": self._idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM1"].value,
+                "ERISC": self._idle_erisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"
+                ].value,
+                "ERISC0": self._idle_erisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"
+                ].value,
+                "ERISC1": self._idle_erisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM1"
+                ].value,
             },
         }
 
         # Blackhole has ERISC1 processor type
         try:
-            self._enum_values_eth["ProcessorTypes"]["ERISC1"] = self._idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
+            self._enum_values_eth["ProcessorTypes"]["ERISC1"] = self._idle_erisc_elf.enumerators[
+                "EthProcessorTypes::DM1"
+            ].value
         except:
             pass
 
@@ -144,11 +163,14 @@ class DispatcherData:
             )[0][0]
 
             # enum dispatch_core_processor_classes
-            watcher_kernel_id = mem_access(
-                fw_elf,
-                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
-                loc_mem_reader,
-            )[0][0] & 0xFFFF
+            watcher_kernel_id = (
+                mem_access(
+                    fw_elf,
+                    f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
+                    loc_mem_reader,
+                )[0][0]
+                & 0xFFFF
+            )
 
             kernel = self.inspector_data.kernels.get(watcher_kernel_id)
         except:
@@ -206,4 +228,5 @@ def run(args, context: Context):
 
 if __name__ == "__main__":
     from triage import run_script
+
     run_script()

@@ -47,17 +47,20 @@ class ScriptArguments:
 
 
 # Type variables for the decorator
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def triage_cache(run_method: Callable[[ScriptArguments, Context], T], /) -> Callable[[ScriptArguments, Context], T]:
     # Check that run method has two arguments (args, context)
     assert callable(run_method), "run_method must be a callable function."
     signature = inspect.signature(run_method)
-    assert len(signature.parameters) == 2 and 'args' in signature.parameters and 'context' in signature.parameters, "run_method must have two arguments (args, context)."
+    assert (
+        len(signature.parameters) == 2 and "args" in signature.parameters and "context" in signature.parameters
+    ), "run_method must have two arguments (args, context)."
 
     # Create simple cache
     cache: dict[tuple[int, int], T] = {}
+
     def cache_wrapper(args: ScriptArguments, context: Context) -> T:
         cache_key = (id(args), id(context))
         if cache_key not in cache:
@@ -65,6 +68,7 @@ def triage_cache(run_method: Callable[[ScriptArguments, Context], T], /) -> Call
         return cache[cache_key]
 
     return cache_wrapper
+
 
 @dataclass
 class TriageScript:
@@ -114,13 +118,19 @@ class TriageScript:
                 raise ValueError(f"Script {script_path} does not have script_config.")
 
             # Check if script has a run method with two arguments (args and context)
-            run_method = script_module.run if hasattr(script_module, 'run') and callable(script_module.run) else None
+            run_method = script_module.run if hasattr(script_module, "run") and callable(script_module.run) else None
             if run_method is not None:
                 signature = inspect.signature(run_method)
-                if len(signature.parameters) != 2 or 'args' not in signature.parameters or 'context' not in signature.parameters:
+                if (
+                    len(signature.parameters) != 2
+                    or "args" not in signature.parameters
+                    or "context" not in signature.parameters
+                ):
                     run_method = None
             if run_method is None:
-                raise ValueError(f"Script {script_path} does not have a valid run method with two arguments (args, context).")
+                raise ValueError(
+                    f"Script {script_path} does not have a valid run method with two arguments (args, context)."
+                )
 
             triage_script = TriageScript(
                 name=os.path.basename(script_path),
@@ -134,7 +144,10 @@ class TriageScript:
                 # If script does not have dependencies, set it to empty list
                 triage_script.config.depends = []
             else:
-                triage_script.config.depends = [dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py" for dep in triage_script.config.depends]
+                triage_script.config.depends = [
+                    dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
+                    for dep in triage_script.config.depends
+                ]
                 triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
 
             return triage_script
@@ -196,14 +209,25 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
 def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
     # TODO: Implement argument parsing for scripts
-    from docopt import docopt, parse_defaults, parse_pattern, formal_usage, printable_usage, parse_argv, extras, Required, TokenStream, DocoptExit, Option, AnyOptions
+    from docopt import (
+        parse_defaults,
+        parse_pattern,
+        formal_usage,
+        printable_usage,
+        parse_argv,
+        Required,
+        TokenStream,
+        DocoptExit,
+        Option,
+        AnyOptions,
+    )
     import sys
 
     combined_options = []
     combined_pattern: Required = Required(*[Required(*[])])
 
     for script in scripts.values():
-        if hasattr(script.module, '__doc__') and script.module.__doc__:
+        if hasattr(script.module, "__doc__") and script.module.__doc__:
             try:
                 script_options = parse_defaults(script.module.__doc__)
                 combined_options.extend(script_options)
@@ -215,7 +239,7 @@ def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
                 print(f"Error parsing arguments for script {script.name}: {e}")
                 continue
 
-    argv = parse_argv(TokenStream(sys.argv[1:], DocoptExit), list(combined_options), options_first = False)
+    argv = parse_argv(TokenStream(sys.argv[1:], DocoptExit), list(combined_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
         ao.children = list(set(combined_options) - pattern_options)
@@ -225,7 +249,9 @@ def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
     return ScriptArguments({})
 
 
-def run_script(script_path: str | None = None, args: ScriptArguments | None = None, context: Context | None = None) -> Any:
+def run_script(
+    script_path: str | None = None, args: ScriptArguments | None = None, context: Context | None = None
+) -> Any:
     # Resolve script path
     if script_path is None:
         # Check if previous call on callstack is a TriageScript
@@ -272,16 +298,17 @@ def run_script(script_path: str | None = None, args: ScriptArguments | None = No
 
 class TTTriageError(Exception):
     """Base class for TT Triage errors."""
+
     pass
 
 
 def main():
     # Initialize tt-exalens
-    init_ttexalens(use_noc1=False) # TODO: Add command line argument to select NOC
+    init_ttexalens(use_noc1=False)  # TODO: Add command line argument to select NOC
 
     # Enumerate all scripts in application directory
     application_path = os.path.dirname(__file__)
-    script_files = [f for f in os.listdir(application_path) if f.endswith('.py') and f != os.path.basename(__file__)]
+    script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
@@ -325,6 +352,7 @@ def main():
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 print(f"{RED}Data provider script {script.name} did not return any data.{RST}")
+
 
 if __name__ == "__main__":
     main()

@@ -5,7 +5,7 @@
 
 """
 Script Name: inspector_data.py
- 
+
 Usage:
     inspector_data [--inspector-log-path=<inspector_log_path>]
 
@@ -117,4 +117,5 @@ def run(args, context) -> InspectorData:
 
 if __name__ == "__main__":
     from triage import run_script
+
     run_script()
