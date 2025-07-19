@@ -186,6 +186,7 @@
       "op_to_op_duration_relative_margin": 0.2,
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.2
+
     }
   },
   "model_tail": {

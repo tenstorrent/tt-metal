@@ -249,7 +249,7 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
 
     else:
         # Random inputs
-        torch_input = torch.randn(1, 1, 32, 512)
+        torch_input = torch.randn(1, 1, 32, 16 * 1024)
 
     tt_input = ttnn.from_torch(
         torch_input,
