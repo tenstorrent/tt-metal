@@ -82,7 +82,7 @@ class TTSampling(LightweightModule):
             dtype=ttnn.uint16,
             layout=ttnn.Layout.TILE,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(3, None), mesh_shape=self.args.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -118,7 +118,6 @@ class TTSampling(LightweightModule):
             sub_core_grids=self.args.sub_core_grid_topk,
             # indices_tensor=self.tt_indices_tensor,
         )
-        breakpoint()
         # Gather values
         # Note: Persistent output buffer used, do not deallocate output!
         topk_values_gathered = self.tt_ccl.line_all_gather(
