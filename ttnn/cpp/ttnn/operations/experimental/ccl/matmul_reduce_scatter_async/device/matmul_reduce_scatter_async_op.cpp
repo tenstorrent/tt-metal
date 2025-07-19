@@ -266,7 +266,11 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         memory_config_rs.value_or(input_tensor.memory_config()),
         topology,
         multi_device_global_semaphore,
-        sub_device_id);
+        sub_device_id,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
 
     std::vector<ttnn::Tensor> full_output = tt::tt_metal::operation::run(
         ttnn::ccl::matmul_reduce_scatter_async_detail::create_matmul_reduce_scatter_async_struct(

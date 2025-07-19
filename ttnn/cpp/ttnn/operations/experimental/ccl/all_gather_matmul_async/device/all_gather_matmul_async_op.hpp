@@ -97,6 +97,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
 
     /* Matmul Params */
@@ -129,7 +132,10 @@ std::vector<Tensor> all_gather_matmul_async(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+    std::optional<uint32_t> chunks_per_sync = std::nullopt,
+    std::optional<uint32_t> num_workers_per_link = std::nullopt,
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental

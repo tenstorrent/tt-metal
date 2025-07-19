@@ -187,7 +187,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->cluster_axis);
+        this->chunks_per_sync,
+        this->num_workers_per_link,
+        this->num_buffers_per_channel);
 }
 
 tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
@@ -204,6 +206,10 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->ring_size,
         this->output_mem_config,
         this->topology,
+        this->cluster_axis,
+        this->chunks_per_sync,
+        this->num_workers_per_link,
+        this->num_buffers_per_channel,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -226,7 +232,10 @@ Tensor reduce_scatter_minimal_async_impl(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::vector<IDevice*>& devices,
-    const std::optional<uint32_t>& cluster_axis) {
+    const std::optional<uint32_t>& cluster_axis,
+    const std::optional<uint32_t>& chunks_per_sync,
+    const std::optional<uint32_t>& num_workers_per_link,
+    const std::optional<uint32_t>& num_buffers_per_channel) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
@@ -277,7 +286,10 @@ Tensor reduce_scatter_minimal_async_impl(
                    ccl_topology,
                    multi_device_global_semaphore,
                    sub_device_id,
-                   cluster_axis),
+                   cluster_axis,
+                   chunks_per_sync,
+                   num_workers_per_link,
+                   num_buffers_per_channel),
                {input_tensor},
                {},
                optional_output_tensors)
@@ -294,7 +306,10 @@ Tensor reduce_scatter_minimal_async(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     return reduce_scatter_minimal_async_impl(
         input_tensor,
@@ -306,7 +321,10 @@ Tensor reduce_scatter_minimal_async(
         topology,
         sub_device_id,
         devices,
-        cluster_axis);
+        cluster_axis,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel);
 }
 
 }  // namespace ccl

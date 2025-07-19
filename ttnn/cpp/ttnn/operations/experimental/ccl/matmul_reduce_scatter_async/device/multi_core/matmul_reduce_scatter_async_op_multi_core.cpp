@@ -82,6 +82,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
             semaphore,
             sub_device_id,
             reduce_scatter_fused_op_signaler,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
             core_grid_offset);
     const auto reduce_scatter_override_runtime_arguments_callback =
         reduce_scatter_program_with_callbacks.override_runtime_arguments_callback;

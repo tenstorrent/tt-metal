@@ -50,6 +50,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
 
     /* Matmul Params */
@@ -159,6 +162,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
             semaphore,
             sub_device_id,
             all_gather_fused_op_signaler,
+            chunks_per_sync,
+            num_workers_per_direction_opt,
+            num_buffers_per_channel,
             core_grid_offset);
     const auto all_gather_override_runtime_arguments_callback =
         program_with_callbacks.override_runtime_arguments_callback;

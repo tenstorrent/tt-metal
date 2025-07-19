@@ -32,7 +32,10 @@ struct ExecuteAllGatherMatmulAsync {
         const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+        std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+        std::optional<uint32_t> chunks_per_sync = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

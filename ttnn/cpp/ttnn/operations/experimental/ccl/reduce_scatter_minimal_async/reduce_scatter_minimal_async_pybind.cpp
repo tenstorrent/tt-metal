@@ -35,7 +35,10 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
+               std::optional<uint32_t> cluster_axis,
+               std::optional<uint32_t> chunks_per_sync,
+               std::optional<uint32_t> num_workers_per_link,
+               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_output_buffers,
@@ -45,7 +48,10 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                     memory_config,
                     topology,
                     subdevice_id,
-                    cluster_axis);
+                    cluster_axis,
+                    chunks_per_sync,
+                    num_workers_per_link,
+                    num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("persistent_output_buffers") = std::nullopt,
@@ -56,7 +62,10 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("cluster_axis") = std::nullopt});
+            py::arg("cluster_axis") = std::nullopt,
+            py::arg("chunks_per_sync") = std::nullopt,
+            py::arg("num_workers_per_link") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
 }  // namespace detail

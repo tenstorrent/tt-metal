@@ -46,7 +46,10 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
                const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
                const std::optional<const std::string>& activation,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const ttnn::CoreGrid> core_grid) -> std::vector<ttnn::Tensor> {
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               std::optional<uint32_t> chunks_per_sync,
+               std::optional<uint32_t> num_workers_per_link,
+               std::optional<uint32_t> num_buffers_per_channel) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -66,7 +69,10 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
                     program_config,
                     activation,
                     compute_kernel_config,
-                    core_grid);
+                    core_grid,
+                    chunks_per_sync,
+                    num_workers_per_link,
+                    num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("weight_tensor"),
@@ -87,7 +93,10 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
             py::arg("program_config") = std::nullopt,
             py::arg("activation") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("core_grid") = std::nullopt});
+            py::arg("core_grid") = std::nullopt,
+            py::arg("chunks_per_sync") = std::nullopt,
+            py::arg("num_workers_per_link") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
 }  // namespace detail

@@ -35,6 +35,9 @@ def run_reduce_scatter_impl(
     ones_tensor=False,
     mem_config_intermediate=None,
     cluster_axis=None,
+    chunks_per_sync=None,
+    num_workers_per_link=None,
+    num_buffers_per_channel=None,
 ):
     torch.manual_seed(0)
 
@@ -65,11 +68,13 @@ def run_reduce_scatter_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    single_batch_input_shape = rs_input_shape[:]
-    single_batch_input_shape[0] = 1
+    intermediate_shape = rs_input_shape[:]
+    if rs_topology == ttnn.Topology.Linear:
+        # Line RS requires double-sized input for forward/backward
+        intermediate_shape.insert(0, 2)
     persistent_intermediate_buffers = [
         ttnn.from_torch(
-            torch.zeros(single_batch_input_shape),
+            torch.zeros(intermediate_shape),
             device=t3k_mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=rs_input_dtype,
@@ -86,7 +91,7 @@ def run_reduce_scatter_impl(
             device=t3k_mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=rs_input_dtype,
-            memory_config=mem_config_rs,
+            memory_config=mem_config_input,
             mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
         )
         for _ in range(num_iters)
@@ -144,10 +149,13 @@ def run_reduce_scatter_impl(
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_links=num_links,
-            memory_config=mem_config_rs,
+            memory_config=mem_config_input,
             topology=rs_topology,
             subdevice_id=worker_sub_device_id,
             cluster_axis=cluster_axis,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
 
         return tt_reduce_scatter_output_tensor

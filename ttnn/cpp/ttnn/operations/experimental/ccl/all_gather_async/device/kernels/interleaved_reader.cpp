@@ -28,6 +28,7 @@ constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(8));
 constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(10);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(11);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -113,6 +114,8 @@ void kernel_main() {
         }
     }
 
+    uint32_t chunk_count = 0;
+    uint32_t sem_target = 0;
     while (slices_received < slices_expected) {
         // Do i expect more from the backward direction?
         // In the linear case, I expect num_targets_backward_direction slices from the left
@@ -122,17 +125,14 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
-        // Got it
-        slices_received++;
 
         int sender_chip_id;
         uint32_t actual_sender_chip_id;
         if (direction == 1) {
-            sender_chip_id = my_chip_id + slices_received;
+            sender_chip_id = my_chip_id + slices_received + 1;
             actual_sender_chip_id = (sender_chip_id >= (int)ring_size) ? sender_chip_id - ring_size : sender_chip_id;
         } else {
-            sender_chip_id = my_chip_id - slices_received;
+            sender_chip_id = my_chip_id - (slices_received + 1);
             actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
         }
         if (fuse_op) {
@@ -147,7 +147,7 @@ void kernel_main() {
         // In the linear case, if I have any targets to my left, always forward
         // In the ring case, if I have received on the right less than my targets on the left, forward
         if ((topology == Topology::Linear && writes_expected > 0) ||
-            (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
+            (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
             // read the next backward slice out of memory, and put it in CB
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
@@ -163,7 +163,15 @@ void kernel_main() {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Ht * input_tensor_Wt;
             }
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+                chunk_count = 0;
                 while (tiles_read < tiles_to_read) {
+                    if (chunk_count % chunks_per_sync == 0) {
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                        sem_target++;
+                    }
+                    chunk_count++;
+
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
@@ -193,6 +201,8 @@ void kernel_main() {
                 output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
             }
         }
+
+        slices_received++;
     }
 
     const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem);
