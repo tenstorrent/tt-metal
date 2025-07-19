@@ -212,6 +212,7 @@ struct TestTrafficConfig {
     std::optional<CoreCoord> dst_logical_core;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
+    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
     // TODO: add later
     // mode - BW, latency etc
 };
@@ -226,6 +227,7 @@ struct TestTrafficSenderConfig {
     std::optional<size_t> atomic_inc_address;
     uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
     uint32_t payload_buffer_size;  // Add payload buffer size field
+    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
 
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
 };
