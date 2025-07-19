@@ -18,10 +18,18 @@ class YOLOv8sWorldPerformantRunner:
         model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        inputs_mesh_mapper=None,
+        weights_mesh_mapper=None,
+        outputs_mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
         self.torch_input_tensor = torch_input_tensor
+        self.num_devices = self.device.get_num_devices()
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.outputs_mesh_composer = outputs_mesh_composer
+
         self.runner_infra = YOLOv8sWorldPerformanceRunnerInfra(
             device,
             device_batch_size,
@@ -29,6 +37,9 @@ class YOLOv8sWorldPerformantRunner:
             weight_dtype,
             model_location_generator,
             resolution=resolution,
+            inputs_mesh_mapper=self.inputs_mesh_mapper,
+            weights_mesh_mapper=self.weights_mesh_mapper,
+            outputs_mesh_composer=self.outputs_mesh_composer,
         )
 
         (
