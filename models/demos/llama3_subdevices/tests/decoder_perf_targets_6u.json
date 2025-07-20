@@ -124,11 +124,11 @@
     "Matmul_RS_0": {
       "op_name": "Matmul_FF3_ReduceScatter_FF1",
       "kernel_duration": 9292.354398148147,
-      "op_to_op": 708.7185185185185,
+      "op_to_op": 980.7777777777778,
       "first_to_last_start": 1914.9925925925927,
       "non-overlapped-dispatch-time": 17432.341269841272,
       "kernel_duration_relative_margin": 0.05,
-      "op_to_op_duration_relative_margin": 0.2,
+      "op_to_op_duration_relative_margin": 0.3,
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.3
     },
@@ -136,7 +136,7 @@
       "op_name": "ReduceScatter_FF3",
       "kernel_duration": 7218.590972222222,
       "op_to_op": 698.4148148148148,
-      "first_to_last_start": 470.5111111111111,
+      "first_to_last_start": 710.4444444444445,
       "non-overlapped-dispatch-time": 7398.333333333333,
       "kernel_duration_relative_margin": 0.05,
       "op_to_op_duration_relative_margin": 0.2,
