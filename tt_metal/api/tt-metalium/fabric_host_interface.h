@@ -64,6 +64,96 @@ enum eth_chan_directions : std::uint8_t {
     COUNT = 4,
 };
 
+// 3 bit expression
+enum compressed_routing_values : std::uint8_t {
+    COMPRESSED_EAST = 0,
+    COMPRESSED_WEST = 1,
+    COMPRESSED_NORTH = 2,
+    COMPRESSED_SOUTH = 3,
+    COMPRESSED_INVALID_DIRECTION = 4,            // Maps to INVALID_DIRECTION (0xDD)
+    COMPRESSED_INVALID_ROUTING_TABLE_ENTRY = 5,  // Maps to INVALID_ROUTING_TABLE_ENTRY (0xFF)
+};
+
+// Compressed routing table using 3 bits
+struct compressed_routing_table_t {
+    // 3 bits per entry, so 8 entries per 3 bytes (24 bits)
+    // For 1024 entries: ceil(1024 * 3 / 8) = 384 bytes
+    std::uint8_t packed_directions[MAX_MESH_SIZE * 3 / 8];  // 384 bytes
+
+    inline std::uint8_t get_direction(std::uint16_t index) const {
+        std::uint32_t bit_index = index * 3;
+        std::uint32_t byte_index = bit_index / 8;
+        std::uint32_t bit_offset = bit_index % 8;
+
+        if (bit_offset <= 5) {
+            // All 3 bits are in the same byte
+            return (packed_directions[byte_index] >> bit_offset) & 0x7;
+        } else {
+            // Bits span across two bytes
+            std::uint8_t low_bits = (packed_directions[byte_index] >> bit_offset) & ((1 << (8 - bit_offset)) - 1);
+            std::uint8_t high_bits = (packed_directions[byte_index + 1] & ((1 << (3 - (8 - bit_offset))) - 1))
+                                     << (8 - bit_offset);
+            return low_bits | high_bits;
+        }
+    }
+
+    inline void set_direction(std::uint16_t index, std::uint8_t direction) {
+        std::uint32_t bit_index = index * 3;
+        std::uint32_t byte_index = bit_index / 8;
+        std::uint32_t bit_offset = bit_index % 8;
+
+        if (bit_offset <= 5) {
+            // All 3 bits are in the same byte
+            packed_directions[byte_index] &= ~(0x7 << bit_offset);             // Clear bits
+            packed_directions[byte_index] |= (direction & 0x7) << bit_offset;  // Set bits
+        } else {
+            // Bits span across two bytes
+            std::uint8_t bits_in_first_byte = 8 - bit_offset;
+            std::uint8_t bits_in_second_byte = 3 - bits_in_first_byte;
+
+            // Clear and set bits in first byte
+            packed_directions[byte_index] &= ~(((1 << bits_in_first_byte) - 1) << bit_offset);
+            packed_directions[byte_index] |= (direction & ((1 << bits_in_first_byte) - 1)) << bit_offset;
+
+            // Clear and set bits in second byte
+            packed_directions[byte_index + 1] &= ~((1 << bits_in_second_byte) - 1);
+            packed_directions[byte_index + 1] |= (direction >> bits_in_first_byte) & ((1 << bits_in_second_byte) - 1);
+        }
+    }
+
+    inline std::uint8_t compress_value(std::uint8_t original_value) const {
+        switch (original_value) {
+            case eth_chan_directions::EAST: return COMPRESSED_EAST;
+            case eth_chan_directions::WEST: return COMPRESSED_WEST;
+            case eth_chan_directions::NORTH: return COMPRESSED_NORTH;
+            case eth_chan_directions::SOUTH: return COMPRESSED_SOUTH;
+            case eth_chan_magic_values::INVALID_DIRECTION: return COMPRESSED_INVALID_DIRECTION;
+            case eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY: return COMPRESSED_INVALID_ROUTING_TABLE_ENTRY;
+            default: return COMPRESSED_INVALID_ROUTING_TABLE_ENTRY;
+        }
+    }
+
+    inline std::uint8_t decompress_value(std::uint8_t compressed_value) const {
+        switch (compressed_value) {
+            case COMPRESSED_EAST: return eth_chan_directions::EAST;
+            case COMPRESSED_WEST: return eth_chan_directions::WEST;
+            case COMPRESSED_NORTH: return eth_chan_directions::NORTH;
+            case COMPRESSED_SOUTH: return eth_chan_directions::SOUTH;
+            case COMPRESSED_INVALID_DIRECTION: return eth_chan_magic_values::INVALID_DIRECTION;
+            case COMPRESSED_INVALID_ROUTING_TABLE_ENTRY: return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+            default: return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+        }
+    }
+
+    inline std::uint8_t get_original_direction(std::uint16_t index) const {
+        return decompress_value(get_direction(index));
+    }
+
+    inline void set_original_direction(std::uint16_t index, std::uint8_t original_direction) {
+        set_direction(index, compress_value(original_direction));
+    }
+} __attribute__((packed));
+
 struct routing_table_t {
     chan_id_t dest_entry[MAX_MESH_SIZE];
 };
@@ -86,15 +176,13 @@ struct fabric_router_l1_config_t {
 
 struct tensix_routing_l1_info_t {
     uint32_t mesh_id;           // Current mesh ID
-    uint32_t device_id;         // Current device ID
-
-    eth_chan_directions intra_mesh_routing_table[MAX_MESH_SIZE];
-    eth_chan_directions inter_mesh_routing_table[MAX_NUM_MESHES];
-    std::uint8_t padding[8];  // pad to 16-byte alignment
+    compressed_routing_table_t intra_mesh_routing_table;  // 384 bytes
+    compressed_routing_table_t inter_mesh_routing_table;  // 384 bytes
+    uint8_t padding[12];                                  // pad to 16-byte alignment
 } __attribute__((packed));
 
-// MEM_TENSIX_ROUTING_TABLE_SIZE
-static_assert(sizeof(tensix_routing_l1_info_t) == 2064, "Struct size mismatch!");
+static_assert(sizeof(tensix_routing_l1_info_t) == 784, "Struct size mismatch!");
+static_assert(sizeof(tensix_routing_l1_info_t) % 16 == 0, "tensix_routing_l1_info_t must be 16-byte aligned");
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
