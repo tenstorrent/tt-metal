@@ -22,41 +22,41 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
 
-    TT_FATAL(input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
-    TT_FATAL(
-        indices_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Indices tensor must be in row major layout");
+    TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
+    TT_FATAL(indices_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Indices tensor must be in row major layout");
 
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
-    TT_FATAL(indices_tensor.get_dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
+    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
+    TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
     TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
 
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
-        auto sparse_token_tensor = output_tensors[0];
-        auto metadata_tensor = output_tensors[1];
+        const auto& sparse_token_tensor = output_tensors[0];
+        const auto& metadata_tensor = output_tensors[1];
         TT_FATAL(
-            sparse_token_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            sparse_token_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "Output tensor must be in row major layout");
         TT_FATAL(
-            metadata_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            metadata_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "Output metadata tensor must be in row major layout");
 
         TT_FATAL(
-            output_specs[0] == sparse_token_tensor.get_tensor_spec(),
+            output_specs[0] == sparse_token_tensor.tensor_spec(),
             "Optional sparse output token tensor spec {} does not match computed output spec {}",
-            sparse_token_tensor.get_tensor_spec(),
+            sparse_token_tensor.tensor_spec(),
             output_specs[0]);
         TT_FATAL(
-            output_specs[1] == metadata_tensor.get_tensor_spec(),
+            output_specs[1] == metadata_tensor.tensor_spec(),
             "Optional metadata tensor spec {} does not match computed output spec {}",
-            metadata_tensor.get_tensor_spec(),
+            metadata_tensor.tensor_spec(),
             output_specs[1]);
     }
+    TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
 
-    auto input_shape = input_tensor.get_tensor_spec().logical_shape();
-    auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
+    auto input_shape = input_tensor.tensor_spec().logical_shape();
+    auto indices_shape = indices_tensor.tensor_spec().logical_shape();
     TT_FATAL(
         input_shape.rank() == 4 && (input_shape.rank() == indices_shape.rank()),
         "Input and indices tensor must have the same number of dimensions");
@@ -75,8 +75,6 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.cross_device_semaphore.has_value(),
         "Cross device semaphore must be specified at the moment");
 
-    TT_FATAL(operation_attributes.num_links == 1, "Number of links must be 1, got {}", operation_attributes.num_links);
-
     TT_FATAL(operation_attributes.topology == tt::tt_fabric::Topology::Linear, "Topology must be linear at the moment");
 }
 
@@ -86,9 +84,9 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
 AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.get_tensor_spec().logical_shape();
-    auto indices_shape = tensor_args.expert_indices_tensor.get_tensor_spec().logical_shape();
-    auto mapping_shape = tensor_args.expert_mapping_tensor.get_tensor_spec().logical_shape();
+    auto input_shape = input_tensor.tensor_spec().logical_shape();
+    auto indices_shape = tensor_args.expert_indices_tensor.tensor_spec().logical_shape();
+    auto mapping_shape = tensor_args.expert_mapping_tensor.tensor_spec().logical_shape();
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
@@ -132,18 +130,17 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     auto mem_config = operation_attributes.output_mem_config;
     auto output_tokens_spec = TensorSpec(
         Shape(output_shape),
-        tt::tt_metal::TensorLayout(
-            input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), mem_config));
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
     auto metadata_spec = TensorSpec(
         Shape(metadata_shape),
         tt::tt_metal::TensorLayout(
-            tensor_args.expert_indices_tensor.get_dtype(),
-            tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.get_layout()),
+            tensor_args.expert_indices_tensor.dtype(),
+            tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.layout()),
             mem_config));
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
-        auto preallocated_output_spec = output_tensors[0].get_tensor_spec();
-        auto preallocated_metadata_spec = output_tensors[1].get_tensor_spec();
+        auto preallocated_output_spec = output_tensors[0].tensor_spec();
+        auto preallocated_metadata_spec = output_tensors[1].tensor_spec();
         return {preallocated_output_spec, preallocated_metadata_spec};
     }
     return {output_tokens_spec, metadata_spec};

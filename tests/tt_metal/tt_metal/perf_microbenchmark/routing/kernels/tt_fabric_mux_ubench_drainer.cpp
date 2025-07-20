@@ -7,6 +7,7 @@
 #include "debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
@@ -21,6 +22,7 @@ constexpr size_t connection_info_address = get_compile_time_arg_val(4);
 constexpr size_t connection_handshake_address = get_compile_time_arg_val(5);
 constexpr size_t sender_flow_control_address = get_compile_time_arg_val(6);
 constexpr size_t channel_base_address = get_compile_time_arg_val(7);
+constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
 
 namespace tt::tt_fabric {
 using DrainerChannelBuffer = EthChannelBuffer<NUM_BUFFERS>;
@@ -30,6 +32,14 @@ using DrainerStatus = EDMStatus;
 }  // namespace tt::tt_fabric
 
 void kernel_main() {
+    size_t rt_args_idx = 0;
+    auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
+    for (uint32_t i = 0; i < num_regions_to_clear; i++) {
+        auto address = get_arg_val<uint32_t>(rt_args_idx++);
+        auto size = get_arg_val<uint32_t>(rt_args_idx++);
+        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
+    }
+
     auto status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::DrainerStatus::STARTED;
 
@@ -68,7 +78,8 @@ void kernel_main() {
             worker_interface.notify_worker_of_read_counter_update();
             increment_local_update_ptr_val(slots_free_stream_id, 1);
         }
-        check_worker_connections(worker_interface, connection_established, slots_free_stream_id);
+        tt::tt_fabric::check_worker_connections<my_eth_channel_id>(
+            worker_interface, connection_established, slots_free_stream_id);
     }
 
     noc_async_write_barrier();

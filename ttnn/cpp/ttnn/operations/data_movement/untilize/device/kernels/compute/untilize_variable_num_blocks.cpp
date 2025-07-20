@@ -14,7 +14,8 @@ void MAIN {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);
 
-    untilize_init(src_cb_id, out_cb_id);
+    compute_kernel_hw_startup(src_cb_id, out_cb_id);
+    untilize_init(src_cb_id);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         cb_wait_front(src_cb_id, per_core_block_tile_cnt);

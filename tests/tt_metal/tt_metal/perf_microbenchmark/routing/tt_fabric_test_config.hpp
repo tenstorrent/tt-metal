@@ -455,6 +455,14 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
         test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
     }
 
+    if (test_yaml["benchmark_mode"]) {
+        test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+    }
+
+    if (test_yaml["sync"]) {
+        test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
+    }
+
     return test_config;
 }
 
@@ -839,6 +847,10 @@ private:
         resolved_test.patterns = parsed_test.patterns;
         resolved_test.bw_calc_func = parsed_test.bw_calc_func;
         resolved_test.seed = parsed_test.seed;
+        resolved_test.global_sync_configs = parsed_test.global_sync_configs;
+        resolved_test.benchmark_mode = parsed_test.benchmark_mode;
+        resolved_test.global_sync = parsed_test.global_sync;
+        resolved_test.global_sync_val = parsed_test.global_sync_val;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {
@@ -929,6 +941,11 @@ private:
             }
 
             iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
+
+            // Add line sync pattern expansion if enabled
+            if (iteration_test.global_sync) {
+                expand_sync_patterns(iteration_test);
+            }
 
             if (p_config.patterns.has_value()) {
                 if (!p_config.senders.empty()) {
@@ -1096,6 +1113,39 @@ private:
             sender.device);
     }
 
+    void validate_sync_pattern(
+        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
+        TT_FATAL(
+            pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST,
+            "Test '{}': Line sync pattern for sender on device {} must use CHIP_MULTICAST.",
+            test.name,
+            sender.device);
+
+        TT_FATAL(
+            pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC,
+            "Test '{}': Line sync pattern for sender on device {} must use NOC_UNICAST_ATOMIC_INC.",
+            test.name,
+            sender.device);
+
+        TT_FATAL(
+            pattern.destination.has_value() && pattern.destination->hops.has_value(),
+            "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
+            test.name,
+            sender.device);
+
+        TT_FATAL(
+            pattern.size.has_value() && pattern.size.value() == 0,
+            "Test '{}': Line sync pattern for sender on device {} must have size 0 (no payload).",
+            test.name,
+            sender.device);
+
+        TT_FATAL(
+            pattern.num_packets.has_value() && pattern.num_packets.value() == 1,
+            "Test '{}': Line sync pattern for sender on device {} must have num_packets 1.",
+            test.name,
+            sender.device);
+    }
+
     void validate_test(const TestConfig& test) const {
         for (const auto& sender : test.senders) {
             for (const auto& pattern : sender.patterns) {
@@ -1105,6 +1155,15 @@ private:
                     validate_chip_unicast(pattern, sender, test);
                 } else if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
                     validate_chip_multicast(pattern, sender, test);
+                }
+            }
+        }
+
+        // Validate line sync patterns if present
+        if (test.global_sync) {
+            for (const auto& sync_sender : test.global_sync_configs) {
+                for (const auto& sync_pattern : sync_sender.patterns) {
+                    validate_sync_pattern(sync_pattern, sync_sender, test);
                 }
             }
         }
@@ -1263,6 +1322,77 @@ private:
                 test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
+    }
+
+    void expand_sync_patterns(ParsedTestConfig& test) {
+        log_info(
+            LogTest,
+            "Expanding line sync patterns for test: {} with topology: {}",
+            test.name,
+            static_cast<int>(test.fabric_setup.topology));
+
+        std::vector<FabricNodeId> all_devices = device_info_provider_.get_all_node_ids();
+        TT_FATAL(!all_devices.empty(), "Cannot expand line sync patterns because no devices were found.");
+
+        // Create sync patterns based on topology - returns multiple patterns per device for mcast
+        for (const auto& src_device : all_devices) {
+            const auto& sync_patterns_and_sync_val_pair = create_sync_patterns_for_topology(src_device, all_devices);
+
+            const auto& sync_patterns = sync_patterns_and_sync_val_pair.first;
+            const auto& sync_val = sync_patterns_and_sync_val_pair.second;
+
+            // Create sender config with all split sync patterns
+            SenderConfig sync_sender = {.device = src_device, .patterns = std::move(sync_patterns)};
+
+            test.global_sync_configs.push_back(std::move(sync_sender));
+
+            // global sync value
+            test.global_sync_val = sync_val;
+        }
+
+        log_info(
+            LogTest,
+            "Generated {} line sync configurations, line_syn_val: {}",
+            test.global_sync_configs.size(),
+            test.global_sync_val);
+    }
+
+    std::pair<std::vector<TrafficPatternConfig>, uint32_t> create_sync_patterns_for_topology(
+        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) {
+        std::vector<TrafficPatternConfig> sync_patterns;
+
+        // Common sync pattern characteristics
+        TrafficPatternConfig base_sync_pattern;
+        base_sync_pattern.ftype = ChipSendType::CHIP_MULTICAST;         // Global sync across devices
+        base_sync_pattern.ntype = NocSendType::NOC_UNICAST_ATOMIC_INC;  // Sync signal via atomic increment
+        base_sync_pattern.size = 0;                                     // No payload, just sync signal
+        base_sync_pattern.num_packets = 1;                              // Single sync signal
+        base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
+        base_sync_pattern.atomic_inc_wrap = 0xFFFF;                     // Large wrap value
+
+        // Topology-specific routing - get multi-directional hops first
+        auto [multi_directional_hops, global_sync_val] =
+            this->route_manager_.get_sync_hops_and_val(src_device, devices);
+
+        // Split multi-directional hops into single-direction patterns
+        auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
+
+        log_debug(
+            LogTest,
+            "Splitting sync pattern for device {} from 1 multi-directional to {} single-direction patterns",
+            src_device.chip_id,
+            split_hops_vec.size());
+
+        // Create separate sync pattern for each mcast direction. This is required since test infra only handle mcast
+        // for one direction. Ex, mcast to E/W will split into EAST and WEST patterns.
+        sync_patterns.reserve(split_hops_vec.size());
+        for (const auto& single_direction_hops : split_hops_vec) {
+            TrafficPatternConfig sync_pattern = base_sync_pattern;
+            sync_pattern.destination = DestinationConfig{.hops = single_direction_hops};
+            sync_patterns.push_back(std::move(sync_pattern));
+        }
+
+        return {sync_patterns, global_sync_val};
     }
 
     void add_senders_from_pairs(
@@ -1591,6 +1721,16 @@ private:
             out << YAML::Value << config.seed;
         }
 
+        if (config.benchmark_mode) {
+            out << YAML::Key << "benchmark_mode";
+            out << YAML::Value << config.benchmark_mode;
+        }
+
+        if (config.global_sync) {
+            out << YAML::Key << "sync";
+            out << YAML::Value << config.global_sync;
+        }
+
         out << YAML::Key << "fabric_setup";
         out << YAML::Value;
         to_yaml(out, config.fabric_setup);
@@ -1604,7 +1744,6 @@ private:
             to_yaml(out, sender);
         }
         out << YAML::EndSeq;
-
         out << YAML::EndMap;
     }
 

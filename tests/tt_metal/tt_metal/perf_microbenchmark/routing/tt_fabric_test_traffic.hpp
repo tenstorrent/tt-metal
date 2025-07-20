@@ -199,6 +199,7 @@ struct TrafficParameters {
     // Global context
     uint32_t seed;
     Topology topology;
+    RoutingType routing_type;
     tt::tt_metal::distributed::MeshShape mesh_shape;
 };
 
@@ -226,7 +227,7 @@ struct TestTrafficSenderConfig {
     uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
     uint32_t payload_buffer_size;  // Add payload buffer size field
 
-    std::vector<uint32_t> get_args() const;
+    std::vector<uint32_t> get_args(bool is_sync_config = false) const;
 };
 
 struct TestTrafficReceiverConfig {
@@ -239,19 +240,23 @@ struct TestTrafficReceiverConfig {
     std::vector<uint32_t> get_args() const;
 };
 
-inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
+inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_config) const {
     std::vector<uint32_t> args;
     args.reserve(20);  // Reserve a reasonable upper bound to avoid reallocations
 
-    const auto metadata =
-        SenderMetadataFields(this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size);
-    const auto metadata_args = metadata.get_args();
-    args.insert(args.end(), metadata_args.begin(), metadata_args.end());
+    if (!is_sync_config) {
+        const auto metadata =
+            SenderMetadataFields(this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size);
+        const auto metadata_args = metadata.get_args();
+        args.insert(args.end(), metadata_args.begin(), metadata_args.end());
+    }
 
     bool is_2d_fabric = (this->parameters.topology == Topology::Mesh);
 
     // push chip send type
-    args.push_back(this->parameters.chip_send_type);
+    if (!is_sync_config) {
+        args.push_back(this->parameters.chip_send_type);
+    }
 
     if (is_2d_fabric) {
         if (this->parameters.chip_send_type == ChipSendType::CHIP_UNICAST) {
@@ -266,10 +271,36 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
             TT_FATAL(!this->dst_node_ids.empty(), "2D multicast should have at least one destination node.");
-            // TODO: fix this
             const auto& dst_rep_node_id = this->dst_node_ids[0];  // Representative destination
+            auto adjusted_hops = this->hops;
+
+            // Handle dynamic routing by adjusting hops
+            bool is_dynamic_routing = (this->parameters.routing_type == RoutingType::Dynamic);
+            if (is_dynamic_routing) {
+                auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
+                auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
+                auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
+                auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
+                // for dynamic routing, decrement north/south hops by 1, since the start dst node is accounted as one
+                // hop.
+                if (north_hops > 0) {
+                    adjusted_hops[RoutingDirection::N] -= 1;
+                }
+                if (south_hops > 0) {
+                    adjusted_hops[RoutingDirection::S] -= 1;
+                }
+                // for dynamic routing, decrement east/west hops by 1, since the start dst node is accounted as one hop.
+                if (north_hops == 0 && south_hops == 0 && east_hops > 0) {
+                    adjusted_hops[RoutingDirection::E] -= 1;
+                }
+                if (north_hops == 0 && south_hops == 0 && west_hops > 0) {
+                    adjusted_hops[RoutingDirection::W] -= 1;
+                }
+            }
+
+            // chip_id and mesh_id is unused for low latency 2d mesh mcast
             const auto mcast_fields =
-                ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, this->hops);
+                ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, adjusted_hops);
             const auto mcast_args = mcast_fields.get_args();
             args.insert(args.end(), mcast_args.begin(), mcast_args.end());
         } else {
@@ -301,7 +332,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
     }
 
     // push noc send type
-    args.push_back(this->parameters.noc_send_type);
+    if (!is_sync_config) {
+        args.push_back(this->parameters.noc_send_type);
+    }
 
     switch (this->parameters.noc_send_type) {
         case NocSendType::NOC_UNICAST_WRITE: {

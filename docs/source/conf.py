@@ -57,6 +57,7 @@ extensions = [
 
 # For markdown and RST files
 source_suffix = {
+    ".ipynb": "jupyterlite_notebook",
     ".rst": "restructuredtext",
     ".txt": "markdown",
     ".md": "markdown",
