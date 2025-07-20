@@ -236,7 +236,6 @@ models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-
 models/demos/blackhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
-models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
