@@ -179,7 +179,6 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceWithCQ1Only) {
 
     ttnn::Shape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
-    uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
 
