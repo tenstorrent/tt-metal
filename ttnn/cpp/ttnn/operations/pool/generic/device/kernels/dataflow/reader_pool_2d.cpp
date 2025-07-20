@@ -82,6 +82,9 @@ FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_r
     // otherwise we can reduce 8 tiles at a time.
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
+    static_assert(in_c % TILE_WIDTH == 0, "Input channels should be divisible by TILE_WIDTH");
+    constexpr uint32_t c_tiles = in_c / TILE_WIDTH;
+    constexpr uint32_t remaining_tiles = c_tiles % MAX_TILES_PER_REDUCTION;
 
     uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
@@ -99,23 +102,30 @@ FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_r
             cb_reserve_back(in_cb_id, 1);
             in_l1_write_addr = get_write_ptr(in_cb_id);
             chunk++;
-        };
-        auto check_mod_row_count = [&]() {
-            if ((processed_rows % max_rows_for_reduction) == 0 && processed_rows != total_elems_to_reduce) {
-                process_in_cb();
-                // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
-                // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
-                // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
-                // cannot contain values greater than the max value, and if we have N=1 chunks we already
-                // initialized the entire CB with the init value, but for avg pool we need to fill the
-                // entire CB with the init value since the junk data will contribute to the average.
-                if constexpr (is_avg_pool) {
-                    // clear the in CB
-                    if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
+
+            bool cleared = false;
+            if constexpr (wide_reduction && remaining_tiles && window_h * window_w > 16) {
+                if (c_i == in_nblocks_c - 2) {
+                    cleared = true;
+                    clear_out_tiles<clear_value_cb_id, remaining_tiles>(
+                        get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+                }
+            }
+            if constexpr (is_large_kernel) {
+                if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction && !cleared) {
+                    if (c_i == in_nblocks_c - 2 && remaining_tiles) {
+                        clear_out_tiles<clear_value_cb_id, remaining_tiles>(
+                            get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+                    } else {
                         clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
                             get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
                     }
                 }
+            }
+        };
+        auto check_mod_row_count = [&]() {
+            if ((processed_rows % max_rows_for_reduction) == 0 && processed_rows != total_elems_to_reduce) {
+                process_in_cb();
             }
         };
         for (uint32_t h = 0; h < window_h; ++h) {
