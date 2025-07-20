@@ -86,17 +86,17 @@ jobs:
                 models/demos/yolov8s_world/tests/ \
                 models/demos/yolov8s/tests \
                 models/experimental/yolov6l/tests/ \
-              -m models_device_performance_bare_metal
-              # env WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py -m models_device_performance_bare_metal
-              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/whisper/tests/test_performance.py -m models_device_performance_bare_metal
-              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/vgg_unet/tests -m models_device_performance_bare_metal
-              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/experimental/vanilla_unet/test -m models_device_performance_bare_metal
-              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/yolov9c/tests/perf -m models_device_performance_bare_metal
-              #env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/experimental/vanilla_unet/test/test_perf_vanilla_unet.py -m models_device_performance_bare_metal
+              -m models_performance_bare_metal
+              # env WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py -m models_performance_bare_metal
+              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/whisper/tests/test_performance.py -m models_performance_bare_metal
+              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/vgg_unet/tests -m models_performance_bare_metal
+              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/experimental/vanilla_unet/test -m models_performance_bare_metal
+              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/yolov9c/tests/perf -m models_performance_bare_metal
+              #env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/experimental/vanilla_unet/test/test_perf_vanilla_unet.py -m models_performance_bare_metal
               # comment out mob-v2 and ufld_v2 for NOW until we fix HF, weight and data loading issues in the CIs
-              #env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/mobilenetv2/tests -m models_device_performance_bare_metal
-              #env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/ufld_v2/tests -m models_device_performance_bare_metal
-              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/yolov8x/tests -m models_device_performance_bare_metal
+              #env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/mobilenetv2/tests -m models_performance_bare_metal
+              #env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/ufld_v2/tests -m models_performance_bare_metal
+              # env WH_ARCH_YAML=$MAGIC_ENV pytest -n auto models/demos/yolov8x/tests -m models_performance_bare_metal
 
               ## Merge all the generated reports
               env python3 models/perf/merge_perf_results.py
@@ -106,9 +106,9 @@ jobs:
                 models/demos/bert_tiny/tests/test_performance.py \
                 models/demos/squeezebert/tests/test_performance.py \
                 models/demos/roberta/tests/test_performance.py
-              -m models_device_performance_bare_metal
-              # env pytest -n auto models/demos/mnist/tests -m models_device_performance_bare_metal
-              # env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m models_device_performance_bare_metal
+              -m models_performance_bare_metal
+              # env pytest -n auto models/demos/mnist/tests -m models_performance_bare_metal
+              # env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m models_performance_bare_metal
 
               ## Merge all the generated reports
               env python3 models/perf/merge_perf_results.py
