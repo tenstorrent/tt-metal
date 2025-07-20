@@ -303,7 +303,8 @@ def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
 
     docs: dict[str, str] = {}
     if __doc__ is not None:
-        docs["tt-triage"] = __doc__
+        my_name = os.path.splitext(os.path.basename(__file__))[0]
+        docs[my_name] = __doc__
     for script in scripts.values():
         if hasattr(script.module, "__doc__") and script.module.__doc__:
             docs[script.name] = script.module.__doc__
