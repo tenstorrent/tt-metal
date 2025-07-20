@@ -7,11 +7,12 @@
 Script Name: tt-triage.py
 
 Usage:
-    tt-triage [--initialize-with-noc1] [--verbosity=<verbosity>]
+    tt-triage [--initialize-with-noc1] [--verbosity=<verbosity>] [--run=<script>]...
 
 Options:
     --initialize-with-noc1    Initialize tt-exalens with NOC1 enabled. [default: False]
     --verbosity=<verbosity>   Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
+    --run=<script>            Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
 
 Description:
     Checking that we can reach all NOC endpoints through NOC0 and NOC1.
@@ -332,12 +333,36 @@ def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
     return ScriptArguments({})
 
 
+FAILURE_CHECKS: list[str] = []
+
+
+def log_check(success: bool, message: str) -> None:
+    global FAILURE_CHECKS
+    if not success:
+        FAILURE_CHECKS.append(message)
+
+
 def serialize_result(script: TriageScript | None, result):
     from dataclasses import fields, is_dataclass
 
     if script is not None:
         print()
         utils.INFO(f"{script.name}:")
+
+    global FAILURE_CHECKS
+    failures = FAILURE_CHECKS
+    FAILURE_CHECKS = []
+    if result is None:
+        if len(failures) > 0:
+            utils.ERROR("  fail")
+            for failure in failures:
+                utils.ERROR(f"    {failure}")
+        else:
+            utils.INFO("  pass")
+        return
+
+    for failure in failures:
+        utils.ERROR(f"  {failure}")
 
     if isinstance(result, list) and len(result) == 0:
         utils.ERROR("  No results found.")
@@ -358,7 +383,7 @@ def serialize_result(script: TriageScript | None, result):
                     assert is_dataclass(value)
                     generate_header(header, value, fields(value))
                 elif "serialized_name" in metadata:
-                    header.append(metadata["serialized_name"])
+                    header.append(metadata["serialized_name"] if metadata["serialized_name"] else field.name)
 
         def generate_row(row: list[str], obj, flds):
             for field in flds:
@@ -438,13 +463,13 @@ def run_script(
     if args is None:
         args = parse_arguments(scripts)
 
-    # Setting verbosity level
-    try:
-        verbosity = int(args["--verbosity"])
-        utils.Verbosity.set(verbosity)
-    except:
-        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+        # Setting verbosity level
+        try:
+            verbosity = int(args["--verbosity"])
+            utils.Verbosity.set(verbosity)
+        except:
+            utils.WARN("Verbosity level must be an integer. Falling back to default value.")
+        utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
 
     # Initialize context if not provided
     if context is None:
@@ -460,10 +485,7 @@ def run_script(
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"Data provider script {script.name} did not return any data.")
     script = scripts[script_path] if script_path in scripts else None
-    if result is not None:
-        serialize_result(script, result)
-    else:
-        serialize_result(script, "pass")
+    serialize_result(script, result)
 
 
 class TTTriageError(Exception):
@@ -472,15 +494,15 @@ class TTTriageError(Exception):
     pass
 
 
-def log_check(success: bool, message: str) -> None:
-    if not success:
-        utils.ERROR(message)
-
-
 def main():
     # Enumerate all scripts in application directory
     application_path = os.path.dirname(__file__)
     script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
+
+    # To avoid multiple imports of this script, we add it to sys.modules
+    my_name = os.path.splitext(os.path.basename(__file__))[0]
+    if my_name not in sys.modules:
+        sys.modules[my_name] = sys.modules["__main__"]
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
@@ -512,7 +534,7 @@ def main():
     script_queue = resolve_execution_order(scripts)
 
     # Parse common command line arguments
-    args = parse_arguments(scripts)
+    args = parse_arguments(scripts)        
 
     # Setting verbosity level
     try:
@@ -525,19 +547,21 @@ def main():
     # Initialize tt-exalens
     context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
 
-    # Execute scripts
-    for script in script_queue:
-        if not all(not dep.failed for dep in script.depends):
-            utils.WARN(f"Cannot run script {script.name} due to failed dependencies.")
-        else:
-            result = script.run(args=args, context=context, log_error=False)
-            if script.config.data_provider and result is None:
-                utils.ERROR(f"Data provider script {script.name} did not return any data.")
-            if not script.config.data_provider:
-                if result is not None:
+    # Check if we should run specific scripts
+    if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
+        for script_name in args["--run"]:
+            run_script(script_name, args, context)
+    else:
+        # Execute all scripts
+        for script in script_queue:
+            if not all(not dep.failed for dep in script.depends):
+                utils.WARN(f"Cannot run script {script.name} due to failed dependencies.")
+            else:
+                result = script.run(args=args, context=context, log_error=False)
+                if script.config.data_provider and result is None:
+                    utils.ERROR(f"Data provider script {script.name} did not return any data.")
+                if not script.config.data_provider:
                     serialize_result(script, result)
-                else:
-                    serialize_result(script, "pass")
 
 
 if __name__ == "__main__":

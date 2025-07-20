@@ -13,7 +13,7 @@ Usage:
 from dataclasses import dataclass
 import os
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_cache, ScriptConfig
+from triage import triage_cache, ScriptConfig, run_script
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
@@ -227,6 +227,4 @@ def run(args, context: Context):
 
 
 if __name__ == "__main__":
-    from triage import run_script
-
     run_script()

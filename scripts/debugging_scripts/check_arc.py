@@ -14,7 +14,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, hex_serializer, log_check
+from triage import ScriptConfig, triage_field, hex_serializer, log_check, run_script
 from check_per_device import run as get_check_per_device
 from datetime import timedelta
 import time
@@ -58,11 +58,11 @@ def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
 
     # Heartbeat must be between 500 and 20000 hb/s
     log_check(
-        heartbeats_per_second < 500,
+        heartbeats_per_second >= 500,
         f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}500{RST}hb/s",
     )
     log_check(
-        heartbeats_per_second > 20000,
+        heartbeats_per_second <= 20000,
         f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}20000{RST}hb/s",
     )
 
@@ -91,11 +91,11 @@ def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
 
     # Heartbeat must be between 10 and 50
     log_check(
-        heartbeats_per_second < 10,
+        heartbeats_per_second >= 10,
         f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s",
     )
     log_check(
-        heartbeats_per_second > 50,
+        heartbeats_per_second <= 50,
         f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}50{RST}hb/s",
     )
 
@@ -112,7 +112,7 @@ def check_arc(device: Device):
     arc = device.arc_block
     postcode = arc.get_register_store().read_register("ARC_RESET_SCRATCH0")
     log_check(
-        postcode & 0xFFFF0000 == 0xC0DE0000, f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}"
+        (postcode & 0xFFFF0000) == 0xC0DE0000, f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}"
     )
     if type(device) == WormholeDevice:
         return check_wormhole_arc(arc, postcode)
@@ -128,6 +128,4 @@ def run(args, context: Context):
 
 
 if __name__ == "__main__":
-    from triage import run_script
-
     run_script()

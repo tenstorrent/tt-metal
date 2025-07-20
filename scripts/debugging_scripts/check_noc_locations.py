@@ -16,7 +16,7 @@ Description:
 from check_per_device import run as get_check_per_device
 from ttexalens.context import Context
 from ttexalens.device import Device
-from triage import ScriptConfig, log_check
+from triage import ScriptConfig, log_check, run_script
 
 script_config = ScriptConfig(
     depends=["check_per_device"],
@@ -35,8 +35,8 @@ def check_noc_locations(device: Device, noc_id: int):
             n_y = (data >> 6) & 0x3F
             loc_to_noc = location.to(noc_str)
             log_check(
-                loc_to_noc != (n_x, n_y),
-                f"Device {device._id} {block_type} block at {location.to_user_str()} has wrong NOC location ({n_x}-{n_y})",
+                loc_to_noc == (n_x, n_y),
+                f"Device {device._id} {block_type} [{location.to_str('logical')}] block at {location.to_str(noc_str)} has wrong NOC location ({n_x}-{n_y})",
             )
 
 
@@ -47,6 +47,4 @@ def run(args, context: Context):
 
 
 if __name__ == "__main__":
-    from triage import run_script
-
     run_script()

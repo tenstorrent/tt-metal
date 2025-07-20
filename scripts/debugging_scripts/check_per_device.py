@@ -13,7 +13,7 @@ Usage:
 from collections.abc import Callable
 from dataclasses import dataclass
 from devices_to_check import run as get_devices_to_check
-from triage import triage_cache, ScriptConfig, triage_field, recurse_field
+from triage import triage_cache, ScriptConfig, triage_field, recurse_field, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
 
@@ -56,6 +56,4 @@ def run(args, context: Context):
 
 
 if __name__ == "__main__":
-    from triage import run_script
-
     run_script()

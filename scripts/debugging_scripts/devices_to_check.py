@@ -14,7 +14,7 @@ Options:
 """
 
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_cache, ScriptConfig
+from triage import triage_cache, ScriptConfig, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
 from utils import ORANGE, RST
@@ -52,6 +52,4 @@ def run(args, context: Context):
 
 
 if __name__ == "__main__":
-    from triage import run_script
-
     run_script()

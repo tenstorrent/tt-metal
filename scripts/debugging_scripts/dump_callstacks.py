@@ -14,7 +14,7 @@ Options:
     --gdb_callstack    Dump callstack using GDB client instead of built-in methods.
 """
 
-from triage import ScriptConfig, recurse_field, triage_field, hex_serializer
+from triage import ScriptConfig, recurse_field, triage_field, hex_serializer, run_script
 from check_per_device import dataclass, run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from ttexalens.coordinate import OnChipCoordinate
@@ -131,6 +131,4 @@ def run(args, context: Context):
 
 
 if __name__ == "__main__":
-    from triage import run_script
-
     run_script()

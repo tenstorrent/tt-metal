@@ -15,7 +15,7 @@ Options:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from triage import triage_cache, ScriptConfig
+from triage import triage_cache, ScriptConfig, run_script
 from parse_inspector_logs import get_data as get_logs_data
 
 script_config = ScriptConfig(
@@ -116,6 +116,4 @@ def run(args, context) -> InspectorData:
 
 
 if __name__ == "__main__":
-    from triage import run_script
-
     run_script()
