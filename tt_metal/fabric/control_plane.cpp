@@ -1622,6 +1622,7 @@ void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr)
 void ControlPlane::initialize_intermesh_eth_links() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     // If intermesh links are not enabled, set all intermesh_eth_links_ to empty
+    std::cout << "Intermesh is enabled: " << this->is_intermesh_enabled() << std::endl;
     if (not this->is_intermesh_enabled()) {
         for (const auto& chip_id : cluster.all_chip_ids()) {
             intermesh_eth_links_[chip_id] = {};
