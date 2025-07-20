@@ -158,7 +158,7 @@ def load_sharded_checkpoints_optimized(checkpoints, n_layers):
 
     def load_single_checkpoint(ckpt_path):
         local_data = defaultdict(list)
-        loaded_ckpt = torch.load(ckpt_path, map_location="cpu")
+        loaded_ckpt = torch.load(ckpt_path, map_location="cpu", mmap=True)
         for key, value in loaded_ckpt.items():
             if "layers." in key:
                 layer_num = int(key.split("layers.")[1].split(".")[0])
