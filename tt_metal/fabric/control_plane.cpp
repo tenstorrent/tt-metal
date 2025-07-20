@@ -1672,6 +1672,11 @@ void ControlPlane::initialize_intermesh_eth_links() {
             for (auto link : extract_intermesh_eth_links(config_data[0], chip_id)) {
                 // Find the CoreCoord for this channel
                 for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
+                    if (channel == link) {
+                        std::cout << "Intermesh link: " << core_coord.str() << " on: " << chip_id
+                                  << " Trained: " << this->is_intermesh_eth_link_trained(chip_id, core_coord)
+                                  << std::endl;
+                    }
                     if (channel == link and this->is_intermesh_eth_link_trained(chip_id, core_coord)) {
                         intermesh_eth_links.push_back({core_coord, link});
                         break;
