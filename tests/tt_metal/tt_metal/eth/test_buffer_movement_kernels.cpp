@@ -415,7 +415,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
+TEST_F(N300DispatchFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);

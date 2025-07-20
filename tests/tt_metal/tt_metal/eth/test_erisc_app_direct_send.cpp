@@ -297,7 +297,7 @@ bool send_over_eth(
 
 namespace tt::tt_metal {
 
-TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
+TEST_F(N300DispatchFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -337,7 +337,7 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
         device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
+TEST_F(N300DispatchFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -377,7 +377,7 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
         device_1, device_0, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
+TEST_F(N300DispatchFixture, ActiveEthBidirectionalCoreDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -433,7 +433,7 @@ TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
         device_1, device_0, receiver_core_1, sender_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
+TEST_F(N300DispatchFixture, ActiveEthRandomDirectSendTests) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     srand(0);
@@ -465,7 +465,7 @@ TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
+TEST_F(N300DispatchFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -522,7 +522,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
+TEST_F(N300DispatchFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);

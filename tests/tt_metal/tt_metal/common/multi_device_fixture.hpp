@@ -70,6 +70,33 @@ protected:
     }
 };
 
+class N300DispatchFixture : public DispatchFixture {
+private:
+    inline static bool is_n300_cluster_ = false;
+    inline static ARCH arch_internal_ = ARCH::Invalid;
+
+protected:
+    static void SetUpTestSuite() {
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
+        arch_internal_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        is_n300_cluster_ = num_devices == 2 && num_pci_devices == 1 && arch_internal_ == tt::ARCH::WORMHOLE_B0;
+    }
+
+    void SetUp() override {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+        this->arch_ = arch_internal_;
+        if (!is_n300_cluster_) {
+            GTEST_SKIP() << "This suite can only be run on N300";
+        }
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE unset");
+            GTEST_SKIP();
+        }
+        DispatchFixture::SetUp();
+    }
+};
+
 class TwoDeviceBlackholeFixture : public DispatchFixture {
 protected:
     void SetUp() override {
