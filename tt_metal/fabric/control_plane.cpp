@@ -1653,6 +1653,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
             // TODO: remove branch here once get_ethernet_connections_to_remote_devices() contains
             // all cross host links, currently on T3K there are some cross host links that are not
             // visible to UMD
+            std::cout << "System is not UBB" << std::endl;
             if (soc_desc.logical_eth_core_to_chan_map.empty()) {
                 intermesh_eth_links_[chip_id] = {};
                 continue;
@@ -1667,7 +1668,9 @@ void ControlPlane::initialize_intermesh_eth_links() {
             std::vector<uint32_t> config_data(1, 0);
             auto multi_mesh_config_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
                 tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG);
+            std::cout << "Read from: " << multi_mesh_config_addr << std::endl;
             cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_config_addr);
+            std::cout << "Config Data: " << config_data[0] << std::endl;
             for (auto link : extract_intermesh_eth_links(config_data[0], chip_id)) {
                 // Find the CoreCoord for this channel
                 for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
