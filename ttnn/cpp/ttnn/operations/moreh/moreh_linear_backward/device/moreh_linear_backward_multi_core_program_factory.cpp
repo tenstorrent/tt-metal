@@ -24,7 +24,6 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     Program program{};
     auto& output_grad = tensor_args.output_grad;
 
-    const auto& bias_grad_shape = bias_grad.logical_shape();
     const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
     auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
@@ -49,7 +48,6 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     // This should allocate a DRAM buffer on the device
     IDevice* device = output_grad.device();
     auto grid = device->compute_with_storage_grid_size();
-    auto arch = device->arch();
     const auto num_cores_y = grid.y;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

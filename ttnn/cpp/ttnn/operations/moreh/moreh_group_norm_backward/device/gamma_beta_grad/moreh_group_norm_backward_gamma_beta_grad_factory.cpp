@@ -55,7 +55,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const auto Wt = w / TILE_WIDTH;
 
     const auto num_channels = c;
-    const auto num_rows = num_channels;  // outer_size
 
     const auto batch = n;
     const auto HtWt = Ht * Wt;
