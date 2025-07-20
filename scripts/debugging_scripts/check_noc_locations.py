@@ -34,7 +34,10 @@ def check_noc_locations(device: Device, noc_id: int):
             n_x = data & 0x3F
             n_y = (data >> 6) & 0x3F
             loc_to_noc = location.to(noc_str)
-            log_check(loc_to_noc != (n_x, n_y), f"Device {device._id} {block_type} block at {location.to_user_str()} has wrong NOC location ({n_x}-{n_y})")
+            log_check(
+                loc_to_noc != (n_x, n_y),
+                f"Device {device._id} {block_type} block at {location.to_user_str()} has wrong NOC location ({n_x}-{n_y})",
+            )
 
 
 def run(args, context: Context):
