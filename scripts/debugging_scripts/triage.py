@@ -4,10 +4,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: tt-triage.py
+Script Name: triage.py
 
 Usage:
-    tt-triage [--initialize-with-noc1] [--verbosity=<verbosity>] [--run=<script>]...
+    triage [--initialize-with-noc1] [--verbosity=<verbosity>] [--run=<script>]...
 
 Options:
     --initialize-with-noc1    Initialize tt-exalens with NOC1 enabled. [default: False]
@@ -15,7 +15,13 @@ Options:
     --run=<script>            Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
 
 Description:
-    Checking that we can reach all NOC endpoints through NOC0 and NOC1.
+    Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
+    Identifies running kernels and provides callstack information to troubleshoot failed operations.
+    Example use with tt-metal:
+        export TT_METAL_HOME=~/work/tt-metal
+        ./build_metal.sh --build-programming-examples
+        build/programming_examples/matmul_multi_core
+        triage
 """
 
 # Check if tt-exalens is installed
