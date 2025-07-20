@@ -102,7 +102,7 @@ jobs:
                 models/demos/convnet_mnist/tests/ \
                 models/demos/bert_tiny/tests/test_performance.py \
                 models/demos/squeezebert/tests/test_performance.py \
-                models/demos/roberta/tests/test_performance.py
+                models/demos/roberta/tests/test_performance.py \
               -m models_performance_bare_metal
               # env pytest -n auto models/demos/mnist/tests -m models_performance_bare_metal
               # env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m models_performance_bare_metal
