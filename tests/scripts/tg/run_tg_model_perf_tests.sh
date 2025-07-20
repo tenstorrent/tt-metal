@@ -22,10 +22,10 @@ run_tg_llama_70b_model_perf_tests() {
   echo "LOG_METAL: Running run_tg_llama_70b_model_perf_tests"
 
   # Run non-overlapped dispatch perf test
-  TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG  RING_6U=1 LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 ; fail+=$?
+  TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 ; fail+=$?
 
   # Run kernel and op to op latency test
-  TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG  RING_6U=1 LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600 ; fail+=$?
+  TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_llama_70b_model_perf_tests failed"
