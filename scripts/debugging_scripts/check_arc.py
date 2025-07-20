@@ -112,7 +112,8 @@ def check_arc(device: Device):
     arc = device.arc_block
     postcode = arc.get_register_store().read_register("ARC_RESET_SCRATCH0")
     log_check(
-        (postcode & 0xFFFF0000) == 0xC0DE0000, f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}"
+        (postcode & 0xFFFF0000) == 0xC0DE0000,
+        f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}",
     )
     if type(device) == WormholeDevice:
         return check_wormhole_arc(arc, postcode)

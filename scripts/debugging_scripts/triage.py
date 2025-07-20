@@ -541,7 +541,7 @@ def main():
     script_queue = resolve_execution_order(scripts)
 
     # Parse common command line arguments
-    args = parse_arguments(scripts)        
+    args = parse_arguments(scripts)
 
     # Setting verbosity level
     try:
