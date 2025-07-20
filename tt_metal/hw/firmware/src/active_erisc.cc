@@ -90,7 +90,6 @@ inline void service_base_fw() {
 
 inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
-    // Also check enable_fw_flag[0] if we need to exit immediately
     while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
         service_base_fw();
@@ -139,7 +138,7 @@ void Application() {
 
     // Stall for the host to set this flag to 1 otherwise we could exit
     // the base firmware while the host is still initializing
-    while (enable_fw_flag[0] != 1) {
+    while (gEnableFwFlag[0] != 1) {
         // Wait for sync from host
         invalidate_l1_cache();
     }
@@ -184,7 +183,7 @@ void Application() {
                     // Notify dispatcher that this has been done
                     internal_::notify_dispatch_core_done(dispatch_addr);
                 }
-            } else if (enable_fw_flag[0] != 1) {
+            } else if (gEnableFwFlag[0] != 1) {
                 internal_::disable_erisc_app();
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 return;
