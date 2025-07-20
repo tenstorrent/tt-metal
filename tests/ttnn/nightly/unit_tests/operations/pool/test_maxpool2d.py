@@ -170,13 +170,13 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    # act = randomize_torch_tensor(torch_tensor_map, act_shape)
-    act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    for n in range(act_shape[0]):
-        for c in range(act_shape[1]):
-            for h in range(act_shape[2]):
-                for w in range(act_shape[3]):
-                    act[n, c, h, w] = h * in_w + w
+    act = randomize_torch_tensor(torch_tensor_map, act_shape)
+    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
+    # for n in range(act_shape[0]):
+    #     for c in range(act_shape[1]):
+    #         for h in range(act_shape[2]):
+    #             for w in range(act_shape[3]):
+    #                 act[n, c, h, w] = h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
@@ -235,14 +235,6 @@ def run_max_pool(
         ceil_mode=ceil_mode,
     )
 
-    print("to layout")
-
-    # this explicit conversion isn't necessary, but we'll do it here to be clear
-    if dtype == ttnn.bfloat8_b:
-        output = ttnn.to_layout(output, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-    print("to cpu")
-
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
@@ -262,13 +254,6 @@ def run_max_pool(
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
-
-    # output_pytorch =  output_pytorch[:][:32][:][:]
-    # golden_pytorch =  golden_pytorch[:][:32][:][:]
-    print("ttnn untilized result:")
-    print(output_pytorch[0][0])
-    print("pytorch result:")
-    print(golden_pytorch[0][0])
 
     pcc_thresh = 1.0
     if dtype == ttnn.bfloat8_b:
@@ -302,56 +287,55 @@ def run_max_pool(
     "act_shape",  ## NCHW
     (
         (  ## resnet shapes
-            # [1, 64, 112, 112],
-            # # [4, 64, 112, 112],
-            # # [8, 64, 112, 112],
-            # [16, 64, 112, 112],
-            # # [20, 64, 112, 112],   ## oom
-            # ## hpr shapes
-            # [8, 32, 132, 20],
-            # # [16, 32, 132, 20],
-            # # [32, 32, 132, 20],
-            # # [64, 32, 132, 20],
-            # [128, 32, 132, 20],
-            # # [256, 32, 132, 20],   ## oom
-            # [8, 32, 264, 40],
-            # # [16, 32, 264, 40],
-            # [32, 32, 264, 40],
-            # # [64, 32, 264, 40],    ## oom
-            # # [128, 32, 264, 40],   ## oom
-            # # [256, 32, 264, 40],   ## oom
-            # [4, 16, 1056, 160],
-            # # [8, 16, 1056, 160],     ## oom
-            # # [16, 16, 1056, 160],    ## oom
-            # # [32, 16, 1056, 160],    ## oom
-            # # [64, 16, 1056, 160],    ## oom
-            # # [128, 16, 1056, 160],   ## oom
-            # # [256, 16, 1056, 160],   ## oom
-            # [8, 16, 528, 80],
-            # [16, 16, 528, 80],
-            # # [32, 16, 528, 80],  ## oom
-            # # [64, 16, 528, 80],  ## oom
-            # # [128, 16, 528, 80], ## oom
-            # # [256, 16, 528, 80], ## oom
-            # ## wide for vgg
-            # [1, 256, 56, 56],
-            # [1, 512, 28, 28],
-            # [1, 512, 14, 14],
-            # # wide yolo kernel
-            # [1, 512, 10, 10],
-            # [1, 96, 112, 112],
-            # [1, 192, 132, 20],
-            # # wide non-8 multiple tests
-            # [1, 800, 32, 32],
-            # [1, 640, 32, 32],
-            # [1, 576, 32, 32],
-            # [1, 384, 32, 32],
-            # # C=16 test
-            # [1, 16, 12, 12],
-            # # partial grid tests
-            # [1, 32, 10, 10],  # BH
-            # [1, 32, 6, 6],  # WH
-            [1, 64, 8, 8],
+            [1, 64, 112, 112],
+            # [4, 64, 112, 112],
+            # [8, 64, 112, 112],
+            [16, 64, 112, 112],
+            # [20, 64, 112, 112],   ## oom
+            ## hpr shapes
+            [8, 32, 132, 20],
+            # [16, 32, 132, 20],
+            # [32, 32, 132, 20],
+            # [64, 32, 132, 20],
+            [128, 32, 132, 20],
+            # [256, 32, 132, 20],   ## oom
+            [8, 32, 264, 40],
+            # [16, 32, 264, 40],
+            [32, 32, 264, 40],
+            # [64, 32, 264, 40],    ## oom
+            # [128, 32, 264, 40],   ## oom
+            # [256, 32, 264, 40],   ## oom
+            [4, 16, 1056, 160],
+            # [8, 16, 1056, 160],     ## oom
+            # [16, 16, 1056, 160],    ## oom
+            # [32, 16, 1056, 160],    ## oom
+            # [64, 16, 1056, 160],    ## oom
+            # [128, 16, 1056, 160],   ## oom
+            # [256, 16, 1056, 160],   ## oom
+            [8, 16, 528, 80],
+            [16, 16, 528, 80],
+            # [32, 16, 528, 80],  ## oom
+            # [64, 16, 528, 80],  ## oom
+            # [128, 16, 528, 80], ## oom
+            # [256, 16, 528, 80], ## oom
+            ## wide for vgg
+            [1, 256, 56, 56],
+            [1, 512, 28, 28],
+            [1, 512, 14, 14],
+            # wide yolo kernel
+            [1, 512, 10, 10],
+            [1, 96, 112, 112],
+            [1, 192, 132, 20],
+            # wide non-8 multiple tests
+            [1, 800, 32, 32],
+            [1, 640, 32, 32],
+            [1, 576, 32, 32],
+            [1, 384, 32, 32],
+            # C=16 test
+            [1, 16, 12, 12],
+            # partial grid tests
+            [1, 32, 10, 10],  # BH
+            [1, 32, 6, 6],  # WH
         )
     ),
 )
@@ -359,19 +343,19 @@ def run_max_pool(
     "kernel_size",
     (
         (2, 2),
-        # (3, 3),
-        # (5, 5),
-        # (9, 9),
+        (3, 3),
+        (5, 5),
+        (9, 9),
         # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        # (0, 0),
+        (0, 0),
         (1, 1),
-        # (2, 2),
-        # (4, 4),
+        (2, 2),
+        (4, 4),
         # (6, 6),
     ),
 )
@@ -379,14 +363,14 @@ def run_max_pool(
     "stride",
     (
         (1, 1),
-        # (2, 2),
+        (2, 2),
     ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
 @pytest.mark.parametrize(
     "dtype",
     [
-        # ttnn.bfloat16,
+        ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -394,12 +378,10 @@ def run_max_pool(
     "ceil_mode",
     [
         False,
-        # True,
+        True,
     ],
 )
-def test_run_max_pool(
-    act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype, use_program_cache, ceil_mode
-):
+def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype, ceil_mode):
     run_max_pool(
         act_shape,
         kernel_size,
@@ -414,7 +396,7 @@ def test_run_max_pool(
     )
 
 
-""" @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
@@ -489,7 +471,6 @@ def test_run_max_pool_width_shard(
     device,
     torch_tensor_map,
     dtype,
-    use_program_cache,
     ceil_mode,
 ):
     run_max_pool(
@@ -601,7 +582,6 @@ def test_run_max_pool_block_shard(
     device,
     torch_tensor_map,
     dtype,
-    use_program_cache,
     ceil_mode,
 ):
     run_max_pool(
@@ -634,7 +614,6 @@ def test_run_max_pool_mem_config(
     device,
     torch_tensor_map,
     memory_config,
-    use_program_cache,
 ):
     run_max_pool(
         act_shape, (3, 3), (1, 1), (2, 2), (1, 1), device, torch_tensor_map, ttnn.bfloat16, memory_config=memory_config
@@ -678,7 +657,6 @@ def test_run_max_pool_yolov4(
     device,
     torch_tensor_map,
     dtype,
-    use_program_cache,
 ):
     run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype)
 
@@ -790,7 +768,6 @@ def test_run_max_pool_yolov4(
 def test_pool_core_nondivis(
     device,
     torch_tensor_map,
-    use_program_cache,
     batch_size,
     input_channels,
     input_height,
@@ -962,7 +939,6 @@ def test_run_max_pool_squeeze_net_model(
     device,
     torch_tensor_map,
     dtype,
-    use_program_cache,
     ceil_mode,
 ):
     run_max_pool(
@@ -975,4 +951,4 @@ def test_run_max_pool_squeeze_net_model(
         torch_tensor_map,
         dtype,
         ceil_mode=ceil_mode,
-    ) """
+    )

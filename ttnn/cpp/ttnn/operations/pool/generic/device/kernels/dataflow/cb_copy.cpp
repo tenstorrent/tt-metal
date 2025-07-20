@@ -41,7 +41,6 @@ void kernel_main() {
     constexpr uint32_t face_size = face_dim * face_dim;  // 256
     constexpr uint32_t tile_face_dim = 2;
     constexpr uint32_t tile_size = face_size * tile_face_dim * tile_face_dim;  // 1024
-    constexpr uint32_t faces_per_row = in_c / face_dim;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     constexpr uint32_t max_tiles_per_iter =
@@ -52,26 +51,47 @@ void kernel_main() {
 
     uint32_t out_l1_write_addr_base = get_write_ptr(cb_dst);
 
-    for (uint32_t i = 0; i < num_top_left_indexes;
-         ++i) {  // TODO: note: for nhw dim, read ele by ele instead of tile by tile
+    for (uint32_t i = 0; i < num_top_left_indexes; ++i) {  // read row by row
+
         for (uint32_t c_i = 0; c_i < in_nblocks_c - 1; ++c_i) {
             uint32_t in_l1_read_addr = get_read_ptr(cb_src);
-            uint32_t out_l1_write_addr = get_write_ptr(cb_dst);
-            // DPRINT << "COPY INPUT LOOP:" << ENDL();
-            // tt::data_movement::common ::print_bf16_pages(in_l1_read_addr, 32 * max_tiles_per_iter, 1);
-
             cb_wait_front(cb_src, max_tiles_per_iter);
             cb_reserve_back(cb_dst, max_tiles_per_iter);
-
-            noc_async_read_one_packet(
-                get_noc_addr(in_l1_read_addr),
-                out_l1_write_addr,
-                max_tiles_per_iter * (in_c == 16 ? 16 : 32) * BYTES_PER_ELEM);
-            noc_async_read_barrier();  // TODO update read for wide tensors to go face by face
-
+            if constexpr (is_out_tiled) {
+                // elements within a face are row major
+                // faces within a tile are row major
+                // tiles within a tensor are row major
+                uint32_t face_nhw = i / face_dim;
+                uint32_t intra_face_nhw = i % face_dim;
+                constexpr uint32_t max_faces_per_row = max_tiles_per_iter * tile_face_dim;
+                // DPRINT  << "max_faces_per_row:" << max_faces_per_row << ENDL();
+                for (uint32_t face_c = 0; face_c < max_faces_per_row; ++face_c) {
+                    uint32_t tile_nhw = face_nhw / tile_face_dim;
+                    uint32_t tile_c = c_i * max_tiles_per_iter + face_c / tile_face_dim;
+                    uint32_t face_mod_nhw = face_nhw % tile_face_dim;
+                    uint32_t face_mod_c = face_c % tile_face_dim;
+                    uint32_t tile_offset = (tile_nhw * in_ntiles_c * tile_size + tile_c * tile_size) * BYTES_PER_ELEM;
+                    uint32_t face_offset =
+                        (face_mod_nhw * face_size * tile_face_dim + face_mod_c * face_size) * BYTES_PER_ELEM;
+                    uint32_t intra_face_offset = intra_face_nhw * face_dim * BYTES_PER_ELEM;
+                    noc_async_read_one_packet(
+                        get_noc_addr(in_l1_read_addr) + face_c * face_dim * BYTES_PER_ELEM,
+                        out_l1_write_addr_base + tile_offset + face_offset + intra_face_offset,
+                        face_dim * BYTES_PER_ELEM);
+                }
+            } else {
+                uint32_t out_l1_write_addr = get_write_ptr(cb_dst);
+                noc_async_read_one_packet(
+                    get_noc_addr(in_l1_read_addr),
+                    out_l1_write_addr,
+                    max_tiles_per_iter * (in_c == 16 ? 16 : 32) * BYTES_PER_ELEM);
+            }
+            noc_async_read_barrier();
             cb_push_back(cb_dst, max_tiles_per_iter);
             cb_pop_front(cb_src, max_tiles_per_iter);
         }
+
+        // Rest partial tiles
         uint32_t in_l1_read_addr = get_read_ptr(cb_src);
         // DPRINT << "COPY INPUT:" << ENDL();
         // tt::data_movement::common ::print_bf16_pages(in_l1_read_addr, 32 * partial_iter_output_tiles, 1);
@@ -85,9 +105,11 @@ void kernel_main() {
             // tiles within a tensor are row major
             uint32_t face_nhw = i / face_dim;
             uint32_t intra_face_nhw = i % face_dim;
-            for (uint32_t face_c = 0; face_c < faces_per_row; ++face_c) {
+            constexpr uint32_t partial_faces_per_row = partial_iter_output_tiles * tile_face_dim;
+            // DPRINT  << "partial_faces_per_row:" << partial_faces_per_row << ENDL();
+            for (uint32_t face_c = 0; face_c < partial_faces_per_row; ++face_c) {
                 uint32_t tile_nhw = face_nhw / tile_face_dim;
-                uint32_t tile_c = face_c / tile_face_dim;
+                uint32_t tile_c = (in_nblocks_c - 1) * max_tiles_per_iter + face_c / tile_face_dim;
                 uint32_t face_mod_nhw = face_nhw % tile_face_dim;
                 uint32_t face_mod_c = face_c % tile_face_dim;
                 uint32_t tile_offset = (tile_nhw * in_ntiles_c * tile_size + tile_c * tile_size) * BYTES_PER_ELEM;
