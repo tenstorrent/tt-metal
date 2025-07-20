@@ -83,7 +83,8 @@ jobs:
           { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "falcon7b", runner-label: "N300", performance: true, cmd: run_falcon7b_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "whisper", runner-label: "N300", performance: true, cmd: run_whisper_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
-          { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf, owner_id: U06ECNVR0EN}, # Evan Smal
+          # hangs: https://github.com/tenstorrent/tt-metal/issues/25369
+          # { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf, owner_id: U06ECNVR0EN}, # Evan Smal
           { name: "segformer", runner-label: "N300", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas (vguduruTT)
           { name: "sentence_bert", runner-label: "N300", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
           #{ name: "yolov11", runner-label: "N300", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
@@ -128,7 +129,7 @@ jobs:
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
-        timeout-minutes: 120
+        timeout-minutes: 60
         env:
           LOGURU_LEVEL: INFO
         with:
