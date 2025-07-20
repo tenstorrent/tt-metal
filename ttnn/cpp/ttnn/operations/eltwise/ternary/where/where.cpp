@@ -22,50 +22,40 @@ namespace ternary_utils {
 // where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 // y = (predicate >= 0)*value_true + (predicate < 0)*value_false
 
-template <typename T1, typename T2>
 Tensor where_impl(
     QueueId queue_id,
     const Tensor& predicate,
-    const T1& value_true,
-    const T2& value_false,
+    const auto& value_true,
+    const auto& value_false,
     const MemoryConfig& memory_config,
     std::optional<Tensor> output) {
-    if constexpr (std::is_same_v<std::decay_t<T1>, Tensor> && std::is_same_v<std::decay_t<T2>, Tensor>) {
-        // Both are Tensors: use ttnn::prim::where - also need to add non-bcast check
-
-        std::optional<DataType> output_dtype =
-            output.has_value() ? std::optional<DataType>(output->dtype()) : std::optional<DataType>(predicate.dtype());
-        return ttnn::prim::where(queue_id, predicate, value_true, value_false, output_dtype, memory_config, output);
-    } else {
-        // At least one is a float: use the alternate code
-        using FusedActivations = tt::stl::Span<const unary::UnaryWithParam>;
-        constexpr auto dtype = std::nullopt;
-        const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
-            return ttnn::multiply(
-                queue_id,
-                condition,
-                value,
-                dtype,
-                memory_config,
-                /* output */ std::nullopt,
-                /* post_activations */ FusedActivations{},
-                /* lhs_activations */ FusedActivations{},
-                /* rhs_activations */ FusedActivations{},
-                /* use_legacy */ false);
-        };
-
-        return ttnn::add(
+    using FusedActivations = tt::stl::Span<const unary::UnaryWithParam>;
+    constexpr auto dtype = std::nullopt;
+    const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
+        return ttnn::multiply(
             queue_id,
-            get_multiplied(ttnn::gtz(queue_id, predicate, memory_config), value_true),
-            get_multiplied(ttnn::lez(queue_id, predicate, memory_config), value_false),
+            condition,
+            value,
             dtype,
             memory_config,
-            output,
+            /* output */ std::nullopt,
             /* post_activations */ FusedActivations{},
             /* lhs_activations */ FusedActivations{},
             /* rhs_activations */ FusedActivations{},
             /* use_legacy */ false);
-    }
+    };
+
+    return ttnn::add(
+        queue_id,
+        get_multiplied(ttnn::gtz(queue_id, predicate, memory_config), value_true),
+        get_multiplied(ttnn::lez(queue_id, predicate, memory_config), value_false),
+        dtype,
+        memory_config,
+        output,
+        /* post_activations */ FusedActivations{},
+        /* lhs_activations */ FusedActivations{},
+        /* rhs_activations */ FusedActivations{},
+        /* use_legacy */ false);
 }
 
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
@@ -89,23 +79,62 @@ Tensor WhereOperation::invoke(
         (memory_config.has_value() ? memory_config.value().is_sharded() : false) ||
         (output.has_value() ? output.value().memory_config().is_sharded() : false);
 
-    // Check if both are Tensors and no sharding is present and involves no broadcast
-    if (is_value_true_Tensor && is_value_false_Tensor && !has_shard_spec) {
-        const auto& t_true = std::get<Tensor>(value_true);
-        const auto& t_false = std::get<Tensor>(value_false);
-        if (ternary_utils::have_same_shape(t_true, predicate) && ternary_utils::have_same_shape(predicate, t_false)) {
-            std::cout << "ternary LLK where op" << std::endl;
-            std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
-                                                                      : std::optional<DataType>(predicate.dtype());
-            return ttnn::prim::where(
-                queue_id,
-                predicate,
-                t_true,
-                t_false,
-                output_dtype,
-                memory_config.value_or(predicate.memory_config()),
-                output);
+    // Check if we can use fast ternary LLK path (TTT, TTS, TST cases)
+    if (!has_shard_spec) {
+        if (is_value_true_Tensor && is_value_false_Tensor) {
+            // TTT case: tensor-tensor-tensor
+            const auto& t_true = std::get<Tensor>(value_true);
+            const auto& t_false = std::get<Tensor>(value_false);
+            if (ternary_utils::have_same_shape(t_true, predicate) &&
+                ternary_utils::have_same_shape(predicate, t_false)) {
+                std::cout << "ternary LLK where op (TTT)" << std::endl;
+                std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
+                                                                          : std::optional<DataType>(predicate.dtype());
+                return ttnn::prim::where(
+                    queue_id,
+                    predicate,
+                    t_true,
+                    t_false,
+                    output_dtype,
+                    memory_config.value_or(predicate.memory_config()),
+                    output);
+            }
+        } else if (is_value_true_Tensor && !is_value_false_Tensor) {
+            // TTS case: tensor-tensor-scalar
+            const auto& t_true = std::get<Tensor>(value_true);
+            if (ternary_utils::have_same_shape(t_true, predicate)) {
+                std::cout << "ternary LLK where op (TTS)" << std::endl;
+                float scalar_false = std::get<float>(value_false);
+                std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
+                                                                          : std::optional<DataType>(predicate.dtype());
+                return ttnn::prim::where(
+                    queue_id,
+                    predicate,
+                    t_true,
+                    scalar_false,
+                    output_dtype,
+                    memory_config.value_or(predicate.memory_config()),
+                    output);
+            }
+        } else if (!is_value_true_Tensor && is_value_false_Tensor) {
+            // TST case: tensor-scalar-tensor
+            const auto& t_false = std::get<Tensor>(value_false);
+            if (ternary_utils::have_same_shape(predicate, t_false)) {
+                std::cout << "ternary LLK where op (TST)" << std::endl;
+                float scalar_true = std::get<float>(value_true);
+                std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
+                                                                          : std::optional<DataType>(predicate.dtype());
+                return ttnn::prim::where(
+                    queue_id,
+                    predicate,
+                    scalar_true,
+                    t_false,
+                    output_dtype,
+                    memory_config.value_or(predicate.memory_config()),
+                    output);
+            }
         }
+        // TSS case: tensor-scalar-scalar will fall through to legacy implementation
     }
 
     std::cout << "Legacy where op" << std::endl;

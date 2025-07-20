@@ -9,6 +9,8 @@
 
 namespace ttnn::operations::ternary {
 
+DataType WhereDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
+
 WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.predicate.is_sharded()) {
@@ -27,6 +29,8 @@ void WhereDeviceOperation::validate_on_program_cache_hit(
 void WhereDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& predicate_tensor = tensor_args.predicate;
+    const auto& value_true_tensor = tensor_args.value_true;
+    const auto& value_false_tensor = tensor_args.value_false;
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
 
     auto out_memory_config = args.memory_config;
@@ -48,6 +52,38 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
         "Where operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
         static_cast<int>(predicate_tensor.memory_config().memory_layout()),
         static_cast<int>(out_memory_config.memory_layout()));
+
+    // Validate tensor shapes based on variant
+    if (args.where_variant == WhereVariant::TTT) {
+        TT_FATAL(
+            predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
+            "Where TTT operation requires predicate and value_true to have same shape. Predicate: {}, Value true: {}",
+            predicate_tensor.logical_shape(),
+            value_true_tensor.value().logical_shape());
+        TT_FATAL(
+            predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
+            "Where TTT operation requires predicate and value_false to have same shape. Predicate: {}, Value false: {}",
+            predicate_tensor.logical_shape(),
+            value_false_tensor.value().logical_shape());
+    } else if (args.where_variant == WhereVariant::TTS) {
+        TT_FATAL(
+            predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
+            "Where TTS operation requires predicate and value_true to have same shape. Predicate: {}, Value true: {}",
+            predicate_tensor.logical_shape(),
+            value_true_tensor.value().logical_shape());
+        TT_FATAL(
+            args.value_false_scalar.has_value(),
+            "Where TTS operation requires value_false_scalar to be set in operation attributes");
+    } else if (args.where_variant == WhereVariant::TST) {
+        TT_FATAL(
+            predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
+            "Where TST operation requires predicate and value_false to have same shape. Predicate: {}, Value false: {}",
+            predicate_tensor.logical_shape(),
+            value_false_tensor.value().logical_shape());
+        TT_FATAL(
+            args.value_true_scalar.has_value(),
+            "Where TST operation requires value_true_scalar to be set in operation attributes");
+    }
 
     if (!predicate_tensor.is_sharded()) {
         TT_FATAL(
@@ -127,12 +163,32 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
             program_factory.index(),
             predicate_tensor.dtype(),
             predicate_tensor.memory_config(),
-            value_true.dtype(),
-            value_true.memory_config(),
-            value_true.dtype(),
-            value_true.memory_config(),
-            value_false.dtype(),
-            value_false.memory_config(),
+            value_true.value().dtype(),
+            value_true.value().memory_config(),
+            value_false.value().dtype(),
+            value_false.value().memory_config(),
+            predicate_shape.volume());
+    } else if (variant == WhereVariant::TTS) {
+        // For TTS, include the scalar value in hash
+        hash = tt::tt_metal::operation::hash_operation<WhereDeviceOperation>(
+            args,
+            program_factory.index(),
+            predicate_tensor.dtype(),
+            predicate_tensor.memory_config(),
+            value_true.value().dtype(),
+            value_true.value().memory_config(),
+            args.value_false_scalar.value(),
+            predicate_shape.volume());
+    } else if (variant == WhereVariant::TST) {
+        // For TST, include the scalar value in hash
+        hash = tt::tt_metal::operation::hash_operation<WhereDeviceOperation>(
+            args,
+            program_factory.index(),
+            predicate_tensor.dtype(),
+            predicate_tensor.memory_config(),
+            args.value_true_scalar.value(),
+            value_false.value().dtype(),
+            value_false.value().memory_config(),
             predicate_shape.volume());
     }
 
@@ -167,6 +223,52 @@ WhereDeviceOperation::invoke(
         .value_true = value_true,
         .value_false = value_false,
         .optional_output_tensor = optional_output_tensor};
+
+    return {attributes, args};
+}
+
+std::tuple<WhereDeviceOperation::operation_attributes_t, WhereDeviceOperation::tensor_args_t>
+WhereDeviceOperation::invoke(
+    const Tensor& predicate,
+    const Tensor& value_true,
+    float value_false_scalar,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    operation_attributes_t attributes{
+        .where_variant = WhereVariant::TTS,
+        .memory_config = memory_config.value_or(predicate.memory_config()),
+        .input_dtype = predicate.dtype(),
+        .dtype = output_dtype.value_or(value_true.dtype()),
+        .compute_kernel_config = std::nullopt,
+        .value_false_scalar = value_false_scalar,
+    };
+
+    tensor_args_t args{
+        .predicate = predicate, .value_true = value_true, .optional_output_tensor = optional_output_tensor};
+
+    return {attributes, args};
+}
+
+std::tuple<WhereDeviceOperation::operation_attributes_t, WhereDeviceOperation::tensor_args_t>
+WhereDeviceOperation::invoke(
+    const Tensor& predicate,
+    float value_true_scalar,
+    const Tensor& value_false,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    operation_attributes_t attributes{
+        .where_variant = WhereVariant::TST,
+        .memory_config = memory_config.value_or(predicate.memory_config()),
+        .input_dtype = predicate.dtype(),
+        .dtype = output_dtype.value_or(value_false.dtype()),
+        .compute_kernel_config = std::nullopt,
+        .value_true_scalar = value_true_scalar,
+    };
+
+    tensor_args_t args{
+        .predicate = predicate, .value_false = value_false, .optional_output_tensor = optional_output_tensor};
 
     return {attributes, args};
 }

@@ -18,16 +18,32 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_w
         ((2, 3, 1, 1), (2, 3, 32, 32), (2, 3, 32, 32)),  # legacy
     ],
 )
-def test_ttnn_where(a_shape, b_shape, c_shape, device):
+@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where(a_shape, b_shape, c_shape, variant, condition, device):
     torch.manual_seed(0)
-    C = torch.ones(a_shape, dtype=torch.float32)
-    T = torch.randn(b_shape, dtype=torch.float32)
-    F = torch.ones(c_shape, dtype=torch.float32) * 10
+    C = torch.ones(a_shape, dtype=torch.float32) * condition
+    if variant == "TTS":
+        T = torch.randn(b_shape, dtype=torch.float32)
+        F = 10.0
+    elif variant == "TST":
+        T = 5.0
+        F = torch.randn(b_shape, dtype=torch.float32)
+    elif variant == "TTT":
+        T = torch.randn(b_shape, dtype=torch.float32)
+        F = torch.ones(c_shape, dtype=torch.float32) * 10
     golden = torch.where(C.bool(), T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    if variant == "TTS":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = 10.0
+    elif variant == "TST":
+        ttnn_T = 5.0
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    elif variant == "TTT":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
     # print("\ntt result", result)
@@ -43,16 +59,32 @@ def test_ttnn_where(a_shape, b_shape, c_shape, device):
         ((256,), (256,), (256,)),  # LLK
     ],
 )
-def test_ttnn_where_int32(a_shape, b_shape, c_shape, device):
+@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where_int32(a_shape, b_shape, c_shape, variant, condition, device):
     torch.manual_seed(0)
-    C = torch.ones(a_shape, dtype=torch.int32)
-    T = torch.randint(-1000, 1000, b_shape, dtype=torch.int32)
-    F = torch.randint(-2000, 100, c_shape, dtype=torch.int32)
+    C = torch.ones(a_shape, dtype=torch.int32) * condition
+    if variant == "TTS":
+        T = torch.randint(-1000, 1000, b_shape, dtype=torch.int32)
+        F = 7
+    elif variant == "TST":
+        T = 10
+        F = torch.randint(-2000, 100, c_shape, dtype=torch.int32)
+    elif variant == "TTT":
+        T = torch.randint(-1000, 1000, b_shape, dtype=torch.int32)
+        F = torch.randint(-2000, 100, c_shape, dtype=torch.int32)
     golden = torch.where(C.bool(), T, F)
 
-    ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    if variant == "TTS":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = 7
+    elif variant == "TST":
+        ttnn_T = 10
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    elif variant == "TTT":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
     # print(result)
@@ -67,19 +99,35 @@ def test_ttnn_where_int32(a_shape, b_shape, c_shape, device):
         ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),
     ],
 )
-def test_ttnn_where_block(tor_dtype, ttnn_dtype, a_shape, b_shape, c_shape, device):
+@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where_block(tor_dtype, ttnn_dtype, a_shape, b_shape, c_shape, variant, condition, device):
     torch.manual_seed(400)
-    C = torch.ones(a_shape, dtype=tor_dtype)
+    C = torch.ones(a_shape, dtype=tor_dtype) * condition
     T = torch.randn(b_shape, dtype=tor_dtype)
     F = torch.ones(c_shape, dtype=tor_dtype) * 10
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    C = ttnn.to_torch(ttnn_C)
-    T = ttnn.to_torch(ttnn_T)
-    F = ttnn.to_torch(ttnn_F)
+    if variant == "TTS":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = 10.0
+    elif variant == "TST":
+        ttnn_T = 5.0
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    elif variant == "TTT":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
+    C = ttnn.to_torch(ttnn_C)
+    if variant == "TTS":
+        T = ttnn.to_torch(ttnn_T)
+        F = 10.0
+    elif variant == "TST":
+        T = 5.0
+        F = ttnn.to_torch(ttnn_F)
+    elif variant == "TTT":
+        T = ttnn.to_torch(ttnn_T)
+        F = ttnn.to_torch(ttnn_F)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     golden = torch.where(C.bool(), T, F)
     result = ttnn.to_torch(ttnn_result)
