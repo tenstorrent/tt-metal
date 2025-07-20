@@ -1,8 +1,8 @@
 {
     "targets": {
         "4U": {
-            "prefill_pcc": 0.9132907037883032,
-            "decode_pcc": 0.9470088259102208,
+            "prefill_pcc": 0.9218901778068198,
+            "decode_pcc": 0.9535217595636257,
             "throughput": 53.7,
             "absolute_margin": 0.5,
             "token_pos": 127
