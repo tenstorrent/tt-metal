@@ -296,14 +296,17 @@ private:
 
     DataMovementProcessor get_processor(bool is_eth) {
         int max_index = 1;
+        int num = 0;
 
         if (is_eth) {
             max_index = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
                             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
                         1;
+            // hardcoded to subordinate for now
+            num = max_index;
+        } else {
+            num = this->generate_random_num(0, max_index);
         }
-
-        const uint32_t num = this->generate_random_num(0, max_index);
         DataMovementProcessor processor;
         if (num == 0) {
             processor = DataMovementProcessor::RISCV_0;
