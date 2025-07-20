@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: dispatcher_data.py
-
 Usage:
     dispatcher_data
 """

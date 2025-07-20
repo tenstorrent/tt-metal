@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: triage.py
-
 Usage:
     triage [--initialize-with-noc1] [--verbosity=<verbosity>] [--run=<script>]...
 
@@ -292,7 +290,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
     return script_queue
 
 
-def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
+def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = None) -> ScriptArguments:
     from docopt import (
         parse_defaults,
         parse_pattern,
@@ -308,9 +306,9 @@ def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
     import sys
 
     docs: dict[str, str] = {}
-    if __doc__ is not None:
-        my_name = os.path.splitext(os.path.basename(__file__))[0]
-        docs[my_name] = __doc__
+    assert __doc__ is not None, "Help message must be provided in the script docstring."
+    my_name = os.path.splitext(os.path.basename(__file__))[0]
+    docs[my_name] = __doc__
     for script in scripts.values():
         if hasattr(script.module, "__doc__") and script.module.__doc__:
             docs[script.name] = script.module.__doc__
@@ -335,9 +333,35 @@ def parse_arguments(scripts: dict[str, TriageScript]) -> ScriptArguments:
     for ao in combined_pattern.flat(AnyOptions):
         ao.children = list(set(combined_options) - pattern_options)
     matched, left, collected = combined_pattern.fix().match(argv)
-    if matched and left == []:  # better error message if left?
+    if matched and left == []:
         return ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
-    return ScriptArguments({})
+
+    detailed_help = any([a.name == "--help" or a.name == "-h" or a.name == "/?" for a in left])
+    doc = __doc__ if script_path is None else scripts[script_path].module.__doc__
+    if doc is None:
+        doc = __doc__
+    if detailed_help:
+        help_message = doc
+        if script_path is None:
+            help_message += "\n\nYou can also use arguments of available scripts:\n"
+        else:
+            help_message += "\n\nYou can also use arguments of dependent scripts:\n"
+        for script in scripts.values():
+            if script.path != script_path and hasattr(script.module, "__doc__") and script.module.__doc__:
+                script_options = parse_defaults(script.module.__doc__)
+                if len(script_options) > 0:
+                    help_message += f"\n{script.module.__doc__}\n"
+    else:
+        help_message = printable_usage(doc)
+        for script in scripts.values():
+            if script.path != script_path and hasattr(script.module, "__doc__") and script.module.__doc__:
+                script_options = parse_defaults(script.module.__doc__)
+                if len(script_options) > 0:
+                    usage = printable_usage(script.module.__doc__)
+                    help_message += " " + " ".join(usage.split()[2:])
+
+    DocoptExit.usage = help_message
+    raise DocoptExit()
 
 
 FAILURE_CHECKS: list[str] = []
@@ -468,7 +492,7 @@ def run_script(
 
     # Parse arguments
     if args is None:
-        args = parse_arguments(scripts)
+        args = parse_arguments(scripts, script_path)
 
         # Setting verbosity level
         try:

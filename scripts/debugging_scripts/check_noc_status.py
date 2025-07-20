@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: check_noc_status.py
-
 Usage:
     scripts/debugging_scripts/check_noc_status.py <elf-file> [-v]
 

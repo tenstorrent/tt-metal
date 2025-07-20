@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: inspector_data.py
-
 Usage:
     inspector_data [--inspector-log-path=<inspector_log_path>]
 

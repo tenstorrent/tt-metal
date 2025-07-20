@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: check_noc_locations.py
-
 Usage:
     check_noc_locations
 

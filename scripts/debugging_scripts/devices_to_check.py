@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: devices_to_check.py
-
 Usage:
     devices_to_check [--dev=<device_id>]...
 

@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: dump_callstacks.py
-
 Usage:
     dump_callstacks [--full_callstack] [--gdb_callstack]
 
