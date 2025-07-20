@@ -158,7 +158,7 @@ What you see below highlights the expectations for all our models that successfu
 <li><p>End-to-end performance metrics should include the time from input preparation to output readiness and any other relevant metrics that apply to the model’s use case.</p></li>
 <li><p>Provide clear instructions or scripts to measure these end-to-end metrics within the <code class="docutils literal notranslate"><span class="pre">README.md</span></code>. These should also be incorporated into the CI pipeline for automated testing.</p></li>
 <li><p>Discuss any external dependencies or services required for the full operation of your model and how they impact the end-to-end performance.</p></li>
-<li><p>Please add your tests to either <code class="docutils literal notranslate"><span class="pre">run_perf_models_other()</span></code>, <code class="docutils literal notranslate"><span class="pre">run_perf_models_llm_javelin()</span></code>, or <code class="docutils literal notranslate"><span class="pre">run_perf_models_cnn_javelin()</span></code> within <code class="docutils literal notranslate"><span class="pre">run_performance.sh</span></code>. Only tests marked with <code class="docutils literal notranslate"><span class="pre">@pytest.mark.models_performance_bare_metal</span></code> will be included.</p></li>
+<li><p>Please add your single-card performance tests to <cite>.github/workflows/perf-models-impl.yaml</cite>. Only tests marked with <code class="docutils literal notranslate"><span class="pre">@pytest.mark.models_performance_bare_metal</span></code> will be included.</p></li>
 </ul>
 </dd>
 </dl>
