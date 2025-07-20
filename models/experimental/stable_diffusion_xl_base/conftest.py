@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import pytest
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_CI_WEIGHTS_PATH
 
 
 def pytest_addoption(parser):
@@ -48,9 +46,3 @@ def evaluation_range(request):
 @pytest.fixture
 def loop_iter_num(request):
     return int(request.config.getoption("--loop-iter-num"))
-
-
-@pytest.fixture(scope="session", autouse=True)
-def set_weights_path():
-    if os.getenv("CI") == "true":
-        os.environ["HF_HOME"] = SDXL_CI_WEIGHTS_PATH

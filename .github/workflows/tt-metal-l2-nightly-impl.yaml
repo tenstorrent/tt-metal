@@ -42,7 +42,7 @@ jobs:
             cmd:  if [[ "${{ inputs.runner-label }}" == "N300" ]]; then
                     export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml;
                   fi;
-                  pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode"
+                  HF_HOME=/mnt/MLPerf/tt_dnn-models/stable_diffusion_xl_base pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode"
             owner: U07N3CUUN05 # Iva Potkonjak
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
