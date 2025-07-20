@@ -1865,6 +1865,13 @@ void ControlPlane::generate_local_intermesh_link_table() {
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
     const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
+
+    if (*(distributed_context.rank()) == 0) {
+        for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
+            std::cout << "Chip: " << chip_id << " Has Intermesh Links: " << this->has_intermesh_links(chip_id)
+                      << std::endl;
+        }
+    }
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (this->has_intermesh_links(chip_id)) {
             for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
