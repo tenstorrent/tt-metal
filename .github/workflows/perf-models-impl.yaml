@@ -41,6 +41,7 @@ jobs:
           - name: other
             model-list:
               - models/demos/convnet_mnist/tests/
+              # This is bad. These should be referencing .../tests directories
               - models/demos/bert_tiny/tests/test_performance.py
               - models/demos/squeezebert/tests/test_performance.py
               - models/demos/roberta/tests/test_performance.py
@@ -48,13 +49,19 @@ jobs:
           - name: other_magic_env
             model-list:
               - models/demos/yolov10x/tests/
+              # This is bad. This should be referencing .../tests directory
               - models/demos/sentence_bert/tests/test_sentence_bert_e2e_performant.py
+              # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
+              # This is bad. This should be referencing .../tests directory
               - models/demos/yolov11/tests/test_e2e_performant.py
+              # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/bert_tiny/tests/test_performance.py
               - models/demos/yolov4/tests/perf/
               - models/demos/yolov7/tests/
+              # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/distilbert/tests/test_perf_distilbert.py
+              # This is bad. This should be referencing .../tests directory
               - models/demos/segformer/tests/test_e2e_performant.py
               - models/demos/metal_BERT_large_11/tests/
               - models/demos/yolov8s_world/tests/
@@ -89,7 +96,7 @@ jobs:
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
       - name: Run performance regressions
-        timeout-minutes: 70
+        timeout-minutes: 35
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO
@@ -106,15 +113,11 @@ jobs:
           install_wheel: true
           run_args: |
             export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+            export WH_ARCH_YAML=$MAGIC_ENV
 
-            if [[ "${{ matrix.model-group.name }}" == "other_magic_env" ]]; then
-              export WH_ARCH_YAML=$MAGIC_ENV
-            elif [[ "${{ matrix.model-group.name }}" == "other" ]]; then
+            if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
+              unset WH_ARCH_YAML
               echo "No environment variable engineering needed for other models"
-            elif [[ "${{ matrix.model-group.name }}" == "cnn_javelin" ]]; then
-              export WH_ARCH_YAML=$MAGIC_ENV
-            elif [[ "${{ matrix.model-group.name }}" == "llm_javelin" ]]; then
-              export WH_ARCH_YAML=$MAGIC_ENV
             elif [[ "${{ matrix.model-group.name }}" == "tt_transformers" ]]; then
               export QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct
               export FAKE_DEVICE=N150
