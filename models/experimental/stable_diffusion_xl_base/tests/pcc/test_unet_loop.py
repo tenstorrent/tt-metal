@@ -137,7 +137,7 @@ def run_unet_inference(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=False,  # TODO: Figure out L2 nightly CI
+        local_files_only=is_ci_env,
     )
 
     # 2. Load tt_unet and tt_scheduler
