@@ -225,20 +225,20 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "BinaryDeviceOperation_1": {
+        "BinaryNgDeviceOperation_0": {
             "op_name": "BinaryDeviceOperation_Temerature_Scaling",
-            "kernel_duration": 900,
-            "op_to_op": 720.0,
-            "non-overlapped-dispatch-time": 6464.0,
+            "kernel_duration": 9000,
+            "op_to_op": 7200.0,
+            "non-overlapped-dispatch-time": 64640.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "BinaryDeviceOperation_2": {
+        "BinaryNgDeviceOperation_1": {
             "op_name": "BinaryDeviceOperation_Indices_Correction",
-            "kernel_duration": 3421.53125,
-            "op_to_op": 735.5454545454545,
-            "non-overlapped-dispatch-time": 7268.7,
+            "kernel_duration": 34210.53125,
+            "op_to_op": 7350.5454545454545,
+            "non-overlapped-dispatch-time": 72680.7,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
@@ -386,24 +386,6 @@
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 1.5
-        },
-        "BinaryNgDeviceOperation_0": {
-            "op_name": "BinaryDeviceOperation_Temerature_Scaling",
-            "kernel_duration": 5810.90625,
-            "op_to_op": 6990.6666666666666,
-            "non-overlapped-dispatch-time": 47670.785714285715,
-            "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.5
-        },
-        "BinaryNgDeviceOperation_1": {
-            "op_name": "BinaryDeviceOperation_Indices_Correction",
-            "kernel_duration": 31390.0291666666667,
-            "op_to_op": 6650.4,
-            "non-overlapped-dispatch-time": 63860.571428571428,
-            "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.5
         },
         "Untilize_0": {
             "op_name": "Untilize_0",
