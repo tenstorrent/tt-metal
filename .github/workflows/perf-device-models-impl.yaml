@@ -56,13 +56,13 @@ jobs:
       #     submodules: recursive
       #     path: repo
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@kkabilar-reorg-devperf-1
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: non-civ2 tests
-        uses: ./.github/actions/device-perf-test
+        uses: ./.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
           test_name: "non-civ2_tests"
           commands: |
