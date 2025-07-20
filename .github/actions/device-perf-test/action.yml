@@ -12,8 +12,8 @@ runs:
         # cd repo
         # ls
         # ./build_metal.sh --enable-profiler
-        export PYTHONPATH=$(pwd)
-        ls tests/scripts
+        # export PYTHONPATH=$(pwd)
+        # ls tests/scripts
         set -x
         export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
 
