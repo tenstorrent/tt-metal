@@ -472,6 +472,11 @@ class TTTriageError(Exception):
     pass
 
 
+def log_check(success: bool, message: str) -> None:
+    if not success:
+        utils.ERROR(message)
+
+
 def main():
     # Enumerate all scripts in application directory
     application_path = os.path.dirname(__file__)

@@ -14,7 +14,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, TTTriageError, triage_field, hex_serializer
+from triage import ScriptConfig, triage_field, hex_serializer, log_check
 from check_per_device import run as get_check_per_device
 from datetime import timedelta
 import time
@@ -25,6 +25,7 @@ from ttexalens.hardware.noc_block import NocBlock
 from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
+import utils
 from utils import RED, BLUE, GREEN, ORANGE, RST
 
 script_config = ScriptConfig(
@@ -48,9 +49,7 @@ def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     delay_seconds = 0.1
     time.sleep(delay_seconds)
     heartbeat_1 = read_arc_telemetry_entry(device_id, "TAG_ARC0_HEALTH")
-    if heartbeat_1 <= heartbeat_0:
-        print(f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
-        raise TTTriageError(f"ARC heartbeat not increasing: {heartbeat_1}.")
+    log_check(heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
 
     # Compute uptime
     arcclk_mhz = read_arc_telemetry_entry(device_id, "TAG_ARCCLK")
@@ -58,14 +57,8 @@ def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     uptime_seconds = heartbeat_1 / heartbeats_per_second
 
     # Heartbeat must be between 500 and 20000 hb/s
-    if heartbeats_per_second < 500:
-        print(f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}500{RST}hb/s")
-        raise TTTriageError(f"ARC heartbeat is too low: {heartbeats_per_second}hb/s. Expected at least 500hb/s")
-    if heartbeats_per_second > 20000:
-        print(
-            f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}20000{RST}hb/s"
-        )
-        raise TTTriageError(f"ARC heartbeat is too high: {heartbeats_per_second}hb/s. Expected at most 20000hb/s")
+    log_check(heartbeats_per_second < 500, f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}500{RST}hb/s")
+    log_check(heartbeats_per_second > 20000, f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}20000{RST}hb/s")
 
     return ArcCheckData(
         location=arc.location,
@@ -83,9 +76,7 @@ def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     delay_seconds = 0.2
     time.sleep(delay_seconds)
     heartbeat_1 = read_arc_telemetry_entry(device_id, "TAG_TIMER_HEARTBEAT")
-    if heartbeat_1 <= heartbeat_0:
-        print(f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
-        raise TTTriageError(f"ARC heartbeat not increasing: {heartbeat_1}.")
+    log_check(heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
 
     # Compute uptime
     arcclk_mhz = read_arc_telemetry_entry(device_id, "TAG_ARCCLK")
@@ -93,12 +84,8 @@ def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     uptime_seconds = heartbeat_1 / heartbeats_per_second
 
     # Heartbeat must be between 10 and 50
-    if heartbeats_per_second < 10:
-        print(f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s")
-        raise TTTriageError(f"ARC heartbeat is too low: {heartbeats_per_second}hb/s. Expected at least 10hb/s")
-    if heartbeats_per_second > 50:
-        print(f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}50{RST}hb/s")
-        raise TTTriageError(f"ARC heartbeat is too high: {heartbeats_per_second}hb/s. Expected at most 50hb/s")
+    log_check(heartbeats_per_second < 10, f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s")
+    log_check(heartbeats_per_second > 50, f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}50{RST}hb/s")
 
     return ArcCheckData(
         location=arc.location,
@@ -112,15 +99,13 @@ def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
 def check_arc(device: Device):
     arc = device.arc_block
     postcode = arc.get_register_store().read_register("ARC_RESET_SCRATCH0")
-    if postcode & 0xFFFF0000 != 0xC0DE0000:
-        print(f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}")
-        raise TTTriageError(f"ARC postcode: 0x{postcode:08x}. Expected 0xc0de____")
+    log_check(postcode & 0xFFFF0000 == 0xC0DE0000, f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}")
     if type(device) == WormholeDevice:
         return check_wormhole_arc(arc, postcode)
     elif type(device) == BlackholeDevice:
         return check_blackhole_arc(arc, postcode)
     else:
-        raise TTTriageError(f"Unsupported architecture: {device._arch}")
+        utils.DEBUG(f"Unsupported architecture for check_arc: {device._arch}")
 
 
 def run(args, context: Context):
