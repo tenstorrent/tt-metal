@@ -59,9 +59,7 @@ def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
 
     # Heartbeat must be between 500 and 20000 hb/s
     if heartbeats_per_second < 500:
-        print(
-            f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}500{RST}hb/s"
-        )
+        print(f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}500{RST}hb/s")
         raise TTTriageError(f"ARC heartbeat is too low: {heartbeats_per_second}hb/s. Expected at least 500hb/s")
     if heartbeats_per_second > 20000:
         print(
@@ -96,14 +94,10 @@ def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
 
     # Heartbeat must be between 10 and 50
     if heartbeats_per_second < 10:
-        print(
-            f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s"
-        )
+        print(f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s")
         raise TTTriageError(f"ARC heartbeat is too low: {heartbeats_per_second}hb/s. Expected at least 10hb/s")
     if heartbeats_per_second > 50:
-        print(
-            f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}50{RST}hb/s"
-        )
+        print(f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}50{RST}hb/s")
         raise TTTriageError(f"ARC heartbeat is too high: {heartbeats_per_second}hb/s. Expected at most 50hb/s")
 
     return ArcCheckData(

@@ -534,5 +534,6 @@ def main():
                 else:
                     serialize_result(script, "pass")
 
+
 if __name__ == "__main__":
     main()

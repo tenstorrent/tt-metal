@@ -29,6 +29,8 @@ DEFAULT_TABLE_FORMAT = TableFormat(
 
 # Verbosity and logging methods
 from enum import Enum
+
+
 class Verbosity(Enum):
     NONE = 0
     ERROR = 1
@@ -79,6 +81,7 @@ class Verbosity(Enum):
         global VERBOSITY_VALUE
 
         return VERBOSITY_VALUE.value >= verbosity.value
+
 
 VERBOSITY_VALUE: Verbosity = Verbosity.INFO
 
