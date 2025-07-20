@@ -158,8 +158,8 @@ void MAIN {
                         constexpr uint32_t FIRST_TILE = 0;
 
                         if ((i & 1) == 0) {  // i % 2
-                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
-                            cb_reserve_back(index_tensor_intermediate_cb_index, 2 * one_tile);
+                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
@@ -167,6 +167,7 @@ void MAIN {
                                 tile_id,
                                 index_tensor_intermediate_cb_index);
                             cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
@@ -174,6 +175,7 @@ void MAIN {
                                 tile_id,
                                 value_tensor_intermediate_cb_index);
                             cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
