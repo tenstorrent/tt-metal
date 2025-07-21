@@ -2,11 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <memory>
+#include <vector>
+
+#include "buffer_test_utils.hpp"
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "buffer_test_utils.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
 using tt::tt_metal::IDevice;
@@ -23,7 +31,7 @@ bool SimpleDramReadOnly(IDevice* device, size_t local_address, size_t byte_size)
     readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
+        log_info(tt::LogTest, "Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
     }
     return pass;
 }
@@ -36,7 +44,7 @@ bool SimpleDramWriteOnly(IDevice* device, size_t local_address, size_t byte_size
     readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
+        log_info(tt::LogTest, "Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
     }
     return pass;
 }

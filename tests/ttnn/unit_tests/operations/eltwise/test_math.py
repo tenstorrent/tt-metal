@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -77,9 +76,6 @@ def test_lgamma(device, h, w):
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.uint16, ttnn.uint32])
 def test_eq(device, h, w, output_dtype):
-    if is_grayskull() and output_dtype in (ttnn.uint16, ttnn.uint32):
-        pytest.skip("GS does not support fp32/uint32/uint16 data types")
-
     torch.manual_seed(0)
 
     same = 50
@@ -103,10 +99,10 @@ def test_eq(device, h, w, output_dtype):
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     output_tensor = ttnn.eq(input_tensor_a, input_tensor_b, dtype=output_dtype)
     assert output_tensor.get_dtype() == output_dtype
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages()) - 1
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device)) - 1
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
@@ -121,9 +117,9 @@ def test_eq(device, h, w, output_dtype):
             output_tensor_preallocated_bfloat16, output_dtype, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.eq(input_tensor_a, input_tensor_b, dtype=output_dtype, output_tensor=output_tensor_preallocated)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
     torch_output_tensor_preallocated = ttnn.to_torch(output_tensor_preallocated)
     assert_with_pcc(torch_output_tensor, torch_output_tensor_preallocated, 0.999)
 

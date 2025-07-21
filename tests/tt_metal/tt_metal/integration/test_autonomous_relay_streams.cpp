@@ -2,32 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
-#include <limits>
-#include <random>
-#include <tuple>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "gtest/gtest.h"
-#include "umd/device/types/arch.h"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/logger.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
+#include <tt-metalium/device.hpp>
+#include "gtest/gtest.h"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/persistent_kernel_cache.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
 
 using tt::tt_metal::IDevice;
 
@@ -595,7 +603,6 @@ void build_and_run_autonomous_stream_test(
         bool matches = true;
         std::size_t size = outputs.size();
         uint32_t sub_size_i = 0;
-        uint32_t page_idx = 0;
         for (auto i = 0; i < size; i += page_size_words) {
             std::size_t n_elems = page_size_words - (sub_sizes.at(sub_size_i) * noc_word_size / sizeof(uint32_t));
             sub_size_i = (sub_size_i + 1) % num_sizes;
@@ -616,7 +623,6 @@ void build_and_run_autonomous_stream_test(
                     matches = false;
                 }
             }
-            page_idx++;
         }
         TT_ASSERT(matches);
     } else {

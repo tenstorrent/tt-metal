@@ -6,15 +6,15 @@
 
 #include <device.hpp>
 #include <stdint.h>
-#include <trace_buffer.hpp>
-#include <worker_config_buffer.hpp>
 #include <cstddef>
 #include <unordered_map>
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 #include "sub_device_types.hpp"
+#include "trace_buffer.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -84,6 +84,6 @@ void update_worker_state_post_trace_execution(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<uint32_t>& expected_num_workers_completed);
 
-std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, const uint32_t num_banks);
+std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, uint32_t num_banks);
 
 }  // namespace tt::tt_metal::trace_dispatch

@@ -10,13 +10,15 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
-#include "buffer.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -79,6 +81,9 @@ public:
 
 class GraphTracker {
 public:
+    GraphTracker(const GraphTracker&) = delete;
+    GraphTracker(GraphTracker&&) = delete;
+
     static GraphTracker& instance() {
         static GraphTracker tracker;
         return tracker;
@@ -154,11 +159,12 @@ public:
 private:
     GraphTracker() = default;
     ~GraphTracker() = default;
-    GraphTracker(const GraphTracker&) = delete;
-    GraphTracker(GraphTracker&&) = delete;
 
     std::vector<std::shared_ptr<IGraphProcessor>> processors;
 
     std::shared_ptr<IGraphHooks> hook;
+
+    std::mutex hooked_buffers_mutex;
+    std::unordered_set<const Buffer*> hooked_buffers;
 };
 }  // namespace tt::tt_metal

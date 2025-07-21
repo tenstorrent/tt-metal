@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-typedef const std::string loss_reduction;
+using loss_reduction = const std::string;
 
 namespace ttnn::operations::moreh {
 

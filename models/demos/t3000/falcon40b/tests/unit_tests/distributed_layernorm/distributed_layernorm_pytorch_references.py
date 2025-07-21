@@ -2,12 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import numpy as np
+import torch
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    get_atol_rtol_pcc,
-)
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import get_atol_rtol_pcc
 
 
 def basic_layernorm(x, gamma, beta, epsilon=1e-5):

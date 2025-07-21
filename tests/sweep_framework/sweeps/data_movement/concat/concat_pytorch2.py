@@ -4181,7 +4181,6 @@ def run(
     *,
     device,
 ) -> list:
-    device.enable_async(False)
     torch_input_tensors = [torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16) for shape in concat_specs["shapes"]]
     torch_output_tensor = torch.concat(torch_input_tensors, dim=concat_specs["dim"])
 
@@ -4203,7 +4202,6 @@ def run(
 def test_concat_pytorch2(concat_spec, dtype, layout, device):
     shapes = concat_spec["shapes"]
     dim = concat_spec["dim"]
-    device.enable_async(False)
     if dtype == ttnn.bfloat16 and any([shape[-1] % 2 != 0 for shape in shapes]) and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Skipping test for RM bfloat16 with odd last dimension")
 

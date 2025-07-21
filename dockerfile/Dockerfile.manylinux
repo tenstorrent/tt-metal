@@ -1,0 +1,93 @@
+FROM quay.io/pypa/manylinux_2_34_x86_64
+
+# Hack for CIv2
+RUN FILES=(/etc/yum.repos.d/*.repo) && \
+  sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+
+RUN dnf remove -y epel-release || true
+
+# Copy install dependencies script and required files
+COPY install_dependencies.sh /tmp/install_dependencies.sh
+COPY tt_metal/sfpi-version.sh /tmp/tt_metal/sfpi-version.sh
+
+# Install system dependencies using the install_dependencies.sh script
+# Use --docker flag for Docker-specific optimizations and --no-distributed
+# since we build OpenMPI from source with ULFM support
+RUN chmod +x /tmp/install_dependencies.sh && \
+    /tmp/install_dependencies.sh --docker --no-distributed && \
+    rm -rf /tmp/install_dependencies.sh /tmp/tt_metal
+
+# Install additional packages needed for manylinux builds and OpenMPI compilation
+# that are not covered by the install_dependencies.sh script
+RUN dnf install -y \
+    autoconf \
+    automake \
+    bison \
+    ca-certificates \
+    expat-devel \
+    flex \
+    gfortran \
+    gmp-devel \
+    gawk \
+    libevent-devel \
+    libibverbs-devel \
+    libmpc-devel \
+    libzstd-devel \
+    mpfr-devel \
+    patchutils \
+    pmix-devel \
+    texinfo \
+    wget \
+    zlib-devel \
+    && dnf clean all
+
+# Build ccache 4.7 from source
+WORKDIR /tmp
+RUN wget https://github.com/ccache/ccache/releases/download/v4.7/ccache-4.7.tar.gz && \
+    tar xzf ccache-4.7.tar.gz && \
+    cd ccache-4.7 && \
+    mkdir build && \
+    cd build && \
+    cmake \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DENABLE_TESTING=OFF \
+        -DWARNINGS_AS_ERRORS=FALSE \
+        -GNinja \
+        .. && \
+    ninja && \
+    ninja install && \
+    cd /tmp && \
+    rm -rf ccache-4.7* && \
+    echo "Installed ccache from source: $(ccache --version)"
+
+# Build OpenMPI 5.0.7 with ULFM support from source
+ARG OMPI_TAG=v5.0.7
+ARG OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+WORKDIR /tmp
+RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.git ompi-src && \
+    cd ompi-src && \
+    git submodule update --init --recursive && \
+    ./autogen.pl && \
+    ./configure \
+        --prefix=${OMPI_PREFIX} \
+        --with-ft=ulfm \
+        --enable-wrapper-rpath \
+        --enable-mpirun-prefix-by-default \
+        --disable-mca-dso \
+        --disable-dlopen && \
+    make -j$(nproc) && \
+    make install && \
+    cd .. && \
+    rm -rf ompi-src
+
+
+# ENV needed
+ENV PATH=${OMPI_PREFIX}/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV CC=clang
+ENV CXX=clang++
+ENV TRACY_NO_INVARIANT_CHECK=1
+ENV TRACY_NO_ISA_EXTENSIONS=1

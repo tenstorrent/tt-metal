@@ -3,13 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import ttnn
-import torch
 from typing import Optional
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    conv_cache,
-    get_default_compute_config,
-)
+
+import torch
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import get_default_compute_config
 
 
 def permute_conv_parameters(weight, bias):
@@ -39,7 +38,6 @@ class downsample_2d:
         self,
         device,
         parameters,
-        reader_patterns_cache,
         batch_size,
         input_height,
         input_width,
@@ -118,12 +116,9 @@ class downsample_2d:
         #     hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
         # hidden_states = self.conv(hidden_states)
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=self.shard_layout,
-            input_channels_alignment=32,
-            transpose_shards=False,
             reshard_if_not_optimal=False,
         )
 
@@ -157,12 +152,14 @@ class downsample_2d:
                 input_layout=hidden_states.get_layout(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv_bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv_bias,
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
             self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
@@ -173,7 +170,7 @@ class downsample_2d:
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
+            dtype=ttnn.bfloat8_b,
         )
 
         return hidden_states

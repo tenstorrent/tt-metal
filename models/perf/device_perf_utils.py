@@ -4,22 +4,31 @@
 
 import json
 import time
-import pandas as pd
-
-from loguru import logger
 from collections import defaultdict
 
+import pandas as pd
+from loguru import logger
+
+from models.perf.perf_utils import process_perf_results
 from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
 from tt_metal.tools.profiler.process_model_log import (
     get_latest_ops_log_filename,
+    get_samples_per_s,
     post_process_ops_log,
     run_device_profiler,
-    get_samples_per_s,
 )
-from models.perf.perf_utils import process_perf_results
 
 
-def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="", has_signposts=False):
+def run_device_perf(
+    command,
+    subdir,
+    num_iterations,
+    cols,
+    batch_size,
+    op_name="",
+    has_signposts=False,
+    device_analysis_types=["device_kernel_duration"],
+):
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
@@ -32,7 +41,7 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="
         results[f"MAX {d_col}"] = -float("inf")
 
     for _ in range(num_iterations):
-        run_device_profiler(command, subdir)
+        run_device_profiler(command, subdir, device_analysis_types)
         r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
@@ -72,6 +81,17 @@ def post_process_ops_log_detailed(
     if op_name != "":
         df = df[df["OP CODE"] == op_name]
 
+    # group by DEVICE ID
+    df = df.groupby("DEVICE ID")
+    # now sort the list of df by the DEVICE FW START CYCLE
+    df = sorted(df, key=lambda x: x[1]["DEVICE FW START CYCLE"].iloc[0])
+
+    # Convert list of tuples to list of dataframes
+    dfs = [group for _, group in df]
+
+    # concatenate the list of df into a single df by interleaving the rows
+    df = pd.concat([df.iloc[[i]] for i in range(len(dfs[0])) for df in dfs], ignore_index=True)
+
     if warmup_iters > 0:
         df = df.iloc[warmup_iters:]
 
@@ -92,7 +112,9 @@ def post_process_ops_log_detailed(
     return results
 
 
-def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0):
+def run_device_perf_detailed(
+    command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0, device_analysis_types=None
+):
     duration_cols = [col + " DURATION [ns]" for col in cols]
 
     clear_profiler_runtime_artifacts()
@@ -104,7 +126,10 @@ def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=Fa
         results[f"MAX {d_col}"] = -float("inf")
         results[f"STD {d_col}"] = 0
 
-    run_device_profiler(command, subdir)
+    if device_analysis_types is None:
+        device_analysis_types = ["device_kernel_duration"]
+
+    run_device_profiler(command, subdir, device_analysis_types=device_analysis_types)
     r = post_process_ops_log_detailed(
         subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
     )

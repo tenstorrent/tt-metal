@@ -3,18 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
-#include <cstddef>
-#include <array>
-
-#include "host_api.hpp"
+#include <stdlib.h>
 #include <tt_stl/indestructible.hpp>
-#include "mesh_config.hpp"
-#include "mesh_device.hpp"
-#include "mesh_coord.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
 
-#include "system_mesh.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "gmock/gmock.h"
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 #include "tests/tt_metal/test_utils/env_vars.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/types/arch.h"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -30,11 +41,18 @@ std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
 }
 
 class T3KReshapeTestFixture : public ::testing::Test {
+private:
+    inline static ARCH arch = tt::ARCH::Invalid;
+    inline static size_t num_devices = 0;
+
 public:
+    static void SetUpTestSuite() {
+        arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        num_devices = tt::tt_metal::GetNumAvailableDevices();
+    }
+
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }
@@ -44,7 +62,7 @@ public:
     }
 };
 
-const std::vector<MeshShape> get_mesh_shapes() {
+std::vector<MeshShape> get_mesh_shapes() {
     static tt::stl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
         MeshShape{1, 1}, MeshShape{1, 2}, MeshShape{1, 3}, MeshShape{1, 4}, MeshShape{1, 5}, MeshShape{1, 6},
         MeshShape{1, 7}, MeshShape{1, 8}, MeshShape{2, 1}, MeshShape{2, 2}, MeshShape{2, 3}, MeshShape{2, 4},
@@ -71,7 +89,7 @@ TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
     const auto& shape = GetParam();
 
     auto& system_mesh = SystemMesh::instance();
-    EXPECT_THAT(system_mesh.get_mapped_physical_device_ids(shape), SizeIs(shape.mesh_size()));
+    EXPECT_THAT(system_mesh.get_mapped_physical_device_ids(shape).values(), SizeIs(shape.mesh_size()));
 }
 
 // Test all possible mesh configurations on T3000
@@ -86,7 +104,7 @@ TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
     if (old_shape.mesh_size() != new_shape.mesh_size()) {
         GTEST_SKIP() << "Device counts don't match; we test this in InvalidReshapeDimensions";
     }
-    if (is_line_topology(old_shape) or is_line_topology(new_shape)) {
+    if (old_shape.is_line_topology() or new_shape.is_line_topology()) {
         GTEST_SKIP() << "Either old or new shape is in line configuration; we test this in From1x4To2x2Invalid";
     }
 
@@ -224,7 +242,7 @@ TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
 
     // Fetch the device ids for a physically connected 2x2 mesh.
-    auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshShape(2, 2));
+    auto physical_device_ids = extract_locals(system_mesh.get_mapped_physical_device_ids(MeshShape(2, 2)).values());
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
     // We will create a 1x4 mesh and then reshape it to 2x2.

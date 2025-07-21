@@ -2,29 +2,52 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include <array>
-#include <tuple>
-#include <vector>
-
-#include "gtest/gtest.h"
+#include <stddef.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include "llrt/hal.hpp"
-#include "hal.hpp"
-#include "host_api.hpp"
-#include "kernel_types.hpp"
-#include "sub_device_types.hpp"
-#include "tt_backend_api_types.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <exception>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "command_queue_fixture.hpp"
-#include "multi_command_queue_fixture.hpp"
-#include "sub_device_test_utils.hpp"
+#include <tt-metalium/data_types.hpp>
 #include "dispatch_test_utils.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include "multi_command_queue_fixture.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
+#include "sub_device_test_utils.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_metal {
 
@@ -276,7 +299,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordin
     const auto sub_device_1_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
     const auto sub_device_2_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{1});
 
-    uint32_t cb_addr = hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{cb_addr};
 
     // Start kernels on each sub device and verify their coordinates
@@ -326,7 +349,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogic
     device->load_sub_device_manager(sub_device_manager);
 
     uint32_t cb_addr_eth = hal::get_erisc_l1_unreserved_base();
-    uint32_t cb_addr_worker = hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr_worker = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // Start kernels on each sub device and verify their coordinates
     Program program_1 = tt::tt_metal::CreateProgram();
@@ -390,7 +413,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordin
         device->create_sub_device_manager({sub_device_3, sub_device_4}, k_local_l1_size),
     };
 
-    uint32_t cb_addr = hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{cb_addr};
 
     for (int i = 0; i < sub_device_managers.size(); ++i) {
@@ -463,6 +486,65 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
             EXPECT_EQ(kernel_result[0], unique_runtime_args[0] + common_runtime_args[0]);
         }
     }
+}
+
+TEST_F(MultiCommandQueueSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
+    constexpr uint32_t k_num_iters = 5;
+    auto* device = device_;
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});
+    // Sub device IDs are swapped between the two sub device managers.
+    auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    device->load_sub_device_manager(sub_device_manager);
+
+    tt_metal::Program program_1 = tt_metal::CreateProgram();
+    tt_metal::Program program_2 = tt_metal::CreateProgram();
+    // On sub device 1.
+    tt_metal::CreateKernel(
+        program_1,
+        "tt_metal/kernels/dataflow/blank.cpp",
+        CoreRangeSet(CoreRange({0, 0}, {2, 2})),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    // On sub device 2.
+    tt_metal::CreateKernel(
+        program_2,
+        "tt_metal/kernels/dataflow/blank.cpp",
+        CoreRangeSet(CoreRange({3, 3}, {3, 3})),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    EnqueueProgram(device->command_queue(0), program_1, false);
+    auto early_event = std::make_shared<Event>();
+    EnqueueRecordEvent(device->command_queue(1), early_event);
+    EnqueueProgram(device->command_queue(1), program_2, false);
+
+    // CQ 0 owns sub device 1, CQ 1 owns sub device 2.
+    EXPECT_THROW(EnqueueProgram(device->command_queue(1), program_1, false), std::exception);
+
+    // Finish allows transfering ownership of sub device 1.
+    Finish(device->command_queue(0));
+    EnqueueProgram(device->command_queue(1), program_1, false);
+
+    // CQ 1 owns sub devices 1 and 2.
+    EXPECT_THROW(EnqueueProgram(device->command_queue(0), program_2, false), std::exception);
+
+    // Waiting on an event before the last program was queued does not allow transferring ownership of sub device 2.
+    EnqueueWaitForEvent(device->command_queue(0), early_event);
+    EXPECT_THROW(EnqueueProgram(device->command_queue(0), program_2, false), std::exception);
+
+    // Later event allows transferring ownership of sub device 2 to CQ 0
+    auto event1 = std::make_shared<Event>();
+    auto event2 = std::make_shared<Event>();
+    EnqueueRecordEvent(device->command_queue(1), event1);
+    EnqueueRecordEvent(device->command_queue(1), event2);
+    EnqueueWaitForEvent(device->command_queue(0), event2);
+    EnqueueProgram(device->command_queue(0), program_2, false);
+
+    Synchronize(device);
+    // Synchronize allows transferring ownership of either subdevice.
+    EnqueueProgram(device->command_queue(0), program_1, false);
+    EnqueueProgram(device->command_queue(1), program_2, false);
+    Synchronize(device);
 }
 
 }  // namespace tt::tt_metal

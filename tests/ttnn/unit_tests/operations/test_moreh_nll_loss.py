@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 import pytest
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -159,6 +159,7 @@ def run_moreh_nll_loss_backward(
     assert passing
 
 
+@skip_for_blackhole("Fails on BH. Issue #20579")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -189,7 +190,7 @@ def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, ttn
     ],
 )
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
-def test_moreh_nll_loss_callback(shape, reduction, device, use_program_cache):
+def test_moreh_nll_loss_callback(shape, reduction, device):
     torch.manual_seed(0)
     ignore_index = 0
 
@@ -213,6 +214,7 @@ def test_moreh_nll_loss_callback(shape, reduction, device, use_program_cache):
     )
 
 
+@skip_for_blackhole("Fails on BH. Issue #20579")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -238,6 +240,7 @@ def test_moreh_nll_loss_compute_kernel_options(
     )
 
 
+@skip_for_blackhole("Fails on BH. Issue #20579")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -268,7 +271,7 @@ def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weigh
     ],
 )
 @pytest.mark.parametrize("reduction_mean", [True, False])
-def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device, use_program_cache):
+def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device):
     torch.manual_seed(0)
 
     ignore_index = 0
@@ -293,6 +296,7 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device, us
     )
 
 
+@skip_for_blackhole("Fails on BH. Issue #20579")
 @pytest.mark.parametrize(
     "shape",
     [

@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "bit_utils.h"
 #include <gtest/gtest.h>
+#include <sys/types.h>
 #include <cstdint>
+#include <memory>
+
+#include "bit_utils.h"
 
 TEST(Host, ExtractBitArray) {
     uint32_t src[4] = {0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0};

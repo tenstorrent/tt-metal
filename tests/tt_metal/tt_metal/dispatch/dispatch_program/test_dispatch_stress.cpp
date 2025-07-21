@@ -2,12 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/logger.hpp>
-#include "gtest/gtest.h"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "gtest/gtest.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -108,11 +131,13 @@ TEST(DispatchStress, TensixRunManyTimes) {
         // Need to open/close the device each time in order to reproduce original issue.
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> chip_ids;
+        chip_ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             chip_ids.push_back(id);
         }
         vector<IDevice*> devices_;
         auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        devices_.reserve(reserved_devices_.size());
         for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }

@@ -2,13 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <array>
+#include <cstddef>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -52,10 +81,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
     uint32_t num_tiles = 32;
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size * num_tiles,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size * num_tiles, .buffer_type = BufferType::DRAM, .bottom_up = true};
 
     ReplicatedBufferConfig global_buffer_config{
         .size = single_tile_size * num_tiles,

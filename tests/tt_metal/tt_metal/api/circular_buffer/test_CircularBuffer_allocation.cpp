@@ -2,14 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
-#include "gtest/gtest.h"
-#include "circular_buffer_test_utils.hpp"
+#include <chrono>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include "circular_buffer_test_utils.hpp"
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/util.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -355,7 +378,8 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                         cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
-                    std::map<uint8_t, uint32_t> num_pages_per_buffer_index = golden_num_pages_per_core.at(core_coord);
+                    const std::map<uint8_t, uint32_t>& num_pages_per_buffer_index =
+                        golden_num_pages_per_core.at(core_coord);
 
                     for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
@@ -387,7 +411,8 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                         cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
-                    std::map<uint8_t, uint32_t> num_pages_per_buffer_index = golden_num_pages_per_core.at(core_coord);
+                    const std::map<uint8_t, uint32_t>& num_pages_per_buffer_index =
+                        golden_num_pages_per_core.at(core_coord);
 
                     for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;

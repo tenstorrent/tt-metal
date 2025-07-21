@@ -46,10 +46,6 @@ The following are the APIs to create Sub-Device core groupings, and to configure
 * `sub_device_0 = ttnn.SubDevice([tensix_core_range_set_0, ethernet_core_range_set_0])`
 
   API to create a SubDevice object representing the configuration of cores we want to track as one group for synchronization/allocations.
-* `sub_device_manager_0 = device.create_sub_device_manager([sub_device_0, sub_device_1], 3200)`
-
-  This takes in a list of sub-devices as well as the local allocator size (described in the following section), and generates the required state/metadata for the specified configuration.
-  Note that this does not change the current configuration of the device.
 
 * `sub_device_manager_0 = device.create_sub_device_manager([sub_device_0, sub_device_1], 3200)`
 

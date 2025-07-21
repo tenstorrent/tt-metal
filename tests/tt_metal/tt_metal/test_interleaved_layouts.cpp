@@ -2,20 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <math.h>
-
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <cmath>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <variant>
+#include <vector>
 
-#include "llrt.hpp"
-
-#include "dprint_server.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+enum class ARCH;
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -514,7 +542,7 @@ int main(int argc, char** argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    string arch_name = "";
+    std::string arch_name = "";
     try {
         std::tie(arch_name, input_args) =
             test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");

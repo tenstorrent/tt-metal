@@ -175,7 +175,7 @@ struct BinaryDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle binary_reader_kernel_id;
             tt::tt_metal::KernelHandle bcast_kernel_id;
-            uint32_t cb_src0;
+            tt::tt_metal::CBHandle cb_src0;
             tt::tt_metal::CBHandle out_cb;
             uint32_t ncores_x;
         };
@@ -198,7 +198,7 @@ struct BinaryDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle binary_reader_kernel_id;
             tt::tt_metal::KernelHandle bcast_kernel_id;
-            uint32_t cb_src0;
+            tt::tt_metal::CBHandle cb_src0;
             tt::tt_metal::CBHandle out_cb;
             uint32_t ncores_x;
         };
@@ -237,7 +237,7 @@ struct BinaryDeviceOperation {
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    static tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);

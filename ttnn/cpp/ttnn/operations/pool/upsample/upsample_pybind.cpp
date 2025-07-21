@@ -5,7 +5,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "upsample.hpp"
 
@@ -38,7 +38,6 @@ void bind_upsample(py::module& module) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::upsample);
     ttnn::bind_registered_operation(
         module,
         ttnn::upsample,

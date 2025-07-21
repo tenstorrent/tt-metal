@@ -2,19 +2,32 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Union
-import time
-import ttnn
-import torch
-import numpy as np
-from loguru import logger
 import math
+import os
 import struct
+import time
+from typing import Union
+
+import numpy as np
 import pytest
-
+import torch
+from loguru import logger
 from ttnn.device import Arch
-
 from typing_extensions import deprecated
+
+import ttnn
+
+
+def get_mesh_device():
+    """Fixture to provide mesh device configuration."""
+    mesh_device = os.environ.get("MESH_DEVICE", "N150")
+    mesh_config = {
+        "N150": (1, 1),
+        "N300": (2, 1),
+        "T3K": (8, 1),
+        "TG": (8, 4),
+    }.get(mesh_device, (ttnn.get_num_devices(), 1))
+    return mesh_config
 
 
 ### Math operations ###
@@ -217,11 +230,7 @@ def tt_tensors_to_torch_tensors(
         # Untilize using singlecore since multicore version runs out of l1 memory (Issue #9022)
         tt_tensors_device = ttnn.untilize(tt_tensors_device, use_multicore=False)
 
-    tt_tensors_device = ttnn.to_torch(
-        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=concat_dim), device=mesh_device
-    )
-
-    return tt_tensors_device
+    return torch.cat([t.to_torch() for t in ttnn.get_device_tensors(tt_tensors_device.cpu())], dim=concat_dim)
 
 
 def tt2torch_tensor(tt_tensor):
@@ -492,6 +501,28 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
     return torch.all(or_abs_rel)
 
 
+def _comp_nonfinite(golden, calculated):
+    """
+    Returns True if tensors contain the same non-finite values (nan, inf, -inf) at the same positions. Also returns True if all elements are finite.
+    Returns False if non-finite values differ between both tensors.
+    """
+
+    # torch.equal(['nan'], ['nan']] => False
+    # For this reason, we check for nan and inf separately
+    if torch.not_equal(torch.isnan(golden), torch.isnan(calculated)).any():
+        return False
+
+    golden_inf_mask = torch.isinf(golden)
+    calculated_inf_mask = torch.isinf(calculated)
+
+    if torch.not_equal(golden_inf_mask, calculated_inf_mask).any():
+        return False
+
+    golden_inf = golden[golden_inf_mask]
+    calculated_inf = calculated[calculated_inf_mask]
+    return torch.equal(golden_inf, calculated_inf)
+
+
 def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
@@ -557,6 +588,73 @@ def comp_pcc(golden, calculated, pcc=0.99):
         return True, 1.0
 
     return cal_pcc >= pcc, cal_pcc
+
+
+def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]:
+    "Return Unit of Least Precision for each element of a given tensor"
+
+    received_ttnn_input = False
+    if isinstance(x, ttnn.Tensor):
+        x = ttnn.to_torch(x)
+        received_ttnn_input = True
+
+    max_value = torch.full(x.size(), torch.finfo(x.dtype).max, dtype=x.dtype)
+
+    # Notes:
+    # - This should be identical to the definition of ULP by Goldberg
+    #   "What every computer scientist should know about floating-point arithmetic"
+    #   https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html
+    # - We use torch.abs(x) to ensure symmetry ULP(-x) == ULP(x)
+    # - For x powers of 2, x + ULP(x) is not closest number but second closest (previous number is 2x closer)
+    #   However, this avoids rounding-to-nearest-tie-to-even issues on addition (i.e. x + ULP(x) != x)
+    abs_x = torch.abs(x)
+    next = torch.nextafter(abs_x, max_value)  # 1 ULP ~ Difference between two consecutive floating point numbers
+    ulp_value = next - abs_x
+
+    if received_ttnn_input:  # Ensures that type(input) == type(output)
+        ulp_value = ttnn.from_torch(ulp_value)
+
+    return ulp_value
+
+
+def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
+    """
+    Compute absolute error between two tensors in Units of Least Precision (ULP)
+    """
+
+    # If both tensors are empty, then we can return True
+    if torch.numel(golden) == 0 and torch.numel(calculated) == 0:
+        return True, "Both tensors are empty"
+
+    if not allow_nonfinite and not torch.all(torch.isfinite(calculated)):
+        return False, "Calculated tensor contains non-finite values"
+
+    if not _comp_nonfinite(golden, calculated):
+        return False, "Tensors are not finite at the same positions"
+    # nonfinite elments can intefere with ULP error calculation
+    # To avoid this, replace nan, +inf, -inf with 0
+    # (we have already checked that both tensors have the same nonfinite elements)
+    mask_finite = ~torch.isfinite(golden)
+    golden = golden.clone()
+    calculated = calculated.clone()
+    golden[mask_finite] = 0
+    calculated[mask_finite] = 0
+
+    # ULP is measured according to the golden tensor
+    # In most cases, data type of golden tensor should be the same as calculated tensor.
+    # However, in some cases, we may want to measure < 1 ULP differences, which requires golden tensor
+    # to have higher precision than calculated tensor.
+    # If we passed golden tensor to ulp() as is, we would get ULP of higher precision.
+    # e.g. ulp of float32 rather bfloat16 calculation, which would give us a wrong value.
+    ulp_value = ulp(golden.type(calculated.dtype))
+
+    if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
+        calculated = calculated.type(golden.dtype)
+        ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
+
+    ulp_delta = torch.max(torch.abs(calculated - golden) / ulp_value)
+
+    return (ulp_delta <= ulp_threshold, f"Max ULP Delta: {ulp_delta}")
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
@@ -845,6 +943,10 @@ def is_e75(device):
 def is_x2_harvested(device):
     grid = device.compute_with_storage_grid_size()
     return device.arch() == Arch.WORMHOLE_B0 and (grid.x, grid.y) == (8, 7)
+
+
+def is_single_chip():
+    return ttnn.GetNumAvailableDevices() == 1
 
 
 def is_blackhole():

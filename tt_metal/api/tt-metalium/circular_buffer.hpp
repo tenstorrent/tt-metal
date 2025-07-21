@@ -8,10 +8,11 @@
 #include <optional>
 #include <unordered_set>
 
-#include "circular_buffer_types.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -32,8 +33,9 @@ public:
         const CoreRangeSet& core_ranges,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
+    CircularBuffer(const CBDescriptor& descriptor);
 
-    const CBHandle id() const { return id_; }
+    CBHandle id() const { return id_; }
 
     const CoreRangeSet& core_ranges() const { return core_ranges_; }
 

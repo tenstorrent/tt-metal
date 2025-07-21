@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
+#include "ttnn/operations/ccl/common/types/sharding_common.hpp"
 
 namespace shard_builder {
 

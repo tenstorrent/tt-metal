@@ -5,11 +5,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       skip-tt-train: false
@@ -30,3 +29,4 @@ jobs:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

@@ -7,11 +7,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
-
 
 namespace ttnn::operations::data_movement {
 
@@ -69,7 +68,6 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
 }
 
 }  // namespace detail
-
 
 void py_bind_reshape_view(pybind11::module& module) {
     detail::bind_reshape_view(

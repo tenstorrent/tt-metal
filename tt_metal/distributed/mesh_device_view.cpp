@@ -16,6 +16,7 @@
 #include "mesh_coord.hpp"
 #include "shape2d.hpp"
 #include "shape_base.hpp"
+#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -33,22 +34,32 @@ std::vector<IDevice*> get_devices_from_coordinates(
 
 }  // namespace
 
-MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) : devices_(devices) {
+MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
+    MeshDeviceView(MeshContainer<IDevice*>(MeshShape(mesh_device.shape()), mesh_device.get_devices())) {}
+
+MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) :
+    MeshDeviceView(MeshContainer<MaybeRemote<IDevice*>>(devices.shape(), wrap_to_maybe_remote(devices.values()))) {}
+
+MeshDeviceView::MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices) : devices_(devices.shape()) {
     if (devices_.shape().dims() == 2) {
         shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
     }
-    for (const auto& [coord, device] : devices_) {
-        device_coordinates_.emplace(device->id(), coord);
-    }
-}
 
-MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
-    MeshDeviceView(MeshContainer<IDevice*>(MeshShape(mesh_device.shape()), mesh_device.get_devices())) {}
+    // Copy the MaybeRemote values and build coordinate map
+    bool all_local = true;
+    for (const auto& [coord, maybe_device] : devices) {
+        devices_.at(coord) = maybe_device;
+        all_local &= maybe_device.is_local();
+        maybe_device.if_local([this, &coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); });
+    }
+
+    fully_local_ = all_local;
+}
 
 MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
     DeviceView devices_in_region;
     for (const auto& coord : range) {
-        devices_in_region.push_back(devices_.at(coord));
+        devices_.at(coord).if_local([&devices_in_region](const auto& device) { devices_in_region.push_back(device); });
     }
     return devices_in_region;
 }
@@ -61,8 +72,10 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_row(size_t row) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     TT_FATAL(row < shape_2d_->height(), "Row index out of bounds: {}", row);
     std::vector<IDevice*> row_devices;
+    row_devices.reserve(shape_2d_->width());
     for (int col = 0; col < shape_2d_->width(); ++col) {
-        row_devices.push_back(devices_.at(MeshCoordinate(row, col)));
+        const auto& coord = MeshCoordinate(row, col);
+        devices_.at(coord).if_local([&row_devices](const auto& device) { row_devices.push_back(device); });
     }
     return row_devices;
 }
@@ -71,8 +84,10 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     TT_FATAL(col < shape_2d_->width(), "Column index out of bounds: {}", col);
     std::vector<IDevice*> col_devices;
+    col_devices.reserve(shape_2d_->height());
     for (int row = 0; row < shape_2d_->height(); ++row) {
-        col_devices.push_back(devices_.at(MeshCoordinate(row, col)));
+        const auto& coord = MeshCoordinate(row, col);
+        devices_.at(coord).if_local([&col_devices](const auto& device) { col_devices.push_back(device); });
     }
     return col_devices;
 }
@@ -80,6 +95,7 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
 std::vector<std::vector<IDevice*>> MeshDeviceView::get_row_views() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     std::vector<std::vector<IDevice*>> row_views;
+    row_views.reserve(shape_2d_->height());
     for (size_t row = 0; row < shape_2d_->height(); ++row) {
         row_views.push_back(get_devices_on_row(row));
     }
@@ -89,6 +105,7 @@ std::vector<std::vector<IDevice*>> MeshDeviceView::get_row_views() const {
 std::vector<std::vector<IDevice*>> MeshDeviceView::get_column_views() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     std::vector<std::vector<IDevice*>> column_views;
+    column_views.reserve(shape_2d_->width());
     for (size_t col = 0; col < shape_2d_->width(); ++col) {
         column_views.push_back(get_devices_on_column(col));
     }
@@ -104,10 +121,19 @@ bool MeshDeviceView::contains(const MeshCoordinate& coord) const noexcept {
 }
 
 IDevice* MeshDeviceView::get_device(const MeshCoordinate& coord) const {
-    return contains(coord) ? devices_.at(coord) : nullptr;
+    if (!contains(coord)) {
+        return nullptr;
+    }
+    auto& maybe_device = devices_.at(coord);
+    TT_FATAL(maybe_device.is_local(), "Cannot get device for remote device at coordinate {}", coord);
+    return *maybe_device;
 }
 const IDevice* MeshDeviceView::at(const MeshCoordinate& coord) const noexcept {
-    return contains(coord) ? devices_.at(coord) : nullptr;
+    if (!contains(coord)) {
+        return nullptr;
+    }
+    const auto& maybe_device = devices_.at(coord);
+    return maybe_device.is_local() ? *maybe_device : nullptr;
 }
 
 bool MeshDeviceView::operator==(const MeshDeviceView& other) const {
@@ -137,18 +163,20 @@ MeshCoordinate MeshDeviceView::find_device(chip_id_t device_id) const {
 
 chip_id_t MeshDeviceView::find_device_id(const MeshCoordinate& coord) const {
     TT_FATAL(contains(coord), "Coordinate {} not found in mesh {}", coord, devices_.shape());
-    return devices_.at(coord)->id();
+    auto& maybe_device = devices_.at(coord);
+    TT_FATAL(maybe_device.is_local(), "Cannot get device ID for remote device at coordinate {}", coord);
+    return (*maybe_device)->id();
 }
 
 bool MeshDeviceView::is_mesh_2d() const { return shape_2d_.has_value(); }
 
-std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(size_t length, const Shape2D& mesh_shape) {
-    // Iterate in a zigzag pattern from top-left to bottom-right.
+std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
+    size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset) {
+    // Iterate in a zigzag pattern from top-left to bottom-right, starting at the offset.
     std::vector<MeshCoordinate> line_coords;
     line_coords.reserve(length);
     const auto [num_rows, num_cols] = mesh_shape;
-    int row_index = 0;
-    int col_index = 0;
+    auto [row_index, col_index] = mesh_offset;
     bool left_to_right = true;
 
     for (size_t i = 0; i < length && row_index < num_rows && col_index < num_cols; ++i) {
@@ -170,14 +198,17 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(size_t length, 
 
 std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& ring_shape, const Shape2D& mesh_shape) {
     const auto [ring_rows, ring_cols] = ring_shape;
+    TT_FATAL(ring_rows > 0 && ring_cols > 0, "Ring shape must not be empty along either dimension. Got {}", ring_shape);
+    TT_FATAL(
+        ring_rows <= mesh_shape.height() && ring_cols <= mesh_shape.width(),
+        "Subgrid {} is out of mesh bounds {}",
+        ring_shape,
+        mesh_shape);
+
     const auto end_row = ring_rows - 1;
     const auto end_col = ring_cols - 1;
 
-    // Validate the specified subgrid
     std::vector<MeshCoordinate> boundary_coords;
-    if (ring_rows > mesh_shape.height() || ring_cols > mesh_shape.width()) {
-        TT_THROW("Subgrid is out of mesh bounds.");
-    }
 
     // Traverse the top row from left to right
     for (size_t col = 0; col <= end_col; ++col) {
@@ -207,7 +238,8 @@ std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& 
 
 std::vector<IDevice*> MeshDeviceView::get_line_devices() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
-    auto boundary_coords = get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_);
+    auto boundary_coords =
+        get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_, /*mesh_offset=*/Shape2D(0, 0));
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
@@ -217,6 +249,13 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return this->devices_.values(); }
+MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return extract_locals(devices_.values()); }
+
+bool MeshDeviceView::fully_local() const { return fully_local_; }
+
+bool MeshDeviceView::is_local(const MeshCoordinate& coord) const {
+    TT_FATAL(contains(coord), "Coordinate {} not found in mesh {}", coord, devices_.shape());
+    return devices_.at(coord).is_local();
+}
 
 }  // namespace tt::tt_metal::distributed

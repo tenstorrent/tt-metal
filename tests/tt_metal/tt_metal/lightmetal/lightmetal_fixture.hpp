@@ -6,8 +6,8 @@
 
 #include "dispatch_fixture.hpp"
 #include "env_lib.hpp"
-#include <tt-metalium/device_impl.hpp>
-#include "llrt/hal.hpp"
+#include <tt-metalium/device.hpp>
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <circular_buffer_constants.h>
@@ -28,9 +28,10 @@ protected:
     size_t trace_region_size_;
 
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        TT_FATAL(!this->IsSlowDispatch(), "Test is running in slow dispatch mode, which is not supported.");
     }
 
     void CreateDeviceAndBeginCapture(

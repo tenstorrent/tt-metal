@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
@@ -51,8 +52,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_padded_shape();
-    const auto output_grad_shape_without_padding = output_grad.get_logical_shape();
+    const auto output_grad_shape = output_grad.padded_shape();
+    const auto output_grad_shape_without_padding = output_grad.logical_shape();
     const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -64,8 +65,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layer_norm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    const auto mean_rstd_shape = mean.get_padded_shape();
-    const auto mean_rstd_shape_without_padding = mean.get_logical_shape();
+    const auto mean_rstd_shape = mean.padded_shape();
+    const auto mean_rstd_shape_without_padding = mean.logical_shape();
     auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
     auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 
@@ -110,7 +111,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     const uint32_t im4_t = 1;  // x - mean
     const uint32_t im5_t = 1;  // dycopy
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
     CreateCircularBuffer(
@@ -151,7 +152,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(gamma_grad_has_value),
         static_cast<uint32_t>(beta_grad_has_value)};
 
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,14 +9,16 @@
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
+#include "eth_chan_noc_mapping.h"
 #include <fabric_host_interface.h>
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_metal/fabric/hw/inc/eth_chan_noc_mapping.h"
 
 using namespace tt::tt_fabric;
 
+#ifndef DISABLE_LOW_LATENCY_ROUTING
 #ifndef LOW_LATENCY_ROUTING
 #define LOW_LATENCY_ROUTING
+#endif
 #endif
 
 #define FVC_MODE_ROUTER 1
@@ -53,7 +55,7 @@ inline uint64_t get_timestamp() {
     return (((uint64_t)timestamp_high) << 32) | timestamp_low;
 }
 
-typedef struct fvc_outbound_push_state {
+struct fvc_outbound_push_state_t {
     uint32_t local_rdptr;
     uint32_t buffer_size;
     uint32_t buffer_slot_start[FABRIC_ROUTER_OUTBOUND_BUF_SLOTS];
@@ -70,7 +72,7 @@ typedef struct fvc_outbound_push_state {
     volatile uint64_t* slots_cleared_ack_addr;
 
     inline void init(uint32_t buffer_id, uint32_t data_buf_start, uint32_t data_buf_size_words) {
-        uint32_t words = sizeof(fvc_outbound_push_state) / 4;
+        uint32_t words = sizeof(fvc_outbound_push_state_t) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -126,6 +128,7 @@ typedef struct fvc_outbound_push_state {
             noc_inline_dw_write_set_state<true>(
                 STREAM_REG_ADDR(
                     STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+                0,
                 0xF,
                 write_at_cmd_buf,
                 1);
@@ -169,8 +172,11 @@ typedef struct fvc_outbound_push_state {
             return;
         } else {
             // relay the credits to noc data sender to replenish buffer space in noc sender
-            noc_inline_dw_write_with_state<false, true, true, true>(
-                slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC, *slots_cleared_ack_addr >> 32, write_at_cmd_buf, 1);
+            noc_inline_dw_write_with_state<false, true, true, true, true>(
+                slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC,
+                *slots_cleared_ack_addr >> NOC_ADDR_COORD_SHIFT,
+                write_at_cmd_buf,
+                1);
             // clear the credits receied from ethernet receiver.
             *update_sender_slots_cleared = (-slots_cleared) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
@@ -208,12 +214,11 @@ typedef struct fvc_outbound_push_state {
         *update_slot_credits = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         return true;
     }
-
-} fvc_outbound_push_state_t;
+};
 
 static_assert(sizeof(fvc_outbound_push_state_t) % 4 == 0);
 
-typedef struct fvc_inbound_push_state {
+struct fvc_inbound_push_state_t {
     chan_payload_ptr inbound_wrptr;
     uint32_t slots_inbound;
     uint32_t slots_cleared;
@@ -250,7 +255,7 @@ typedef struct fvc_inbound_push_state {
 #endif
 
     inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
-        uint32_t words = sizeof(fvc_inbound_push_state) / 4;
+        uint32_t words = sizeof(fvc_inbound_push_state_t) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -368,7 +373,7 @@ typedef struct fvc_inbound_push_state {
                 // Write lower 4 Bytes of 8 Byte entry.
                 noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
                 // Write upper 4 Bytes of 8 Byte entry.
-                noc_inline_dw_write(router_addr + (sizeof(uint32_t)), xy_local_addr >> 32);
+                noc_inline_dw_write(router_addr + (sizeof(uint32_t)), xy_local_addr >> NOC_ADDR_COORD_SHIFT);
             }
         } else {
             uint32_t router_direction = get_next_hop_router_direction(mesh_id, device_id);
@@ -380,7 +385,7 @@ typedef struct fvc_inbound_push_state {
             router_addr += router_direction * sizeof(uint64_t);
             // stream register to receive router buffer space available updates.
             noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
-            noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
+            noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> NOC_ADDR_COORD_SHIFT);
             uint32_t remote_buffer_start =
                 FABRIC_ROUTER_DATA_BUF_START + router_direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
             for (uint32_t i = 0; i < FABRIC_ROUTER_OUTBOUND_BUF_SLOTS; i++) {
@@ -425,6 +430,7 @@ typedef struct fvc_inbound_push_state {
         }
     }
 
+#ifdef LOW_LATENCY_ROUTING
     FORCE_INLINE void advance_remote_wrptr(uint32_t num_slots, uint32_t direction) {
         if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
             remote_wrptr[direction] = (remote_wrptr[direction] + num_slots) & (FABRIC_ROUTER_OUTBOUND_BUF_SLOTS - 1);
@@ -436,6 +442,20 @@ typedef struct fvc_inbound_push_state {
             remote_wrptr[direction] = temp;
         }
     }
+#else
+    FORCE_INLINE void advance_remote_wrptr(uint32_t num_slots) {
+        if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
+            remote_wrptr[remote_wrptr_direction] =
+                (remote_wrptr[remote_wrptr_direction] + num_slots) & (FABRIC_ROUTER_OUTBOUND_BUF_SLOTS - 1);
+        } else {
+            uint32_t temp = remote_wrptr[remote_wrptr_direction] + num_slots;
+            if (temp >= remote_buffer_size) {
+                temp -= remote_buffer_size;
+            }
+            remote_wrptr[remote_wrptr_direction] = temp;
+        }
+    }
+#endif
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     FORCE_INLINE uint32_t get_num_slots_available() {
@@ -511,11 +531,13 @@ typedef struct fvc_inbound_push_state {
         uint32_t dst_mesh_id = packet_header->routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             remote_wrptr_direction = port_direction_table[next_port];
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = packet_header->routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             remote_wrptr_direction = port_direction_table[next_port];
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
@@ -525,9 +547,11 @@ typedef struct fvc_inbound_push_state {
     uint32_t get_next_hop_router_noc_xy(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_dev_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -537,8 +561,10 @@ typedef struct fvc_inbound_push_state {
         uint32_t direction = 0;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
         } else {
             next_port = routing_table->intra_mesh_table.dest_entry[dst_dev_id];
+            ASSERT(next_port != INVALID_DIRECTION);
         }
 
         if (routing_table->port_direction.directions[eth_chan_directions::EAST] == next_port) {
@@ -574,7 +600,7 @@ typedef struct fvc_inbound_push_state {
             advance_remote_wrptr(1, remote_wrptr_direction);
             advance_out_rdptr<fvc_mode>(1);
             uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
-            noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+            noc_inline_dw_write<true, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
             *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
             uint32_t words_available = packet_words_remaining;
@@ -616,7 +642,7 @@ typedef struct fvc_inbound_push_state {
         noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
         advance_remote_wrptr(1, direction);
         uint64_t push_addr = get_noc_addr_helper(mcast_router_noc_xy[direction], router_push_addr);
-        noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        noc_inline_dw_write<true, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
         *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
@@ -745,7 +771,7 @@ typedef struct fvc_inbound_push_state {
         advance_remote_wrptr(1);
         advance_out_rdptr<fvc_mode>(1);
         uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
-        noc_inline_dw_write(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        noc_inline_dw_write<true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
         *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t words_available = packet_words_remaining;
@@ -819,11 +845,11 @@ typedef struct fvc_inbound_push_state {
         free_receiver_buffer_space<fvc_mode>(slots_cleared);
         slots_cleared = 0;
     }
-} fvc_inbound_push_state_t;
+};
 
 static_assert(sizeof(fvc_inbound_push_state_t) % 4 == 0);
 
-typedef struct fvc_outbound_pull_state {
+struct fvc_outbound_pull_state_t {
     uint8_t chan_num;
     uint8_t pad[3];
     uint32_t packet_in_progress;
@@ -856,7 +882,7 @@ typedef struct fvc_outbound_pull_state {
     }
 
     inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
-        uint32_t words = sizeof(fvc_outbound_pull_state) / 4;
+        uint32_t words = sizeof(fvc_outbound_pull_state_t) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -945,6 +971,7 @@ typedef struct fvc_outbound_pull_state {
         uint32_t num_words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
         uint32_t chunk_to_forward = std::min(num_words_before_wrap, words_remaining);
         while (words_remaining) {
+            invalidate_l1_cache();
             src_addr = get_local_buffer_read_addr();
             dest_addr = src_addr - buffer_start + remote_buffer_start;
             if constexpr (barrier) {
@@ -1072,7 +1099,7 @@ typedef struct fvc_outbound_pull_state {
         register_move_data(PACKET_HEADER_SIZE_WORDS);
         return PACKET_HEADER_SIZE_WORDS;
     }
-} fvc_outbound_pull_state_t;
+};
 
 static_assert(sizeof(fvc_outbound_pull_state_t) % 4 == 0);
 
@@ -1090,7 +1117,7 @@ enum ProcessingFlags : uint8_t {
 // direction, socket receiver/consumer buffer, center worker/consumer buffer.
 // Which ever entity receives the pull request is responsible draining the required amount of data from
 // FVC Producer.
-typedef struct fvc_inbound_pull_state {
+struct fvc_inbound_pull_state_t {
     chan_payload_ptr inbound_wrptr;
     chan_payload_ptr inbound_rdptr;
     uint32_t my_id;
@@ -1132,7 +1159,7 @@ typedef struct fvc_inbound_pull_state {
     }
 
     inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
-        uint32_t words = sizeof(fvc_inbound_pull_state) / 4;
+        uint32_t words = sizeof(fvc_inbound_pull_state_t) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -1351,10 +1378,12 @@ typedef struct fvc_inbound_pull_state {
         uint32_t dst_mesh_id = current_packet_header.routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = current_packet_header.routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -1747,10 +1776,10 @@ typedef struct fvc_inbound_pull_state {
         free_receiver_buffer_space<fvc_mode>(words_cleared);
         words_cleared = 0;
     }
-} fvc_inbound_pull_state_t;
+};
 
 static_assert(sizeof(fvc_inbound_pull_state_t) % 4 == 0);
-typedef struct fvcc_outbound_state {
+struct fvcc_outbound_state_t {
     volatile chan_payload_ptr remote_rdptr;
     uint32_t remote_ptr_update_addr;
     volatile ctrl_chan_msg_buf*
@@ -1771,7 +1800,7 @@ typedef struct fvcc_outbound_state {
     }
 
     inline void init(uint32_t buf_start, uint32_t sync_buf_start, uint32_t remote_buf_start, uint32_t ptr_update_addr) {
-        uint32_t words = sizeof(fvcc_outbound_state) / 4;
+        uint32_t words = sizeof(fvcc_outbound_state_t) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -1789,6 +1818,7 @@ typedef struct fvcc_outbound_state {
     inline void advance_fvcc_rdptr() {
         uint32_t rd_ptr = remote_rdptr.ptr;
         while (rd_ptr != fvcc_buf->rdptr.ptr) {
+            invalidate_l1_cache();
             uint32_t msg_index = fvcc_buf->rdptr.ptr & FVCC_SIZE_MASK;
             fvcc_buf->msg_buf[msg_index].packet_header.routing.flags = 0;
             fvcc_buf->rdptr.ptr = inc_ptr_with_wrap(fvcc_buf->rdptr.ptr);
@@ -1836,8 +1866,7 @@ typedef struct fvcc_outbound_state {
         forward_data_from_fvcc_buffer();
         advance_fvcc_rdptr();
     }
-
-} fvcc_outbound_state_t;
+};
 
 static_assert(sizeof(fvcc_outbound_state_t) % 4 == 0);
 
@@ -1848,7 +1877,7 @@ static_assert(sizeof(fvcc_outbound_state_t) % 4 == 0);
 // direction, if not meant for local device.
 // If control packet is addressed to local device, FVCC producer can process the packet locally if
 // it is a read/write ack, or forward the packet to Gatekeeper for further local processing.
-typedef struct fvcc_inbound_state {
+struct fvcc_inbound_state_t {
     volatile chan_payload_ptr inbound_wrptr;
     volatile chan_payload_ptr inbound_rdptr;
     uint32_t remote_ptr_update_addr;
@@ -1866,7 +1895,7 @@ typedef struct fvcc_inbound_state {
     volatile packet_header_t* current_packet_header;
 
     inline void init(uint32_t buf_start, uint32_t ptr_update_addr, uint64_t gk_fvcc_buf_start) {
-        uint32_t words = sizeof(fvcc_inbound_state) / 4;
+        uint32_t words = sizeof(fvcc_inbound_state_t) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -1963,10 +1992,12 @@ typedef struct fvcc_inbound_state {
         uint32_t dst_mesh_id = current_packet_header->routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = current_packet_header->routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -1996,6 +2027,7 @@ typedef struct fvcc_inbound_state {
         uint32_t wrptr = fvcc_buf->wrptr.ptr;
         noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, rdptr);
         while (1) {
+            invalidate_l1_cache();
             noc_async_read_one_packet(noc_addr, (uint32_t)(&fvcc_buf->rdptr.ptr), 4);
             noc_async_read_barrier();
             if (!fvcc_buf_ptrs_full(wrptr, fvcc_buf->rdptr.ptr)) {
@@ -2033,7 +2065,7 @@ typedef struct fvcc_inbound_state {
             }
         } else {
             // Control message is not meant for local chip. Forward to next router enroute to destination.
-            uint64_t dest_addr = ((uint64_t)get_next_hop_router_noc_xy() << 32) | FVCC_OUT_BUF_START;
+            uint64_t dest_addr = get_noc_addr_helper(get_next_hop_router_noc_xy(), FVCC_OUT_BUF_START);
             forward_message(dest_addr);
         }
         curr_packet_valid = false;
@@ -2050,10 +2082,9 @@ typedef struct fvcc_inbound_state {
         }
         update_remote_rdptr_sent<fvc_mode>();
     }
+};
 
-} fvcc_inbound_state_t;
-
-typedef struct socket_reader_state {
+struct socket_reader_state_t {
     volatile chan_payload_ptr remote_rdptr;
     uint8_t packet_in_progress;
 
@@ -2087,7 +2118,7 @@ typedef struct socket_reader_state {
     }
 
     inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
-        uint32_t words = sizeof(socket_reader_state) / 4;
+        uint32_t words = sizeof(socket_reader_state_t) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -2235,6 +2266,7 @@ typedef struct socket_reader_state {
             uint32_t dest_addr = 0;  // should be second half of fvc buffer.
             uint32_t words_remaining = total_words_to_forward;
             while (words_remaining) {
+                invalidate_l1_cache();
                 uint32_t num_words_before_local_wrap = words_before_pull_buffer_wrap(buffer_size, fvc_out_rdptr);
                 uint32_t num_words_before_remote_wrap = words_before_pull_buffer_wrap(buffer_size, fvc_out_wrptr);
                 uint32_t words_to_forward = std::min(num_words_before_local_wrap, num_words_before_remote_wrap);
@@ -2259,17 +2291,17 @@ typedef struct socket_reader_state {
         words_since_last_sync -= total_words_to_forward;
         return total_words_to_forward;
     }
-} socket_reader_state_t;
+};
 
 static_assert(sizeof(socket_reader_state_t) % 4 == 0);
 
-typedef struct router_state {
+struct router_state_t {
     uint32_t sync_in;
     uint32_t padding_in[3];
     uint32_t sync_out;
     uint32_t padding_out[3];
     uint32_t scratch[4];
-} router_state_t;
+};
 
 inline uint64_t get_timestamp_32b() { return reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 
@@ -2375,6 +2407,7 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
     router_state->scratch[0] = 0xAA;
 
     while (!src_ready or !dest_ready) {
+        invalidate_l1_cache();
         if (router_state->sync_out != 0xAA) {
             internal_::eth_send_packet(0, scratch_addr, sync_in_addr, 1);
         } else {
@@ -2428,6 +2461,7 @@ template <bool blocking_mode = false>
 inline bool tt_fabric_check_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request, uint32_t wrptr) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
     do {
+        invalidate_l1_cache();
         noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
         noc_async_read_barrier();
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {

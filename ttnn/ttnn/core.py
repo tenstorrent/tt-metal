@@ -9,7 +9,6 @@ import ttnn
 
 from ttnn.types import (
     DEVICE_STORAGE_TYPE,
-    MULTI_DEVICE_STORAGE_TYPE,
     MemoryConfig,
     ShardStrategy,
     ShardOrientation,
@@ -34,7 +33,7 @@ def has_storage_type_of(tensor: "ttnn.Tensor", storage_type) -> bool:
 
 
 def is_tensor_storage_on_device(tensor: "ttnn.Tensor") -> bool:
-    return tensor.storage_type() in (DEVICE_STORAGE_TYPE, MULTI_DEVICE_STORAGE_TYPE)
+    return tensor.storage_type() == DEVICE_STORAGE_TYPE
 
 
 def is_sharded(tensor) -> bool:
@@ -103,7 +102,7 @@ def dump_stack_trace_on_segfault():
 
 def create_sharded_memory_config(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
-    core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
+    core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet],
     strategy: ShardStrategy,
     orientation: Optional[ShardOrientation] = None,
     use_height_and_width_as_shard_shape: bool = False,
@@ -113,7 +112,7 @@ def create_sharded_memory_config(
 
     Args:
         shape (ttnn.Shape | Tuple[int, ...] | List[int]): the shape of the tensor.
-        core_grid (ttnn.CoreGrid | ttnn.CoreRange): the core_grid on which to distribute the sharded tensor on (writes to the cores L1s).
+        core_grid (ttnn.CoreGrid | ttnn.CoreRangeSet): the core_grid on which to distribute the sharded tensor on (writes to the cores L1s).
         strategy (ttnn.ShardStrategy): the sharding strategy of either height, width or block.
         orientation (ttnn.ShardOrientation, optional): the order in which to traverse the cores when reading/writing shards. Defaults to `None`.
         use_height_and_width_as_shard_shape (bool, optional): if True, the height and width of the tensor will be used as the shard shape. Defaults to `False`. If is False, the shard shape will be calculated based on the core_grid and the tensor shape where tensor shape is seen as [math.prod(dims), width]
@@ -231,14 +230,14 @@ def create_sharded_memory_config(
 # The existing function should be deprecated with this one. Not replacing right now to avoid a big change.
 def create_sharded_memory_config_(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
-    core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
+    core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet],
     strategy: Union[ShardStrategy, TensorMemoryLayout],
     orientation,
     use_height_and_width_as_shard_shape: bool = False,
     tile_layout: bool = False,
 ) -> MemoryConfig:
     """
-    create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, use_height_and_width_as_shard_shape: bool = False) -> MemoryConfig
+    create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, use_height_and_width_as_shard_shape: bool = False) -> MemoryConfig
 
     Creates a MemoryConfig object with a sharding spec, required for sharded ops.
     Currently sharding only supports L1 tensors.

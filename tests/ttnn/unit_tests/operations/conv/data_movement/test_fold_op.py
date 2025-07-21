@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -82,6 +82,36 @@ def test_fold_with_permute_reshape_on_host(device, n, c, h, w, pad_h, pad_w, str
         torch_input_tensor, pad_h, pad_w, stride_h, stride_w
     )
     assert_with_pcc(torch_output_tensor, torch_output_tensor_new, 1)
+
+
+@pytest.mark.parametrize("nhw", [(3, 64, 64), (1, 224, 224), (1, 384, 512), (1, 512, 672)])
+@pytest.mark.parametrize("channels", [3, 32, 320])
+@pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, input_layout):
+    batch_size, height, width = nhw
+    stride_h, stride_w = stride
+    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
+    torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    torch_output_tensor = torch.reshape(
+        torch_input_tensor_nhwc, (batch_size, height // stride_h, stride_h, width // stride_w, stride_w, channels)
+    )
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 1, 3, 2, 4, 5))
+    torch_output_tensor = torch.reshape(
+        torch_output_tensor, (batch_size, height // stride_h, width // stride_w, channels * stride_h * stride_w)
+    )
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor_nhwc, layout=input_layout, device=device, memory_config=input_memory_config
+    )
+    tt_output_tensor = ttnn.fold(
+        tt_input_tensor,
+        stride_h,
+        stride_w,
+    )
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    isequal = torch.equal(torch_output_tensor, tt_output_tensor)
+    assert isequal
 
 
 def pad_and_fold_with_permute_and_reshape_on_device(
@@ -250,9 +280,7 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
 @pytest.mark.parametrize("pad_w", [3])
 @pytest.mark.parametrize("stride_h", [2])
 @pytest.mark.parametrize("stride_w", [2])
-def test_fold_with_permute_reshape_on_device_sharded(
-    device, n, c, h, w, pad_h, pad_w, stride_h, stride_w, use_program_cache
-):
+def test_fold_with_permute_reshape_on_device_sharded(device, n, c, h, w, pad_h, pad_w, stride_h, stride_w):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
@@ -359,43 +387,39 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_allclose(actual, expected)
 
 
-@pytest.mark.skipif(is_wormhole_b0(), reason="Not enough cores for wormhole_b0")
 def test_fold_sharded(device):
     torch.manual_seed(0)
 
-    shape = (20, 230, 115, 8)
-    N, H, W, C = shape
-    stride_h = 2
-    stride_w = 1
+    for run in range(2):
+        shape = (8, 224, 14, 64)
+        N, H, W, C = shape
+        stride_h = 16
+        stride_w = 1
 
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
-    expected = fold_torch(torch_input, stride_h, stride_w)
-    expected = expected.reshape(1, 1, -1, expected.shape[-1])
+        expected = fold_torch(torch_input, stride_h, stride_w)
+        expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 7),
-            ),
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 8),
-                ttnn.CoreCoord(3, 8),
-            ),
-        }
-    )
-    n_cores = 100
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 0),
+                ),
+            }
+        )
+        n_cores = 8
 
-    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
-    tt_input = torch2tt_tensor(
-        torch_input,
-        device,
-        ttnn.ROW_MAJOR_LAYOUT,
-        tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
-    )
-    tt_out = ttnn.fold(tt_input, stride_h, stride_w)
-    actual = tt2torch_tensor(tt_out)
+        tt_input = torch2tt_tensor(
+            torch_input,
+            device,
+            ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+        )
+        tt_out = ttnn.fold(tt_input, stride_h, stride_w)
+        actual = tt2torch_tensor(tt_out)
 
-    torch.testing.assert_allclose(actual, expected)
+        torch.testing.assert_allclose(actual, expected)

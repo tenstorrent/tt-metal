@@ -7,7 +7,7 @@
 #include <functional>
 #include <random>
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {
@@ -40,9 +40,9 @@ bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float at
     auto reldenom = fmaxf(fabsf(af), fabsf(bf));
     auto result = (absdiff <= atol) || (absdiff <= rtol * reldenom);
     if (result != true) {
-        tt::log_error(tt::LogTest, "Discrepacy: A={}, B={}", af, bf);
-        tt::log_error(tt::LogTest, "   absdiff={}, atol={}", absdiff, atol);
-        tt::log_error(tt::LogTest, "   reldiff={}, rtol={}", absdiff / (reldenom + 1e-6f), rtol);
+        log_error(tt::LogTest, "Discrepacy: A={}, B={}", af, bf);
+        log_error(tt::LogTest, "   absdiff={}, atol={}", absdiff, atol);
+        log_error(tt::LogTest, "   reldiff={}, rtol={}", absdiff / (reldenom + 1e-6f), rtol);
     }
     return result;
 }

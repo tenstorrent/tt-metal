@@ -26,9 +26,9 @@ void MAIN {
 
 #if not defined ELTWISE_DEST_REUSE_TYPE
 #ifdef FULL_INIT
-    binary_op_specific_init<true, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
+    binary_tiles_init<true, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
 #else
-    binary_op_specific_init<false, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
+    binary_tiles_init<false, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
 #endif
 #endif
 

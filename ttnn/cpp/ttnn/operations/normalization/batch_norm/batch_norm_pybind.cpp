@@ -4,12 +4,17 @@
 
 #include "batch_norm_pybind.hpp"
 
-#include "batch_norm.hpp"
+#include <optional>
 
-#include "pybind11/decorators.hpp"
-namespace py = pybind11;
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "batch_norm.hpp"
+#include "ttnn-pybind/decorators.hpp"
+
 namespace ttnn::operations::normalization::detail {
-void bind_batch_norm_operation(pybind11::module& module) {
+
+void bind_batch_norm_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::batch_norm,
@@ -31,6 +36,7 @@ void bind_batch_norm_operation(pybind11::module& module) {
             training (bool, optional): Selection between training mode and inference (evaluation) mode. Defaults to `False` (Inference mode).
             output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): device compute kernel configuration for the operation. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to 0.
 
 
@@ -77,6 +83,7 @@ void bind_batch_norm_operation(pybind11::module& module) {
             py::arg("bias") = std::nullopt,
             py::arg("output") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::normalization::detail

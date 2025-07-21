@@ -6,21 +6,21 @@
 //       that don't require macros to function
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include <tt-metalium/buffer_types.hpp>
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <tt-metalium/buffer_types.hpp>
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
+#include "ttnn/operations/ccl/common/kernels/command_processor.hpp"
 
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
-#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "api/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -116,7 +116,7 @@ static_assert(test_object2.number_of_cores > 0, "Misconfigured sharded addrgen f
 static_assert(test_object2.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
 static_assert(test_object2.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-typedef ShardedInfo<0,0,0,0,0,0,0> Tensor1ShardInfo;
+using Tensor1ShardInfo = ShardedInfo<0,0,0,0,0,0,0>;
 #endif
 #endif
 
@@ -850,6 +850,7 @@ void try_advance(command_context_t<Addrgen>& cmd_ctx) {
                 cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
                 DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
+                invalidate_l1_cache();
             }
             break;
 
@@ -971,7 +972,7 @@ void kernel_main() {
 #endif
 
     if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
+        fabric_connection.open<true>();
     }
     while (stream_done_mask != finish_value) {
         if ((stream_done_mask & 0x1) == 0) {

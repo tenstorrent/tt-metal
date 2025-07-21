@@ -3,24 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
+import evaluate
 import pytest
 import torch
 from loguru import logger
+from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
-
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from models.demos.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
-import evaluate
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
@@ -48,7 +42,6 @@ def positional_ids(config, input_ids, past_key_values_length=0):
 
 def run_bert_question_and_answering_inference(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -157,7 +150,6 @@ def run_bert_question_and_answering_inference(
 
 def run_bert_question_and_answering_inference_squad_v2(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -248,20 +240,11 @@ def run_bert_question_and_answering_inference_squad_v2(
 @pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
 @pytest.mark.parametrize("input_loc", ["models/demos/bert_tiny/demo/input_data.json"])
-def test_demo(
-    input_loc,
-    batch_size,
-    sequence_size,
-    model_name,
-    model_location_generator,
-    device,
-    use_program_cache,
-):
+def test_demo(input_loc, batch_size, sequence_size, model_name, model_location_generator, device):
     disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=batch_size,
         sequence_size=sequence_size,
@@ -285,13 +268,11 @@ def test_demo_squadv2(
     n_iterations,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference_squad_v2(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=batch_size,
         sequence_size=sequence_size,

@@ -50,9 +50,9 @@ struct IndexFillOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        const uint32_t dim,
+        uint32_t dim,
         const Tensor& index,
-        const std::variant<float, int> value,
+        std::variant<float, int> value,
         const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::index_fill

@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
-
-int main(int argc, char** argv) {
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
+int main() {
     /* Silicon accelerator setup */
     IDevice* device = CreateDevice(0);
 
@@ -42,18 +44,18 @@ int main(int argc, char** argv) {
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size);
-    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     /* Specify data movement kernel for reading/writing data to/from DRAM */
     KernelHandle binary_reader_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/add_2_integers_in_riscv/kernels/reader_writer_add_in_riscv.cpp",
+        OVERRIDE_KERNEL_PREFIX "add_2_integers_in_riscv/kernels/reader_writer_add_in_riscv.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

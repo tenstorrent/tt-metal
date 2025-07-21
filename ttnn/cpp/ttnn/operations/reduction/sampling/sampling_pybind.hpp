@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "pybind11/pybind_fwd.hpp"
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::reduction::detail {
 void bind_reduction_sampling_operation(pybind11::module& module);

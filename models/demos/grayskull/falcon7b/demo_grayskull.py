@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 
 
@@ -28,7 +29,6 @@ def test_demo(
     model_location_generator,
     get_tt_cache_path,
     device,
-    use_program_cache,
 ):
     return run_falcon_demo_kv(
         user_input=user_input,

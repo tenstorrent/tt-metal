@@ -8,7 +8,7 @@
 #include <buffer.hpp>
 #include <event.hpp>
 #include <host_api.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include <chrono>
 #include <fstream>
@@ -25,19 +25,14 @@
 #include "command_queue.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
-#include "dispatch_core_manager.hpp"
-#include "dprint_server.hpp"
+#include "impl/context/metal_context.hpp"
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
-#include "llrt/hal.hpp"
-#include "program_impl.hpp"
-#include "rtoptions.hpp"
-#include "span.hpp"
+#include "tt-metalium/program.hpp"
+#include <tt_stl/span.hpp>
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
@@ -86,12 +81,6 @@ void ValidateBufferRegion(
 }
 }  // namespace detail
 
-enum DispatchWriteOffsets {
-    DISPATCH_WRITE_OFFSET_ZERO = 0,
-    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
-    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 2,
-};
-
 inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 }
@@ -107,7 +96,8 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t expected_num_workers_completed,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t unicast_cores_launch_message_wptr,
-    SubDeviceId sub_device_id) :
+    SubDeviceId sub_device_id,
+    program_dispatch::ProgramDispatchMetadata& dispatch_md) :
     command_queue_id(command_queue_id),
     noc_index(noc_index),
     manager(manager),
@@ -117,42 +107,39 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     dispatch_core(dispatch_core),
     multicast_cores_launch_message_wptr(multicast_cores_launch_message_wptr),
     unicast_cores_launch_message_wptr(unicast_cores_launch_message_wptr),
-    sub_device_id(sub_device_id) {
+    sub_device_id(sub_device_id),
+    dispatch_metadata(dispatch_md) {
     this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    this->dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
 void EnqueueProgramCommand::process() {
-    // Dispatch metadata contains runtime information based on
-    // the kernel config ring buffer state
-    program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-
     // Compute the total number of workers this program uses
     uint32_t num_workers = 0;
     if (program.runs_on_noc_multicast_only_cores()) {
-        num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, this->sub_device_id);
+        num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
     if (program.runs_on_noc_unicast_only_cores()) {
-        num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, this->sub_device_id);
+        num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
     // Reserve space for this program in the kernel config ring buffer
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->config_buffer_mgr,
-        program.get_program_config_sizes(),
+        program.impl().get_program_config_sizes(),
         program.get_program_binary_status(device->id()),
         num_workers,
         this->expected_num_workers_completed,
         dispatch_metadata);
 
-    RecordProgramRun(program);
+    RecordProgramRun(program.get_id());
 
     // Access the program dispatch-command cache
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
     auto& cached_program_command_sequence = program.get_cached_program_command_sequences().at(command_hash);
     // Update the generated dispatch commands based on the state of the CQ and the ring buffer
     program_dispatch::update_program_dispatch_commands(
-        program,
+        program.impl(),
         cached_program_command_sequence,
         this->multicast_cores_launch_message_wptr,
         this->unicast_cores_launch_message_wptr,
@@ -181,7 +168,7 @@ EnqueueTerminateCommand::EnqueueTerminateCommand(
 void EnqueueTerminateCommand::process() {
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB = hal_ref.get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
@@ -190,11 +177,11 @@ void EnqueueTerminateCommand::process() {
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
         HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);
-        dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SLAVE);
+        dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
         this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
         this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
@@ -224,6 +211,9 @@ void EnqueueReadBuffer(
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::ReadFromBuffer(buffer_obj, (uint8_t *)dst);
+    }
     BufferRegion region(0, buffer_obj.size());
     EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
 }
@@ -256,6 +246,10 @@ void EnqueueWriteBuffer(
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::WriteToBuffer(buffer_obj,
+            tt::stl::Span<const uint8_t>((const uint8_t *)std::get<const void *>(src), buffer_obj.size()));
+    }
     BufferRegion region(0, buffer_obj.size());
     EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
 }
@@ -276,6 +270,9 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     ZoneScoped;
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::LaunchProgram((IDevice *)&cq, program);
+    }
     detail::DispatchStateCheck(true);
 
     IDevice* device = cq.device();
@@ -290,11 +287,20 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
 
 void EnqueueRecordEvent(
     CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Ignore record event in slow dispatch.
+        return;
+    }
     detail::DispatchStateCheck(true);
     cq.enqueue_record_event(event, sub_device_ids);
 }
 
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch conservatively flushes all work since there's no cq.
+        Synchronize(event->device);
+        return;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Worker thread.
     log_trace(
@@ -309,6 +315,11 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) 
 }
 
 void EventSynchronize(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch conservatively flushes all work since there's no cq.
+        Synchronize(event->device);
+        return;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
     log_trace(
@@ -319,12 +330,12 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
         event->event_id);
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
-        if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled() &&
-            tt::watcher_server_killed_due_to_error()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled() &&
+            MetalContext::instance().watcher_server()->killed_due_to_error()) {
             TT_FATAL(
                 false,
                 "Command Queue could not complete EventSynchronize. See {} for details.",
-                tt::watcher_get_log_file_name());
+                MetalContext::instance().watcher_server()->log_file_name());
             return;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(5));
@@ -332,6 +343,10 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
 }
 
 bool EventQuery(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.
+        return true;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
     bool event_completed = event->device->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;
@@ -348,14 +363,21 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
 void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return;
+    }
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
-    TT_ASSERT(
-        !(DPrintServerHangDetected()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
-    TT_ASSERT(
-        !(tt::watcher_server_killed_due_to_error()),
-        "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
-        tt::watcher_get_log_file_name());
+    // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
+    if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
+        TT_FATAL(
+            !(MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()),
+            "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        TT_FATAL(
+            !(MetalContext::instance().watcher_server()->killed_due_to_error()),
+            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
+            MetalContext::instance().watcher_server()->log_file_name());
+    }
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {

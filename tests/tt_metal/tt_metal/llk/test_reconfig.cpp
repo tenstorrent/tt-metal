@@ -2,10 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <variant>
-#include "device_fixture.hpp"
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat8.hpp>
+#include <bit>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -138,7 +171,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
     auto l1_output1_cb = tt_metal::CreateCircularBuffer(program, core, l1_output1_cb_config);
 
     vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
 
     defines["DST_ACCUM_MODE"] = "1";  // Needed always in order for reader kernel to load data from CB2
     defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";

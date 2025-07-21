@@ -16,7 +16,7 @@ struct MorehNllLossUnreducedBackward {
         const Tensor& output_grad_tensor,
         const std::optional<Tensor>& weight_tensor,
         const std::optional<Tensor>& input_grad_tensor,
-        const int32_t ignore_index,
+        int32_t ignore_index,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
@@ -24,7 +24,7 @@ struct MorehNllLossUnreducedBackward {
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
 
 namespace ttnn {
-constexpr auto moreh_nll_loss_unreduced_backward = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_nll_loss_unreduced_backward = ttnn::register_operation<
     "ttnn::moreh_nll_loss_unreduced_backward",
     operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreducedBackward>();
 }  // namespace ttnn

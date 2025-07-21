@@ -7,27 +7,24 @@
 #include <core_coord.hpp>
 #include <kernel.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <rtoptions.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <map>
-#include <memory>
-#include <optional>
 #include <ostream>
 #include <string>
-#include <string_view>
 #include <utility>
 
 #include "assert.hpp"
 #include "dev_msgs.h"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include <umd/device/tt_core_coordinates.h>
-#include "utils.hpp"
+#include "impl/context/metal_context.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
 
+using tt::tt_metal::detail::ProgramImpl;
 namespace {
 
 // Class to track stats for DispatchData
@@ -131,9 +128,9 @@ public:
     };
     ~DataCollector() { inst = nullptr; };
 
-    void RecordData(Program& program, data_collector_t type, uint32_t transaction_size, RISCV riscv);
-    void RecordKernelGroups(Program& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups);
-    void RecordProgramRun(Program& program);
+    void RecordData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv);
+    void RecordKernelGroups(ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups);
+    void RecordProgramRun(uint64_t program_id);
     void DumpData();
 
 private:
@@ -143,8 +140,7 @@ private:
     std::map<uint64_t, int> program_id_to_call_count;
 };
 
-void DataCollector::RecordData(Program& program, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
-    uint64_t program_id = program.get_id();
+void DataCollector::RecordData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
     if (program_id_to_dispatch_data.count(program_id) == 0) {
         // If no existing data for this program, initialize starting values.
         program_id_to_dispatch_data[program_id] = std::vector<DispatchData>();
@@ -158,7 +154,8 @@ void DataCollector::RecordData(Program& program, data_collector_t type, uint32_t
     program_id_to_dispatch_data[program_id].at(type).Update(transaction_size, riscv);
 }
 
-void DataCollector::RecordKernelGroups(Program& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
+void DataCollector::RecordKernelGroups(
+    ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
     uint64_t program_id = program.get_id();
     // Make a copy of relevant info, since user may destroy program before we dump.
     for (KernelGroup& kernel_group : kernel_groups) {
@@ -172,12 +169,11 @@ void DataCollector::RecordKernelGroups(Program& program, CoreType core_type, std
     }
 }
 
-void DataCollector::RecordProgramRun(Program& program) {
-    uint64_t program_id = program.get_id();
+void DataCollector::RecordProgramRun(uint64_t program_id) {
     program_id_to_call_count[program_id]++;
 }
 
-string DispatchClassToString(enum dispatch_core_processor_classes proc_class, CoreType core_type) {
+std::string DispatchClassToString(enum dispatch_core_processor_classes proc_class, CoreType core_type) {
     switch (core_type) {
         case CoreType::WORKER:
             switch (proc_class) {
@@ -202,6 +198,7 @@ void DataCollector::DumpData() {
 
     // Extra DispatchData objects to collect data across programs
     std::vector<DispatchData*> cross_program_data;
+    cross_program_data.reserve(DISPATCH_DATA_COUNT);
     for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
         cross_program_data.push_back(new DispatchData(idx));
     }
@@ -269,19 +266,19 @@ void InitDataCollector() {
 
 namespace tt {
 
-void RecordDispatchData(Program& program, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
+void RecordDispatchData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
     InitDataCollector();
-    DataCollector::inst->RecordData(program, type, transaction_size, riscv);
+    DataCollector::inst->RecordData(program_id, type, transaction_size, riscv);
 }
 
-void RecordKernelGroups(Program& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
+void RecordKernelGroups(ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
@@ -289,14 +286,14 @@ void RecordKernelGroups(Program& program, CoreType core_type, std::vector<Kernel
     DataCollector::inst->RecordKernelGroups(program, core_type, kernel_groups);
 }
 
-void RecordProgramRun(Program& program) {
+void RecordProgramRun(uint64_t program_id) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
     InitDataCollector();
-    DataCollector::inst->RecordProgramRun(program);
+    DataCollector::inst->RecordProgramRun(program_id);
 }
 
 }  // namespace tt

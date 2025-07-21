@@ -2,20 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <algorithm>
 #include <array>
+#include <cstdint>
+#include <exception>
+#include <memory>
+#include <optional>
+#include <variant>
 #include <vector>
 
-#include "gtest/gtest.h"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/allocator.hpp>
-
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "llrt.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_metal {
 
@@ -62,8 +72,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_2.size / sizeof(uint32_t));
 
     uint32_t page_size_3 = 1024;
-    InterleavedBufferConfig interleaved_config = {
-        device, page_size_3, page_size_3, BufferType::L1, TensorMemoryLayout::INTERLEAVED};
+    InterleavedBufferConfig interleaved_config = {device, page_size_3, page_size_3, BufferType::L1};
     auto input_3 =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, interleaved_config.size / sizeof(uint32_t));
 

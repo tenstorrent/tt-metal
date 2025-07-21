@@ -26,9 +26,9 @@
 #include <nlohmann/json.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <tt_stl/type_name.hpp>
+#include <tt-logger/tt-logger.hpp>
 
-namespace tt {
-namespace stl {
+namespace ttsl {
 
 template <typename T>
 constexpr std::string_view get_type_name() {
@@ -142,9 +142,9 @@ struct Attribute final {
     static constexpr std::size_t ALIGNMENT = 32;
     using storage_t = std::array<std::byte, 1312>;
 
-    const std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
-    const std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
-    const nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
+    std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
+    std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
+    nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
 
     template <typename Type, typename BaseType = std::decay_t<Type>>
     Attribute(Type&& object) :
@@ -154,19 +154,19 @@ struct Attribute final {
             if constexpr (std::is_copy_constructible_v<BaseType>) {
                 return new (&self) BaseType{*reinterpret_cast<const BaseType*>(other)};
             } else {
-                static_assert(tt::stl::concepts::always_false_v<BaseType>);
+                static_assert(ttsl::concepts::always_false_v<BaseType>);
             }
         }},
         move_storage{[](storage_t& self, void* other) -> void* {
             if constexpr (std::is_move_constructible_v<BaseType>) {
                 return new (&self) BaseType{*reinterpret_cast<BaseType*>(other)};
             } else {
-                static_assert(tt::stl::concepts::always_false_v<BaseType>);
+                static_assert(ttsl::concepts::always_false_v<BaseType>);
             }
         }},
 
         implementations{
-            .to_string_impl_ = [](const storage_t& storage) -> const std::string {
+            .to_string_impl_ = [](const storage_t& storage) -> std::string {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 if constexpr (std::is_pointer_v<BaseType>) {
                     return fmt::format("{}*", get_type_name<BaseType>());
@@ -174,11 +174,11 @@ struct Attribute final {
                     return fmt::format("{}", object);
                 }
             },
-            .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
+            .to_hash_impl_ = [](const storage_t& storage) -> std::size_t {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return hash::detail::hash_object(object);
             },
-            .to_json_impl_ = [](const storage_t& storage) -> const nlohmann::json {
+            .to_json_impl_ = [](const storage_t& storage) -> nlohmann::json {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return json::to_json(object);
             }} {
@@ -248,9 +248,9 @@ private:
     void* (*move_storage)(storage_t& storage, void*) = nullptr;
 
     struct implementations_t {
-        const std::string (*to_string_impl_)(const storage_t&) = nullptr;
-        const std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
-        const nlohmann::json (*to_json_impl_)(const storage_t&) = nullptr;
+        std::string (*to_string_impl_)(const storage_t&) = nullptr;
+        std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
+        nlohmann::json (*to_json_impl_)(const storage_t&) = nullptr;
     };
 
     implementations_t implementations;
@@ -296,9 +296,9 @@ constexpr bool supports_conversion_to_string_v =
 
 template <typename T>
 Attributes get_attributes(const T& object) {
-    if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<std::decay_t<T>>) {
-        constexpr auto num_attributes = tt::stl::reflection::detail::get_num_attributes<std::decay_t<T>>();
-        tt::stl::reflection::Attributes attributes;
+    if constexpr (ttsl::reflection::detail::supports_compile_time_attributes_v<std::decay_t<T>>) {
+        constexpr auto num_attributes = ttsl::reflection::detail::get_num_attributes<std::decay_t<T>>();
+        ttsl::reflection::Attributes attributes;
         const auto attribute_values = object.attribute_values();
         [&object, &attributes, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
@@ -310,8 +310,8 @@ Attributes get_attributes(const T& object) {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return attributes;
-    } else if constexpr (tt::stl::concepts::Reflectable<std::decay_t<T>>) {
-        tt::stl::reflection::Attributes attributes;
+    } else if constexpr (ttsl::concepts::Reflectable<std::decay_t<T>>) {
+        ttsl::reflection::Attributes attributes;
         reflect::for_each(
             [&object, &attributes](auto I) {
                 const auto& attribute_name = reflect::member_name<I>(object);
@@ -325,7 +325,7 @@ Attributes get_attributes(const T& object) {
     }
 }
 
-static std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
+inline std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
     os << attribute.to_string();
     return os;
 }
@@ -362,7 +362,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
 
         os << ")";
     } else {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Type cannot be converted to string");
+        static_assert(ttsl::concepts::always_false_v<T>, "Type cannot be converted to string");
     }
     return os;
 }
@@ -484,7 +484,7 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) 
 }
 
 template <typename T>
-    requires(tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value))
+    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value))
 std::ostream& operator<<(std::ostream& os, const T& object) {
     os << reflect::type_name(object);
     os << "(";
@@ -511,8 +511,7 @@ void visit_object_of_type(auto&& callback, T&& object) {
 }
 
 template <typename T>
-    requires(not tt::stl::concepts::Reflectable<std::decay_t<T>>) and
-            (not requires { std::decay_t<T>::attribute_names; })
+    requires(not ttsl::concepts::Reflectable<std::decay_t<T>>) and (not requires { std::decay_t<T>::attribute_names; })
 struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
@@ -610,7 +609,7 @@ struct visit_object_of_type_t<T> {
 };
 
 template <typename T>
-    requires tt::stl::concepts::Reflectable<std::decay_t<T>>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>>
 struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
@@ -650,8 +649,7 @@ auto transform_object_of_type(auto&& callback, T&& object) {
 }
 
 template <typename T>
-    requires(not tt::stl::concepts::Reflectable<std::decay_t<T>>) and
-            (not requires { std::decay_t<T>::attribute_names; })
+    requires(not ttsl::concepts::Reflectable<std::decay_t<T>>) and (not requires { std::decay_t<T>::attribute_names; })
 struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
@@ -662,7 +660,7 @@ struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, T&& value) const {
-        log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
+        log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
 
@@ -675,7 +673,7 @@ struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, const T& value) const {
-        log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
+        log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
 };
@@ -739,7 +737,7 @@ struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, T&& object) const {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
+        static_assert(ttsl::concepts::always_false_v<T>, "Unsupported transform of object of type");
     }
 
     template <typename object_t>
@@ -751,12 +749,12 @@ struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, const T& object) const {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
+        static_assert(ttsl::concepts::always_false_v<T>, "Unsupported transform of object of type");
     }
 };
 
 template <typename T>
-    requires tt::stl::concepts::Reflectable<std::decay_t<T>>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>>
 struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
@@ -800,18 +798,17 @@ auto get_first_object_of_type(const T& value) {
 }
 
 template <typename T>
-    requires(not tt::stl::concepts::Reflectable<std::decay_t<T>>) and
-            (not requires { std::decay_t<T>::attribute_names; })
+    requires(not ttsl::concepts::Reflectable<std::decay_t<T>>) and (not requires { std::decay_t<T>::attribute_names; })
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
-    const auto operator()(const T& value) const {
+    auto operator()(const T& value) const {
         return value;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& value) const {
+    auto operator()(const T& value) const {
         throw std::runtime_error("Unsupported get first object of type: " + get_type_name<T>());
     }
 };
@@ -819,7 +816,7 @@ struct get_first_object_of_type_t<T> {
 template <typename T>
 struct get_first_object_of_type_t<std::optional<T>> {
     template <typename object_t>
-    const auto operator()(const std::optional<T>& value) const {
+    auto operator()(const std::optional<T>& value) const {
         if (value.has_value()) {
             const auto& tensor = value.value();
             return get_first_object_of_type<object_t>(tensor);
@@ -830,7 +827,7 @@ struct get_first_object_of_type_t<std::optional<T>> {
 template <typename T>
 struct get_first_object_of_type_t<std::vector<T>> {
     template <typename object_t>
-    const auto operator()(const std::vector<T>& value) const {
+    auto operator()(const std::vector<T>& value) const {
         for (auto& tensor : value) {
             return get_first_object_of_type<object_t>(tensor);
         }
@@ -841,7 +838,7 @@ struct get_first_object_of_type_t<std::vector<T>> {
 template <typename T, auto N>
 struct get_first_object_of_type_t<std::array<T, N>> {
     template <typename object_t>
-    const auto operator()(const std::array<T, N>& value) const {
+    auto operator()(const std::array<T, N>& value) const {
         for (auto& tensor : value) {
             return get_first_object_of_type<object_t>(tensor);
         }
@@ -851,7 +848,7 @@ struct get_first_object_of_type_t<std::array<T, N>> {
 template <typename... Ts>
 struct get_first_object_of_type_t<std::tuple<Ts...>> {
     template <typename object_t>
-    const auto operator()(const std::tuple<Ts...>& value) const {
+    auto operator()(const std::tuple<Ts...>& value) const {
         return get_first_object_of_type<object_t>(std::get<0>(value));
     }
 };
@@ -861,44 +858,43 @@ template <typename T>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& object) const {
+    auto operator()(const T& object) const {
         return object;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& object) const {
+    auto operator()(const T& object) const {
         constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
         return get_first_object_of_type<object_t>(object.attribute_values());
     }
 };
 
 template <typename T>
-    requires tt::stl::concepts::Reflectable<std::decay_t<T>>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& object) const {
+    auto operator()(const T& object) const {
         return object;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& object) const {
+    auto operator()(const T& object) const {
         return get_first_object_of_type<object_t>(reflect::get<0>(object));
     }
 };
 
 }  // namespace reflection
-}  // namespace stl
-}  // namespace tt
+}  // namespace ttsl
 
 template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<tt::stl::reflection::detail::supports_conversion_to_string_v<T>>> {
+struct fmt::formatter<T, char, std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T>>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& object, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -910,7 +906,7 @@ struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& value, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << value;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -922,7 +918,7 @@ struct fmt::formatter<std::filesystem::path> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::filesystem::path& path, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << path;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -934,7 +930,7 @@ struct fmt::formatter<std::optional<T>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::optional<T>& optional, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << optional;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -946,7 +942,7 @@ struct fmt::formatter<std::variant<Ts...>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::variant<Ts...>& variant, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << variant;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -958,7 +954,7 @@ struct fmt::formatter<std::reference_wrapper<T>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::reference_wrapper<T> reference, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << reference;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -970,7 +966,7 @@ struct fmt::formatter<std::tuple<Ts...>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::tuple<Ts...>& tuple, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << tuple;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -982,7 +978,7 @@ struct fmt::formatter<std::array<T, N>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::array<T, N>& array, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << array;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -994,7 +990,7 @@ struct fmt::formatter<std::vector<T>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::vector<T>& vector, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << vector;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -1006,7 +1002,7 @@ struct fmt::formatter<std::set<T>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::set<T>& set, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << set;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -1018,7 +1014,7 @@ struct fmt::formatter<std::map<K, V>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::map<K, V>& map, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << map;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -1030,7 +1026,7 @@ struct fmt::formatter<std::unordered_map<K, V>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::unordered_map<K, V>& map, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << map;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -1039,21 +1035,20 @@ struct fmt::formatter<std::unordered_map<K, V>> {
 
 template <typename T>
     requires(
-        tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
-                                                  tt::stl::reflection::detail::supports_conversion_to_string_v<T>))
+        ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
+                                               ttsl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& object, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
+        using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
 
-namespace tt {
-namespace stl {
+namespace ttsl {
 namespace hash {
 
 namespace detail {
@@ -1112,12 +1107,12 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
         }
         return std::hash<T>{}(object);
-    } else if constexpr (tt::stl::reflection::detail::supports_to_hash_v<T>) {
+    } else if constexpr (ttsl::reflection::detail::supports_to_hash_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using to_hash method: {}\n", get_type_name<T>(), object);
         }
         return object.to_hash();
-    } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<T>) {
+    } else if constexpr (ttsl::reflection::detail::supports_compile_time_attributes_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using compile-time attributes: {}\n", get_type_name<T>(), object);
         }
@@ -1207,7 +1202,7 @@ inline hash_t hash_object(const T& object) noexcept {
         } else {
             return 0;
         }
-    } else if constexpr (tt::stl::concepts::Reflectable<T>) {
+    } else if constexpr (ttsl::concepts::Reflectable<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
         }
@@ -1215,8 +1210,7 @@ inline hash_t hash_object(const T& object) noexcept {
         reflect::for_each([&hash, &object](auto I) { hash = hash_objects(hash, reflect::get<I>(object)); }, object);
         return hash;
     } else {
-        static_assert(
-            tt::stl::concepts::always_false_v<T>, "Type doesn't support hashing using tt::stl::hash::hash_object");
+        static_assert(ttsl::concepts::always_false_v<T>, "Type doesn't support hashing using ttsl::hash::hash_object");
     }
 }
 
@@ -1304,7 +1298,6 @@ template <typename T, std::size_t N>
 struct to_json_t<std::array<T, N>> {
     nlohmann::json operator()(const std::array<T, N>& array) noexcept {
         nlohmann::json json_array = nlohmann::json::array();
-        std::size_t hash = 0;
         [&array, &json_array]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
                 [&array, &json_array] {
@@ -1518,7 +1511,7 @@ struct to_json_t<reflection::Attribute> {
 };
 
 template <typename T>
-    requires tt::stl::reflection::detail::supports_compile_time_attributes_v<T>
+    requires ttsl::reflection::detail::supports_compile_time_attributes_v<T>
 struct to_json_t<T> {
     nlohmann::json operator()(const T& object) noexcept {
         nlohmann::json json_object = nlohmann::json::object();
@@ -1537,7 +1530,7 @@ struct to_json_t<T> {
 };
 
 template <typename T>
-    requires tt::stl::concepts::Reflectable<T>
+    requires ttsl::concepts::Reflectable<T>
 struct to_json_t<T> {
     nlohmann::json operator()(const T& object) noexcept {
         nlohmann::json json_object = nlohmann::json::object();
@@ -1553,7 +1546,7 @@ struct to_json_t<T> {
 };
 
 template <typename T>
-    requires tt::stl::concepts::Reflectable<T>
+    requires ttsl::concepts::Reflectable<T>
 struct from_json_t<T> {
     T operator()(const nlohmann::json& json_object) noexcept {
         T object;
@@ -1572,11 +1565,15 @@ struct from_json_t<T> {
 template <typename T>
 struct to_json_t {
     nlohmann::json operator()(const T& optional) noexcept {
-        return fmt::format("tt::stl::json::to_json_t: Unsupported type {}", get_type_name<T>());
+        return fmt::format("ttsl::json::to_json_t: Unsupported type {}", get_type_name<T>());
     }
 };
 
 }  // namespace json
+}  // namespace ttsl
 
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt

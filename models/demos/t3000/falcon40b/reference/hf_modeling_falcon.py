@@ -31,7 +31,6 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, LayerNorm, MSELoss
 from torch.nn import functional as F
-
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions,
@@ -46,8 +45,8 @@ from transformers.utils import (
     add_start_docstrings_to_model_forward,
     logging,
 )
-from .hf_configuration_falcon import FalconConfig
 
+from .hf_configuration_falcon import FalconConfig
 
 logger = logging.get_logger(__name__)
 

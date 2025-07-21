@@ -2,22 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <cmath>
+#include <cstring>
+#include <exception>
+#include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include "device_pool.hpp"
-#include "logger.hpp"
-#include "tt_cluster.hpp"
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -94,7 +103,7 @@ int main(int argc, char** argv) {
             page_size);
 
         // Device setup
-        if (device_id >= tt::Cluster::instance().number_of_devices()) {
+        if (device_id >= tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices()) {
             log_info(LogTest, "Skip! Device id {} is not applicable on this system", device_id);
             return 1;
         }
@@ -172,7 +181,7 @@ int main(int argc, char** argv) {
         // Validation & teardown
         // Data check is only valid if both read and write are enabled
         if (!skip_read && !skip_write && !(src_vec == result_vec)) {
-            log_error("Read data mismatch");
+            log_error(tt::LogTest, "Read data mismatch");
             pass = false;
         }
         pass &= tt_metal::CloseDevice(device);
@@ -185,7 +194,7 @@ int main(int argc, char** argv) {
     // Determine if it passes performance goal
     auto avg_h2d_bandwidth = calculate_average(h2d_bandwidth);
     auto avg_d2h_bandwidth = calculate_average(d2h_bandwidth);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // TODO: check the theoritical peak of wormhole
         static constexpr double k_PcieMax = 16.0;  // GB/s
         double target_read_bandwidth;
@@ -223,13 +232,18 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_rw_buffer");
+    log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_rw_buffer");
     log_info(
+        tt::LogTest,
         "CSV_INPUT:buffer-type:{}:transfer-size:{}",
         BUFFER_TYPEToString(static_cast<BUFFER_TYPE>(buffer_type)),
         transfer_size);
-    log_info("CSV_OUTPUT:H2D_Bandwidth(GB/s):{:.3f}:D2H_Bandwidth(GB/s):{:.3f}", avg_h2d_bandwidth, avg_d2h_bandwidth);
-    log_info("CSV_RESULT:pass:{}", pass);
+    log_info(
+        tt::LogTest,
+        "CSV_OUTPUT:H2D_Bandwidth(GB/s):{:.3f}:D2H_Bandwidth(GB/s):{:.3f}",
+        avg_h2d_bandwidth,
+        avg_d2h_bandwidth);
+    log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

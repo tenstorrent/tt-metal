@@ -68,9 +68,9 @@ void get_enum(MsgPackFile& file, std::string_view name, T& value) {
 }
 
 void write_ttnn_tensor(MsgPackFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor) {
-    auto shape = tensor.get_logical_shape();
-    auto data_type = tensor.get_dtype();
-    auto layout = tensor.get_layout();
+    auto shape = tensor.logical_shape();
+    auto data_type = tensor.dtype();
+    auto layout = tensor.layout();
     auto storage_type = tensor.storage_type();
 
     file.put(std::string(name) + "/shape", to_bytes(shape));
@@ -105,7 +105,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
     tt::tt_metal::Layout layout{};
     tt::tt_metal::StorageType storage_type{};
 
-    auto shape = core::create_shape({1, 1, 1, 1});
+    auto shape = ttnn::Shape({1, 1, 1, 1});
     std::vector<uint8_t> bytes;
     file.get(std::string(name) + "/shape", bytes);
     from_bytes<ttnn::Shape>(bytes, shape);

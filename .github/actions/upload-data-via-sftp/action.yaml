@@ -13,6 +13,9 @@ inputs:
   hostname:
     description: "Hostname of server"
     required: true
+  path:
+    description: "Path where data and batchfile are located"
+    required: false
 
 runs:
   using: "composite"
@@ -20,8 +23,21 @@ runs:
     - name: Create key file
       shell: bash
       run: |
+        # Change dir to path if its set
+        # If provided, generate key file in inputs.path location for the upload step
+        if [ -n "${{ inputs.path }}" ]; then
+          echo "Changing dir to ${{ inputs.path }}"
+          cd "${{ inputs.path }}"
+        fi
         echo "${{ inputs.ssh-private-key }}" > id_key
         chmod go-rwx id_key
     - name: Upload files
       shell: bash
-      run: sftp  -oStrictHostKeyChecking=no -i id_key -b ${{ inputs.sftp-batchfile }} ${{ inputs.username }}@${{ inputs.hostname }}
+      run: |
+        # Change dir to path if its set
+        # Example: when running in containers the batchfile and data files are located under /work
+        if [ -n "${{ inputs.path }}" ]; then
+          echo "Changing dir to ${{ inputs.path }}"
+          cd "${{ inputs.path }}"
+        fi
+        sftp  -oStrictHostKeyChecking=no -i id_key -b ${{ inputs.sftp-batchfile }} ${{ inputs.username }}@${{ inputs.hostname }}

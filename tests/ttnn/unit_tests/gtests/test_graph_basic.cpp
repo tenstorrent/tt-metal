@@ -2,16 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/move/utility_core.hpp>
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <stddef.h>
+#include <stdint.h>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <vector>
+
+#include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
-#include "ttnn_test_fixtures.hpp"
-#include "ttnn/device.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/graph/graph_processor.hpp"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_consts.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_test_fixtures.hpp"
 
-#include <string>
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::graph::test {
 

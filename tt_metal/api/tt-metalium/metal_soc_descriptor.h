@@ -9,8 +9,8 @@
 #include <map>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/tt_cluster_descriptor.h>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
@@ -26,8 +26,9 @@ enum BoardType : uint32_t;
 struct metal_SocDescriptor : public tt_SocDescriptor {
 public:
     std::vector<size_t> dram_view_channels;
-    std::vector<CoreCoord> dram_view_worker_cores;  // per channel preferred worker endpoint
-    std::vector<CoreCoord> dram_view_eth_cores;     // per dram view preferred eth endpoint
+    std::vector<std::vector<CoreCoord>>
+        dram_view_worker_cores;                               // per dram view preferred worker endpoints for each noc
+    std::vector<std::vector<CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
     std::vector<size_t> dram_view_address_offsets;  // starting address offset
 
     uint64_t dram_core_size;
@@ -38,8 +39,8 @@ public:
     metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& board_type);
     metal_SocDescriptor() = default;
 
-    CoreCoord get_preferred_worker_core_for_dram_view(int dram_view) const;
-    CoreCoord get_preferred_eth_core_for_dram_view(int dram_view) const;
+    CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
+    CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
     CoreCoord get_logical_core_for_dram_view(int dram_view) const;
     size_t get_address_offset(int dram_view) const;
     size_t get_channel_for_dram_view(int dram_view) const;

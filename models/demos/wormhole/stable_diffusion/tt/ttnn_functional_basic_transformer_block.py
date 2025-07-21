@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention import cross_attention
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_feedforward import feedforward
-import torch
 
 
 def compare(tensor, name, permute=False):

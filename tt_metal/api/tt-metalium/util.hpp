@@ -1,14 +1,15 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "assert.hpp"
-#include "math.hpp"
-#include "tt_backend_api_types.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "data_types.hpp"
-#include "hal_types.hpp"
+
+#include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <umd/device/tt_soc_descriptor.h>
 
 namespace tt::tt_metal::detail {
@@ -33,12 +34,11 @@ inline DeviceAddr SizeBytesPerBank(
         size_bytes);
     DeviceAddr num_pages = page_size_bytes == 0 ? 0 : size_bytes / page_size_bytes;
     DeviceAddr num_equally_distributed_pages = num_pages == 0 ? 0 : 1 + ((num_pages - 1) / num_banks);
-    return num_equally_distributed_pages * round_up(page_size_bytes, alignment_bytes);
+    return num_equally_distributed_pages * round_up(page_size_bytes, static_cast<DeviceAddr>(alignment_bytes));
 }
 
 inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
     switch (arch) {
-        case ARCH::GRAYSKULL: return NOC::NOC_1;
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_0;
     }
@@ -46,7 +46,6 @@ inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
 
 inline NOC GetPreferredNOCForDRAMWrite(ARCH arch) {
     switch (arch) {
-        case ARCH::GRAYSKULL: return NOC::NOC_0;
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_1;
     }

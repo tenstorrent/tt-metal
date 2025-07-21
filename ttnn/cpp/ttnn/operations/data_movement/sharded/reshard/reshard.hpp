@@ -20,6 +20,5 @@ struct ReshardOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto reshard =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::reshard", ttnn::operations::data_movement::ReshardOperation>();
+constexpr auto reshard = ttnn::register_operation<"ttnn::reshard", ttnn::operations::data_movement::ReshardOperation>();
 }  // namespace ttnn

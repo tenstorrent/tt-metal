@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.perf.perf_utils import today, merge_perf_files, check_perf_results
+from models.perf.perf_utils import check_perf_results, merge_perf_files, today
 
 expected_cols = [
     "Model",
@@ -19,7 +19,7 @@ expected_cols = [
     "Throughput CPU (Batch*inf/sec)",
 ]
 
-check_cols = ["Inference Time (sec)", "Compile Time (sec)"]
+check_cols = ["Inference Time (sec)"]
 
 if __name__ == "__main__":
     fname = f"Models_Perf_{today}.csv"

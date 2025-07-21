@@ -11,7 +11,7 @@ namespace ttnn::operations::moreh::moreh_abs_pow {
 struct MorehAbsPow {
     static Tensor invoke(
         const Tensor& input,
-        const float p,
+        float p,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
@@ -19,7 +19,6 @@ struct MorehAbsPow {
 }  // namespace ttnn::operations::moreh::moreh_abs_pow
 
 namespace ttnn {
-constexpr auto moreh_abs_pow = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_abs_pow",
-    ttnn::operations::moreh::moreh_abs_pow::MorehAbsPow>();
+constexpr auto moreh_abs_pow =
+    ttnn::register_operation<"ttnn::moreh_abs_pow", ttnn::operations::moreh::moreh_abs_pow::MorehAbsPow>();
 }

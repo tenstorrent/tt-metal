@@ -4,9 +4,9 @@
 
 import pytest
 
-from models.utility_functions import skip_for_grayskull
-from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
 from models.demos.t3000.llama2_70b.tests.test_llama_decoder import run_test_LlamaDecoder_inference
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
+from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -41,7 +41,6 @@ def test_LlamaDecoder_inference_t3000(
     max_batch_size,
     max_context_len,
     llama_version,
-    use_program_cache,
 ):
     if seq_len == 1 and batch != max_batch_size:
         pytest.skip(f"Input batch size should match max_batch_size")

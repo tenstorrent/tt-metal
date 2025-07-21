@@ -26,20 +26,20 @@ Program CreateEltwiseAddProgram(
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, tile_size_bytes);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, tile_size_bytes);
-    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src1_config);
 
     constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
     constexpr uint32_t num_output_tiles = 1;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(num_output_tiles * tile_size_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(output_cb_index, tile_size_bytes);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_output_config);
 
     // Add data movement kernels
     KernelHandle reader = CreateKernel(
@@ -84,7 +84,7 @@ Program CreateEltwiseAddProgram(
 //
 // The example showcases TT-Metalium's ability to abstract away the complexity
 // of distributed memory management and compute.
-int main(int argc, char** argv) {
+int main() {
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
 
     // Define the global buffer shape and shard shape for distributed buffers
@@ -96,11 +96,8 @@ int main(int argc, char** argv) {
     auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
 
     // Configure device-local buffer settings
-    auto local_buffer_config = DeviceLocalBufferConfig{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -144,8 +141,6 @@ int main(int argc, char** argv) {
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";
-    bfloat16* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
-    bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
     bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
 

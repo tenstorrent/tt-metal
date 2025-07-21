@@ -1,22 +1,16 @@
-What is ttnn?
-#############
+What is TT-NN?
+##############
 
-:doc:`ttnn </ttnn/about>` is a library that provides a user-friendly interface to operations that run on Tenstorrent's hardware using ``tt-metal`` programming model.
+:doc:`TT-NN </ttnn/about>` is an open source library of neural network operations built on the ``tt-metal`` programming model.
 
-:doc:`ttnn </ttnn/about>` is designed to be intuitive to an user that is familiar with `PyTorch <https://pytorch.org/>`_.
+It can be used in C++ and Python projects, and is designed to feel familiar to developers experienced with `PyTorch <https://pytorch.org/>`_.
 
-:doc:`ttnn </ttnn/about>`'s primary dependency is :doc:`tt_lib </ttnn/dependencies/tt_lib>` which provides the implementation for all of the operations used by :doc:`ttnn </ttnn/about>`.
+Key features of :doc:`TT-NN </ttnn/about>` include:
 
-We trust that this library will be valuable to helping you on your journey to take full advantage of our devices!
-
-
-Key features of :doc:`ttnn </ttnn/about>`
-*****************************************
-
-Key features of :doc:`ttnn </ttnn/about>`:
-    * Support for N-D tensors.
-    * Intuitive way of converting between :ref:`ttnn.ROW_MAJOR_LAYOUT<ttnn.ROW_MAJOR_LAYOUT>` and :ref:`ttnn.TILE_LAYOUT<ttnn.TILE_LAYOUT>` using :ref:`ttnn.to_layout<ttnn.to_layout>`
-    * Stable APIs.
-    * The computation graph of :doc:`ttnn </ttnn/about>` operations can be traced and then visualized or used in any other way. The graph is `networkx` compatible. Refer to :ref:`ttnn Tracer<ttnn Tracer>` for examples
-    * Infrastructure for converting parameters and some sub-modules from a `torch.nn.Module` object. This infrastructure supports caching of the converted parameters which could significantly speed up repeated runs.
-    * Ability to compare the result of each operation to the equivalent `PyTorch <https://pytorch.org/>`_ operation. Very useful for debugging.
+* More than 200 :doc:`operations </ttnn/api>` (matrix multiplication, convolution, reduction, CCL, fused Transformer operations, etc.)
+* A Tensor type that enables `different ways <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md>`_ to represent, distribute and access data on device
+* The ability for developers to register custom operations
+* Native support for a `mesh of devices <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md>`_
+* Tools to trace and `visualize <https://github.com/tenstorrent/ttnn-visualizer>`_ the computation `graph <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md>`_
+* Utilities to cache converted parameters, significantly speeding up model loading on repeated runs
+* A `comparison mode <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/comparison-mode.md>`_ that enables debugging of long operation sequences against a known reference

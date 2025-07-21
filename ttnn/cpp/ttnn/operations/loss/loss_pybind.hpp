@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "pybind11/pybind_fwd.hpp"
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::loss {
-
-void py_bind_loss_functions(pybind11::module& module);
+namespace py = pybind11;
+void py_bind_loss_functions(py::module& module);
 
 }  // namespace ttnn::operations::loss

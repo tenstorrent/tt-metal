@@ -1,3 +1,5 @@
+.. _Programming Model:
+
 Programming Model
 =================
 

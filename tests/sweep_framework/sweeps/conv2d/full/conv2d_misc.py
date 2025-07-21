@@ -43,7 +43,6 @@ TIMEOUT = 30
 # groups
 # override_sharding_config
 # core_grid
-# use_shallow_conv_variant
 # deallocate_activation
 # enable_auto_formatting
 # padded_input_channels
@@ -56,7 +55,6 @@ TIMEOUT = 30
 # groups
 # override_sharding_config
 # core_grid
-# use_shallow_conv_variant
 # deallocate_activation
 
 # Keeping rest of the params constant
@@ -125,7 +123,6 @@ parameters = {
         "groups": [1],
         "override_sharding_config": [False],
         "core_grid": [None],
-        "use_shallow_conv_variant": [False],
         "deallocate_activation": [False],
         "enable_auto_formatting": [False],
         "padded_input_channels": [None],
@@ -168,7 +165,6 @@ parameters = {
             ((0, 0), (4, 4), (0, 6), (1, 6)),  # Uneven shape, 27 cores
             ((0, 0), (5, 5), (0, 6), (2, 6)),  # Uneven shape, 39 cores
         ],
-        "use_shallow_conv_variant": [True],
         "deallocate_activation": [True],
         # Parameters-to-check ends
         "enable_auto_formatting": [False],
@@ -201,7 +197,6 @@ parameters = {
         "groups": [1],
         "override_sharding_config": [False],
         "core_grid": [None],  # ignored
-        "use_shallow_conv_variant": [False],
         "deallocate_activation": [False],
         "enable_auto_formatting": [False],
         "padded_input_channels": [None],
@@ -235,7 +230,6 @@ def run(
     groups,
     override_sharding_config,
     core_grid,
-    use_shallow_conv_variant,
     deallocate_activation,
     enable_auto_formatting,
     padded_input_channels=None,
@@ -260,7 +254,6 @@ def run(
         groups,
         override_sharding_config,
         core_grid,
-        use_shallow_conv_variant,
         deallocate_activation,
         enable_auto_formatting,
         device,

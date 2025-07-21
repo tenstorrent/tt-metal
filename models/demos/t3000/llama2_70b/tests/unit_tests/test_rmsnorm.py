@@ -2,21 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.model_config import (
-    get_model_config,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 class TtLlamaRMSNorm(torch.nn.Module):

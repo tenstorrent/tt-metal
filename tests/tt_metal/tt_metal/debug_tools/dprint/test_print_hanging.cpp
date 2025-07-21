@@ -2,12 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug_tools_fixture.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include "gtest/gtest.h"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
+#include <functional>
+#include <stdexcept>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that we can handle an invalid WAIT command.
@@ -19,10 +36,10 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Some machines will run this test on different virtual cores, so wildcard the exact coordinates.
 const std::string golden_output =
-    R"(DPRINT server timed out on Device *, worker core (x=*,y=*), riscv 4, waiting on a RAISE signal: 1
+    R"(DPRINT server timed out on Device ?, worker core (x=?,y=?), riscv 4, waiting on a RAISE signal: 1
 )";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -39,10 +56,10 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
 try {
     fixture->RunProgram(device, program);
 } catch (std::runtime_error& e) {
-    const string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
-    const string error = string(e.what());
+    const std::string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
+    const std::string error = std::string(e.what());
     log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-    EXPECT_TRUE(error.find(expected) != string::npos);
+    EXPECT_TRUE(error.find(expected) != std::string::npos);
 }
 
     // Check the print log against golden output.

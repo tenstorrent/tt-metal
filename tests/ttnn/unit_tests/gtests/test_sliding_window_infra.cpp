@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
+#include <fmt/base.h>
+#include <string>
 
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "gtest/gtest.h"
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/api/tt-metalium/core_coord.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn::operations::sliding_window::test {
 
@@ -14,7 +17,7 @@ using namespace tt::tt_metal;
 class SlidingWindowTestFixture : public testing::TestWithParam<SlidingWindowConfig> {};
 
 TEST_P(SlidingWindowTestFixture, SlidingWindowHash) {
-    auto sliding_window_a = GetParam();
+    const auto& sliding_window_a = GetParam();
 
     // start of same input
     auto sliding_window_b = sliding_window_a;

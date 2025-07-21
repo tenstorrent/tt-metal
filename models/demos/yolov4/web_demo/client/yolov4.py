@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import time
-import io
-import math
 import argparse
-import cv2
-import requests
-import orjson
-import av
+import io
 import logging
-import streamlit as st
+import math
+import time
+
+import av
+import cv2
 import numpy as np
-
-
+import orjson
+import requests
+import streamlit as st
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
-
 
 # Configure the logger
 logging.basicConfig(
@@ -154,8 +152,7 @@ class VideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
-st.sidebar.image("TT.png", use_column_width=True)
-st.sidebar.image("GS.png", use_column_width=True)
+st.title("YOLOv4 Detection Demo")
 
 webrtc_streamer(
     key="example",

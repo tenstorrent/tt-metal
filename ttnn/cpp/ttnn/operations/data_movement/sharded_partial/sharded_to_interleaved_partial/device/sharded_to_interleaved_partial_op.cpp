@@ -4,7 +4,7 @@
 
 #include "sharded_to_interleaved_partial_op.hpp"
 
-#include "cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
@@ -20,23 +20,23 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
         "Slice index and num_slices don't match! Index = {} num_slices = {}",
         slice_index,
         num_slices);
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
+    TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
     TT_FATAL(
-        (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % num_slices == 0,
+        (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
 
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Error");
-    if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-        if (input_tensor.get_padded_shape()[-1] % shard_spec.shape[1] != 0 ||
-            ((input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % shard_spec.shape[0]) != 0) {
+    if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (input_tensor.padded_shape()[-1] % shard_spec.shape[1] != 0 ||
+            ((input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % shard_spec.shape[0]) != 0) {
             TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
         }
     }
-    if (input_tensor.get_dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
+    if (input_tensor.dtype() != this->output_dtype) {
+        TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
     }
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }

@@ -1,16 +1,13 @@
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
-target_sources(
+# These headers are for the device, not host; will require cross compiling to lint them (future work).
+set_target_properties(
     fabric
-    PRIVATE
-        control_plane.cpp
-        routing_table_generator.cpp
-        mesh_graph.cpp
-        erisc_datamover_builder.cpp
-        fabric_host_utils.cpp
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
 )
-
 target_sources(
     fabric
     PUBLIC
@@ -21,7 +18,9 @@ target_sources(
             hw/inc/tt_fabric_api.h
             hw/inc/tt_fabric.h
             hw/inc/tt_fabric_interface.h
-            hw/inc/eth_chan_noc_mapping.h
+            hw/inc/tt_fabric_mux.hpp
+            hw/inc/tt_fabric_mux_interface.hpp
+            hw/inc/fabric_routing_mode.h
             hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp
             hw/inc/edm_fabric/edm_fabric_utils.hpp
             hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
@@ -29,10 +28,40 @@ target_sources(
             hw/inc/edm_fabric/fabric_connection_manager.hpp
             hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
             hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
+            hw/inc/edm_fabric/fabric_txq_setup.h
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
+    PRIVATE
+        control_plane.cpp
+        routing_table_generator.cpp
+        mesh_graph.cpp
+        erisc_datamover_builder.cpp
+        fabric.cpp
+        fabric_host_utils.cpp
+        fabric_context.cpp
+        fabric_mux_config.cpp
+        serialization/intermesh_link_table.cpp
 )
 
-target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# Include helper functions and generate headers from flatbuffer schemas
+include(flatbuffers)
+set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
+
+# Collect all generated headers
+set(GENERATED_FBS_HEADERS)
+foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND GENERATED_FBS_HEADERS ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
+# Add the generated headers to your target
+target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
+
+target_include_directories(
+    fabric
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+)
 
 target_link_libraries(
     fabric
@@ -45,18 +74,10 @@ target_link_libraries(
         yaml-cpp::yaml-cpp
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
+        FlatBuffers::FlatBuffers
 )
 
-target_precompile_headers(
-    fabric
-    PRIVATE
-        <functional>
-        <map>
-        <memory>
-        <unordered_map>
-        <variant>
-        <vector>
-)
+target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
 

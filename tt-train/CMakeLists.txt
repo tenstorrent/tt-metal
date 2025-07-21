@@ -15,7 +15,12 @@ else()
     find_and_set_clang17()
 endif()
 
-project(ml-framework-cpp)
+project(
+    ml-framework-cpp
+    LANGUAGES
+        C
+        CXX
+)
 CHECK_COMPILERS()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")

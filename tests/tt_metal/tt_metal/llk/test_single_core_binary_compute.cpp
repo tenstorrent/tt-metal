@@ -2,20 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <bit>
-
-#include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <bit>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -26,7 +55,7 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::binary {
-const map<string, string> binary_op_name_to_op_type = {
+const map<std::string, std::string> binary_op_name_to_op_type = {
     {"add", "EltwiseBinaryType::ELWADD"},
     {"sub", "EltwiseBinaryType::ELWSUB"},
     {"mul", "EltwiseBinaryType::ELWMUL"},
@@ -34,7 +63,7 @@ const map<string, string> binary_op_name_to_op_type = {
     {"sub_with_dest_reuse", "EltwiseBinaryType::ELWSUB"},
     {"mul_with_dest_reuse", "EltwiseBinaryType::ELWMUL"},
 };
-const map<string, string> binary_op_name_to_op_kernel = {
+const map<std::string, std::string> binary_op_name_to_op_kernel = {
     {"add", "add_tiles"},
     {"sub", "sub_tiles"},
     {"mul", "mul_tiles"},
@@ -125,7 +154,8 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
     auto l1_output_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_output_cb_config);
 
     vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> defines = {{"ELTWISE_OP_TYPE", binary_op_name_to_op_type.at(test_config.binary_op)}};
+    std::map<std::string, std::string> defines = {
+        {"ELTWISE_OP_TYPE", binary_op_name_to_op_type.at(test_config.binary_op)}};
 
     if (test_config.binary_op.find("_with_dest_reuse") != std::string::npos) {
         defines["ELTWISE_DEST_REUSE_TYPE"] = "EltwiseBinaryReuseDestType::DEST_TO_SRCA";
@@ -286,7 +316,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
             .binary_op = "add",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -306,7 +336,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
             .binary_op = "sub",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -326,7 +356,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
             .binary_op = "mul",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -347,7 +377,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
             .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -368,7 +398,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
             .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -389,7 +419,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
             .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -409,7 +439,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
             .binary_op = "add_with_dest_reuse",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -429,7 +459,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
             .binary_op = "sub_with_dest_reuse",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -449,7 +479,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
             .binary_op = "mul_with_dest_reuse",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -469,7 +499,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
             .binary_op = "add",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -489,7 +519,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
             .binary_op = "sub",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -509,7 +539,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
             .binary_op = "mul",
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 4;
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -535,7 +565,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
             .acc_to_dest = true,
             .math_fidelity = MathFidelity(i),
         };
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -561,7 +591,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
             .acc_to_dest = true,
             .math_fidelity = MathFidelity(i),
         };
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
@@ -587,7 +617,7 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
             .acc_to_dest = true,
             .math_fidelity = MathFidelity(i),
         };
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }

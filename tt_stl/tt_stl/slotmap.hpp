@@ -21,12 +21,12 @@
 #include <climits>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
-#include "assert.hpp"
-
-namespace tt::stl {
+namespace ttsl {
 
 template <typename T, size_t INDEX_BITS>
 struct Key {
@@ -65,12 +65,12 @@ public:
     T index() const { return value >> VERSION_BITS; }
     T version() const { return value & VERSION_MASK; }
 
-    bool operator<=>(const Key& other) const = default;
+    friend auto operator<=>(Key, Key) = default;
 };
 
-#define MAKE_SLOTMAP_KEY(NAME, T, N)     \
-    struct NAME : ::tt::stl::Key<T, N> { \
-        using Key::Key;                  \
+#define MAKE_SLOTMAP_KEY(NAME, T, N)  \
+    struct NAME : ::ttsl::Key<T, N> { \
+        using Key::Key;               \
     };
 
 template <typename KeyT, typename T>
@@ -135,7 +135,6 @@ private:
         = default;
     };
 
-private:
     static constexpr index_type max_index = KeyT::max_index;
     static constexpr index_type invalid_index = std::numeric_limits<index_type>::max();
     std::vector<Slot> slots;
@@ -169,7 +168,9 @@ public:
             slot = Slot(new_version, std::forward<Args>(args)...);
         } else {
             idx = static_cast<index_type>(slots.size());
-            TT_FATAL(idx <= max_index, "SlotMap index out of bounds");
+            if (idx > max_index) {
+                throw std::runtime_error("SlotMap index out of bounds");
+            }
             constexpr version_type version = 1;
             slots.emplace_back(version, std::forward<Args>(args)...);
         }
@@ -240,7 +241,9 @@ public:
      * @param new_capacity The new capacity to the SlotMap.
      */
     void reserve(size_t new_capacity) {
-        TT_FATAL(new_capacity <= max_index, "SlotMap capacity out of bounds");
+        if (new_capacity > max_index) {
+            throw std::runtime_error("SlotMap capacity out of bounds");
+        }
 
         // Technically this can reserve more than max_index, but it's not a problem,
         // since we still check the index bounds when inserting.
@@ -376,4 +379,10 @@ private:
     }
 };
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

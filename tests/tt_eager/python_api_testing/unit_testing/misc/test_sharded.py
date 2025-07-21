@@ -510,7 +510,6 @@ def test_sharded_matmul_1d_in1(
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
-@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_sharded_partial_op(
     device,
     H,
@@ -518,13 +517,11 @@ def test_sharded_partial_op(
     num_slices,
     activations_dtype,
     output_dtype,
-    async_mode,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
-    device.enable_async(async_mode)
     grid_size = (8, 8)
     in0_shape = [1, 1, H, 64]
     W = in0_shape[-1]
@@ -587,14 +584,10 @@ def test_sharded_partial_op(
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
-@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
-def test_block_sharded_partial_op(
-    device, H, W, num_cores, activations_dtype, output_dtype, async_mode, function_level_defaults, use_program_cache
-):
+def test_block_sharded_partial_op(device, H, W, num_cores, activations_dtype, output_dtype, function_level_defaults):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
-    device.enable_async(async_mode)
     grid_size = (8, 8)
     in0_shape = [1, 1, H, W]
     W = in0_shape[-1]
@@ -650,7 +643,8 @@ def test_block_sharded_partial_op(
 @pytest.mark.parametrize("num_cores", [64, 1], ids=["multi_core", "single_core"])
 @pytest.mark.parametrize("in0_height_sharded", [True, False], ids=["in0_height_sharded", "in0_dram_interleaved"])
 @pytest.mark.parametrize("out_height_sharded", [True, False], ids=["out_height_sharded", "out_dram_interleaved"])
-def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded):
+@pytest.mark.parametrize("in_place", [True, False], ids=["in_place", "not_in_place"])
+def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_place):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -667,7 +661,9 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded):
 
     height_sharded_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
 
-    tt_scalar = torch_scalar.item()
+    tt_scalar_dram = ttnn.from_torch(
+        torch_scalar, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
     tt_in0_dram = ttnn.from_torch(
         torch_in0, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -694,12 +690,12 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded):
 
         tt_out = ttnn.multiply(
             tt_in0_height_sharded,
-            tt_scalar,
+            tt_scalar_dram,
             memory_config=out_mem_config,
         )
         tt_in0_height_sharded.deallocate()
     else:
-        tt_out = ttnn.multiply(tt_in0_dram, tt_scalar, memory_config=out_mem_config)
+        tt_out = ttnn.multiply(tt_in0_dram, tt_scalar_dram, memory_config=out_mem_config)
 
     if out_height_sharded:
         tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
@@ -707,7 +703,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded):
     # Reference is out and input dram interleaved
     tt_out_ref = ttnn.multiply(
         tt_in0_dram,
-        tt_scalar,
+        tt_scalar_dram,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_in0_dram.deallocate()
@@ -731,7 +727,6 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded):
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
-@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_width_sharded_partial_op(
     device,
     H,
@@ -740,13 +735,11 @@ def test_width_sharded_partial_op(
     num_slices,
     activations_dtype,
     output_dtype,
-    async_mode,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
-    device.enable_async(async_mode)
     grid_size = (8, 8)
     in0_shape = [1, 1, H, W]
 
@@ -808,7 +801,6 @@ def test_width_sharded_partial_op(
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
-@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_partial_sharded_op_binary(
     device,
     in0_sharded,
@@ -819,13 +811,11 @@ def test_partial_sharded_op_binary(
     num_slices,
     activations_dtype,
     output_dtype,
-    async_mode,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
-    device.enable_async(async_mode)
     grid_size = (8, 8)
     in0_shape = [1, 1, H, 96]
     in1_shape = in0_shape
@@ -968,7 +958,7 @@ def test_sharded_binary(
     assert passing
 
 
-def test_sharded_program_cache(device, use_program_cache, function_level_defaults):
+def test_sharded_program_cache(device, function_level_defaults):
     grid_size = device.compute_with_storage_grid_size()
     num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -1860,9 +1850,9 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
             interleaved_mem_config,
         )
 
-    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()[:, :, :1, :]
+    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
-    y = torch.max(x, 2, True)[0]
+    y = torch.amax(x, 2)
 
     if dtype == ttnn.bfloat16:
         passing, output = comp_equal(y, tt_got_back)
@@ -2379,7 +2369,7 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     "seq_len",
     (32,),
 )
-def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_program_cache):
+def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len):
     dim_in = 4096
     dim_hidden = int(3.5 * dim_in / 4)  # 3584
     dim_out = dim_in
@@ -2420,26 +2410,32 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 0) if is_wormhole_b0() else ttnn.CoreCoord(7, 0),  # Blackhole coord
+                ttnn.CoreCoord(device.dram_grid_size().x, 0),
             ),
         }
     )
-    if is_wormhole_b0():
-        w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 320), ttnn.ShardOrientation.ROW_MAJOR)
-    else:
-        assert is_blackhole()
-        w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 448), ttnn.ShardOrientation.ROW_MAJOR)
+
+    def nearest_32(x):
+        return int(math.ceil(x / 32) * 32)
+
+    w1_w3_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set,
+        (dim_in, nearest_32(dim_hidden / device.dram_grid_size().x)),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
     w1_w3_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
         w1_w3_shard_spec,
     )
 
-    if is_wormhole_b0():
-        w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 352), ttnn.ShardOrientation.ROW_MAJOR)
-    else:
-        assert is_blackhole()
-        w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 512), ttnn.ShardOrientation.ROW_MAJOR)
+    w2_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set,
+        (dim_hidden, nearest_32(dim_out / device.dram_grid_size().x)),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
     w2_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
@@ -2517,3 +2513,40 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
     assert passing_w2_out
     assert passing_input
     assert passing
+
+
+# prior to https://github.com/tenstorrent/tt-metal/pull/20538 this would throw a tt_assert. This test ensures the fix
+# works and does not break anything.
+def test_unused_cores(device):
+    shape = (1, 1, 32, 192)
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))}),
+            shard_shape=[32, 64],
+            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_mode=ttnn.ShardMode.PHYSICAL,
+        ),
+    )
+
+    torch_input1 = torch.randn(shape, dtype=torch.bfloat16)
+    torch_input2 = torch.randn(shape, dtype=torch.bfloat16)
+
+    torch_output = torch_input1 * torch_input2
+
+    tt_input1 = ttnn.from_torch(
+        torch_input1, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config, dtype=ttnn.bfloat16
+    )
+    tt_input2 = ttnn.from_torch(
+        torch_input2, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config, dtype=ttnn.bfloat16
+    )
+
+    tt_input1 = ttnn.sharded_to_interleaved(tt_input1)
+    tt_input2 = ttnn.sharded_to_interleaved(tt_input2)
+
+    ttnn_output = ttnn.multiply(tt_input1, tt_input2)
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert comp_pcc(torch_output, ttnn_output, 0.99)[0]

@@ -2,15 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <string>
-
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <time.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "test_common.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "impl/context/metal_context.hpp"
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <optional>
+#include <ratio>
+#include <string>
+#include <tuple>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "test_common.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -44,7 +63,8 @@ int main(int argc, char** argv) {
 
         // Application Setup
         srand(time(0));
-        uint32_t dram_addr = 64;
+        uint32_t dram_addr =
+            tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalDramMemAddrType::UNRESERVED);
         uint32_t dram_channel = rand() % 8;
         log_info(LogTest, "Target DRAM channel = {}", dram_channel);
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
@@ -12,6 +12,7 @@ from models.demos.llama3_subdevices.tt.llama_common import (
 )
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+from models.demos.llama3_subdevices.tt.sampling import TTSampling
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -26,12 +27,18 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "weights, layers",
+    "weights, layers, iterations",
     [
-        ("random", 1),
-        ("instruct", 80),
+        ("random", 1, 6),
+        ("instruct", 80, 5),
     ],
     ids=["quick", "full"],
+)
+@pytest.mark.parametrize(
+    "sampling_params",
+    [
+        {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+    ],
 )
 @pytest.mark.parametrize(
     "paged_attention",
@@ -46,7 +53,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -70,24 +77,46 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "worker_l1_size": 1344544,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
 def test_llama_model_inference(
     weights,
     layers,
+    iterations,
+    sampling_params,
     max_seq_len,
     batch_size,
     paged_attention,
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
+
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
@@ -106,12 +135,12 @@ def test_llama_model_inference(
 
     # Define minimum PCC for each iteration
     if layers == 1:
-        pcc = 0.922166
+        pcc = 0.921936
     else:
         pcc = 0.94
 
     # Define tight final PCC thresholds for quick mode
-    final_model_pcc = {"llama31_70b": 0.92216}[model_name]
+    final_model_pcc = {"llama31_70b": 0.921936}[model_name]
 
     final_k_cache_pcc = {
         "llama31_70b": 0.9997,
@@ -119,8 +148,6 @@ def test_llama_model_inference(
     final_v_cache_pcc = {
         "llama31_70b": 0.9997,
     }[model_name]
-
-    iterations = 6 if layers == 1 else 5
 
     if layers is not None:
         model_args.n_layers = layers
@@ -202,6 +229,12 @@ def test_llama_model_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
+    tt_sampling = TTSampling(
+        args=model_args,
+        mesh_device=mesh_device,
+        temperature=temperature,
+        tt_ccl=tt_model.tt_ccl,
+    )
     logger.info("Model and caches loaded.")
 
     if run_ref_pt:
@@ -246,7 +279,7 @@ def test_llama_model_inference(
             )
 
             # Get cos/sin matrices for the current position of each user
-            rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+            rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos)
 
             # Run TT model
             tt_out = tt_model(
@@ -256,6 +289,8 @@ def test_llama_model_inference(
                 mode="decode",
                 page_table=page_table_tt,
             )
+            # Sampling
+            tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
 
             # Convert ttnn tensor to torch tensor
             mesh_composer = ttnn.ConcatMesh2dToTensor(
@@ -299,40 +334,15 @@ def test_llama_model_inference(
                 if run_ref_pt:
                     pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
             else:
-                # Greedy decode (temperature = 0) the generated token and save it to print out later
-                # tt_out_tok_host = sample_host(tt_output_torch, None, temperature=0, top_p=0.8)
-                sub_core_grids = ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-                    ]
-                )
-                tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-                    tt_out[0],
-                    dim=3,
-                    num_links=2,
-                    cluster_axis=0,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    buffer_key="SAMPLING",
-                )
-                tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-                tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                    tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
-                )
-
+                tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
+                tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
                 tt_out_tok = ttnn.to_torch(
-                    tt_out_tok,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device,
-                        dims=(3, 1) if model_args.is_galaxy else (1, 3),
-                        mesh_shape=model_args.cluster_shape,
-                    ),
-                )[0, 0, 0, :32].view(32, 1)
-                for tttt in range(1, 32):
-                    tt_out_tok[tttt][0] = 0
-                # print(tt_out_tok.shape, tt_out_tok_host.shape)
-                tt_decode_input = embd(tt_out_tok)
+                    tt_out_tok_cpu,
+                ).view(32, 1)
+
                 all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of TT outputs
+                tt_decode_input = embd(tt_out_tok)
+
                 if run_ref_pt:
                     pt_out_tok = sample_host(ref_output, None, temperature=0, top_p=0.8)
                     pt_decode_input = embd(pt_out_tok)

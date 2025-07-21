@@ -5,7 +5,7 @@
 #include "moreh_norm_backward_pybind.hpp"
 
 #include "moreh_norm_backward.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm_backward {
 void bind_moreh_norm_backward_operation(py::module& module) {

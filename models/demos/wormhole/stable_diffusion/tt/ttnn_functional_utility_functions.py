@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from tt_lib.fallback_ops import fallback_ops
 import math
 
 import torch
+from tt_lib.fallback_ops import fallback_ops
 
-conv_cache = {}
+import ttnn
 
 
 def round_up_to_tile_dim(n):

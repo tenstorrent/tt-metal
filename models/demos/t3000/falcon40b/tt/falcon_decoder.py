@@ -2,16 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from typing import Optional, Tuple
 
-import ttnn
-from ttnn import ReplicateTensorToMesh
+import torch
 
+import ttnn
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
-
 from models.demos.t3000.falcon40b.tt.model_utils import fused_partial_layernorm
+from ttnn import ReplicateTensorToMesh
 
 
 class TtFalconDecoderLayer:

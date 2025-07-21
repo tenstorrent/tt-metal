@@ -15,16 +15,16 @@ struct ArgMaxOperation {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const std::optional<int> dim = std::nullopt,
+        std::optional<int> dim = std::nullopt,
+        bool keepdim = false,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        const bool use_muticore = false,
+        bool use_muticore = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 }  // namespace operations::reduction
 
-constexpr auto argmax =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::argmax", ttnn::operations::reduction::ArgMaxOperation>();
+constexpr auto argmax = ttnn::register_operation<"ttnn::argmax", ttnn::operations::reduction::ArgMaxOperation>();
 
 }  // namespace ttnn

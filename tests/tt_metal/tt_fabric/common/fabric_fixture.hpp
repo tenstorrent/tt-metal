@@ -1,15 +1,17 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "gtest/gtest.h"
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "rtoptions.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -20,63 +22,72 @@ class ControlPlaneFixture : public ::testing::Test {
        void SetUp() override {
            auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
            if (not slow_dispatch) {
-               tt::log_info(
+               log_info(
                    tt::LogTest,
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
                GTEST_SKIP();
            }
+           // reserve max available planes
+           uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
+           tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+               tt::tt_fabric::FabricConfig::FABRIC_2D, num_routing_planes);
        }
 
-       void TearDown() override {}
+       void TearDown() override {
+           tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+               tt::tt_fabric::FabricConfig::DISABLED);
+       }
 };
 
 class BaseFabricFixture : public ::testing::Test {
-protected:
-    tt::ARCH arch_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
-    std::vector<tt::tt_metal::IDevice*> devices_;
-    bool slow_dispatch_;
+public:
+    inline static tt::ARCH arch_;
+    inline static std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
+    inline static std::vector<tt::tt_metal::IDevice*> devices_;
+    inline static bool slow_dispatch_;
 
-    void SetUpDevices(tt_metal::FabricConfig fabric_config) {
+    const std::vector<tt::tt_metal::IDevice*>& get_devices() const { return devices_; }
+
+    void SetUp() override {
+        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (num_devices < 2) {
+            log_info(tt::LogTest, "Skipping fabric tests as there are less than 2 devices available");
+            GTEST_SKIP();
+        }
+    }
+
+    static void DoSetUpTestSuite(
+        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
-            tt::log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
+            log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
         } else {
-            tt::log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
+            log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
         // Set up all available devices
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
+        ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_metal::detail::InitializeFabricConfig(fabric_config);
+        tt::tt_fabric::SetFabricConfig(
+            fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, num_routing_planes);
         devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
         }
     }
 
-    bool find_device_with_neighbor_in_direction(
-        std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
-        std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
-        RoutingDirection direction) {
-        auto* control_plane = tt::Cluster::instance().get_control_plane();
-        for (auto* device : devices_) {
-            src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-
-            // Get neighbours within a mesh in the given direction
-            auto neighbors =
-                control_plane->get_intra_chip_neighbors(src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
-            if (neighbors.size() > 0) {
-                dst_mesh_chip_id = {src_mesh_chip_id.first, neighbors[0]};
-                return true;
-            }
-        }
-
-        return false;
+    static void DoTearDownTestSuite() {
+        tt::tt_metal::detail::CloseDevices(devices_map_);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
+
+    static void SetUpTestSuite() { TT_THROW("SetUpTestSuite not implemented in BaseFabricFixture"); }
+
+    static void TearDownTestSuite() { TT_THROW("TearDownTestSuite not implemented in BaseFabricFixture"); }
 
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
@@ -97,20 +108,108 @@ protected:
             tt::tt_metal::Finish(cq);
         }
     }
-
-    void TearDown() override {
-        tt::tt_metal::detail::CloseDevices(devices_map_);
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
-    }
 };
 
 class Fabric1DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D); }
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
 class Fabric2DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D); }
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
+
+class NightlyFabric2DFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class Fabric2DDynamicFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class NightlyFabric2DDynamicFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
+public:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    void SetUp(
+        const std::string& mesh_graph_desc_file,
+        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+            mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+    }
+
+private:
+    void SetUp() override {}
+
+    void TearDown() override {
+        BaseFabricFixture::DoTearDownTestSuite();
+        tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph();
+    }
+};
+
+class T3kCustomMeshGraphFabric2DDynamicFixture
+    : public CustomMeshGraphFabric2DDynamicFixture,
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {
+    void SetUp() override {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::T3K) {
+            GTEST_SKIP();
+        }
+    }
+};
+
+struct McastRoutingInfo {
+    RoutingDirection mcast_dir;
+    uint32_t num_mcast_hops;
+};
+
+void RunTestUnicastRaw(
+    BaseFabricFixture* fixture,
+    uint32_t num_hops = 1,
+    RoutingDirection direction = RoutingDirection::E,
+    bool enable_fabric_tracing = false);
+
+void RunTestUnicastConnAPI(
+    BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E, bool use_dram_dst = false);
+
+void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
+
+void RunTestMCastConnAPI(
+    BaseFabricFixture* fixture,
+    RoutingDirection fwd_dir = RoutingDirection::W,
+    uint32_t fwd_hops = 1,
+    RoutingDirection bwd_dir = RoutingDirection::E,
+    uint32_t bwd_hops = 1);
+
+void RunTest2DMCastConnAPI(
+    BaseFabricFixture* fixture,
+    RoutingDirection trunk_dir,
+    uint32_t trunk_hops,
+    uint32_t branch_east_hops,
+    uint32_t branch_west_hops);
+
+void RunTestChipMCast1D(
+    BaseFabricFixture* fixture,
+    RoutingDirection dir,
+    uint32_t start_distance,
+    uint32_t range,
+    bool enable_fabric_tracing = false);
+
+void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

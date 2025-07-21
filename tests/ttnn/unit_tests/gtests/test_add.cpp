@@ -2,11 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <array>
+#include <memory>
+#include <optional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn {
@@ -32,8 +46,7 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
     {
         const auto input_tensor = ttnn::zeros(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
         const auto output_tensor = input_tensor + param.scalar;
-        const auto expected_tensor =
-            ttnn::operations::creation::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+        const auto expected_tensor = ttnn::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
         TT_FATAL(
             ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }

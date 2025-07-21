@@ -9,6 +9,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
+#include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"

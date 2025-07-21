@@ -2,25 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-import ttnn
-from loguru import logger
 import time
 
+import pytest
+import torch
+from loguru import logger
+from transformers import AutoTokenizer, DistilBertForQuestionAnswering
+from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
 from models.demos.distilbert.tt import ttnn_optimized_distilbert
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_grayskull,
+    is_wormhole_b0,
     profiler,
 )
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-from models.perf.perf_utils import prep_perf_report
-from transformers import DistilBertForQuestionAnswering, AutoTokenizer
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import is_grayskull, is_wormhole_b0
 
 
 @pytest.mark.models_performance_bare_metal
@@ -154,7 +154,7 @@ def test_distilbert_perf_device(batch_size, test, reset_seeds):
     if is_grayskull():
         expected_perf = 57.3
     elif is_wormhole_b0():
-        expected_perf = 97.0
+        expected_perf = 105.0
 
     command = f"pytest tests/ttnn/integration_tests/distilbert/test_ttnn_distilbert.py::test_distilbert_for_question_answering[sequence_size=768-batch_size=8-model_name=distilbert-base-uncased-distilled-squad]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

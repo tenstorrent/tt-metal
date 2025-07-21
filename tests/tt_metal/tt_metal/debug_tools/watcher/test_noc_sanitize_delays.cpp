@@ -2,13 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rtoptions.hpp"
-#include "debug_tools_fixture.hpp"
-#include "debug_tools_test_utils.hpp"
-#include "llrt.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stddef.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "debug_tools_fixture.hpp"
+#include "dev_msgs.h"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -83,10 +114,8 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord
 
         vector<uint32_t> compute_kernel_args = { };
 
-        std::map<string, string> binary_defines = {
-            { "ELTWISE_OP", "add_tiles" },
-            { "ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD" }
-        };
+        std::map<std::string, std::string> binary_defines = {
+            {"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}};
         auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",

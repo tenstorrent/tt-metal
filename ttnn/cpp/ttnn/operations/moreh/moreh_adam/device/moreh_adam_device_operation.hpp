@@ -80,19 +80,19 @@ struct MorehAdamOperation {
         const Tensor& exp_avg_in,
         const Tensor& exp_avg_sq_in,
 
-        const std::optional<float> lr,
-        const std::optional<float> beta1,
-        const std::optional<float> beta2,
-        const std::optional<float> eps,
-        const std::optional<float> weight_decay,
-        const std::optional<uint32_t> step,
-        const std::optional<bool> amsgrad,
+        std::optional<float> lr,
+        std::optional<float> beta1,
+        std::optional<float> beta2,
+        std::optional<float> eps,
+        std::optional<float> weight_decay,
+        std::optional<uint32_t> step,
+        std::optional<bool> amsgrad,
 
         const std::optional<const Tensor>& max_exp_avg_sq_in,
-        const std::optional<const Tensor> param_out,
-        const std::optional<const Tensor> exp_avg_out,
-        const std::optional<const Tensor> exp_avg_sq_out,
-        const std::optional<const Tensor> max_exp_avg_sq_out,
+        std::optional<const Tensor> param_out,
+        std::optional<const Tensor> exp_avg_out,
+        std::optional<const Tensor> exp_avg_sq_out,
+        std::optional<const Tensor> max_exp_avg_sq_out,
 
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
@@ -102,7 +102,6 @@ struct MorehAdamOperation {
 }  // namespace ttnn::operations::moreh::moreh_adam
 
 namespace ttnn::prim {
-constexpr auto moreh_adam = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::prim::moreh_adam",
-    ttnn::operations::moreh::moreh_adam::MorehAdamOperation>();
+constexpr auto moreh_adam =
+    ttnn::register_operation<"ttnn::prim::moreh_adam", ttnn::operations::moreh::moreh_adam::MorehAdamOperation>();
 }

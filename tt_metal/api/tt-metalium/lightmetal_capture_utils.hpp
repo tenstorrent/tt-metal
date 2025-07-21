@@ -4,12 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/buffer.hpp>
 #include <functional>
 #include <memory>
 #include <variant>
-
-#include "lightmetal/host_api_capture_helpers.hpp"
 
 namespace tt {
 namespace tt_metal {

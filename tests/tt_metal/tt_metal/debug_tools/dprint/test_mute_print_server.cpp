@@ -1,12 +1,28 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "debug_tools_fixture.hpp"
-#include "gtest/gtest.h"
-#include "dprint_server.hpp"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <stdint.h>
 #include <tt-metalium/host_api.hpp>
+#include <functional>
+#include <map>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the DPRINT server can be muted/unmuted.
@@ -20,7 +36,7 @@ const std::string golden_output =
 R"(Printing int from arg: 0
 Printing int from arg: 2)";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -48,11 +64,11 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
     run_program(0);
 
     // Disable the printing and run the program again.
-    DprintServerSetMute(true);
+    MetalContext::instance().dprint_server()->set_mute(true);
     run_program(1);
 
     // Re-enable prints and run the program one more time.
-    DprintServerSetMute(false);
+    MetalContext::instance().dprint_server()->set_mute(false);
     run_program(2);
 
     // Check the print log against golden output.

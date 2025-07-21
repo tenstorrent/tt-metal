@@ -2,16 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dispatch_fixture.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stddef.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tests/tt_metal/test_utils/print_helpers.hpp"
+#include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "dispatch_fixture.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -38,8 +70,8 @@ struct MatmulTileConfig {
     bool fp32_dest_acc_en = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
-    string reader_kernel;
-    string compute_kernel;
+    std::string reader_kernel;
+    std::string compute_kernel;
     vector<uint32_t> compute_kernel_args;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
@@ -50,15 +82,16 @@ void create_test_stimuli(MatmulTileStimuli& stimuli, uint32_t M, uint32_t K, uin
         shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     stimuli.t = tensor.get_values();
 
-    auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
-    auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+    auto activations_tilized = tilize_swizzled(tensor.get_values(), M * 32, K * 32);
+    auto activations_tile_layout =
+        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = tt::tt_metal::transpose_tiles(activations, M, K, 1);
     stimuli.a = activations_tile_transposed;
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);
-    auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+    auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
+    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     stimuli.w = weights;
 }
@@ -228,7 +261,7 @@ void matmul_tile(
             1 * single_tile_size_bfp16b};
     }
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     compute_defines["WITH_DT"] = cfg.with_dt ? "1" : "0";
     compute_defines["TEST_INIT_SHORT"] = cfg.test_init_short ? "1" : "0";
@@ -291,8 +324,9 @@ void matmul_tile(
     fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
 
     std::vector<bfloat16> golden = std::move(tensor_vals);
-    std::vector<bfloat16> golden_tilized = test_utils::tilize(golden, M * 32, N * 32);
-    std::vector<bfloat16> golden_tilized_single = convert_to_tile_layout(tt::stl::MakeConstSpan(golden_tilized));
+    std::vector<bfloat16> golden_tilized = tilize_swizzled(golden, M * 32, N * 32);
+    std::vector<bfloat16> golden_tilized_single =
+        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(golden_tilized));
 
     std::vector<uint32_t> golden_packed(golden_tilized_single.size());
     uint16_t math_fid_mask = 0xFFFF;
@@ -320,7 +354,7 @@ void matmul_tile(
     }
     DeallocateBuffer(*dst_dram_buffer);
 
-    tt::log_info(
+    log_info(
         tt::LogTest,
         "Math Fidelity = {}, FP32_DestAcc = {}, DstSyncFull = {}",
         cfg.math_fidelity,
@@ -349,7 +383,7 @@ TEST_F(DispatchFixture, TensixMatmulSingleTile) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -380,7 +414,7 @@ TEST_F(DispatchFixture, TensixMatmulMultiTile) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -419,7 +453,7 @@ TEST_F(DispatchFixture, TensixMatmulBlock) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -456,7 +490,7 @@ TEST_F(DispatchFixture, TensixMatmulBlockInitShort) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -493,7 +527,7 @@ TEST_F(DispatchFixture, TensixMatmulBlockInitShortWithDt) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {

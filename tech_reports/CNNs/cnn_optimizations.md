@@ -55,7 +55,6 @@ class UNetUpblock:
         conv3,
         bn3,
         device,
-        conv_cache={},
         mesh_mapper=None,
     ):
         self.device = device

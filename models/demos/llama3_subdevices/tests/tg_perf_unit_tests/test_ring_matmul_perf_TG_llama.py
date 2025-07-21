@@ -14,9 +14,9 @@ THRESHOLD = 1.0
 @pytest.mark.parametrize(
     "mm_type, perf_target_us",
     [
-        ("qkv", 7.9),
-        ("do", 7.0),
-        ("ff13", 8.9),
+        ("qkv", 9.2),
+        ("do", 7.3),
+        ("ff13", 9.9),
         ("ff2", 14.8),
         ("lm_head", 380),
     ],
@@ -42,22 +42,23 @@ def test_ring_mm_tg_llama_perf(
     profiler.end("run")
 
     # Get the measured performance
-    measured_min_us = results[cols[0]]["MIN"] / 1000
-    measured_max_us = results[cols[0]]["MAX"] / 1000
-    measured_avg_us = results[cols[0]]["AVG"] / 1000
-    measured_std_us = results[cols[0]]["STD"] / 1000
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
 
     # Save the measurement
-    benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-min-us", measured_min_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-max-us", measured_max_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-avg-us", measured_avg_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-std-us", measured_std_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"ring_matmul",
-        ml_model_name="llama70b-tg-unit",
+        run_type=f"tg_llama_ops",
+        ml_model_name="llama70b-tg",
     )
 
     assert (

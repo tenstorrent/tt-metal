@@ -3,23 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
+import evaluate
 import pytest
 import torch
-import evaluate
-from loguru import logger
 from datasets import load_dataset
-from models.generation_utils import get_logits_processor
-import ttnn
-
-from transformers import T5ForConditionalGeneration, AutoTokenizer, T5Config
-from models.demos.grayskull.t5.tt import ttnn_functional_t5
-from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
+from loguru import logger
+from transformers import AutoTokenizer, T5Config, T5ForConditionalGeneration
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
+import ttnn
+from models.demos.grayskull.t5.tt import ttnn_functional_t5, ttnn_optimized_functional_t5
+from models.generation_utils import get_logits_processor
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
@@ -359,7 +355,7 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     ),
 )
 def test_functional_t5_demo(
-    device, use_program_cache, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
+    device, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
 ):
     disable_persistent_kernel_cache()
 
@@ -372,9 +368,7 @@ def test_functional_t5_demo(
     ("batch_size", "sequence_length", "max_tokens", "model_name", "use_optimized_version"),
     ((8, 128, 5, "t5-small", True), (8, 128, 5, "google/flan-t5-small", True)),
 )
-def test_functional_t5_demo_squadv2(
-    device, use_program_cache, batch_size, sequence_length, max_tokens, model_name, use_optimized_version
-):
+def test_functional_t5_demo_squadv2(device, batch_size, sequence_length, max_tokens, model_name, use_optimized_version):
     disable_persistent_kernel_cache()
 
     return run_functional_t5_question_and_answering_inference_squadv2(

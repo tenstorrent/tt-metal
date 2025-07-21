@@ -3,34 +3,34 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
 import torch
-import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from loguru import logger
 
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
-from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-    extract_pcc_from_log,
-    gather_cos_sin,
-    precompute_freqs,
+    BASE_URL,
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
-    BASE_URL,
-    UNIT_TEST_N_LAYER,
-    UNIT_TEST_LAYER_NUM,
-    UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
-    comp_pcc,
-    get_rot_transformation_mat,
-    should_skip_model_load,
+    UNIT_TEST_LAYER_NUM,
+    UNIT_TEST_N_LAYER,
+    UNIT_TEST_START_POS,
     check_kv_cache,
+    check_mesh_device,
+    comp_pcc,
+    extract_pcc_from_log,
+    gather_cos_sin,
+    get_rot_transformation_mat,
+    precompute_freqs,
+    setup_llama_env,
+    should_skip_model_load,
 )
+from models.demos.t3000.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.demos.t3000.llama2_70b.tt.llama_rope import TtLlamaRotarySetup
+from models.utility_functions import skip_for_grayskull
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -395,7 +395,6 @@ def test_LlamaDecoder_inference(
     max_batch_size,
     max_context_len,
     llama_version,
-    use_program_cache,
 ):
     if seq_len == 1 and batch != max_batch_size:
         pytest.skip(f"Input batch size should match max_batch_size")

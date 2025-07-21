@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from loguru import logger
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 
 
 def run_fold_test(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
@@ -33,6 +33,7 @@ def run_fold_test(device, input_shape, output_size, kernel_size, dilation, paddi
     assert passing
 
 
+@skip_for_blackhole("Fails on BH. Issue #20577")
 @pytest.mark.parametrize(
     "input_shape,output_size,kernel_size,dilation,padding,stride",
     [
@@ -74,9 +75,7 @@ def test_fold(device, input_shape, output_size, kernel_size, dilation, padding, 
         torch.bfloat16,
     ],
 )
-def test_fold_callback(
-    device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype, use_program_cache
-):
+def test_fold_callback(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
     torch.manual_seed(0)
     num_program_cache_entries_list = []
     for i in range(2):

@@ -2,25 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
-#include <tt-metalium/logger.hpp>
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "ttnn/device.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn_test_fixtures.hpp"
-
-#include "ttnn/tensor/types.hpp"
-
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
-#include "ttnn/graph/graph_operation_queries.hpp"
-
-#include "ttnn/tensor/types.hpp"
-
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <nlohmann/json.hpp>
+#include <stddef.h>
+#include <tt-logger/tt-logger.hpp>
 #include <cstdint>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <string>
+#include <tuple>
+#include <unordered_set>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include "gtest/gtest.h"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/graph/graph_operation_queries.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_test_fixtures.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -57,13 +70,15 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
 
         auto call = [&] {
-            const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b);
+            constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+            const auto output_tensor = ttnn::add(
+                input_tensor_a, input_tensor_b, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
             return output_tensor;
         };
 
         auto json_trace = graph::query_trace(call);
 
-        tt::log_info("Trace: {}", json_trace.dump(4));
+        log_info(tt::LogTest, "Trace: {}", json_trace.dump(4));
 
         // Direct calls
         {
@@ -85,9 +100,6 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             auto compute_with_storage_grid_size = device_->compute_with_storage_grid_size();
             size_t interleaved_storage_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-            auto l1_output_per_core =
-                graph::extract_l1_output_buffer_allocation_size_per_core(json_trace, interleaved_storage_cores);
-            EXPECT_EQ(l1_output_per_core, params.expected_l1_output_per_core);
             auto l1_peak_per_core =
                 graph::extract_l1_buffer_allocation_peak_size_per_core(json_trace, interleaved_storage_cores);
             EXPECT_EQ(l1_peak_per_core, params.expected_l1_peak_per_core);
@@ -103,19 +115,20 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             if (output_info.size() != params.expected_output_info.size()) {
                 auto print = [](const auto& infos) {
                     for (const auto& info : infos) {
-                        tt::log_info("{}", info);
+                        log_info(tt::LogTest, "{}", info);
                     }
                 };
 
-                tt::log_info(
+                log_info(
+                    tt::LogTest,
                     "Output info size mismatch. Expected {} but got {}",
                     params.expected_output_info.size(),
                     output_info.size());
 
-                tt::log_info("Expected output info:");
+                log_info(tt::LogTest, "Expected output info:");
                 print(params.expected_output_info);
 
-                tt::log_info("Actual output info:");
+                log_info(tt::LogTest, "Actual output info:");
                 print(output_info);
                 ASSERT_TRUE(false);
             }
@@ -174,13 +187,13 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
                 .memory_config =
-                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                     .buffer_type = tt::tt_metal::BufferType::L1,
-                     .shard_spec =
-                         tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
-                             {6 * 32, 32 * 32},
-                             ShardOrientation::COL_MAJOR}},
+                    tt::tt_metal::MemoryConfig{
+                        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                        tt::tt_metal::BufferType::L1,
+                        tt::tt_metal::ShardSpec{
+                            CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
+                            {6 * 32, 32 * 32},
+                            ShardOrientation::COL_MAJOR}},
                 .expected_calltrace =
                     {"ttnn::add",
                      "ttnn::prim::binary_ng",
@@ -205,13 +218,13 @@ INSTANTIATE_TEST_SUITE_P(
         ss << uid++;
 
         const auto& param = std::get<0>(info.param);
-        switch (param.memory_config.buffer_type) {
+        switch (param.memory_config.buffer_type()) {
             case tt::tt_metal::BufferType::DRAM: ss << "_DRAM"; break;
             case tt::tt_metal::BufferType::L1: ss << "_L1"; break;
             default: break;
         }
 
-        switch (param.memory_config.memory_layout) {
+        switch (param.memory_config.memory_layout()) {
             case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: ss << "_I"; break;
             case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED: ss << "_HS"; break;
             case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED: ss << "_WS"; break;

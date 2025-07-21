@@ -2,25 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <emmintrin.h>
+#include <errno.h>
+#include <fmt/base.h>
+#include <immintrin.h>
+#include <smmintrin.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
 #include <string>
+#include <thread>
+#include <tuple>
+#include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <thread>
-
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
-#include "test_common.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include "impl/dispatch/command_queue_common.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch/memcpy.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/tt_xy_pair.h"
+
+enum class CoreType;
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -45,7 +67,7 @@ void* align(void* ptr, std::size_t max_alignment) {
     // ex. if the current ptr here is 16, but we specified an alignment of 8,
     // then this is both 8 and 16 byte aligned, so we offset again by our
     // specified alignment to make the max alignment what was specified
-    aligned = aligned & (max_alignment << 1 - 1) ? aligned : aligned + max_alignment;
+    aligned = aligned & ((max_alignment << 1) - 1) ? aligned : aligned + max_alignment;
 
     return reinterpret_cast<void*>(aligned);
 }
@@ -224,16 +246,19 @@ int main(int argc, char** argv) {
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         TT_ASSERT(device_id == mmio_device_id, "This test can only be run on MMIO device!");
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        void* host_hugepage_start = (void*)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
-        uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+        void* host_hugepage_start =
+            (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
+        uint32_t hugepage_size =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel);
         uint32_t host_write_ptr = 0;
 
-        CoreType dispatch_core_type = get_dispatch_core_type();
-        uint32_t prefetch_q_base = DispatchMemMap::get(dispatch_core_type)
-                                       .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::UNRESERVED);
 
         uint32_t reg_addr = prefetch_q_base;
         uint32_t num_reg_entries = 128;
@@ -351,7 +376,7 @@ int main(int argc, char** argv) {
                 if (simulate_write_ptr_update) {
                     uint32_t num_write_ptr_updates = write_size_bytes / (32 * 1024);
                     for (int i = 0; i < num_write_ptr_updates; i++) {
-                        tt::Cluster::instance().write_reg(
+                        tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
                             &val_to_write, tt_cxy_pair(device->id(), physical_core), reg_addr);
                         reg_addr += sizeof(uint32_t);
                         num_reg_writes = (reg_addr - prefetch_q_base) / sizeof(uint32_t);
@@ -363,7 +388,7 @@ int main(int argc, char** argv) {
 
                 if (write_ptr_readback_interval > 0 and num_reg_writes == write_ptr_readback_interval) {
                     std::vector<std::uint32_t> read_hex_vec(1, 0);
-                    tt::Cluster::instance().read_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                         read_hex_vec.data(), sizeof(uint32_t), tt_cxy_pair(device->id(), physical_core), reg_addr);
                 }
 
@@ -407,9 +432,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    log_info("test_pull_from_pcie");
-    log_info("Bandwidth(GB/s): {:.3f}", avg_h2d_bandwidth);
-    log_info("pass:{}", pass);
+    log_info(tt::LogTest, "test_pull_from_pcie");
+    log_info(tt::LogTest, "Bandwidth(GB/s): {:.3f}", avg_h2d_bandwidth);
+    log_info(tt::LogTest, "pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

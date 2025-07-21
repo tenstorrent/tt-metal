@@ -13,17 +13,17 @@ struct BatchNorm {
         const Tensor& input,
         std::optional<Tensor> running_mean = std::nullopt,
         std::optional<Tensor> running_var = std::nullopt,
-        const bool training = false,
-        const float eps = 1e-05,
-        const float momentum = 0.1,
+        bool training = false,
+        float eps = 1e-05,
+        float momentum = 0.1,
         const std::optional<Tensor>& weight = std::nullopt,
         const std::optional<Tensor>& bias = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
         QueueId queue_id = DefaultQueueId);
 };
 }  // namespace operations::normalization
 
-constexpr auto batch_norm =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::batch_norm", ttnn::operations::normalization::BatchNorm>();
+constexpr auto batch_norm = ttnn::register_operation<"ttnn::batch_norm", ttnn::operations::normalization::BatchNorm>();
 }  // namespace ttnn

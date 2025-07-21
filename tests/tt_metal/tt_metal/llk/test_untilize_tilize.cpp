@@ -2,21 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <math.h>
-
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <bit>
+#include <cctype>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <type_traits>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "device_fixture.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -43,13 +73,12 @@ using GoldenFunc = std::variant<
         const ::unit_tests::compute::GoldenConfig& config)>>;
 
 struct TestConfig {
-    // Whether or not to use *_init_short LLK API calls:
-    bool short_init = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
     // Whether or not we want the result to be stored in DST in FP32 is
     // controlled with this flag:
     bool fp32_dest_acc_en = false;
+    bool fast_tilize = false;
     uint32_t input_single_tile_size;
     uint32_t output_single_tile_size;
     // Block height in tiles:
@@ -100,8 +129,8 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     std::shared_ptr<tt_metal::Buffer> src1_dram_buffer;
-    uint32_t dram_buffer_src1_addr;
-    CoreCoord dram_src1_noc_xy;
+    uint32_t dram_buffer_src1_addr{};
+    CoreCoord dram_src1_noc_xy{};
 
     if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         src1_dram_buffer = CreateBuffer(input_dram_config);
@@ -125,7 +154,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    string reader_kernel_path;
+    std::string reader_kernel_path;
     if (test_config.untilize_type.has_value()) {
         reader_kernel_path = "tt_metal/kernels/dataflow/reader_unary.cpp";
     } else if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
@@ -153,9 +182,9 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         uint(test_config.num_tiles_c)   // per_core_block_tile_cnt
     };
 
-    string compute_kernel;
+    std::string compute_kernel;
     if (test_config.untilize_type.has_value()) {
-        string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
+        std::string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
             return std::tolower(c);
         });
@@ -168,16 +197,16 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/";
         compute_kernel += (test_config.tilize_type == TilizeType::UNPACK_A) ? "tilize.cpp" : "unpack_tilizeA_B.cpp";
     } else {
-        tt::log_fatal("Invalid untilize and tilize type value");
+        log_fatal(tt::LogTest, "Invalid untilize and tilize type value");
     }
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
 
-    if (test_config.short_init) {
-        defines["SHORT_INIT"] = "1";
-    }
     if (test_config.fp32_dest_acc_en) {
         defines["DST_ACCUM_MODE"] = "1";
+    }
+    if (test_config.fast_tilize) {
+        defines["FAST_TILIZE"] = "1";
     }
 
     auto eltwise_unary_kernel = tt_metal::CreateKernel(
@@ -260,7 +289,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
                                          const ::unit_tests::compute::GoldenConfig& config)>>) {
                 golden = func(src0_vec, src1_vec, config);
             } else {
-                log_fatal("Invalid golden function type");
+                log_fatal(tt::LogTest, "Invalid golden function type");
             }
         },
         test_config.golden_function);
@@ -291,15 +320,17 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         std::cout << "RESULTS " << std::endl;
         print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
     }
-    ASSERT_TRUE(pass);
     log_info(
         tt::LogTest,
-        "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, pass = {}",
+        "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, "
+        "FastTilize = {}, pass = {}",
         test_config.num_tiles_r,
         test_config.num_tiles_c,
         test_config.fp32_dest_acc_en,
         test_config.dst_full_sync_en,
+        test_config.fast_tilize,
         pass);
+    ASSERT_TRUE(pass);
 }
 
 }  // namespace unit_tests::compute::tilize
@@ -313,13 +344,38 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
                     .dst_full_sync_en = dst_full_sync_en,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .input_single_tile_size = 2 * 1024,
+                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
+                    .num_tiles_r = num_tile[0],
+                    .num_tiles_c = num_tile[1],
+                    .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
+                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+TEST_F(DeviceFixture, TensixComputeFastTilize) {
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    for (auto num_tile : num_tiles) {
+        for (bool fp32_dest_acc_en : {false}) {
+            // FP32 dest acc not possible for GS
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                continue;
+            }
+            for (bool dst_full_sync_en : {false}) {
+                unit_tests::compute::tilize::TestConfig test_config = {
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .fast_tilize = true,
                     .input_single_tile_size = 2 * 1024,
                     .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
                     .num_tiles_r = num_tile[0],
@@ -350,31 +406,6 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeA_B) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .short_init = true,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
 /**************************************
 Following tests are for Unpack Untilize
 ***************************************/
@@ -384,36 +415,11 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .short_init = true,
                     .dst_full_sync_en = dst_full_sync_en,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .input_single_tile_size = 2 * 1024,
@@ -432,40 +438,15 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
 Following tests are for pack untilize
 ***************************************/
 TEST_F(DeviceFixture, TensixComputePackUntilize) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
-                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputePackUntilizeShortInit) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .short_init = true,
                     .dst_full_sync_en = dst_full_sync_en,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .input_single_tile_size = 2 * 1024,
@@ -508,7 +489,6 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeDstTinyTile) {
             uint32_t num_faces_per_tile = test_config_value[2];
             uint32_t face_r_dim = test_config_value[3];
             unit_tests::compute::tilize::TestConfig test_config = {
-                .short_init = true,
                 .dst_full_sync_en = dst_full_sync_en,
                 .input_single_tile_size = 2 * 1024,
                 .output_single_tile_size = 2 * num_faces_per_tile * face_r_dim * face_c_dim,

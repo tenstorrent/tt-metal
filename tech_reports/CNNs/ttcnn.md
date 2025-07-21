@@ -68,6 +68,7 @@ Applies a 2D convolution over `input_tensor`, a 4D tensor with dimensions ordere
         input_height,
         input_width,
         ## optional arguments
+        dtype,
         conv_config,
         compute_config,
         groups,
@@ -92,6 +93,7 @@ Arguments:
 * `batch_size` an `int`.
 * `input_height` an `int`.
 * `input_width` an `int`.
+* `dtype = ttnn.bfloat16`_optional_ output data type. If not set defaults to input activations data type
 * `conv_config` _optional_ structure of configuration parameters of type `Conv2DConfig`. This is described in detail below.
 * `compute_config` _optional_ structure of compute configuration parameters of type `DeviceConfiguration`. This is described in detail below.
 * `groups` _optional_ `int` to control the connections between inputs and outputs. Both `in_channels` and `out_channels` should be divisible by `groups`.
@@ -103,10 +105,8 @@ Arguments:
 
 Following are the conv2d operation configuration parameters:
 
-* `dtype = ttnn.bfloat16` input activations data type.
 * `weights_dtype = ttnn.bfloat16` weights and bias data type.
 * `activation = ""` _optional_ `string`. Any activation function to apply. Options are `"relu"`.
-* `input_channels_alignment = 32` _optional_ `uint32_t`. Alignment value for channels dimension in the input tensor. This is applicable when `in_channels <= 16` when the alignment can be set to 16 instead of 32.
 * `deallocate_activation = False` _optional_ bool indicating whether the input activation tensor memory should be deallocated.
 * `reallocate_halo_output = False` _optional_ bool indicating if the intermediate tensor generated within the op should be reallocated to reduce memory fragmentation.
 * `act_block_h_override = 0` _optional_ `uint32_t` to override the `act_block_h` parameter, which determines the size of blocks used in computations -- smaller values require less memory, larger values require more memory but are more performant. This argument is ignored when `shard_layout = WIDTH_SHARDED`.
@@ -174,7 +174,6 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
 ```python
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16
     )
 
@@ -194,6 +193,7 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
         input_width=input_width,
         conv_config=conv_config,
         return_output_dim=True,
+        dtype=ttnn.bfloat16,
     )
 ```
 
@@ -283,7 +283,7 @@ corresponding input activation and weight blocks can be determined as in
 the following.
 
 In order to compute an output block of dimensions $[bH_{o}, bW_{o}]$, we
-need the the following input blocks:
+need the following input blocks:
 
 1.  an activation matrix of dimensions
     $[bH_{o}\textbf{,} \ K_h \times K_w \times C_i]$

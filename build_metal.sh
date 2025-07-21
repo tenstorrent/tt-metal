@@ -3,9 +3,16 @@
 set -eo pipefail
 
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-MAJOR=${VERSION%.*}
 ARCH=`uname -m`
+
+# VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
+source /etc/os-release
+VERSION="unknown-version"
+if [[ -v "$VERSION_ID" ]]; then
+    VERSION="${VERSION_ID}"
+elif [[ -v "$BUILD_ID" ]]; then
+    VERSION="${BUILD_ID}"
+fi
 
 # Function to display help
 show_help() {
@@ -15,10 +22,6 @@ show_help() {
     echo "  -c, --enable-ccache              Enable ccache for the build."
     echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
-    echo "  -a, --enable-asan                Enable AddressSanitizer."
-    echo "  -m, --enable-msan                Enable MemorySanitizer."
-    echo "  -s, --enable-tsan                Enable ThreadSanitizer."
-    echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
@@ -44,12 +47,13 @@ show_help() {
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --enable-coverage                Instrument the binaries for code coverage."
+    echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
 }
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -60,10 +64,6 @@ clean() {
 export_compile_commands="OFF"
 enable_ccache="OFF"
 enable_time_trace="OFF"
-enable_asan="OFF"
-enable_msan="OFF"
-enable_tsan="OFF"
-enable_ubsan="OFF"
 build_type="Release"
 enable_profiler="OFF"
 build_dir=""
@@ -79,7 +79,6 @@ light_metal_trace="ON"
 build_all="OFF"
 cxx_compiler_path=""
 cpm_source_cache=""
-cpm_use_local_packages="OFF"
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
@@ -92,6 +91,7 @@ fi
 
 configure_only="OFF"
 enable_coverage="OFF"
+enable_distributed="ON"
 with_python_bindings="ON"
 
 declare -a cmake_args
@@ -103,10 +103,6 @@ build-all
 export-compile-commands
 enable-ccache
 enable-time-trace
-enable-asan
-enable-msan
-enable-tsan
-enable-ubsan
 build-type:
 enable-profiler
 install-prefix:
@@ -132,6 +128,7 @@ ttnn-shared-sub-libs
 toolchain-path:
 configure-only
 enable-coverage
+without-distributed
 without-python-bindings
 "
 
@@ -158,16 +155,10 @@ while true; do
             enable_ccache="ON";;
         -t|--enable-time-trace)
             enable_time_trace="ON";;
-        -a|--enable-asan)
-            enable_asan="ON";;
-        -m|--enable-msan)
-            enable_msan="ON";;
-        -s|--enable-tsan)
-            enable_tsan="ON";;
-        -u|--enable-ubsan)
-            enable_ubsan="ON";;
         --enable-coverage)
             enable_coverage="ON";;
+        --without-distributed)
+            enable_distributed="OFF";;
 	--build-dir)
             build_dir="$2";shift;;
         -b|--build-type)
@@ -206,8 +197,6 @@ while true; do
             cxx_compiler_path="$2";shift;;
         --cpm-source-cache)
             cpm_source_cache="$2";shift;;
-        --cpm-use-local-packages)
-            cpm_use_local_packages="ON";;
         --c-compiler-path)
             c_compiler_path="$2";shift;;
         --toolchain-path)
@@ -266,10 +255,6 @@ echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
 echo "INFO: Build type: $build_type"
 echo "INFO: Enable time trace: $enable_time_trace"
-echo "INFO: Enable AddressSanitizer: $enable_asan"
-echo "INFO: Enable MemorySanitizer: $enable_msan"
-echo "INFO: Enable ThreadSanitizer: $enable_tsan"
-echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
 echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
@@ -277,6 +262,7 @@ echo "INFO: Build tests: $build_tests"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
+echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 
 # Prepare cmake arguments
@@ -299,34 +285,12 @@ if [ "$cpm_source_cache" != "" ]; then
     cmake_args+=("-DCPM_SOURCE_CACHE=$cpm_source_cache")
 fi
 
-if [ "$cpm_use_local_packages" = "ON" ]; then
-    echo "INFO: CPM_USE_LOCAL_PACKAGES: $cpm_use_local_packages"
-    cmake_args+=("-DCPM_USE_LOCAL_PACKAGES=ON")
-fi
-
 if [ "$enable_ccache" = "ON" ]; then
-    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=TRUE")
     cmake_args+=("-DENABLE_CCACHE=TRUE")
 fi
 
 if [ "$enable_time_trace" = "ON" ]; then
     cmake_args+=("-DENABLE_BUILD_TIME_TRACE=ON")
-fi
-
-if [ "$enable_asan" = "ON" ]; then
-    cmake_args+=("-DENABLE_ASAN=ON")
-fi
-
-if [ "$enable_msan" = "ON" ]; then
-    cmake_args+=("-DENABLE_MSAN=ON")
-fi
-
-if [ "$enable_tsan" = "ON" ]; then
-    cmake_args+=("-DENABLE_TSAN=ON")
-fi
-
-if [ "$enable_ubsan" = "ON" ]; then
-    cmake_args+=("-DENABLE_UBSAN=ON")
 fi
 
 if [ "$enable_profiler" = "ON" ]; then
@@ -374,6 +338,7 @@ fi
 
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
+    cmake_args+=("-DTT_INSTALL=OFF")
 fi
 
 if [ "$unity_builds" = "ON" ]; then
@@ -403,8 +368,17 @@ fi
 
 if [ "$with_python_bindings" = "ON" ]; then
     cmake_args+=("-DWITH_PYTHON_BINDINGS=ON")
+    cmake_args+=("-DPython3_EXECUTABLE=$(which python3)")
+    cmake_args+=("-DPython3_INCLUDE_DIR=$(python3 -c "from sysconfig import get_paths as gp; print(gp()['include'])")")
+    cmake_args+=("-DPython3_LIBRARY=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR') + '/libpython' + sysconfig.get_config_var('LDVERSION') + '.so')")")
 else
     cmake_args+=("-DWITH_PYTHON_BINDINGS=OFF")
+fi
+
+if [ "$enable_distributed" = "ON" ]; then
+    cmake_args+=("-DENABLE_DISTRIBUTED=ON")
+else
+    cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

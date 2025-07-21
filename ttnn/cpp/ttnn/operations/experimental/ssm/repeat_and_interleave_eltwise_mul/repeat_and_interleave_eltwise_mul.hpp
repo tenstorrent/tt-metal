@@ -16,15 +16,15 @@ struct ExecuteRepeatAndInterleaveEltwiseMul {
         const Tensor& a,
         const Tensor& b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DataType> dtype = std::nullopt,
-        const std::optional<MathFidelity> math_fidelity = std::nullopt);
+        std::optional<DataType> dtype = std::nullopt,
+        std::optional<MathFidelity> math_fidelity = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::ssm
 
 namespace ttnn::experimental {
 
-constexpr auto repeat_and_interleave_eltwise_mul = ttnn::register_operation_with_auto_launch_op<
+constexpr auto repeat_and_interleave_eltwise_mul = ttnn::register_operation<
     "ttnn::experimental::repeat_and_interleave_eltwise_mul",
     ttnn::operations::experimental::ssm::ExecuteRepeatAndInterleaveEltwiseMul>();
 

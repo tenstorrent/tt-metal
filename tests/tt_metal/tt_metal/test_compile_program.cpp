@@ -2,21 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <cstdlib>
-#include <filesystem>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_memory.h>
-#include "tt_metal/detail/kernel_cache.hpp"
-#include <tt-metalium/tt_metal.hpp>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include "jit_build/build.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
@@ -27,13 +44,14 @@ struct KernelCacheStatus {
     std::unordered_map<std::string, bool> kernel_name_to_cache_hit;
 };
 
-void ClearKernelCache (const string& kernel_root_path) {
+void ClearKernelCache(const std::string& kernel_root_path) {
     std::filesystem::remove_all(kernel_root_path);
     detail::HashLookup::inst().clear();
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
-std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program& program, const string& kernel_root_path) {
+std::unordered_map<std::string, std::string> get_last_program_binary_path(
+    const Program& program, const std::string& kernel_root_path) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(program, kernel_id);
@@ -75,7 +93,7 @@ KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, b
         if (pre_compile_kernel_to_hash_str.find(kernel_name) == pre_compile_kernel_to_hash_str.end()) {
             kernel_cache_status.kernel_name_to_cache_hit.insert({kernel_name, false});
         } else {
-            auto prev_hash_str = pre_compile_kernel_to_hash_str.at(kernel_name);
+            const auto& prev_hash_str = pre_compile_kernel_to_hash_str.at(kernel_name);
             bool cache_hit = hash_str == prev_hash_str;
             kernel_cache_status.kernel_name_to_cache_hit.insert({kernel_name, cache_hit});
         }
@@ -149,11 +167,11 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
             .math_approx_mode = program_attributes.math_approx_mode,
             .compile_args = compute_kernel_args});
 
-    return std::move(program);
+    return program;
 }
 
 void assert_kernel_binary_path_exists(
-    const Program& program, const string& kernel_root_path, const KernelCacheStatus &kernel_cache_status) {
+    const Program& program, const std::string& kernel_root_path, const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(program, kernel_id);
@@ -181,7 +199,7 @@ void assert_kernel_hash_matches(
     const std::unordered_map<std::string, std::string>& golden_kernel_name_to_hash,
     const KernelCacheStatus& kernel_cache_status) {
     for (const auto& [kernel_name, hash] : kernel_cache_status.kernel_name_to_hash_str) {
-        auto expected_hash = golden_kernel_name_to_hash.at(kernel_name);
+        const auto& expected_hash = golden_kernel_name_to_hash.at(kernel_name);
         TT_FATAL(hash == expected_hash, "Expected hash for {} {} but got {}", kernel_name, expected_hash, hash);
     }
 }

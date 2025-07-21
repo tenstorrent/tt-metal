@@ -15,7 +15,7 @@
 // 2. Enqueue a Write command to the MeshBuffer with random data
 // 3. Enqueue a Read command to the MeshBuffer and read back the data to a local buffer
 // 4. Verify that the data read back matches the original data
-int main(int argc, char** argv) {
+int main() {
     using namespace tt::tt_metal;
     using namespace tt::tt_metal::distributed;
     using tt::tt_metal::distributed::ShardedBufferConfig;
@@ -30,11 +30,8 @@ int main(int argc, char** argv) {
     uint32_t tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::UInt32);
     uint32_t distributed_buffer_size_bytes = 64 * 128 * tile_size_bytes;
 
-    auto local_buffer_config = DeviceLocalBufferConfig{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::L1, .bottom_up = false};
     auto distributed_buffer_config = ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,

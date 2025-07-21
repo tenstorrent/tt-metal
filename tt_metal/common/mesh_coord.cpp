@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "shape_base.hpp"
-#include "small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -46,28 +46,45 @@ std::vector<size_t> find_diff_dimensions(const MeshCoordinateRange& a, const Mes
     return diff_dims;
 }
 
-// Returns true if the two ranges are mergeable: ranges must either be identical, have an intersection, or be adjacent
-// along exactly one dimension.
+// Returns true if the two ranges are mergeable; that is, when 2 ranges can be replaced by one.
+// Ranges must either be identical, be adjacent along exactly one dimension, or contain each other.
 bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b) {
     TT_ASSERT(a.dims() == b.dims(), "Cannot compare ranges with different dimensions: {} != {}", a.dims(), b.dims());
 
     auto diff_dims = find_diff_dimensions(a, b);
     if (diff_dims.empty()) {
+        // Ranges are identical.
         return true;
     } else if (diff_dims.size() == 1) {
+        // Ranges are adjacent or overlap along one dimension.
         size_t diff_dim = diff_dims[0];
         return std::max(a.start_coord()[diff_dim], b.start_coord()[diff_dim]) <=
                std::min(a.end_coord()[diff_dim], b.end_coord()[diff_dim]) + 1;
     } else {
-        return false;
+        return a.contains(b) || b.contains(a);
     }
+}
+
+int32_t normalize_index(int32_t index, int32_t size) {
+    int32_t normalized_index = index;
+    if (normalized_index < 0) {
+        normalized_index += size;
+    }
+    TT_FATAL(
+        normalized_index >= 0 && normalized_index < size,
+        "Index out of bounds: {} not in [{}, {})",
+        index,
+        -size,
+        size);
+
+    return normalized_index;
 }
 
 }  // namespace
 
-MeshShape::MeshShape(uint32_t x) : MeshShape({x}) {}
-MeshShape::MeshShape(uint32_t x, uint32_t y) : MeshShape({x, y}) {}
-MeshShape::MeshShape(uint32_t x, uint32_t y, uint32_t z) : MeshShape({x, y, z}) {}
+MeshShape::MeshShape(uint32_t s) : MeshShape({s}) {}
+MeshShape::MeshShape(uint32_t s0, uint32_t s1) : MeshShape({s0, s1}) {}
+MeshShape::MeshShape(uint32_t s0, uint32_t s1, uint32_t s2) : MeshShape({s0, s1, s2}) {}
 
 MeshShape::MeshShape(const tt::stl::SmallVector<uint32_t>& shape) : ShapeBase(shape) { compute_strides(); }
 MeshShape::MeshShape(tt::stl::SmallVector<uint32_t>&& shape) : ShapeBase(std::move(shape)) { compute_strides(); }
@@ -75,6 +92,7 @@ MeshShape::MeshShape(std::initializer_list<uint32_t> ilist) : ShapeBase(ilist) {
 MeshShape::MeshShape(tt::stl::Span<const uint32_t> span) : ShapeBase(span) { compute_strides(); }
 
 void MeshShape::compute_strides() {
+    TT_FATAL(dims() > 0, "MeshShape cannot have 0 dimension.");
     size_t stride = 1;
     strides_.resize(dims());
     for (int dim = dims() - 1; dim >= 0; --dim) {
@@ -105,13 +123,13 @@ std::ostream& operator<<(std::ostream& os, const MeshShape& shape) {
     return os;
 }
 
-bool is_line_topology(const MeshShape& shape) {
-    return std::count_if(shape.cbegin(), shape.cend(), [](size_t dim) { return dim != 1; }) <= 1;
+bool MeshShape::is_line_topology() const {
+    return std::count_if(cbegin(), cend(), [](size_t dim) { return dim != 1; }) <= 1;
 }
 
-MeshCoordinate::MeshCoordinate(uint32_t x) : value_({x}) {}
-MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y) : value_({x, y}) {}
-MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y, uint32_t z) : value_({x, y, z}) {}
+MeshCoordinate::MeshCoordinate(uint32_t c) : value_({c}) {}
+MeshCoordinate::MeshCoordinate(uint32_t c0, uint32_t c1) : value_({c0, c1}) {}
+MeshCoordinate::MeshCoordinate(uint32_t c0, uint32_t c1, uint32_t c2) : value_({c0, c1, c2}) {}
 
 MeshCoordinate::MeshCoordinate(tt::stl::Span<const uint32_t> coords) : value_(coords.begin(), coords.end()) {}
 
@@ -121,7 +139,48 @@ MeshCoordinate MeshCoordinate::zero_coordinate(size_t dimensions) {
 
 size_t MeshCoordinate::dims() const { return value_.size(); }
 tt::stl::Span<const uint32_t> MeshCoordinate::coords() const { return value_; }
-uint32_t MeshCoordinate::operator[](size_t dim) const { return value_[dim]; }
+uint32_t MeshCoordinate::operator[](int32_t dim) const { return value_[normalize_index(dim, dims())]; }
+uint32_t& MeshCoordinate::operator[](int32_t dim) { return value_[normalize_index(dim, dims())]; }
+
+size_t MeshCoordinate::to_linear_index(const MeshShape& shape) const {
+    TT_FATAL(shape.dims() == dims(), "Shape and coordinate dimensions do not match: {} != {}", shape.dims(), dims());
+
+    size_t linear_index = 0;
+    for (size_t dim = 0; dim < dims(); ++dim) {
+        TT_FATAL(value_[dim] < shape[dim], "Coordinate {} is out of bounds for shape {}", *this, shape);
+        linear_index += value_[dim] * shape.get_stride(dim);
+    }
+    return linear_index;
+}
+
+std::optional<MeshCoordinate> MeshCoordinate::get_neighbor(
+    const MeshShape& shape, int32_t offset, int32_t dim, BoundaryMode mode) const {
+    TT_FATAL(shape.dims() == dims(), "Shape and coordinate dimensions do not match: {} != {}", shape.dims(), dims());
+    for (size_t i = 0; i < dims(); ++i) {
+        TT_FATAL(value_[i] < shape[i], "Coordinate {} is out of bounds for shape {}", *this, shape);
+    }
+
+    dim = normalize_index(dim, shape.dims());
+
+    const auto boundary = static_cast<int32_t>(shape[dim]);
+    const int32_t current_pos = static_cast<int32_t>(value_[dim]);
+    const int32_t new_pos = current_pos + offset;
+
+    MeshCoordinate result = *this;
+
+    switch (mode) {
+        case BoundaryMode::WRAP: result[dim] = ((new_pos % boundary) + boundary) % boundary; break;
+        case BoundaryMode::CLAMP: result[dim] = std::clamp(new_pos, 0, boundary - 1); break;
+        case BoundaryMode::NONE:
+            if (new_pos < 0 || new_pos >= boundary) {
+                return std::nullopt;
+            }
+            result[dim] = new_pos;
+            break;
+    }
+
+    return result;
+}
 
 bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs) {
     return lhs.dims() == rhs.dims() && std::equal(lhs.coords().begin(), lhs.coords().end(), rhs.coords().begin());
@@ -172,9 +231,19 @@ MeshCoordinateRange::MeshCoordinateRange(const MeshCoordinate& start, const Mesh
 MeshCoordinateRange::MeshCoordinateRange(const MeshShape& shape) :
     MeshCoordinateRange(MeshCoordinate::zero_coordinate(shape.dims()), shape_back(shape)) {}
 
+MeshCoordinateRange::MeshCoordinateRange(const MeshCoordinate& coord) : start_(coord), end_(coord) {}
+
 size_t MeshCoordinateRange::dims() const { return start_.dims(); }
 const MeshCoordinate& MeshCoordinateRange::start_coord() const { return start_; }
 const MeshCoordinate& MeshCoordinateRange::end_coord() const { return end_; }
+
+MeshShape MeshCoordinateRange::shape() const {
+    tt::stl::SmallVector<uint32_t> shape_dims;
+    for (size_t i = 0; i < dims(); ++i) {
+        shape_dims.push_back(end_[i] - start_[i] + 1);
+    }
+    return MeshShape(shape_dims);
+}
 
 bool MeshCoordinateRange::contains(const MeshCoordinate& coord) const {
     TT_FATAL(coord.dims() == dims(), "Coordinate dimensions do not match: {} != {}", coord.dims(), dims());
@@ -218,19 +287,21 @@ MeshCoordinateRange::Iterator::Iterator(
     const MeshCoordinateRange* range, const MeshCoordinate& current, size_t linear_index) :
     range_(range), current_coord_(current), linear_index_(linear_index) {}
 
+MeshCoordinateRange::Iterator MeshCoordinateRange::Iterator::operator++(int) {
+    Iterator tmp = *this;
+    ++(*this);
+    return tmp;
+}
+
 MeshCoordinateRange::Iterator& MeshCoordinateRange::Iterator::operator++() {
     ++linear_index_;
-
-    tt::stl::SmallVector<uint32_t> new_coords(current_coord_.coords().begin(), current_coord_.coords().end());
-    for (int i = new_coords.size() - 1; i >= 0; --i) {
-        auto& dimension_value = new_coords[i];
-        if (++dimension_value > range_->end_coord()[i]) {
-            dimension_value = range_->start_coord()[i];
+    for (int i = current_coord_.dims() - 1; i >= 0; --i) {
+        if (++current_coord_[i] > range_->end_coord()[i]) {
+            current_coord_[i] = range_->start_coord()[i];
         } else {
             break;
         }
     }
-    current_coord_ = MeshCoordinate(new_coords);
     return *this;
 }
 const MeshCoordinate& MeshCoordinateRange::Iterator::operator*() const { return current_coord_; }
@@ -259,20 +330,7 @@ std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range) {
     return os;
 }
 
-size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord) {
-    TT_FATAL(
-        shape.dims() == coord.dims(),
-        "Shape and coordinate dimensions do not match: {} != {}",
-        shape.dims(),
-        coord.dims());
-
-    size_t linear_index = 0;
-    for (size_t dim = 0; dim < coord.dims(); ++dim) {
-        TT_FATAL(coord[dim] < shape[dim], "Coordinate {} is out of bounds for shape {}", coord, shape);
-        linear_index += coord[dim] * shape.get_stride(dim);
-    }
-    return linear_index;
-}
+MeshCoordinateRangeSet::MeshCoordinateRangeSet(const MeshCoordinateRange& range) { ranges_.push_back(range); }
 
 void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
     TT_FATAL(
@@ -282,12 +340,13 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
         to_merge.dims());
 
     // Iteratively merge the new range with existing ranges until no more merges are possible.
+    std::vector<MeshCoordinateRange> add_back;
     MeshCoordinateRange merged = to_merge;
-    bool did_merge = true;
-    while (did_merge) {
-        did_merge = false;
-        for (auto it = ranges_.begin(); it != ranges_.end(); ++it) {
+    while (true) {
+        bool did_merge = false;
+        for (auto it = ranges_.begin(); it != ranges_.end();) {
             if (check_mergeable(merged, *it)) {
+                // Can replace `it` + `merged` with a single new range.
                 tt::stl::SmallVector<uint32_t> new_start;
                 tt::stl::SmallVector<uint32_t> new_end;
                 for (size_t i = 0; i < merged.dims(); ++i) {
@@ -298,10 +357,36 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
                 ranges_.erase(it);
                 did_merge = true;
                 break;
+            } else if (merged.intersects(*it) || it->intersects(merged)) {
+                // There is an intersection between `merged` and `it`.
+                // For simplicity, erase the entire `it`, but add back what isn't present in `merged`.
+                for (const auto& coord : *it) {
+                    if (!merged.contains(coord)) {
+                        add_back.push_back(MeshCoordinateRange(coord));
+                    }
+                }
+                it = ranges_.erase(it);
+            } else {
+                // Cannot merge nor intersect with `it`, proceed to the next element.
+                ++it;
             }
+        }
+
+        if (!did_merge) {
+            break;
         }
     }
     ranges_.push_back(merged);
+
+    // Sort the ranges to ensure deterministic order.
+    std::sort(ranges_.begin(), ranges_.end(), [](const auto& a, const auto& b) {
+        return (a.start_coord() != b.start_coord()) ? a.start_coord() < b.start_coord() : a.end_coord() < b.end_coord();
+    });
+
+    // Merge back the ranges that were removed.
+    for (const auto& range : add_back) {
+        merge(range);
+    }
 }
 
 MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoordinateRange& intersection) {
@@ -368,6 +453,35 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
         }
         return complement_set;
     }
+}
+
+std::vector<MeshCoordinate> MeshCoordinateRangeSet::coords() const {
+    std::vector<MeshCoordinate> coords;
+    for (const auto& range : ranges_) {
+        for (const auto& coord : range) {
+            coords.push_back(coord);
+        }
+    }
+    std::sort(coords.begin(), coords.end());
+    return coords;
+}
+
+bool operator==(const MeshCoordinateRangeSet& lhs, const MeshCoordinateRangeSet& rhs) {
+    return lhs.ranges() == rhs.ranges();
+}
+
+bool operator!=(const MeshCoordinateRangeSet& lhs, const MeshCoordinateRangeSet& rhs) { return !(lhs == rhs); }
+
+std::ostream& operator<<(std::ostream& os, const MeshCoordinateRangeSet& range_set) {
+    os << "MeshCoordinateRangeSet([";
+    for (size_t i = 0; i < range_set.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << range_set.ranges()[i];
+    }
+    os << "])";
+    return os;
 }
 
 }  // namespace tt::tt_metal::distributed

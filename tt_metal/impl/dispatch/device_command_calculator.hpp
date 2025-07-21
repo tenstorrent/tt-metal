@@ -9,7 +9,7 @@
 
 #include "assert.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
@@ -19,7 +19,8 @@ public:
     uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
 
     void add_dispatch_wait() {
-        this->cmd_write_offsetB += sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd);
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -29,6 +30,11 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
     void add_prefetch_relay_linear() {
+        this->cmd_write_offsetB += sizeof(CQPrefetchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_prefetch_stall() {
         this->cmd_write_offsetB += sizeof(CQPrefetchCmd);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
@@ -51,6 +57,18 @@ public:
             // Need to make sure next command that flushes prefetch is written to correctly aligned location
             this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
         }
+    }
+
+    void add_dispatch_write_linear_host_event(uint32_t data_sizeB) {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd) + data_sizeB;
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_dispatch_write_linear_host() {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_go_signal_mcast() {
@@ -77,9 +95,9 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_dispatch_set_write_offsets() {
+    void add_dispatch_set_write_offsets(uint32_t num_offsets) {
         this->add_prefetch_relay_inline();
-        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd) + num_offsets * sizeof(uint32_t);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -111,6 +129,22 @@ public:
         this->cmd_write_offsetB += increment_sizeB;
     }
 
+    void add_prefetch_relay_ringbuffer(uint16_t num_sub_cmds) {
+        static_assert(sizeof(CQPrefetchRelayRingbufferSubCmd) % sizeof(uint32_t) == 0);
+
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayRingbufferSubCmd);
+        uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+        this->cmd_write_offsetB += increment_sizeB;
+    }
+
+    void add_prefetch_set_ringbuffer_offset() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    }
+
+    void add_prefetch_paged_to_ringbuffer() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    }
+
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
         uint16_t num_sub_cmds,
@@ -120,7 +154,6 @@ public:
         static_assert(
             std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-        bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
         uint32_t packed_write_max_multicast_sub_cmds =
             get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -191,16 +224,20 @@ public:
     // of sub commands that can be written in a single dispatch command.
     template <typename PackedSubCmd>
     void insert_write_packed_payloads(
-        const uint32_t num_sub_cmds,
-        const uint32_t sub_cmd_sizeB,
-        const uint32_t max_prefetch_command_size,
-        const uint32_t packed_write_max_unicast_sub_cmds,
+        uint32_t num_sub_cmds,
+        uint32_t sub_cmd_sizeB,
+        uint32_t max_prefetch_command_size,
+        uint32_t packed_write_max_unicast_sub_cmds,
         std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads);
+
+    // Clear calculator state
+    void clear() { this->cmd_write_offsetB = 0; }
 
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment =
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 };
 }  // namespace tt::tt_metal

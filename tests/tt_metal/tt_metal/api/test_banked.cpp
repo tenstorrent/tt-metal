@@ -2,19 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <memory>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-
-#include <tt-metalium/logger.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -46,8 +63,8 @@ bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banke
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
 
-    string reader_kernel_name = "";
-    string writer_kernel_name = "";
+    std::string reader_kernel_name = "";
+    std::string writer_kernel_name = "";
     size_t input_page_size_bytes = 0;
     size_t output_page_size_bytes = 0;
     std::vector<uint32_t> reader_runtime_args = {};
@@ -84,9 +101,8 @@ bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banke
 
     auto output_buffer = CreateBuffer(out_config);
 
-    tt::log_debug(
-        tt::LogTest, "Input buffer: [address: {} B, size: {} B]", input_buffer->address(), input_buffer->size());
-    tt::log_debug(
+    log_debug(tt::LogTest, "Input buffer: [address: {} B, size: {} B]", input_buffer->address(), input_buffer->size());
+    log_debug(
         tt::LogTest, "Output buffer: [address: {} B, size: {} B]", output_buffer->address(), output_buffer->size());
 
     TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes, "Error");
@@ -309,7 +325,6 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
-        TT_FATAL(num_banks % 2 == 0, "Error");
         size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 6;
@@ -365,7 +380,6 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
-        TT_FATAL(num_banks % 2 == 0, "Error");
         size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 6;
@@ -393,7 +407,6 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
-        TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
@@ -515,7 +528,6 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyDramW
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
-        TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;

@@ -5,7 +5,7 @@
 #include "moreh_arange_pybind.hpp"
 
 #include "moreh_arange.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
 void bind_moreh_arange_operation(py::module& module) {

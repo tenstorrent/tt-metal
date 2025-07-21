@@ -7,16 +7,16 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -27,9 +27,9 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& gather_multi_device_global_semaphore,
+               const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& gather_multi_device_global_semaphore,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
@@ -62,9 +62,9 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
                const ttnn::Tensor& input_tensor,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& gather_multi_device_global_semaphore,
+               const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& gather_multi_device_global_semaphore,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
@@ -102,21 +102,27 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
                ttnn::Tensor& buffer_tensor,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphore& multi_device_global_semaphore,
+               const std::optional<const DataType> dtype,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_links,
-               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
+               bool use_noc1_only,
+               bool use_optimal_ccl_for_llama) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     buffer_tensor,
                     cluster_axis,
                     mesh_device,
                     multi_device_global_semaphore,
+                    dtype,
                     memory_config,
                     topology,
                     num_links,
-                    worker_subdevice_id_opt);
+                    worker_subdevice_id_opt,
+                    use_noc1_only,
+                    use_optimal_ccl_for_llama);
             },
             py::arg("input_tensor"),
             py::arg("buffer_tensor"),
@@ -124,16 +130,19 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("mesh_device"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
+            py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("num_links") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt});
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("use_noc1_only") = false,
+            py::arg("use_optimal_ccl_for_llama") = false});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_all_reduce_async(pybind11::module& module) {
-    detail::bind_all_reduce_async(
+    bind_all_reduce_async(
         module,
         ttnn::experimental::all_reduce_async,
         R"doc(
@@ -147,7 +156,7 @@ void py_bind_all_reduce_async(pybind11::module& module) {
             mesh_device (MeshDevice): Device mesh to perform the line-all-reduce operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
 
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
@@ -160,16 +169,12 @@ void py_bind_all_reduce_async(pybind11::module& module) {
         Example:
 
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
-            >>> num_devices = 8
-            >>> input_tensors = torch.chunk(full_tensor, num_devices)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
-            >>> tt_input_tensors = []
-            >>> for i, t in enumerate(input_tensors):
-                    tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
-            >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-
-            >>> output = ttnn.all_reduce_async(input_tensor_mesh, topology=ttnn.Topology.Linear)
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+            >>> input_tensor = ttnn.from_torch(
+                    full_tensor,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+                )
+            >>> output = ttnn.experimental.all_reduce_async(input_tensor, topology=ttnn.Topology.Linear)
 
         )doc");
 }

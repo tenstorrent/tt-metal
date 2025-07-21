@@ -11,7 +11,7 @@
 #include "assert.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
 #include "tracy/Tracy.hpp"
@@ -202,17 +202,16 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
     constexpr uint32_t MANTISSA_BFP_SHIFT = 24 - MANTISSA_BFP_WIDTH;
     constexpr uint32_t MANTISSA_BFP_MAX_VAL = (1 << MANTISSA_BFP_WIDTH) - 1;
 
-    // check for both +/- 0.0
-    constexpr uint32_t EXP_MANTISSA_BMSK = ((1U << 31) - 1);
-    bool is_zero = ((input & EXP_MANTISSA_BMSK) == 0);
-
-    if (is_zero) {
-        return 0;
-    }
-
     uint32_t mantissa = input & 0x007fffff;
     uint32_t exp = (input & 0x7f800000) >> 23;
     uint32_t sign = (input & 0x80000000) >> 31;
+
+    // check for both +/- 0.0 or +/- denormal
+    bool is_zero_or_denormal = (exp == 0);
+
+    if (is_zero_or_denormal) {
+        return 0;
+    }
 
     if (is_exp_a) {
         int32_t se = static_cast<int32_t>(exp);
@@ -323,13 +322,12 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
     auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
     auto face_W = tile.has_value() ? tile->get_face_shape()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
-    auto face_HW = face_H * face_W;
     auto subtiles_in_tile_row = tile_H / face_H;
     auto subtiles_in_tile_col = tile_W / face_W;
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
 
-    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
 
     int num_float_in_tile = tile_HW;

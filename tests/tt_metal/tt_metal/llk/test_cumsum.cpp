@@ -2,13 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -82,8 +113,8 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
         .set_page_size(16, single_tile_size);
     auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
-    string reader_kernel_name, writer_kernel_name;
-    std::map<string, string> defines = {};
+    std::string reader_kernel_name, writer_kernel_name;
+    std::map<std::string, std::string> defines = {};
     std::vector<uint32_t> compile_args = {};
 
     if (test_config.rowwise) {

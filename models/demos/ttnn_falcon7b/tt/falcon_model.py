@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from abc import abstractmethod
 from typing import Optional, Tuple
 
-import ttnn
+import torch
 
-from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
+import ttnn
 from models.demos.ttnn_falcon7b.tt.common import create_attention_mask
+from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from ttnn import ShardTensorToMesh
 
 
@@ -54,7 +54,7 @@ class TtFalconModelShared:
 
         embeddings = self.embeddings(input_ids)
 
-        if isinstance(self.device, ttnn.Device):
+        if self.device.get_num_devices() == 1:
             mesh_mapper = None
         else:
             shard_dim = 2 if llm_mode == "decode" else 0

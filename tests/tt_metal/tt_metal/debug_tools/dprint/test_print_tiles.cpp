@@ -2,10 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking DPRINTs from all harts.
@@ -82,8 +116,8 @@ static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
     return u32_vec;
 }
 
-static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t> &input_tile) {
-    string data = "";
+static std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+    std::string data = "";
     if (data_format == tt::DataFormat::Float32) {
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
@@ -177,9 +211,9 @@ static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint3
     return data;
 }
 
-static string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t> &input_tile) {
-    string data = GenerateExpectedData(data_format, input_tile);
-    string expected = fmt::format("Print tile from Data0:{}", data);
+static std::string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+    std::string data = GenerateExpectedData(data_format, input_tile);
+    std::string expected = fmt::format("Print tile from Data0:{}", data);
     expected += fmt::format("\nPrint tile from Unpack:{}", data);
     expected += fmt::format("\nPrint tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print...");
     expected += fmt::format("\nPrint tile from Pack:{}", data);
@@ -210,19 +244,19 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     // Create kernels on device
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_brisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_ncrisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_trisc.cpp",
         core,
         ComputeConfig{});
@@ -240,7 +274,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
         string tmp = fmt::format("data[{:#03}:{:#03}]:", idx - 1, idx - 16);
         for (int i = 0; i < 16; i++)
             tmp += fmt::format(" 0x{:08x}", u32_vec[idx + 15 - i]);
-        log_info("{}", tmp);
+        log_info(tt::LogTest, "{}", tmp);
     }*/
 
     // Send input tile to dram
@@ -255,8 +289,8 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     fixture->RunProgram(device, program);
 
     // Check against expected prints
-    string expected = GenerateGoldenOutput(data_format, u32_vec);
-    // log_info("Expected output:\n{}", expected);
+    std::string expected = GenerateGoldenOutput(data_format, u32_vec);
+    // log_info(tt::LogTest, "Expected output:\n{}", expected);
     EXPECT_TRUE(
         FilesMatchesString(
             DPrintFixture::dprint_file_name,

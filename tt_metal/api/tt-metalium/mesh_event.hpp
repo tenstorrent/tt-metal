@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <ostream>
 
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace tt {
 namespace tt_metal {

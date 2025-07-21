@@ -3,21 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
 import pytest
 
-from models.demos.t3000.falcon40b.tt.model_config import model_config_entries
 from models.demos.t3000.falcon40b.demo.demo import run_falcon_demo_kv
+from models.demos.t3000.falcon40b.tt.model_config import model_config_entries
 
 
 @pytest.mark.parametrize("max_seq_len", (128,))
 def test_demo_generate_reference_output(
-    max_seq_len, model_location_generator, get_tt_cache_path, t3k_mesh_device, use_program_cache, is_ci_env
+    max_seq_len, model_location_generator, get_tt_cache_path, t3k_mesh_device, is_ci_env
 ):
     if is_ci_env:
         pytest.skip("Skip generating reference output in CI")
 
     input_file = "models/demos/t3000/falcon40b/demo/input_data.json"
-    t3k_mesh_device.enable_async(True)
 
     generated_text, measurements = run_falcon_demo_kv(
         user_input=input_file,
@@ -46,10 +46,8 @@ def test_demo(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
 ):
     input_file = "models/demos/t3000/falcon40b/demo/input_data.json"
-    t3k_mesh_device.enable_async(True)
 
     generated_text, measurements = run_falcon_demo_kv(
         user_input=input_file,

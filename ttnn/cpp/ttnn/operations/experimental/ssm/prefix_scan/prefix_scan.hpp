@@ -16,16 +16,15 @@ struct ExecutePrefixScan {
         const Tensor& bx,
         const Tensor& h_prev,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DataType> dtype = std::nullopt,
-        const std::optional<MathFidelity> math_fidelity = std::nullopt);
+        std::optional<DataType> dtype = std::nullopt,
+        std::optional<MathFidelity> math_fidelity = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::ssm
 
 namespace ttnn::experimental {
 
-constexpr auto prefix_scan = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::prefix_scan",
-    ttnn::operations::experimental::ssm::ExecutePrefixScan>();
+constexpr auto prefix_scan = ttnn::
+    register_operation<"ttnn::experimental::prefix_scan", ttnn::operations::experimental::ssm::ExecutePrefixScan>();
 
 }  // namespace ttnn::experimental

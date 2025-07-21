@@ -2,16 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <string>
-
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "test_gold_impls.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "test_gold_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 using std::vector;
 using namespace tt;

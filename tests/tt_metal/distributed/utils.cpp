@@ -3,7 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/distributed/utils.hpp"
+
+#include <fmt/base.h>
+#include <array>
+#include <cstdlib>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal::distributed::test::utils {
 
@@ -32,10 +59,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
 
         ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
         DeviceLocalBufferConfig per_device_buffer_config{
-            .page_size = page_size,
-            .buffer_type = tt_metal::BufferType::DRAM,
-            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-            .bottom_up = true};
+            .page_size = page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
 
         bool allocate_bufs = src0_bufs.empty();
         for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
@@ -95,7 +119,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
-        std::map<string, string> binary_defines = {
+        std::map<std::string, std::string> binary_defines = {
             {"ELTWISE_OP", op_id_to_op_define[eltwise_op]}, {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
         auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,
@@ -148,9 +172,9 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
 
     std::vector<std::shared_ptr<Program>> programs;
 
-    std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-    std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
-    std::map<string, string> erisc_defines = {{"ERISC", "1"}};
+    std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+    std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
+    std::map<std::string, std::string> erisc_defines = {{"ERISC", "1"}};
 
     for (uint32_t i = 0; i < num_programs; i++) {
         Program& program = *programs.emplace_back(std::make_shared<Program>());
@@ -377,6 +401,31 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
         }
     }
     return programs;
+}
+
+ScopedEnvVar::ScopedEnvVar(const char* name, const char* value) : name_(name) {
+    // Save original value
+    const char* original = std::getenv(name);
+    if (original) {
+        original_value_ = original;
+        had_original_ = true;
+    }
+
+    // Set new value
+    if (value) {
+        setenv(name, value, /*overwrite=*/1);
+    } else {
+        unsetenv(name);
+    }
+}
+
+ScopedEnvVar::~ScopedEnvVar() {
+    // Restore original value
+    if (had_original_) {
+        setenv(name_, original_value_.c_str(), /*overwrite=*/1);
+    } else {
+        unsetenv(name_);
+    }
 }
 
 }  // namespace tt::tt_metal::distributed::test::utils

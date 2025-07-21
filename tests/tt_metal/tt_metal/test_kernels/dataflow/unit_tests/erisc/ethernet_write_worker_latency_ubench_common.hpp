@@ -10,6 +10,7 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include "eth_ubenchmark_types.hpp"
+#include "risc_common.h"
 
 // #define ENABLE_DEBUG 1
 
@@ -41,10 +42,7 @@ constexpr MeasurementType measurement_type = static_cast<MeasurementType>(get_co
 constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(2);
 constexpr uint32_t MAX_NUM_TRANSACTION_ID =
     NUM_BUFFER_SLOTS / 2;  // the algorithm only works for NUM_BUFFER_SLOTS divisible by MAX_NUM_TRANSACTION_ID
-constexpr uint32_t worker_noc_x = get_compile_time_arg_val(3);
-constexpr uint32_t worker_noc_y = get_compile_time_arg_val(4);
-constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(5);
-constexpr uint32_t disable_trid = get_compile_time_arg_val(6);
+constexpr uint32_t disable_trid = get_compile_time_arg_val(3);
 
 // ******************************* Sender APIs ***************************************************
 
@@ -91,6 +89,7 @@ FORCE_INLINE void write_receiver(
 }
 
 FORCE_INLINE bool has_receiver_ack(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+    invalidate_l1_cache();
     return buffer_slot_sync_addr->bytes_sent == 0;
 }
 
@@ -168,6 +167,7 @@ FORCE_INLINE uint32_t setup_receiver_buffer(
 FORCE_INLINE uint32_t get_buffer_slot_trid(uint32_t curr_ptr) { return curr_ptr % MAX_NUM_TRANSACTION_ID + 1; }
 
 FORCE_INLINE bool has_incoming_packet(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+    invalidate_l1_cache();
     return buffer_slot_sync_addr->bytes_sent != 0;
 }
 

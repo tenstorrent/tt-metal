@@ -12,8 +12,8 @@ enum class BinaryOpType {
     MUL,
     GT,
     LT,
-    LTE,
-    GTE,
+    LE,
+    GE,
     EQ,
     NE,
     SQUARED_DIFFERENCE,
@@ -32,9 +32,16 @@ enum class BinaryOpType {
     BITWISE_OR,
     LEFT_SHIFT,
     RIGHT_SHIFT,
+    LOGICAL_RIGHT_SHIFT,
     QUANT,
     REQUANT,
     DEQUANT,
+    MAXIMUM,
+    MINIMUM,
+    GCD,
+    LCM,
+    ADDALPHA,
+    SUBALPHA,
 };
 
 }  // namespace ttnn::operations::binary

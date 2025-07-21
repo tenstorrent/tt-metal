@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 35
+        default: 45
       build-artifact-name:
         required: true
         type: string
@@ -22,6 +22,10 @@ on:
       docker-image:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       arch:
@@ -40,7 +44,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 35
+        default: 45
       build-artifact-name:
         required: true
         type: string
@@ -50,6 +54,10 @@ on:
       docker-image:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   profiler-regression:
@@ -57,10 +65,11 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - cloud-virtual-machine
-      - in-service
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -75,11 +84,13 @@ jobs:
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
         GITHUB_ACTIONS: true
+        # TODO: Revisit the addition of this env var https://github.com/tenstorrent/tt-metal/issues/20161
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
-      options: "--device /dev/tenstorrent"
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -91,11 +102,12 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           ./tests/scripts/run_profiler_regressions.sh
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -104,8 +116,6 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            /work/generated/test_reports/
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

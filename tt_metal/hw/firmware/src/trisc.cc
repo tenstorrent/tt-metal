@@ -45,8 +45,15 @@ enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc =
 
 volatile tt_reg_ptr uint *reg_base = reinterpret_cast<volatile uint *>(0xFFB10000);
 volatile tt_reg_ptr uint *pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
-volatile tt_reg_ptr uint *regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
-volatile tt_reg_ptr uint *instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
+volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
+#if !defined(INSTRN_BUFFER_TNG)
+// Once tt_llk is using an instrn_buffer array, this definition can be
+// deleted.
+}  // namespace ckernel
+extern volatile uint __instrn_buffer[];
+namespace ckernel {
+volatile tt_reg_ptr uint* instrn_buffer = &__instrn_buffer[0];
+#endif  // INSTRN_BUF_TNG
 tt_reg_ptr uint *regmem = reinterpret_cast<tt_reg_ptr uint *>(REGFILE_BASE);
 
 uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
@@ -59,7 +66,7 @@ const uint8_t thread_id = COMPILE_FOR_TRISC;
 #define GET_TRISC_RUN_EVAL(x, t) x##t
 #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
 volatile tt_l1_ptr uint8_t *const trisc_run =
-    &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->slave_sync.trisc, COMPILE_FOR_TRISC);
+    &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
 }  // namespace ckernel
 
@@ -93,12 +100,7 @@ void init_sync_registers() {
 }
 
 int main(int argc, char *argv[]) {
-    // Workaround for tt-metal#16439, making sure gathering is disabled
-#ifdef ARCH_BLACKHOLE
-    disable_gathering();
-#endif
-    configure_l1_data_cache();
-    DIRTY_STACK_MEMORY();
+    configure_csr();
     WAYPOINT("I");
 
     do_crt1((uint32_t tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE_SCRATCH));
@@ -111,6 +113,7 @@ int main(int argc, char *argv[]) {
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    *trisc_run = RUN_SYNC_MSG_DONE;
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
@@ -140,11 +143,11 @@ int main(int argc, char *argv[]) {
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t end_cb_index = launch_msg->kernel_config.max_local_cb_end_index;
-        setup_local_cb_read_write_interfaces(cb_l1_base, 0, end_cb_index, cb_init_read, cb_init_write, cb_init_write);
+        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write>(cb_l1_base, 0, local_cb_mask);
 
         cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
-        end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
+        uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
         // NOC argument is unused
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
 #endif
@@ -159,10 +162,10 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
-        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
-            (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
-        (*kernel_address)((uint32_t)kernel_address);
-        RECORD_STACK_USAGE();
+        uint32_t kernel_lma = (kernel_config_base +
+                               launch_msg->kernel_config.kernel_text_offset[index]);
+        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+        record_stack_usage(stack_free);
         WAYPOINT("D");
 
         // Signal completion

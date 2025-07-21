@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_distributed_pybind.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "layernorm_pre_all_gather.hpp"
 #include "layernorm_post_all_gather.hpp"
 

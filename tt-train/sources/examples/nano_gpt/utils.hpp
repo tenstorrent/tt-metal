@@ -69,6 +69,13 @@ void load_training_state(
     scheduler->set_state_dict(state_dict);
 }
 
+template <typename Model>
+void load_model_parameters(std::string &model_path, Model &model, const std::string &model_name) {
+    ttml::serialization::MsgPackFile deserializer;
+    deserializer.deserialize(model_path);
+    ttml::serialization::read_module(deserializer, model_name, model.get());
+}
+
 uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size = 32);
 
 class GradientAccumulator {
@@ -168,4 +175,6 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     return ss.str();
 }
 
-void initialize_device(bool ddp, bool tp);
+void initialize_device(
+    const tt::tt_metal::distributed::MeshShape &mesh_shape,
+    const std::vector<int> &device_ids);

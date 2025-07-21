@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import ttnn
 from models.utility_functions import nearest_y
 

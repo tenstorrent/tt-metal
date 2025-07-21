@@ -2,15 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <type_traits>
+#include <chrono>
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
+#include <stdint.h>
 #include <tt-metalium/bfloat8.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <cmath>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -23,7 +56,7 @@ namespace unit_tests::compute::broadcast {
 
 enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
-const map<BroadcastDim, string> broadcast_dim_to_type = {
+const map<BroadcastDim, std::string> broadcast_dim_to_type = {
     {BroadcastDim::ROW, "BroadcastType::ROW"},
     {BroadcastDim::COL, "BroadcastType::COL"},
     {BroadcastDim::SCALAR, "BroadcastType::SCALAR"},
@@ -228,7 +261,7 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
     auto l1_src_cb_1 = CreateCircularBufferHelper(program, core, block_size * 2, in1_t, 1);
     auto l1_dst_cb_1 = CreateCircularBufferHelper(program, core, block_size * 2, out1_t, 17);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"BCAST_DIM_0", broadcast_dim_to_type.at(test_config.broadcast_dim_0)},
         {"BCAST_DIM_1", broadcast_dim_to_type.at(test_config.broadcast_dim_1)}};
 
@@ -319,6 +352,7 @@ TEST_F(DeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
                     .out1_t = (out0_t_ == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b};
 
                 log_info(
+                    tt::LogTest,
                     "Testing UNARY BROADCAST BCAST_DIM_0={} in0_t={} out0_t={} | BCAST_DIM_1={} in1_t={} out1_t={}",
                     broadcast_dim_to_type.at(test_config.broadcast_dim_0),
                     test_config.in0_t,

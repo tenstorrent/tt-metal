@@ -4,7 +4,6 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
 
@@ -47,8 +46,10 @@ class RMSNorm(LightweightModule):
         weight_dtype=ttnn.bfloat16,
         is_distributed=None,
         eps: float = 1e-05,
+        add_unit_offset=False,
         sharded_program_config=None,
         sharded_output_config=None,
+        output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
     ):
         super().__init__()
@@ -67,6 +68,10 @@ class RMSNorm(LightweightModule):
         torch_weight = (
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )
+
+        # Add offset before caching
+        if add_unit_offset:
+            torch_weight = torch_weight + 1.0
 
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
@@ -98,6 +103,7 @@ class RMSNorm(LightweightModule):
 
         self.sharded_output_config = sharded_output_config
         self.sharded_program_config = sharded_program_config
+        self.output_mem_config = output_mem_config
 
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,

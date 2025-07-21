@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-#include "cpp/pybind11/decorators.hpp"
-
-#include "permute.hpp"
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;

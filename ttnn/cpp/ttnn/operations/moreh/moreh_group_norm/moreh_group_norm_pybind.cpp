@@ -5,7 +5,7 @@
 #include "moreh_group_norm_pybind.hpp"
 
 #include "moreh_group_norm.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm {
 void bind_moreh_group_norm_operation(py::module& module) {

@@ -8,11 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
-)
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
@@ -68,7 +63,6 @@ def run_with_trace(
     dim,
     num_links,
     output_mem_config,
-    enable_persistent_fabric,
     multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
@@ -83,7 +77,6 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
-        enable_persistent_fabric_mode=enable_persistent_fabric,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -99,7 +92,6 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
-            enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -121,11 +113,9 @@ def run_all_gather_impl(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     trace_mode=False,
     rand_tensor=True,
     mem_config=None,
@@ -136,18 +126,9 @@ def run_all_gather_impl(
     tensor_mem_layout=None,
     use_cluster_axis_api=False,
     cluster_axis=None,
-    create_persistent_fabric=True,
-    teardown_persistent_fabric=True,
-    wrap_fabric_around_mesh=False,
 ):
-    enable_persistent_fabric = True
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
-    # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
-
-    if enable_async:
-        logger.info(f"Using Async Mode for All Gather Op Dispatch")
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -160,21 +141,12 @@ def run_all_gather_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    if create_persistent_fabric:
-        mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device,
-            [worker_sub_device],
-            0,
-            0,
-            enable_persistent_fabric,
-            wrap_fabric_around_mesh=wrap_fabric_around_mesh,
-            topology=all_gather_topology,
-        )
-        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
     ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)] for _ in range(num_iters)
     ]
 
     logger.info(f"Output shape: {output_shape}")
@@ -246,15 +218,20 @@ def run_all_gather_impl(
                             tile_id += 1
 
         output_tensor_goldens_list.append(output_tensor)
-        input_tensors = torch.chunk(output_tensor, num_devices, dim)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-            )
-            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        input_tensor_mesh = ttnn.from_torch(
+            output_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -267,7 +244,6 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
-            enable_persistent_fabric,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
@@ -285,7 +261,6 @@ def run_all_gather_impl(
                     topology=all_gather_topology,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     subdevice_id=worker_sub_device_id,
-                    enable_persistent_fabric_mode=enable_persistent_fabric,
                     num_preferred_links=num_links,
                 )
 
@@ -298,7 +273,6 @@ def run_all_gather_impl(
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
                     subdevice_id=worker_sub_device_id,
-                    enable_persistent_fabric_mode=enable_persistent_fabric,
                 )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -322,18 +296,11 @@ def run_all_gather_impl(
                 logger.error(f"output mismatch for tensor {i}")
                 passed = False
 
-    for i in range(num_devices):
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
-
-    if enable_persistent_fabric and teardown_persistent_fabric:
-        mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(
-            mesh_device, wrap_fabric_around_mesh=wrap_fabric_around_mesh, topology=all_gather_topology
-        )
-
+    assert (
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
     if not passed:
         assert eq, f"{i} FAILED: {output}"
 
@@ -363,7 +330,7 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [10])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -375,9 +342,7 @@ def test_all_gather(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_impl(
         t3k_mesh_device,
@@ -387,14 +352,10 @@ def test_all_gather(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
         rand_tensor=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
         mem_config=mem_config,
     )
 
@@ -481,7 +442,7 @@ def test_all_gather(
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_sharded(
     t3k_mesh_device,
     num_devices,
@@ -491,9 +452,7 @@ def test_all_gather_sharded(
     input_dtype,
     layout,
     num_iters,
-    use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_shape,
     input_shard_grid,
     output_shard_shape,
@@ -511,20 +470,15 @@ def test_all_gather_sharded(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,
         input_shard_grid=input_shard_grid,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
-        wrap_fabric_around_mesh=True,
     )
 
 
@@ -534,11 +488,11 @@ def test_all_gather_sharded(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
         (
-            4,
+            8,
             [1, 4, 32, 1280],
             3,
             ttnn.TILE_LAYOUT,
-            (32, 320),
+            (32, 160),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
             None,
             None,
@@ -555,9 +509,9 @@ def test_all_gather_sharded(
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_all_gather_sharded_ring(
-    pcie_mesh_device,
+    t3k_mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -565,9 +519,7 @@ def test_all_gather_sharded_ring(
     input_dtype,
     layout,
     num_iters,
-    use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_shape,
     input_shard_grid,
     output_shard_shape,
@@ -575,30 +527,25 @@ def test_all_gather_sharded_ring(
     tensor_mem_layout,
 ):
     if num_links > 1:
-        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the pcie_mesh_device (and hence only has 1 link available for use)"
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
 
     run_all_gather_impl(
-        pcie_mesh_device,
+        t3k_mesh_device,
         num_devices,
         output_shape,
         dim,
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
-        enable_async=enable_async,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,
         input_shard_grid=input_shard_grid,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
-        wrap_fabric_around_mesh=True,
     )
 
 
@@ -625,9 +572,9 @@ def test_all_gather_sharded_ring(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
     mesh_device,
     num_devices,
@@ -637,13 +584,11 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -655,16 +600,11 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -695,8 +635,8 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [2])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     num_devices,
     per_chip_output_shape,
@@ -705,14 +645,12 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     mesh_device,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -724,16 +662,11 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -761,7 +694,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     ],
 )
 @pytest.mark.parametrize("replication_factor1", [4])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize(
     "num_devices2, num_links2, per_chip_output_shape2, dim2, layout2",
     [
@@ -774,6 +706,7 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
 )
 @pytest.mark.parametrize("replication_factor2", [2])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabric_post_commit(
     mesh_device,
     num_devices1,
@@ -788,14 +721,12 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
     input_dtype,
     layout2,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor1,
     replication_factor2,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -807,16 +738,11 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         input_dtype,
         layout1,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor1,
         cluster_axis=0,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=False,
     )
 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
@@ -829,14 +755,9 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         input_dtype,
         layout2,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor2,
         cluster_axis=1,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=False,
-        teardown_persistent_fabric=True,
     )

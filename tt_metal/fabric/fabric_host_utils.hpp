@@ -1,53 +1,71 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_graph.hpp>                   // FabricType
+#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <llrt/tt_cluster.hpp>
+#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <set>
 #include <vector>
-
-#include "core_coord.hpp"
-#include "fabric_host_interface.h"
-#include "system_memory_manager.hpp"
-
-namespace tt {
-namespace tt_metal {
-class Program;
-}  // namespace tt_metal
-}  // namespace tt
-
+#include <unordered_map>
+#include <queue>
+#include <functional>
+#include <unordered_set>
+#include <optional>
 namespace tt::tt_fabric {
 
-// Used to get the run-time args for estabilishing connection with the fabric router.
-// The API appends the connection specific run-time args to the set of exisiting
-// run-time args for the worker programs, which allows the workers to conveniently
-// build connection management object(s) using the run-time args.
-// It is advised to call the API once all the other run-time args for the prgram are
-// determined/pushed to keep things clean and avoid any extra arg management.
-//
-// Inputs:
-// src_chip_id: physical chip id/device id of the sender chip
-// dst_chip_id: physical chip id/device id of the receiver chip
-// routing_plane: the link (0..n) to use b/w the src_chip_id and dst_chip_id. On WH for
-//                instance we can have upto 4 active links b/w two chips
-// worker_program: program handle
-// worker_core: worker core logical coordinates
-// worker_args: list of existing run-time args to which the connection args will be appended
-//
-// Constraints:
-// 1. Currently the sender and reciever chip should be physically adjacent
-// 2. Currently the sender and reciever chip should be on the same mesh (for 1D)
-// 3. When connecting with 1D fabric routers, users are responsible for setting up the
-// connection appropriately. The API will not perform any checks to ensure that the
-// connection is indeed a 1D connection b/w all the workers.
-void append_fabric_connection_rt_args(
-    chip_id_t src_chip_id,
-    chip_id_t dst_chip_id,
-    routing_plane_id_t routing_plane,
-    tt::tt_metal::Program& worker_program,
-    const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args);
+class FabricNodeId;
+bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+
+uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology);
+uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology);
+
+void set_routing_mode(uint16_t routing_mode);
+void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension = 1);
+
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::ClusterType cluster_type);
+
+std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction);
+
+void get_optimal_noc_for_edm(
+    FabricEriscDatamoverBuilder& edm_builder1,
+    FabricEriscDatamoverBuilder& edm_builder2,
+    uint32_t num_links,
+    Topology topology);
+
+// Helper: BFS distance map from a start chip to all reachable chips using the
+// provided adjacency map. Returned distances are expressed in hop count.
+std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
+    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map);
+
+// Helper: Build adjacency map and discover corners/edges using BFS
+struct IntraMeshAdjacencyMap {
+    std::unordered_map<chip_id_t, std::vector<chip_id_t>> adjacency_map;
+    std::vector<chip_id_t> corners;  // Should always be size 2 for 1D meshes, 4 for 2D meshes, populated in order of closest to chip 0 by default
+    std::vector<chip_id_t> edges;    // Should always be size 2 for 1D meshes, 4 for 2D meshes, populated in order of closest to chip 0 by default
+    std::uint32_t ns_size;  // North-South size (rows)
+    std::uint32_t ew_size;  // East-West size (columns)
+};
+
+IntraMeshAdjacencyMap build_mesh_adjacency_map(
+    const std::set<chip_id_t>& user_chip_ids,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func,
+    std::optional<chip_id_t> start_chip_id = std::nullopt);
+
+// Helper: Convert 1D mesh adjacency map to row-major vector representation
+std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info);
+
+// Helper: Convert 2D mesh adjacency map to row-major vector representation
+std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
+    const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id = std::nullopt);
 
 }  // namespace tt::tt_fabric

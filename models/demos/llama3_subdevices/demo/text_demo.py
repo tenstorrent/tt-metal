@@ -7,21 +7,22 @@ from datetime import datetime
 import hashlib
 import requests
 import json
-
 import torch
 import pytest
 import os
 import ttnn
 
-from models.demos.llama3_subdevices.tt.generator import Generator
+from models.demos.llama3_subdevices.tt.generator import Generator, SamplingParams
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
-    sample_host,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.utility_functions import (
+    comp_pcc,
+)
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -55,16 +56,12 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
 
 
 # load input prompts from json, return as a list
-def load_inputs(user_input, batch, instruct):
+def load_inputs(user_input, len_per_batch, instruct):
     if isinstance(user_input, str):
         with open(user_input, "r") as f:
             user_input = json.load(f)
-
-    if len(user_input) < batch:
-        logger.warning(
-            f"Number of users in the file is less than the provided batch={batch}. Repeating the prompts to match the batch size."
-        )
-        user_input = user_input * batch
+    batch = len(len_per_batch)
+    user_input = user_input * batch
 
     in_prompt = []
     cache_dir = Path("models/tt_transformers/demo/context_cache")
@@ -77,7 +74,9 @@ def load_inputs(user_input, batch, instruct):
         if "context" in user_input[i]:
             if "max_length" in user_input[i]:  # Clip the context to the max length provided
                 context_text = load_and_cache_context(
-                    user_input[i]["context"], cache_dir, max_length=user_input[i]["max_length"]
+                    user_input[i]["context"],
+                    cache_dir,
+                    max_length=(user_input[i]["max_length"]) if batch == 1 else len_per_batch[i],
                 )
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
@@ -91,12 +90,34 @@ def load_inputs(user_input, batch, instruct):
     return in_prompt
 
 
+def load_demo_targets(filename, galaxy_type):
+    """
+    Load expected demo targets from a JSON file.
+    """
+    if not os.path.exists(filename):
+        logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
+        return []
+
+    with open(filename, "r") as f:
+        try:
+            demo_targets = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
+            return []
+
+    demo_targets = demo_targets["targets"][galaxy_type]
+
+    return demo_targets
+
+
 def create_tt_model(
     mesh_device,
     instruct,
     max_batch_size,
     optimizations,
     max_seq_len,
+    num_layers,
+    dummy_weights,
     page_params,
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
@@ -107,13 +128,13 @@ def create_tt_model(
     tt_model_args = TtModelArgs(
         mesh_device,
         instruct=instruct,
-        max_batch_size=max_batch_size,
+        max_batch_size=32,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        dummy_weights=dummy_weights,
     )
-    # tt_model_args.n_layers = 1
+    tt_model_args.n_layers = num_layers
     state_dict = tt_model_args.load_state_dict()
-
     page_table = None
     paged_attention_config = None
     tt_kv_cache = None
@@ -128,7 +149,7 @@ def create_tt_model(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
+            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
         )
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
@@ -143,6 +164,7 @@ def create_tt_model(
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
+        enable_prefetcher_performance_mode=True,
     )
 
     if use_paged_kv_cache:
@@ -156,7 +178,7 @@ def create_tt_model(
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
@@ -167,106 +189,152 @@ def create_tt_model(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, num_layers, print_outputs",
     [
-        (  # Batch-1 run (Latency) - single user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            1,  # batch_size
-            150,  # max_generated_tokens
-            False,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-        ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only
+            False,  # apc_test
+            False,  # pcc_check
+            80,  # num layers
+            False,  # print_outputs
         ),
-        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+        (  # Batch-1 run (Throughput) - 1 user, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            False,  # ci_only
+            False,  # apc_test
+            False,  # pcc_check
+            80,  # num layers
+            False,  # print_outputs
         ),
-        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
-            "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            16 * 1024,  # max_seq_len
-            1,  # batch_size
-            15000,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            False,  # ci_only
-        ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # Repeat-5 Batch-1 run (Throughput) - 1 user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
-            1,  # repeat_batches
-            8192,  # max_seq_len
+            2,  # repeat_batches
+            128 * 1024,  # max_seq_len
             1,  # batch_size
-            4096,  # max_generated_tokens
+            200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
+            True,  # stop_at_eos
+            False,  # apc_test,
+            False,  # pcc_check
+            80,  # num layers
+            False,  # print_outputs
         ),
-        (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+        (  # Long-context run - multiple users, long prompt (adapted to the model being used and architecture)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            2000,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
-            1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
-            True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
-            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
+            True,  # stop_at_eos
+            False,  # apc_test,
+            False,  # pcc_check
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+            "models/demos/llama3_subdevices/demo/input_data_long_32k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test,
+            False,  # pcc_check
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # APC Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+            "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            130,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # apc_test
+            True,  # pcc_check
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+            "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            True,  # pcc_check
+            80,  # num layers
+            False,  # print_outputs
         ),
     ],
     ids=[
-        "batch-1",  # latency
         "batch-32",  # throughput
-        "long-context",  # max-length
-        "reasoning-1",  # reasoning
-        "ci-1",  # CI batch 1
-        "ci-32",  # CI batch 32
+        "batch-1",  # latency
+        "repeat2",  # latency with 5 repeat batches
+        "long-context-batch32",  # max-length for 32 users
+        "long-context-32k",  # max-length
+        "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
+        "pcc-80L",  # pcc check for 80L + teacher forced
     ],
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
         LlamaOptimizations.performance,
-        LlamaOptimizations.accuracy,
     ],
 )
 @pytest.mark.parametrize(
+    "pcc_decode_len",
+    [10],
+)
+@pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872, "num_command_queues": 1, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    [
+        {
+            "trace_region_size": 102000000,
+            "num_command_queues": 1,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "worker_l1_size": 1344544,
+            "fabric_config": True,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -289,46 +357,75 @@ def test_demo_text(
     optimizations,
     stop_at_eos,
     mesh_device,
-    use_program_cache,
     is_ci_env,
-    ci_only,
+    apc_test,
+    num_layers,
+    pcc_check,
+    pcc_decode_len,
     reset_seeds,
     request,
+    galaxy_type,
+    print_outputs,
 ):
     """
     Simple demo with limited dependence on reference code.
     """
-
-    if is_ci_env and (optimizations == LlamaOptimizations.accuracy or not ci_only):
-        pytest.skip("CI only runs the CI-only tests")
-
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
-
-    mesh_device.enable_async(True)
-    enable_trace = True  # Use tracing for better perf
-    print_to_file = False  # Enable this flag to print the output of all users to a file
+        pytest.skip("Llama TG only supports batch-32")
+    if galaxy_type == "6U" and apc_test:
+        pytest.skip("Skipping test since there is no 6U machines dedicated for APC")
+    if apc_test and not pcc_check:
+        raise ValueError("APC test requires PCC check to be enabled")
+    if apc_test:
+        demo_targets = load_demo_targets("models/demos/llama3_subdevices/demo/text_demo_targets.json", galaxy_type)
 
     # Override parameters from command line if they are provided
-    # input_prompts = request.config.getoption("--input_prompts") or input_prompts
-    # if request.config.getoption("--instruct") in [
-    #     0,
-    #     1,
-    # ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
-    #     instruct = request.config.getoption("--instruct")
-    # repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
-    # max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
-    # batch_size = request.config.getoption("--batch_size") or batch_size
-    # max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
-    # paged_attention = request.config.getoption("--paged_attention") or paged_attention
-    # page_params = request.config.getoption("--page_params") or page_params
-    # sampling_params = request.config.getoption("--sampling_params") or sampling_params
-    # if request.config.getoption("--stop_at_eos") in [
-    #     0,
-    #     1,
-    # ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
-    #     stop_at_eos = request.config.getoption("--stop_at_eos")
+    input_prompts = request.config.getoption("--input_prompts") or input_prompts
+    if request.config.getoption("--instruct") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        instruct = request.config.getoption("--instruct")
+    repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
+    max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
+    batch_size = request.config.getoption("--batch_size") or batch_size
+    max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
+    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    page_params = request.config.getoption("--page_params") or page_params
+    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    if request.config.getoption("--stop_at_eos") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        stop_at_eos = request.config.getoption("--stop_at_eos")
+    print_outputs = request.config.getoption("--print_outputs") or print_outputs
+
+    enable_trace = True  # Use tracing for better perf
+    prefill_enable_trace = True  # repeat_batches > 1
+    print_to_file = False  # Enable this flag to print the output of all users to a file
+    instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
+    input_lenghts = (
+        [
+            534,
+            1008,
+            1111 * 4,
+            3333 * 4,
+        ]
+        * 8
+        if batch_size == 32
+        else [15384 * 8]
+    )
+
+    # Creat batch output file
+    benchmark_data = BenchmarkData()
+    profiler_step_name = "tg-llama-demo-prefill-e2e"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_directory = "models/demos/llama3_subdevices/demo/output"
+    os.makedirs(output_directory, exist_ok=True)
+    os.chmod(output_directory, 0o755)
+    output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
+
     stop_at_eos = False
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -336,7 +433,7 @@ def test_demo_text(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/tt_transformers/demo/output"
+        output_directory = "models/demos/llama3_subdevices/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
@@ -348,11 +445,49 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(input_prompts) == 1:  # Manual input
-        input_prompts = input_prompts * batch_size
-    else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, batch_size, input_prompts)
+    input_prompts = load_inputs(
+        input_prompts,
+        input_lenghts,
+        input_prompts,
+    )
     profiler.end("loading_inputs")
+
+    # Load expected outputs for comparison
+    expected_outputs_data = []
+    # Always use this specific path for the expected outputs.
+    expected_outputs_file_path_to_load = "models/demos/llama3_subdevices/demo/outputs_batch_1.json"
+
+    if os.path.exists(expected_outputs_file_path_to_load):
+        logger.info(f"Attempting to load expected outputs from: {expected_outputs_file_path_to_load}")
+        try:
+            with open(expected_outputs_file_path_to_load, "r") as f:
+                first_char = f.read(1)
+                if not first_char:
+                    logger.warning(
+                        f"Expected outputs file {expected_outputs_file_path_to_load} is empty. Disabling comparison."
+                    )
+                else:
+                    f.seek(0)
+                    loaded_json = json.load(f)[galaxy_type]
+                    if isinstance(loaded_json, list) and all(isinstance(item, str) for item in loaded_json):
+                        expected_outputs_data = loaded_json
+                        logger.info(
+                            f"Successfully loaded {len(expected_outputs_data)} expected string outputs from {expected_outputs_file_path_to_load}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Expected {expected_outputs_file_path_to_load} to contain a JSON list of strings. Got {type(loaded_json)}. Disabling comparison."
+                        )
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {expected_outputs_file_path_to_load}: {e}. Disabling comparison.")
+        except Exception as e:
+            logger.error(
+                f"Unexpected error loading or parsing {expected_outputs_file_path_to_load}: {str(e)}. Disabling comparison."
+            )
+    else:
+        logger.warning(
+            f"Expected outputs file not found: {expected_outputs_file_path_to_load}. Output comparison will be skipped."
+        )
 
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
@@ -367,12 +502,14 @@ def test_demo_text(
         max_batch_size=batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        dummy_weights=not instruct,
         page_params=page_params,
         dtype=ttnn.bfloat8_b,
         use_paged_kv_cache=paged_attention,
     )
 
-    # model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
@@ -396,162 +533,310 @@ def test_demo_text(
                 instruct,
                 max_generated_tokens,
             )
+
         except Exception as e:
             logger.error(f"Error during preprocessing: {str(e)}")
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
+
+        # Load reference outputs for PCC check
+        if pcc_check:
+            vocab_size = 128256
+            if is_ci_env or galaxy_type == "6U":
+                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
+            else:
+                ref_output_path = f"/proj_sw/user_dev/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
+            assert os.path.exists(ref_output_path), f"Reference output file with path {ref_output_path} does not exist!"
+            torch_reference = torch.load(ref_output_path)
+            assert torch_reference["all_ref_logits"].shape == (
+                batch_size * pcc_decode_len,
+                1,
+                vocab_size,
+            ), f"In PCC check mode, expected reference logits to have shape {(batch_size * pcc_decode_len, vocab_size)}, received {torch_reference['all_ref_logits'].shape}"
+            assert (
+                encoded_prompts[0] == torch_reference["reference_tokens"][:max_encoded_prompt_len].tolist()
+            ), f"Provided prompt tokens do not match reference model prompt tokenss, Your prompt is encoded as: {encoded_prompts[0]}, but your reference tokens are {torch_reference['reference_tokens'][:max_encoded_prompt_len]}"
+            assert max_encoded_prompt_len + pcc_decode_len == len(
+                torch_reference["reference_tokens"]
+            ), f"Length of prompt prefill tokens {max_encoded_prompt_len + pcc_decode_len} must match number of prompt tokens in reference tokens {len(torch_reference['reference_tokens'])}"
+            torch_output = torch_reference["all_ref_logits"].reshape(pcc_decode_len, batch_size, vocab_size)[:, 0, :]
+            ref_tokens = torch_reference["reference_tokens"]
+
         assert (
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
+        batch_size_per_device_group = (
+            32 if batch_size == 32 else 1
+        )  # This is a workoaround until page table needs to know that attention is DP
+
+        if paged_attention:
+            paged_cache_max_seq_len = (
+                page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size_per_device_group
+            )
+            assert (
+                max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
+            ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
         if batch_idx != 0:
+            model.switch_mode("prefill")
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
-        if batch_idx != 0:
-            model.switch_mode("prefill")
-
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
+        if batch_idx == 0:
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            try:
+                tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+                toks = generator.prefill_forward_text(
+                    input_tokens_prefill_pt,  # Just warmup prefill for 1 user
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=prefill_enable_trace,
+                    tt_out_logits_all_users=tt_out_logits_all_users,
+                )
+            except Exception as e:
+                logger.error(f"Error during prefill warmup: {str(e)}")
+                raise e
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
 
         logger.info(f"Starting prefill...")
+
         profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[0].unsqueeze(0),
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        prefilled_token = torch.argmax(logits, dim=-1)
+
+        try:
+            tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+            toks = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=prefill_enable_trace,
+                tt_out_logits_all_users=tt_out_logits_all_users,
+            )
+        except Exception as e:
+            logger.error(f"Error during prefill: {str(e)}")
+            raise e
+
+        # Check the output tokens after prefill
+        if pcc_check:
+            torch_output_logits = torch_output[0]
+            logits = tt_out_logits_all_users[0, 0, :vocab_size]
+            does_pass, pcc_message = comp_pcc(
+                logits, torch_output_logits, 0.91 if not apc_test else demo_targets["prefill_pcc"]
+            )
+            logger.info(f"PCC: {pcc_message}")
+            logger.info(
+                f"Teacher forced token at prefill {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
+            )
+        if apc_test:
+            assert_message = (
+                f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
+                f"If it is expected to be different in Llama model, please update the text_demo_targets.json file.\n"
+                f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+            )
+            assert pcc_message == demo_targets["prefill_pcc"], assert_message
+
+        # Save prefill token
+        prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
-        prefilled_token = prefilled_token.repeat(batch_size, 1)
+
         # Keep track of generated outputs to print out every iteration
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
         for user in range(batch_size):
-            user_tok = int(prefilled_token[0].item())
+            user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)
-        # print("Prefill outputs:", [tokenizer.decode(output) for output in all_outputs])
-        # model.tt_ccl.close()
-        # return True
-        user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-        # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = True  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        # Keeps track when a user reaches EoD token
+        user_done = [False] * batch_size
+
+        device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
 
         # Initial positions
-        current_pos = torch.tensor([decoding_pos[0] for b in range(batch_size)])
+        current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+        if batch_size == 1:
+            # pad current_pos to 32 with -1s
+            current_pos = torch.nn.functional.pad(current_pos, (0, 32 - current_pos.shape[0]), value=-1)
+            # pad page_table to 32 with 0s
+            page_table = torch.nn.functional.pad(page_table, (0, 0, 0, 32 - page_table.shape[0]), value=0)
 
         # Start decoding
         iteration = 0
         users_decoding = True
 
-        out_tok = prefilled_token  # .repeat(batch_size, 1)
+        # Replace the prefill token with reference token if PCC check enabled
+        out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
+
+        if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+            out_tok = out_tok.repeat(32, 1)
+
         try:
             model.switch_mode("decode")
         except Exception as e:
             logger.error(f"Error switching to decode mode: {str(e)}")
             model.tt_ccl.close()
-        logger.info(f"Starting decode loop...")
+        logger.info(f"Starting decode loop from positions: {decoding_pos}")
 
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
+
+        top_5_accs = []
+        top_1_accs = []
+        read_events = []
+        tt_out_toks = []
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
+            # Determine whether to enable trace
+            if apc_test:
+                is_enable_trace = iteration != 0  # First iteration is compile time and checks PCC
+            else:
+                is_enable_trace = enable_trace if not pcc_check else False
             # Run decode forward
             try:
-                logits = generator.decode_forward_text(
+                # Save logits only for PCC check when tracing is disabled
+                tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
+                tt_out_tok, read_event = generator.decode_forward_text(
                     out_tok,
                     current_pos,
-                    enable_trace=enable_trace,
+                    enable_trace=is_enable_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
-                    argmax_on_device=argmax_on_device,
+                    read_from_device=True,
+                    sampling_params=device_sampling_params,
+                    reset_inputs=iteration == 0,
+                    tt_out_logits_saved=tt_out_logits_saved,
                 )
+                read_events.append(read_event)
+                tt_out_toks.append(tt_out_tok)
+                if apc_test and iteration == 0:
+                    tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
                 break
 
-            # Get the next token
-            if argmax_on_device:
-                out_tok = logits.unsqueeze(1)
-                for b in range(1, 32):
-                    out_tok[b][0] = 0
-            else:
-                # TODO Fix use case with temperature > 0
-                _, out_tok = sample_host(
-                    logits,
-                    temperature=sampling_params["temperature"],
-                    top_p=sampling_params["top_p"],
-                    on_host=True,
-                )
-
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            else:
+                logger.info(f"Iteration {iteration} (compile): {1000*decode_iteration_time:.4f}ms")
+            # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
+            # If it's apc_test we do not teacher force, but we still check PCC for only iteration == 0
+            teacher_forcing = (
+                not apc_test
+                and pcc_check
+                and max_encoded_prompt_len + iteration + 1 < len(ref_tokens)
+                and num_layers == 80
+            )
+            if iteration > 0:
+                ttnn.event_synchronize(read_events.pop(0))
+                tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
+
+                out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
+
+                if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+                    out_tok = out_tok.repeat(32, 1)
+                # Check if iteration == 1, because that's when we compare outputs from iteration 0
+                if teacher_forcing or (apc_test and iteration == 1):
+                    # Since APC test is only for the first decode iteration, we use the logits from the first iteration and not current one
+                    if apc_test:
+                        tt_out_logits_saved = tt_out_logits_saved_iter_0
+                        torch_output_logits = torch_output[1]  # 0 is prefill logits
+                    else:
+                        torch_output_logits = torch_output[iteration + 1]
+                    does_pass, pcc_message = comp_pcc(
+                        tt_out_logits_saved, torch_output_logits, 0.91 if not apc_test else demo_targets["decode_pcc"]
+                    )
+                    logger.info(f"PCC: {pcc_message}")
+                    logger.info(
+                        f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
+                    )
+                if apc_test:
+                    assert_message = (
+                        f"Decode PCC check failed: {pcc_message}, while expected {demo_targets['decode_pcc']}.\n"
+                        f"If any ops in Llama model might be impacted, please update decode_pcc in the text_demo_targets.json file.\n"
+                        f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+                    )
+                    assert pcc_message == demo_targets["decode_pcc"], assert_message
+
+                if teacher_forcing:
+                    _, tt_top5_tokens = torch.topk(tt_out_logits_saved, k=5, dim=-1)
+                    _, ref_top5_tokens = torch.topk(torch_output_logits, k=5, dim=-1)
+                    top_1_acc = tt_top5_tokens[0] == ref_top5_tokens[0]
+                    top_5_acc = torch.any(tt_top5_tokens == ref_top5_tokens)
+                    top_1_accs.append(top_1_acc)
+                    top_5_accs.append(top_5_acc)
+                    logger.info(f"Top-1 Accuracy: {top_1_acc}")
+                    logger.info(
+                        f"Top-5 Correctness:{torch.any(tt_top5_tokens == ref_top5_tokens).item(),} Accuracy: {top_5_acc}"
+                    )
+
+                # Save output token to print out later
+                if not pcc_check:
+                    for user in range(batch_size):
+                        user_tok = out_tok.tolist()[user]
+                        if (
+                            user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                        ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+                            all_outputs[user].append(user_tok)
+                        else:
+                            if (
+                                stop_at_eos
+                            ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+                                user_done[user] = True
+                                logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                                if all(user_done):
+                                    users_decoding = False
+
+                # Print out generated outputs for each user at the end of every iteration
+                if print_outputs and not is_ci_env and not pcc_check:
+                    for user in range(batch_size):
+                        text = "".join(tokenizer.decode(all_outputs[user]))
+                        if len(text) > 100:
+                            text = "..." + text[-97:]
+                        text = text.replace("\n", " ")
+                        logger.info("[User {}] {}".format(user, text))
+
+                # The e2e decode inference accounts for device execution + host post-processing time
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                # Always print perf after every iteration
+                tokens_per_second_per_user = 1 / decode_iteration_time
 
-            # Always print perf after every iteration
-            tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.info(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
+                logger.info(
+                    f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
+                )
+                if apc_test and demo_targets["token_pos"] == iteration:
+                    lower_bound = demo_targets["throughput"] - demo_targets["absolute_margin"]
+                    upper_bound = demo_targets["throughput"] + demo_targets["absolute_margin"]
+                    # TODO: Enable once experimentaly established avg and absolute margin
+                    assert_message = (
+                        f"Throughput for APC test is not within the expected range. Current throughput: {tokens_per_second_per_user:.1f} tok/s/user, Update text_demo_targets.json file with the expected throughput.\n"
+                        f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+                    )
+                    # assert (
+                    #     lower_bound <= tokens_per_second_per_user <= upper_bound
+                    # ), assert_message
 
             current_pos += 1
-
-            # Save output token to print out later
-            for user in range(batch_size):
-                user_tok = out_tok[user].item()
-                if (
-                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
-                    all_outputs[user].append(user_tok)
-                else:
-                    if (
-                        stop_at_eos
-                    ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
-                        user_done[user] = True
-                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                        if all(user_done):
-                            users_decoding = False
-
-            # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env:
-                for user in range(batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
-
             iteration += 1
 
             # Upper limit of generated tokens for each user
-            if iteration >= max_generated_tokens:
-                users_decoding = False
+            users_decoding = iteration < max_generated_tokens
 
             # Final print
-            if not users_decoding:
+            if not users_decoding and not pcc_check:
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
@@ -575,8 +860,58 @@ def test_demo_text(
                         logger.info(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
-                    break
                 profiler.end(f"log_saving_file", iteration=batch_idx)
+            if not users_decoding and batch_size == 1 and repeat_batches > 1:
+                # Compare to text in outputs_batch_1.json for the first user of the first batch
+                if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
+                    if i == 0:  # Only for the first user of the batch (i.e., user 0)
+                        if len(expected_outputs_data) > 0:
+                            expected_text = expected_outputs_data[0]  # Compare with the first entry in the JSON list
+                            actual_text_clean = text_after_prompt.strip()
+                            expected_text_clean = expected_text.strip()
+
+                            if actual_text_clean != expected_text_clean:
+                                logger.warning(
+                                    f"Output for user {i} in batch {batch_idx} DOES NOT MATCH expected output from {expected_outputs_file_path_to_load}."
+                                )
+                                logger.info(f"Expected: {repr(expected_text_clean)}")
+                                logger.info(f"Actual  : {repr(actual_text_clean)}")
+                                mismatches_found = 0
+                                # Iterate based on the longer of the two strings to catch all differences
+                                for char_idx in range(min(len(actual_text_clean), len(expected_text_clean))):
+                                    actual_char = (
+                                        actual_text_clean[char_idx]
+                                        if char_idx < len(actual_text_clean)
+                                        else "<END_OF_ACTUAL>"
+                                    )
+                                    expected_char = (
+                                        expected_text_clean[char_idx]
+                                        if char_idx < len(expected_text_clean)
+                                        else "<END_OF_EXPECTED>"
+                                    )
+                                    if actual_char != expected_char:
+                                        logger.info(
+                                            f"Mismatch at position {char_idx}: Actual: '{repr(actual_char)}', Expected: '{repr(expected_char)}'"
+                                        )
+                                        mismatches_found += 1
+                                    if mismatches_found >= 20:  # Limit number of logged mismatches
+                                        logger.info(
+                                            "More mismatches exist but will not be logged for this comparison (limit reached)."
+                                        )
+                                        assert (
+                                            False
+                                        ), "More mismatches exist but will not be logged for this comparison (limit reached)."
+                                        break
+                        else:
+                            logger.info(
+                                f"Output for user {i} in batch {batch_idx} matches expected output from {expected_outputs_file_path_to_load}."
+                            )
+                    else:  # expected_outputs_data is not empty list, but i==0 and len(expected_outputs_data) == 0 (should be caught by outer if)
+                        logger.warning(
+                            f"Expected outputs data was loaded from {expected_outputs_file_path_to_load} but is an empty list. Cannot compare for user {i}, batch {batch_idx}."
+                        )
+                elif batch_idx == 0 and not expected_outputs_data and i == 0:  # Only log once per batch if no data
+                    logger.warning("Expected outputs data is empty or not loaded, cannot compare.")
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
@@ -595,7 +930,7 @@ def test_demo_text(
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Average prefill time for each user
-    avg_time_to_first_token = total_inference_prefill_time / batch_size
+    avg_time_to_first_token = total_inference_prefill_time
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
@@ -619,6 +954,10 @@ def test_demo_text(
         "Total compile time": compile_prefill_time + compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),
     }
+
+    if not apc_test and num_layers == 80 and pcc_check and len(top_1_accs) > 0 and len(top_5_accs) > 0:
+        measurements["Top 1 Accuracy"] = sum(top_1_accs) / len(top_1_accs)
+        measurements["Top 5 Accuracy"] = sum(top_5_accs) / len(top_5_accs)
 
     # Decode performance for some specific tokens
     tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
@@ -658,21 +997,23 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.1-70B", "Deepseek-R1-Distill-70B"]
-    # model_args.base_model_name = "Llama3.1-70B"
+    supported_models = ["Llama-3.1-70B", "Llama-3.3-70B", "Deepseek-R1-Distill-70B"]
+    # model_args.base_model_name = "Llama-3.1-70B"
     supported_devices = ["TG"]
 
     tt_device_name = model_args.device_name
 
     # Set the target times to first token for every combination of device and model
     target_prefill_tok_s = {
-        "TG_Llama3.1-70B": 1050,  # TODO Update target
+        "TG_Llama-3.1-70B": 1050,  # TODO Update target
+        "TG_Llama-3.3-70B": 1050,
         "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
     target_decode_tok_s_u = {
-        "TG_Llama3.1-70B": 20,  # TODO Update target
+        "TG_Llama-3.1-70B": 20,  # TODO Update target
+        "TG_Llama-3.3-70B": 20,
         "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
@@ -682,46 +1023,21 @@ def test_demo_text(
         "decode_t/s": target_decode_tok_s,
         "decode_t/s/u": target_decode_tok_s_u,
     }
+    if repeat_batches > 1 and batch_size == 1:
+        assert avg_time_to_first_token * 1000 < 122, f"TTFT {avg_time_to_first_token} ms is too high, should be < 121."
 
     # Save benchmark data for CI dashboard
-    if is_ci_env:
-        # Instead of running warmup iterations, the demo profiles the initial compile iteration
-        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
-        benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
-
-        # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, iteration):
-            benchmark_data.add_measurement(
-                profiler,
-                0,
-                "inference_decode",
-                f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
-                step_warm_up_num_iterations=None,
-                target=None,
-            )
-
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
-        )
+    if is_ci_env and repeat_batches > 1:
         benchmark_data.add_measurement(
             profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
+            1,  # grab the second repeat batch of prefill
+            "inference_prefill",
+            "ttft_e2e",
+            round(avg_time_to_first_token * 1000, 2),
+        )  # average TTFT in ms
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_args.base_model_name,
-            ml_model_type="llm",
-            num_layers=model_args.n_layers,
-            batch_size=batch_size,
-            input_sequence_length=max(prefill_lens),
-            output_sequence_length=num_tokens_generated_decode[0],
+            run_type=f"tg_llama_text_demo_prefill",
+            ml_model_name="llama70b-tg",
         )

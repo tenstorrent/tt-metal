@@ -39,7 +39,7 @@ void kernel_main() {
         noc_async_read_one_packet_with_state<true>(base_l1_read_addr_0, l1_write_addr);
         l1_write_addr += width_len_bytes;
 
-        noc_async_write_barrier();
+        noc_async_read_barrier();
 
         cb_pop_front(output_transpose_cb, input0_num_tiles_width + input1_num_tiles_width);
         cb_push_back(output_cb, input0_num_tiles_width + input1_num_tiles_width);

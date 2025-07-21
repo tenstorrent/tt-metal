@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -66,9 +66,6 @@ def test_segformer_model(
     reset_seeds,
     is_ci_env,
 ):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
 
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
@@ -100,12 +97,24 @@ def test_segformer_model(
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor_permuted,
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
+    CONV2D_MIN_CHANNEL_SIZE = 8
+    # adjust padding if necessary
+    if num_channels < CONV2D_MIN_CHANNEL_SIZE:
+        ttnn_input_tensor = ttnn.pad(
+            ttnn_input_tensor, [batch_size, height, width, CONV2D_MIN_CHANNEL_SIZE], [0, 0, 0, 0], 0
+        )
+    elif num_channels > CONV2D_MIN_CHANNEL_SIZE and num_channels % 32 != 0:
+        ttnn_input_tensor = ttnn.pad(
+            ttnn_input_tensor, [batch_size, height, width, (num_channels + 31) // 32 * 32], [0, 0, 0, 0], 0
+        )
+
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
     ttnn_output = ttnn_model(
+        device,
         ttnn_input_tensor,
         output_attentions=None,
         output_hidden_states=None,

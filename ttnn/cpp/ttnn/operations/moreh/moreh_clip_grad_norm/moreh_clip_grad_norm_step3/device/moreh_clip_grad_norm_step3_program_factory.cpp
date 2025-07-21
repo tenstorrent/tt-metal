@@ -66,7 +66,7 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
 
     const uint32_t out0_t = 1;  // output(inplace)
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(inputs.at(0).get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(inputs.at(0).dtype());
 
     CreateCircularBuffer(
         program,
@@ -111,7 +111,7 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
 
         const auto& input = inputs.at(i);
         const auto input_addr = input.buffer()->address();
-        const auto num_tiles = input.volume() / tt::constants::TILE_HW;
+        const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
 
         // reader
         const std::array reader_runtime_args{

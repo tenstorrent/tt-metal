@@ -2,13 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
 #include <tt-metalium/core_coord.hpp>
-#include "dispatch_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/core_descriptor.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <exception>
+#include <set>
+#include <string>
+#include <variant>
+#include <vector>
+
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "dispatch_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 
@@ -86,14 +99,14 @@ TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDir) {
-    const string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     create_kernel(kernel_file);
     detail::CompileProgram(this->device_, this->program_);
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir) {
-    const string& orig_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
-    const string& new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
+    const std::string& orig_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const std::string& new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
     this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
     this->create_kernel(new_kernel_file);
     detail::CompileProgram(this->device_, this->program_);
@@ -101,7 +114,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirAndKernelRootDir) {
-    const string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     this->setup_kernel_dir(kernel_file, kernel_file);
     this->create_kernel(kernel_file);
     detail::CompileProgram(this->device_, this->program_);
@@ -109,7 +122,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
-    const string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
+    const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
     this->create_kernel(kernel_file);
     EXPECT_THROW(detail::CompileProgram(this->device_, this->program_), std::exception);
 }

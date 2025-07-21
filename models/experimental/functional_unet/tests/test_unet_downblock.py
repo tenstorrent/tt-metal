@@ -16,10 +16,11 @@ from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     check_pcc_pool,
     is_n300_with_eth_dispatch_cores,
+    UNET_L1_SMALL_REGION_SIZE,
 )
 
 
-@pytest.mark.parametrize("batch, groups", [(1, 2)])
+@pytest.mark.parametrize("batch, groups", [(1, 4)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width",
     [
@@ -29,7 +30,7 @@ from models.experimental.functional_unet.tests.common import (
         ("downblock4", 32, 132, 20),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_downblock(
     batch: int,
     groups: int,
@@ -63,7 +64,7 @@ def test_unet_downblock(
     check_pcc_pool(torch_output, ttnn_output)
 
 
-@pytest.mark.parametrize("batch, groups", [(1, 2)])
+@pytest.mark.parametrize("batch, groups", [(1, 4)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width",
     [
@@ -73,10 +74,9 @@ def test_unet_downblock(
         ("downblock4", 32, 132, 20),
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_downblock_multi_device(
-    batch, groups, block_name, input_channels, input_height, input_width, mesh_device, reset_seeds, enable_async_mode
+    batch, groups, block_name, input_channels, input_height, input_width, mesh_device, reset_seeds
 ):
     if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")
@@ -110,7 +110,9 @@ def test_unet_downblock_multi_device(
     ttnn_input = ttnn_input.to(mesh_device)
     ttnn_output, ttnn_residual = getattr(ttnn_model, block_name)(ttnn_input)
 
-    assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
-    assert len(ttnn_residual.devices()) == 2, "Expected residual output tensor to be sharded across 2 devices"
+    assert ttnn_output.device().get_num_devices() == 2, "Expected output tensor to be sharded across 2 devices"
+    assert (
+        ttnn_residual.device().get_num_devices() == 2
+    ), "Expected residual output tensor to be sharded across 2 devices"
     check_pcc_conv(torch_residual, ttnn_residual, pcc=0.999, mesh_composer=output_mesh_composer)
     check_pcc_pool(torch_output, ttnn_output, pcc=0.999, mesh_composer=output_mesh_composer)

@@ -6,20 +6,20 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t stick_nbytes = get_arg_val<uint32_t>(0);
-    uint32_t in_nsticks_per_core = get_arg_val<uint32_t>(1);
-    uint32_t scale_h = get_arg_val<uint32_t>(2);
-    uint32_t scale_w = get_arg_val<uint32_t>(3);
-
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t is_reader = get_compile_time_arg_val(2);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(3);
 
-    uint32_t reader_nsticks_per_core = (in_nsticks_per_core + is_reader) / 2;
-    uint32_t out_nsticks_per_core = reader_nsticks_per_core * scale_h * scale_w;
-    uint32_t image_row_begin = is_reader ? 0 : reader_nsticks_per_core;
-    uint32_t image_row_end = is_reader ? reader_nsticks_per_core : in_nsticks_per_core;
+    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(4);
+    constexpr uint32_t in_nsticks_per_core = get_compile_time_arg_val(5);
+    constexpr uint32_t scale_h = get_compile_time_arg_val(6);
+    constexpr uint32_t scale_w = get_compile_time_arg_val(7);
+
+    constexpr uint32_t reader_nsticks_per_core = (in_nsticks_per_core + is_reader) / 2;
+    constexpr uint32_t out_nsticks_per_core = reader_nsticks_per_core * scale_h * scale_w;
+    constexpr uint32_t image_row_begin = is_reader ? 0 : reader_nsticks_per_core;
+    constexpr uint32_t image_row_end = is_reader ? reader_nsticks_per_core : in_nsticks_per_core;
     uint32_t l1_read_addr = get_read_ptr(in_cb_id);
     uint32_t l1_write_addr = get_write_ptr(out_cb_id) + image_row_begin * scale_h * scale_w * stick_nbytes;
 

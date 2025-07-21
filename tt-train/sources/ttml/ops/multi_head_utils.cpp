@@ -53,7 +53,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
 }
 
 autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
-    auto x_shape = x->get_value().get_logical_shape();
+    auto x_shape = x->get_value().logical_shape();
 
     uint32_t batch_size = x_shape[0];
     uint32_t num_heads = x_shape[1];
@@ -69,8 +69,7 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
         // (B, 1, S, E) -> (B, 1, E, S)
         auto grad_result = ttnn::transpose(grad_output, -2, -1);
         // (B, 1, E, S) -> (B, H, E/H, S)
-        grad_result =
-            ttnn::reshape(grad_result, core::create_shape({batch_size, num_heads, embedding_dim, sequence_length}));
+        grad_result = ttnn::reshape(grad_result, ttnn::Shape({batch_size, num_heads, embedding_dim, sequence_length}));
         // (B, H, E/H, S) -> (B, H, S, E/H)
         grad_result = ttnn::transpose(grad_result, -2, -1);
         x->add_grad(grad_result);

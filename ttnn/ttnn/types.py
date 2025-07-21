@@ -19,6 +19,8 @@ bfloat4_b = DataType.BFLOAT4_B
 
 BufferType = ttnn._ttnn.tensor.BufferType
 TensorMemoryLayout = ttnn._ttnn.tensor.TensorMemoryLayout
+ShardShapeAlignment = ttnn._ttnn.tensor.ShardShapeAlignment
+ShardDistributionStrategy = ttnn._ttnn.tensor.ShardDistributionStrategy
 # TODO: MemoryConfig = ttnn._ttnn.types.MemoryConfig
 MemoryConfig = ttnn._ttnn.tensor.MemoryConfig
 MathFidelity = ttnn._ttnn.tensor.MathFidelity
@@ -34,17 +36,20 @@ TILE_LAYOUT = Layout.TILE
 
 StorageType = ttnn._ttnn.tensor.StorageType
 DEVICE_STORAGE_TYPE = StorageType.DEVICE
-MULTI_DEVICE_STORAGE_TYPE = StorageType.MULTI_DEVICE
 
 TILE_SIZE = 32
 
 Tile = ttnn._ttnn.tensor.Tile
 
 Shape = ttnn._ttnn.types.Shape
+TensorSpec = ttnn._ttnn.tensor.TensorSpec
 Tensor = ttnn._ttnn.tensor.Tensor
 
 
 CoreGrid = ttnn._ttnn.types.CoreGrid
+
+ThrottleLevel = ttnn._ttnn.operations.core.ThrottleLevel
+
 
 DeviceComputeKernelConfig = ttnn._ttnn.operations.core.DeviceComputeKernelConfig
 WormholeComputeKernelConfig = ttnn._ttnn.operations.core.WormholeComputeKernelConfig
@@ -67,9 +72,11 @@ class ShardStrategy(Enum):
 MeshShape = ttnn._ttnn.multi_device.MeshShape
 MeshCoordinate = ttnn._ttnn.multi_device.MeshCoordinate
 MeshCoordinateRange = ttnn._ttnn.multi_device.MeshCoordinateRange
+MeshCoordinateRangeSet = ttnn._ttnn.multi_device.MeshCoordinateRangeSet
 ShardOrientation = ttnn._ttnn.tensor.ShardOrientation
 ShardMode = ttnn._ttnn.tensor.ShardMode
 ShardSpec = ttnn._ttnn.tensor.ShardSpec
+NdShardSpec = ttnn._ttnn.tensor.NdShardSpec
 CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
@@ -82,3 +89,12 @@ BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
 
 BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim
+
+CBFormatDescriptor = ttnn._ttnn.program_descriptor.CBFormatDescriptor
+CBDescriptor = ttnn._ttnn.program_descriptor.CBDescriptor
+ReaderConfigDescriptor = ttnn._ttnn.program_descriptor.ReaderConfigDescriptor
+WriterConfigDescriptor = ttnn._ttnn.program_descriptor.WriterConfigDescriptor
+ComputeConfigDescriptor = ttnn._ttnn.program_descriptor.ComputeConfigDescriptor
+KernelDescriptor = ttnn._ttnn.program_descriptor.KernelDescriptor
+SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
+ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor

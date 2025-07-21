@@ -11,10 +11,11 @@
 #include <optional>
 #include <functional>
 
-#include "device.hpp"
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "shape2d.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -43,12 +44,10 @@ public:
     using DeviceView = std::vector<IDevice*>;
     using DeviceViews = std::vector<std::vector<IDevice*>>;
 
-    // Create a view of the entire mesh.
-    // MeshDeviceView(const MeshDevice& mesh_device);
-
     // // Create a view of a sub-region of the mesh defined by `range`.
     // MeshDeviceView(const std::vector<IDevice*>& devices, const MeshCoordinateRange& range);
     explicit MeshDeviceView(const MeshContainer<IDevice*>& devices);
+    explicit MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices);
     explicit MeshDeviceView(const MeshDevice& mesh_device);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
@@ -96,14 +95,23 @@ public:
     //
     // Important: these utilities currently only support 2D meshes.
     // TODO: #17477 - Remove the methods that assume 2D mesh.
-    [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(size_t length, const Shape2D& mesh_shape);
+    [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(
+        size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset);
     [[nodiscard]] static std::vector<MeshCoordinate> get_ring_coordinates(
         const Shape2D& ring_shape, const Shape2D& mesh_shape);
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
+    // Returns true if the view is fully local, i.e. all devices in the view are local.
+    bool fully_local() const;
+
+    // Returns true if the view is fully local, i.e. all devices in the view are local.
+    // Throws if the coordinate is out of bounds of this view.
+    bool is_local(const MeshCoordinate& coord) const;
+
 private:
-    MeshContainer<IDevice*> devices_;
+    bool fully_local_ = true;
+    DistributedMeshContainer<IDevice*> devices_;
     std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 
     // Set if the view is 2D to enable row/col APIs, otherwise nullopt.

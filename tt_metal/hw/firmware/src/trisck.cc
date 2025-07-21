@@ -18,6 +18,7 @@
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
+#include "debug/stack_usage.h"
 
 // Global vars
 uint32_t unp_cfg_context = 0;
@@ -28,8 +29,15 @@ uint32_t op_info_offset = 0;
 
 namespace ckernel
 {
-volatile tt_reg_ptr uint * regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
-volatile tt_reg_ptr uint * instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
+volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
+#if !defined(INSTRN_BUFFER_TNG)
+// Once tt_llk is using an instrn_buffer array, this definition can be
+// deleted.
+}  // namespace ckernel
+extern volatile uint __instrn_buffer[];
+namespace ckernel {
+volatile tt_reg_ptr uint* instrn_buffer = &__instrn_buffer[0];
+#endif  // !INSTRN_BUF_TNG
 volatile tt_reg_ptr uint * pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
 volatile tt_reg_ptr uint * mailbox_base[4] = {
     reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX0_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX1_BASE),
@@ -37,7 +45,11 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 };
 }
 
-void kernel_launch(uint32_t kernel_base_addr) {
+extern "C" [[gnu::section(".start")]]
+uint32_t _start() {
+    // Enable GPREL optimizations.
+    asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
+    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
@@ -45,10 +57,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
     ckernel::wait(KERNEL_RUN_TIME);
 #endif
 #else
-  extern uint32_t __kernel_init_local_l1_base[];
-  extern uint32_t __fw_export_end_text[];
-  do_crt1((
-      uint32_t tt_l1_ptr *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
+    extern uint32_t __kernel_data_lma[];
+    do_crt1((uint32_t tt_l1_ptr *)__kernel_data_lma);
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
@@ -63,5 +73,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");
+    EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
+    return measure_stack_usage();
 }

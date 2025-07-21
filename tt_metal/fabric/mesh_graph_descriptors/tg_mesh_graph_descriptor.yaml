@@ -22,28 +22,33 @@ Mesh: [
 {
   id: 0,
   board: N150Gateway,
-  topology: [1, 1],
-  host_mapping: [[]]},
+  device_topology: [1, 1],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
 {
   id: 1,
   board: N150Gateway,
-  topology: [1, 1],
-  host_mapping: [[]]},
+  device_topology: [1, 1],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
 {
   id: 2,
   board: N150Gateway,
-  topology: [1, 1],
-  host_mapping: [[]]},
+  device_topology: [1, 1],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
 {
   id: 3,
   board: N150Gateway,
-  topology: [1, 1],
-  host_mapping: [[]]},
+  device_topology: [1, 1],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
 {
   id: 4,
   board: Galaxy,
-  topology: [1, 1],
-  host_mapping: [[]]}
+  device_topology: [4, 8],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
 ]
 
 Graph: [

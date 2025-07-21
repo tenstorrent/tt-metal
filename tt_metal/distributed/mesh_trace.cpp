@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include "mesh_trace.hpp"
 
 #include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
-#include <mesh_trace.hpp>
 #include <stdint.h>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
@@ -23,7 +23,7 @@
 #include "allocator_types.hpp"
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "device.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
@@ -31,8 +31,8 @@
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
-#include "system_memory_manager.hpp"
-#include "trace_buffer.hpp"
+#include "dispatch/system_memory_manager.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 
@@ -46,6 +46,11 @@ MeshTraceId MeshTrace::next_id() {
 void MeshTraceDescriptor::assemble_dispatch_commands(
     MeshDevice* mesh_device, const std::vector<MeshTraceStagingMetadata>& mesh_trace_md) {
     auto& trace_data = this->ordered_trace_data;
+    // Track the trace region size per device range
+    // The size of the allocated trace buffer will be the max
+    // across all regions
+    std::unordered_map<MeshCoordinateRange, uint32_t> trace_sizes;
+
     for (auto& trace_md : mesh_trace_md) {
         auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
         auto& sysmem_manager = mesh_device->get_device(sysmem_mgr_coord)->sysmem_manager();
@@ -71,13 +76,19 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
                         program.data.end(),
                         std::make_move_iterator(program_cmds_vector.begin()),
                         std::make_move_iterator(program_cmds_vector.end()));
+                    // Update size of intersection
+                    trace_sizes[intersection] += trace_md.size;
                 } else {
                     // Intersection is a subset of the originally placed program.
                     auto complement = subtract(program.device_range, intersection);
                     for (const auto& complement_range : complement.ranges()) {
                         intermed_trace_data.push_back(MeshTraceData{complement_range, program.data});
+                        // Trace region size of complement doesn't change
+                        trace_sizes[complement_range] = trace_sizes[program.device_range];
                     }
                     intermed_trace_data.push_back(MeshTraceData{intersection, program.data});
+                    // Update size of intersection
+                    trace_sizes[intersection] = trace_sizes[program.device_range] + trace_md.size;
                     auto& intersection_data = intermed_trace_data.back().data;
                     intersection_data.insert(
                         intersection_data.end(),
@@ -94,6 +105,9 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
                         device_ranges_to_invalidate.begin(), device_ranges_to_invalidate.end(), program.device_range) ==
                     device_ranges_to_invalidate.end()) {
                     intermed_trace_data.push_back(std::move(program));
+                } else {
+                    // Clear trace size of invalid range
+                    trace_sizes.erase(trace_sizes.find(program.device_range));
                 }
             }
             trace_data = intermed_trace_data;
@@ -101,15 +115,21 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
         if (not intersection_found) {
             // Intersection not found, place program on Mesh.
             trace_data.push_back(MeshTraceData{trace_md.device_range, std::move(program_cmds_vector)});
+            trace_sizes[trace_md.device_range] = trace_md.size;
         }
-        this->total_trace_size += trace_md.size;
     }
+    uint32_t max_trace_size = 0;
+    for (const auto& size_per_range : trace_sizes) {
+        max_trace_size = std::max(size_per_range.second, max_trace_size);
+    }
+    this->total_trace_size = max_trace_size;
     MeshCoordinateRange bcast_device_range(mesh_device->shape());
     std::vector<uint32_t> exec_buf_end = {};
 
-    DeviceCommand command_sequence(hal_ref.get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
+    exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         exec_buf_end.push_back(((uint32_t*)command_sequence.data())[i]);
     }
@@ -132,7 +152,6 @@ std::shared_ptr<MeshTraceBuffer> MeshTrace::create_empty_mesh_trace_buffer() {
 }
 
 void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<MeshTraceBuffer>& trace_buffer) {
-    auto mesh_device = mesh_cq.device();
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
@@ -151,7 +170,6 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     DeviceLocalBufferConfig device_local_trace_buf_config = {
         .page_size = page_size,
         .buffer_type = BufferType::TRACE,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
     };
 
     ReplicatedBufferConfig global_trace_buf_config = {

@@ -2,19 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-import ttnn
+import torch
+import transformers
+from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
+from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, strip_state_dict_prefix
 from models.demos.ttnn_falcon7b.tt.falcon_mlp import TtFalconMLP
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, strip_state_dict_prefix
-from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
-import transformers
-
-from loguru import logger
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 
@@ -57,10 +56,6 @@ def torch_model():
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "enable_async",
-    [True, False],
-)
 def test_falcon_mlp(
     mesh_device,
     model_name,
@@ -69,10 +64,7 @@ def test_falcon_mlp(
     expected_pcc,
     model_config_str,
     torch_model,
-    enable_async,
 ):
-    mesh_device.enable_async(enable_async)
-
     torch.manual_seed(0)
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
@@ -110,5 +102,3 @@ def test_falcon_mlp(
         expected_pcc,
     )
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
-
-    mesh_device.enable_async(False)

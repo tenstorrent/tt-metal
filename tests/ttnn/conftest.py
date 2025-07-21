@@ -19,6 +19,10 @@ import ttnn
 import ttnn.database
 
 
+def pytest_addoption(parser):
+    parser.addoption("--runslow", action="store_true", default=False, help="run tests marked as slow")
+
+
 def pytest_make_parametrize_id(config, val, argname):
     if isinstance(val, ModuleType):
         val = val.__name__
@@ -29,12 +33,19 @@ def pytest_collection_modifyitems(config, items):
     if not ttnn.CONFIG.enable_fast_runtime_mode:
         return
 
+    runslow = config.getoption("--runslow")
+    skip_slow = pytest.mark.skip(reason="need --runslow option to run")
+
     logger.warning("Fast Runtime Mode is ON. Skipping tests tagged with @pytest.mark.requires_fast_runtime_mode_off")
     skip_unmarked = pytest.mark.skip(reason="Skipping test with requires_fast_runtime_mode_off")
     for item in items:
         if "requires_fast_runtime_mode_off" in item.keywords:
             logger.warning(f"Skipping {item}")
             item.add_marker(skip_unmarked)
+        if "slow" in item.keywords:
+            if not runslow:
+                logger.warning(f"Skipping slow test {item}")
+                item.add_marker(skip_slow)
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +64,7 @@ def pre_and_post(request):
             if report_path.exists():
                 logger.warning(f"Removing existing log directory: {report_path}")
                 shutil.rmtree(report_path)
+            ttnn.database.DEVICE_IDS_IN_DATABASE.clear()
         yield
 
     if ttnn.database.SQLITE_CONNECTION is not None:

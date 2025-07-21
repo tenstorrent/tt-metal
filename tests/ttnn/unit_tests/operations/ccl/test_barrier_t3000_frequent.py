@@ -20,14 +20,12 @@ def sharded_impl(
     shard_grid,
     dim,
     num_links,
-    use_program_cache,
     function_level_defaults,
     orientation,
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
     all_gather_topology,
-    enable_async,
     trace_mode,
     num_iter,
     tile=(32, 32),
@@ -36,7 +34,6 @@ def sharded_impl(
         pytest.skip("Not T3000!")
     n_worker = None
     n_buffer = None
-    device.enable_async(enable_async)
     unchunked_input_shape = list(input_shape)
     unchunked_input_shape[dim] *= num_devices
 
@@ -120,15 +117,12 @@ def run_normal(
     layout,
     num_iters,
     all_gather_topology,
-    enable_async,
     tile=(32, 32),
 ):
     print("Running barrier test")
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
 
-    if enable_async:
-        logger.info(f"Using Async Mode for Barrier Op Dispatch")
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
@@ -136,7 +130,6 @@ def run_normal(
     logger.info(f"dim: {dim}")
     input_tensor = torch.rand(input_shape).bfloat16()
     # Use Async mode based on test input config
-    device.enable_async(enable_async)
     input_tensor_mesh = ttnn.from_torch(
         input_tensor,
         device=device,
@@ -231,7 +224,6 @@ def run_with_trace(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("all_gather_topology", [ttnn.Topology.Ring])
 @pytest.mark.parametrize("num_iters", [1000])
 @pytest.mark.parametrize("mem_config", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
@@ -247,7 +239,6 @@ def test_run_barrier_impl(
     layout,
     num_iters,
     all_gather_topology,
-    enable_async,
 ):
     if t3k_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
@@ -261,7 +252,6 @@ def test_run_barrier_impl(
         layout,
         num_iters,
         all_gather_topology,
-        enable_async,
     )
 
 
@@ -291,7 +281,6 @@ def test_run_barrier_impl(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("all_gather_topology", [ttnn.Topology.Ring])
 @pytest.mark.parametrize("num_iters", [1000])
 @pytest.mark.parametrize("mem_config", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
@@ -307,7 +296,6 @@ def test_run_barrier_impl_pcie(
     layout,
     num_iters,
     all_gather_topology,
-    enable_async,
 ):
     if pcie_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
@@ -321,7 +309,6 @@ def test_run_barrier_impl_pcie(
         layout,
         num_iters,
         all_gather_topology,
-        enable_async,
     )
 
 
@@ -353,7 +340,6 @@ def test_run_barrier_impl_pcie(
     ),
 )
 @pytest.mark.parametrize("trace_mode", [True, False])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("num_iter", [1000])
 @pytest.mark.parametrize("all_gather_topology", [ttnn.Topology.Ring])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 7840768}], indirect=True)
@@ -365,14 +351,12 @@ def test_barrier_sharded(
     shard_grid,
     dim,
     num_links,
-    use_program_cache,
     function_level_defaults,
     orientation,
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
     all_gather_topology,
-    enable_async,
     trace_mode,
     num_iter,
 ):
@@ -384,14 +368,12 @@ def test_barrier_sharded(
         shard_grid,
         dim,
         num_links,
-        use_program_cache,
         function_level_defaults,
         orientation,
         input_dtype,
         tensor_layout,
         tensor_mem_layout,
         all_gather_topology,
-        enable_async,
         trace_mode,
         num_iter,
     )
@@ -423,7 +405,6 @@ def test_barrier_sharded(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("all_gather_topology", [ttnn.Topology.Ring])
 @pytest.mark.parametrize("num_iters", [1000])
 @pytest.mark.parametrize("mem_config", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
@@ -440,7 +421,6 @@ def test_run_barrier_tiny_tile(
     layout,
     num_iters,
     all_gather_topology,
-    enable_async,
     tile_h,
 ):
     if t3k_mesh_device.get_num_devices() < num_devices:
@@ -455,6 +435,5 @@ def test_run_barrier_tiny_tile(
         layout,
         num_iters,
         all_gather_topology,
-        enable_async,
         tile=(tile_h, 32),
     )

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,13 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_wormhole_b0, torch_random, is_wormhole_b0, is_grayskull, is_blackhole
+from models.utility_functions import (
+    is_wormhole_b0,
+    torch_random,
+    is_wormhole_b0,
+    is_grayskull,
+    is_blackhole,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -54,19 +60,15 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("input_a_is_sharded", [True, False])
 @pytest.mark.parametrize("output_is_sharded", [True, False])
-@pytest.mark.parametrize("m_size, num_cores", [[25088, 98]])
+@pytest.mark.parametrize("m_size, num_cores", [[5632, 22]])
 @pytest.mark.parametrize("k_size, n_size", [[64, 64], [64, 256]])
 @pytest.mark.parametrize("input_a_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("input_b_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_ttnn_linear(
     device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
 ):
-    grid_size = device.compute_with_storage_grid_size()
+    grid_size = (6, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
-    if num_cores > (compute_grid_size.x * compute_grid_size.y):
-        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
-    if input_a_dtype != input_b_dtype and is_wormhole_b0():
-        pytest.skip("WH does not work with mixed precision")
 
     input_shape_a = [1, 1, m_size, k_size]
     input_shape_b = [1, 1, k_size, n_size]
@@ -81,7 +83,7 @@ def test_ttnn_linear(
     output_memory_config = sharded_memory_config if output_is_sharded else interleaved_memory_config
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(12, 9),
+        compute_with_storage_grid_size=grid_size,
         in0_block_w=k_size // 32,
         out_subblock_h=8 // (n_size // 32),
         out_subblock_w=n_size // 32,
@@ -146,13 +148,15 @@ def test_ttnn_linear(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
 
-@pytest.mark.skipif(is_grayskull(), reason="parallelization not supported for GS")
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [8192])
 @pytest.mark.parametrize("n_size", [1024])
 def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
+    dram_grid_size = device.dram_grid_size().x
+    if dram_grid_size < 8:
+        pytest.skip(f"Minimum dram grid size needs to be 8 and is {dram_grid_size}.")
     grid_size = ttnn.CoreGrid(y=1, x=8)
 
     torch_input_tensor_in0 = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
@@ -174,7 +178,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     # in1 shard config
     in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
-    in1_shard_shape = (8192, 96)
+    in1_shard_shape = (8192, 128) if is_blackhole() else (8192, 96)
     in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     input_tensor_in1 = ttnn.from_torch(
@@ -183,6 +187,13 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         device=device,
         dtype=ttnn.bfloat8_b,
         memory_config=in1_mem_config,
+    )
+
+    # output shard config
+    out_shard_shape = (32, 128)
+    out_shard_spec = ttnn.ShardSpec(shard_grid, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    out_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -203,7 +214,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         input_tensor_in0,
         input_tensor_in1,
         program_config=program_config,
-        memory_config=sharded_mem_config,
+        memory_config=out_sharded_mem_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
     )
@@ -216,9 +227,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
 
 @pytest.mark.parametrize("H, num_cores", [[64, 64]])
 @pytest.mark.parametrize("num_slices", [2])
-@pytest.mark.parametrize("enable_async", [True, False])
-def test_sharded_partial_op(device, H, num_cores, num_slices, enable_async):
-    device.enable_async(enable_async)
+def test_sharded_partial_op(device, H, num_cores, num_slices):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")

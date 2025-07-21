@@ -37,6 +37,8 @@
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_pybind.hpp"
 
+namespace py = pybind11;
+
 namespace ttnn::operations::moreh {
 void bind_moreh_operations(py::module& module) {
     moreh_abs_pow::bind_moreh_abs_pow_operation(module);

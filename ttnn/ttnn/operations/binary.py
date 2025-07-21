@@ -368,10 +368,25 @@ def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device, **
 ttnn.attach_golden_function(ttnn.remainder, golden_function=_golden_function_remainder)
 
 
-def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, device, **kwargs):
     import torch
 
-    return torch.fmod(input_tensor_a, input_tensor_b)
+    if not torch.is_tensor(input_tensor_b):
+        input_dtype = input_tensor_a.dtype
+        if input_dtype == torch.bfloat16:
+            input_tensor_a = input_tensor_a.float()
+        result = torch.nan_to_num(
+            torch.fmod(input_tensor_a, input_tensor_b),
+            nan=device.sfpu_nan(),
+            posinf=device.sfpu_inf(),
+            neginf=-device.sfpu_inf(),
+        )
+        if input_dtype == torch.bfloat16:
+            result = result.bfloat16()
+    else:
+        result = torch.fmod(input_tensor_a, input_tensor_b)
+
+    return result
 
 
 ttnn.attach_golden_function(ttnn.fmod, golden_function=_golden_function_fmod)
@@ -493,5 +508,15 @@ def _golden_function_prelu(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 ttnn.attach_golden_function(ttnn.prelu, golden_function=_golden_function_prelu)
 
+
+def _golden_function_logical_right_shift(input_tensor_a, shift_amt, *args, **kwargs):
+    import torch
+
+    t1_uint = input_tensor_a.to(torch.int64) & 0xFFFFFFFF
+    result = (t1_uint >> shift_amt).to(torch.int32)
+    return result
+
+
+ttnn.attach_golden_function(ttnn.logical_right_shift, golden_function=_golden_function_logical_right_shift)
 
 __all__ = []

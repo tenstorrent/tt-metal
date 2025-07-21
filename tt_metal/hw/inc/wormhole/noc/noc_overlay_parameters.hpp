@@ -89,21 +89,21 @@
 
 namespace Noc {
 
-typedef struct OverlayField_ {
+struct OverlayField {
     std::string name;
     std::uint32_t offset;
     std::uint32_t width;
     std::string description;
-} OverlayField;
+};
 
-typedef struct OverlayReg_ {
+struct OverlayReg {
     std::string name;
     std::uint32_t index;
     std::unordered_map<std::string, std::uint32_t> fields_by_name;
     std::unordered_map<std::uint32_t, std::uint32_t> fields_by_offset;
     std::vector<OverlayField> fields;
     std::string description;
-} OverlayReg;
+};
 
 // OverLayParams
 class OLP {
