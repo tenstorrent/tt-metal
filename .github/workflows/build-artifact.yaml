@@ -157,7 +157,7 @@ jobs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
+      image: ${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -371,7 +371,7 @@ jobs:
           CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z && ccache -p
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
-          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+          CIBW_MANYLINUX_X86_64_IMAGE: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
 
       - name: Set wheel artifact name
         id: set_wheel_artifact_name
