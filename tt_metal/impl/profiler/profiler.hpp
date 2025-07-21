@@ -137,12 +137,6 @@ private:
     std::unordered_map<std::pair<uint16_t, CoreCoord>, TracyTTCtx, pair_hash<uint16_t, CoreCoord>>
         device_tracy_contexts;
 
-    // Hash to zone source locations
-    std::unordered_map<uint16_t, ZoneDetails> hash_to_zone_src_locations;
-
-    // Zone sourece locations
-    std::unordered_set<std::string> zone_src_locations;
-
     // Iterator on the current zone being processed
     std::unordered_set<tracy::TTDeviceEvent>::iterator current_zone_it;
 
@@ -172,9 +166,6 @@ private:
 
     void populateZoneSrcLocations(
         const std::string& new_log_name, const std::string& log_name = "", bool push_new = false);
-
-    // Iterate through all zone source locations and generate hash
-    void generateZoneSourceLocationsHashes();
 
     // serialize all noc trace data into per-op json trace files
     void serializeJsonNocTraces(
@@ -296,6 +287,9 @@ public:
     DeviceProfiler() = delete;
 
     ~DeviceProfiler();
+
+    // Hash to zone source locations
+    std::unordered_map<uint16_t, ZoneDetails> hash_to_zone_src_locations;
 
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;

@@ -1389,60 +1389,6 @@ void DeviceProfiler::setDeviceArchitecture(tt::ARCH device_arch) {
 #endif
 }
 
-uint32_t DeviceProfiler::hash32CT(const char* str, size_t n, uint32_t basis) {
-    return n == 0 ? basis : hash32CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));
-}
-
-uint16_t DeviceProfiler::hash16CT(const std::string& str) {
-    uint32_t res = hash32CT(str.c_str(), str.length());
-    return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
-}
-
-void DeviceProfiler::populateZoneSrcLocations(
-    const std::string& new_log_name, const std::string& log_name, const bool push_new) {
-    std::ifstream log_file_read(new_log_name);
-    std::string line;
-    while (std::getline(log_file_read, line)) {
-        std::string delimiter = "'#pragma message: ";
-        int delimiter_index = line.find(delimiter) + delimiter.length();
-        std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
-
-        uint16_t hash_16bit = hash16CT(zone_src_location);
-
-        auto did_insert = zone_src_locations.insert(zone_src_location);
-        if (did_insert.second && (hash_to_zone_src_locations.find(hash_16bit) != hash_to_zone_src_locations.end())) {
-            TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
-        }
-
-        std::stringstream ss(zone_src_location);
-        std::string zone_name;
-        std::string source_file;
-        std::string line_num_str;
-        std::getline(ss, zone_name, ',');
-        std::getline(ss, source_file, ',');
-        std::getline(ss, line_num_str, ',');
-
-        ZoneDetails details(zone_name, source_file, std::stoull(line_num_str));
-
-        auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
-        if (ret.second && push_new) {
-            std::ofstream log_file_write(log_name, std::ios::app);
-            log_file_write << line << std::endl;
-            log_file_write.close();
-        }
-    }
-    log_file_read.close();
-}
-
-void DeviceProfiler::generateZoneSourceLocationsHashes() {
-    // Load existing zones from previous runs
-    populateZoneSrcLocations(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG);
-
-    // Load new zones from the current run
-    populateZoneSrcLocations(
-        tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG, true);
-}
-
 void DeviceProfiler::readResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
@@ -1491,8 +1437,6 @@ void DeviceProfiler::processResults(
     ZoneName(zone_name.c_str(), zone_name.size());
 
     device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
-
-    generateZoneSourceLocationsHashes();
 
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
