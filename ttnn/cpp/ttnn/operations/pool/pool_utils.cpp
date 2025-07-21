@@ -103,20 +103,6 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
         is_shard_width_tile_multiple,
         act_block_h_override);
 
-    // pooling can accept any height and either a tile multiple or half a tile for width.
-    if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        uint32_t num_cores_c = 1;
-        uint32_t c_per_core = channels / num_cores_c;
-    } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto grid_x = pconfig.grid.ranges()[0].end_coord.x - pconfig.grid.ranges()[0].start_coord.x + 1;
-        auto grid_y = pconfig.grid.ranges()[0].end_coord.y - pconfig.grid.ranges()[0].start_coord.y + 1;
-        uint32_t num_cores_c = block_shard_orientation == ShardOrientation::COL_MAJOR ? grid_y : grid_x;
-        uint32_t c_per_core = channels / num_cores_c;
-    } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        uint32_t num_cores_c = pconfig.grid.num_cores();
-        uint32_t c_per_core = channels / num_cores_c;
-    }
-
     return pconfig;
 }
 

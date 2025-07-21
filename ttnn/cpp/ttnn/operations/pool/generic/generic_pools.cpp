@@ -119,9 +119,9 @@ static Tensor pool2d_invoke(
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
 
-        uint32_t input_channels_alignment = 8;
-        if (input_tensor.memory_config().is_sharded() && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-            input_tensor.layout() == Layout::ROW_MAJOR) {
+        uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 8;
+        if (!is_in_tiled && input_tensor.memory_config().is_sharded() &&
+            shard_layout == TensorMemoryLayout::HEIGHT_SHARDED && input_tensor.layout() == Layout::ROW_MAJOR) {
             const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
             input_channels_alignment = (shard_width % tt::constants::TILE_WIDTH == 0) ? tt::constants::TILE_WIDTH
                                        : (shard_width % 16 == 0)                      ? 16U
@@ -165,16 +165,19 @@ static Tensor pool2d_invoke(
 
     // update the shard spec to match the output shape
     auto shard_spec = out_memory_config.shard_spec().value();
-    uint32_t output_shard_width_padded = input_tensor.dtype() == DataType::BFLOAT8_B
-                                             ? tt::round_up(channels / num_cores_c, tt::constants::TILE_WIDTH)
-                                             : tt::round_up(channels / num_cores_c, 16);
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
-    uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * (is_out_tiled ? tt::constants::TILE_WIDTH : 1));
-    // uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
+    uint32_t output_c_padded = tt::round_up(
+        output_c,
+        num_cores_c *
+            (is_out_tiled ? tt::constants::TILE_WIDTH
+             : shard_layout == TensorMemoryLayout::WIDTH_SHARDED || shard_layout == TensorMemoryLayout::BLOCK_SHARDED
+                 ? 8
+                 : 16));
+    uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
         "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}",
