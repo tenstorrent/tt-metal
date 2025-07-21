@@ -469,15 +469,9 @@ struct profileScopeGuaranteed {
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
         if constexpr (TRACE_ON_TENSIX) {
-            if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_STARTED_BIT) {
-                mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
-            } else {
-                mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
-                if constexpr (index == 0) {
-                    // finish_profiler();
-                    // risc_finished_profiling();
-                    profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = CUSTOM_MARKERS;
-                }
+            mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
+            if constexpr (index == 0) {
+                profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = CUSTOM_MARKERS;
             }
         } else {
             mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
