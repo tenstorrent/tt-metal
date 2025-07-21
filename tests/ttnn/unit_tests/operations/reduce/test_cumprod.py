@@ -63,6 +63,7 @@ def test_cumprod_normal(dim, shape, dtypes, device):
 
             # assert values with pcc
             assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
+        assert device.num_program_cache_entries() >= 1
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 

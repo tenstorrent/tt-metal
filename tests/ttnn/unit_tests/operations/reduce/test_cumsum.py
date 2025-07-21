@@ -85,26 +85,27 @@ def test_cumsum(size, dim, dtypes, device):
     # Generate integer input on [-2; 2];
     # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
     # which are not handled yet
-    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+    for _ in range(2):
+        torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
+        input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
-    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
+        expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
-    # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
-    if not is_supported(size, dim, expected_output_dtype):
-        pytest.skip("Unsupported configuration by ttnn.cumsum")
+        # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
+        if not is_supported(size, dim, expected_output_dtype):
+            pytest.skip("Unsupported configuration by ttnn.cumsum")
 
-    output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
+        output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
 
-    assert output_tensor.dtype == expected_output_dtype
-    assert output_tensor.shape == (size)
+        assert output_tensor.dtype == expected_output_dtype
+        assert output_tensor.shape == (size)
 
-    torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
+        torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
 
-    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
+        expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
-    if torch_output.numel() > 0:
-        assert_allclose(expected_output, torch_output)
+        if torch_output.numel() > 0:
+            assert_allclose(expected_output, torch_output)
 
 
 @pytest.mark.parametrize(
@@ -119,6 +120,7 @@ def test_cumsum(size, dim, dtypes, device):
         ([7, 13, 129, 33], 1),
         ([2, 3, 5, 33, 128], -1),
         ([5, 2, 3, 5, 33, 128], 0),
+        ([1, 151936], -1),
     ],
 )
 @pytest.mark.parametrize(
@@ -164,54 +166,6 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     if torch_output.numel() > 0:
         assert_allclose(expected_output, torch_output)
 
-
-@pytest.mark.parametrize(
-    "size, dim",
-    [
-        ([2, 3, 4], 0),
-        ([2, 3, 4, 5, 33, 33], 5),
-        ([1, 151936], -1),
-        ([1, 19], -1),
-    ],
-)
-@pytest.mark.parametrize(
-    "dtypes",
-    [
-        (torch.float32, None),
-        (torch.bfloat16, ttnn.bfloat16),
-        (torch.int32, ttnn.int32),
-    ],
-)
-def test_cumsum_callback(size, dim, dtypes, device):
-    torch.manual_seed(29112024)
-
-    (torch_dtype, ttnn_dtype) = dtypes
-
-    # Generate integer input on [-2; 2];
-    # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
-    # which are not handled yet
-    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
-
-    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
-
-    # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
-    if not is_supported(size, dim, expected_output_dtype):
-        pytest.skip("Unsupported configuration by ttnn.cumsum")
-
-    for _ in range(2):  # Test with program cache
-        output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
-
-        assert output_tensor.dtype == expected_output_dtype
-        assert output_tensor.shape == (size)
-
-        torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
-
-        expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
-
-        if torch_output.numel() > 0:
-            assert_allclose(expected_output, torch_output)
-
     assert device.num_program_cache_entries() >= 1
 
 
@@ -227,6 +181,7 @@ def test_cumsum_callback(size, dim, dtypes, device):
         ([7, 13, 129, 33], 1),
         ([2, 3, 5, 33, 128], -1),
         ([5, 2, 3, 5, 33, 128], 0),
+        ([1, 151936], -1),
     ],
 )
 @pytest.mark.parametrize(
