@@ -837,8 +837,28 @@ inline void noc_async_write_multicast(
     }
 }
 
-// TODO: write docs
-// this sets the state for issuing a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+// clang-format off
+/**
+ * Sets the stateful registers for an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * to a specified destination node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function is used to set up the state for
+ * \a noc_async_write_one_packet_with_state, which will issue the actual
+ * write request. \a noc_async_write can be used instead if the state preservation is not
+ * needed. Also, see \a noc_async_write_barrier.
+ *
+ * The destination node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                                            | Data type | Valid range                      | required |
+ * |--------------------------------|--------------------------------------------------------|-----------|----------------------------------|----------|
+ * | dst_noc_addr                   | Encoding of the destination NOC location (x,y)+address | uint64_t  | Results of \a get_noc_addr calls | True     |
+ * | size                           | Size of data transfer in bytes                         | uint32_t  | 0..1MB                           | True     |
+ * | noc                            | Which NOC to use for the transaction                   | uint8_t   | 0 or 1                           | False    |
+ * | vc                             | Which VC to use for the transaction                    | uint8_t   | 0-3                              | False    |
+ * | non_posted (template argument) | Whether the write is nonposted (i.e. ack required)     | bool      | true or false                    | False    |
+ */
+// clang-format on
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
     uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
@@ -850,19 +870,36 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
     WAYPOINT("NWPD");
 }
 
-// TODO: write docs
-// this issues only a single packet with cmd buf state with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * to a specified destination node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function must be preceded by a call to
+ * \a noc_async_write_one_packet_set_state. This function is used to issue the actual
+ * write request after the state has been set up.
+ * \a noc_async_write can be used instead if the state preservation is not needed. Also, see \a noc_async_write_barrier.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                                        | Data type | Valid range   | required |
+ * |--------------------------------|----------------------------------------------------|-----------|---------------|----------|
+ * | src_local_l1_addr              | Address in local L1 memory on source core          | uint32_t  | 0..1MB        | True     |
+ * | dst_local_l1_addr              | Address in local L1 memory on destination core     | uint32_t  | 0..1MB        | True     |
+ * | noc                            | Which NOC to use for the transaction               | uint8_t   | 0 or 1        | False    |
+ * | non_posted (template argument) | Whether the write is nonposted (i.e. ack required) | bool      | true or false | False    |
+ */
+// clang-format on
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
-    uint32_t src_local_l1_addr, uint32_t dst_local_addr, uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_addr, src_local_l1_addr);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_l1_addr, src_local_l1_addr);
 
     WAYPOINT("NWPW");
     ncrisc_noc_write_with_state<noc_mode, non_posted, true /* update_counter */, true /* one_packet */>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_local_addr);
+        noc, write_cmd_buf, src_local_l1_addr, dst_local_l1_addr);
     WAYPOINT("NWPD");
 }
 
@@ -1542,21 +1579,25 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * Initiates an asynchronous write of a 32-bit value to a NOC destination.
  * Typically used for writing registers, but can be used for memory locations as well.
  * The destination is specified as a 64-bit NOC address (see \a noc_async_write).
- * The advantage over using \a noc_async_write is that we don't a Tensix L1
+ * The advantage over using \a noc_async_write is that we don't use a Tensix L1
  * memory source location; the write value is written directly into a register.
  * Unlike using \a noc_async_write, there are also no address alignment concerns.
  * Also, see \a noc_async_write_barrier.
  *
  * The destination node can be either a Tensix core+L1 memory
- * address or a PCIe controller.
+ * address or a PCIe controller; This API does not support DRAM addresses.
  *
  * Return value: None
  *
- * | Argument  | Description                                            | Type     | Valid Range                      | Required |
- * |-----------|--------------------------------------------------------|----------|----------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address     | uint64_t | Results of \a get_noc_addr calls | True     |
- * | val       | The value to be written                                | uint32_t | Any uint32_t value               | True     |
- * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                          | False    |
+ * | Argument                                 | Description                                                | Type     | Valid Range                      | Required |
+ * |------------------------------------------|------------------------------------------------------------|----------|----------------------------------|----------|
+ * | addr                                     | Encoding of the destination location (x,y)+address         | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | val                                      | The value to be written                                    | uint32_t | Any uint32_t value               | True     |
+ * | be                                       | Byte-enable                                                | uint8_t  | 0x1-0xF                          | False    |
+ * | noc                                      | NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
+ * | vc                                       | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Unicast VCs)                | False    |
+ * | write_to_stream_reg (template parameter) | Whether to write to a stream register instead of L1 memory | bool     | true or false                    | False    |
+ * | posted              (template parameter) | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                    | False    |
  */
 // clang-format on
 template <bool write_to_stream_reg = false, bool posted = false>
@@ -1564,7 +1605,6 @@ FORCE_INLINE void noc_inline_dw_write(
     uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
-    // This API does not support DRAM addresses
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #ifdef ARCH_BLACKHOLE
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
@@ -1622,8 +1662,33 @@ FORCE_INLINE void noc_inline_dw_write(
     WAYPOINT("NWID");
 }
 
-// on BH this api can only write to stream register, writing to L1 will cause hangs!
-// Part of the address could be set later in noc_inline_dw_write_with_state
+// clang-format off
+/**
+ * Sets the stateful registers for an inline write of a 32-bit value to a NOC destination.
+ * This function is used to set up the state for \a noc_inline_dw_write_with_state, which will issue the actual
+ * write request. The 32-bit value and part of the destination address can be set later in \a noc_inline_dw_write_with_state.
+ * \a noc_inline_dw_write can be used instead if the state preservation is not
+ * needed. Also, see \a noc_async_write_barrier.
+ *
+ * The destination node can be either a Tensix core+L1 memory
+ * address or a PCIe controller; This API does not support DRAM addresses.
+ *
+ * Note: On Blackhole, this API can only write to stream registers, writing to L1 will cause hangs!
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                                                | Type     | Valid Range                      | Required |
+ * |------------------------------|------------------------------------------------------------|----------|----------------------------------|----------|
+ * | addr                         | Encoding of the destination location (x,y)+address         | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | val                          | The value to be written                                    | uint32_t | Any uint32_t value               | False    |
+ * | be                           | Byte-enable                                                | uint8_t  | 0x1-0xF                          | False    |
+ * | cmd_buf                      | Command buffer to use for the transaction                  | uint8_t  | 0-3                              | False    |
+ * | noc                          | NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
+ * | vc                           | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Unicast VCs)                | False    |
+ * | posted (template parameter)  | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                    | False    |
+ * | set_val (template parameter) | Whether to set the value for the write here                | bool     | true or false                    | False    |
+ */
+// clang-format on
 template <bool posted = false, bool set_val = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr,
@@ -1637,8 +1702,35 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     WAYPOINT("NWID");
 }
 
-// on BH this api can only write to stream register, writing to L1 will cause hangs!
-// Either hi or lo address should be getting updated
+// clang-format off
+/**
+ * Initiates an inline write of a 32-bit value to a NOC destination.
+ * This function must be preceded by a call to \a noc_inline_dw_write_set_state.
+ * This function is used to issue the actual write request after the state has been set up.
+ * The 32-bit value and part of the destination address can also be set in this API (Only either hi or lo address should be getting updated).
+ * \a noc_inline_dw_write can be used instead if the state preservation is not
+ * needed. Also, see \a noc_async_write_barrier.
+ *
+ * The destination node can be either a Tensix core+L1 memory
+ * address or a PCIe controller; This API does not support DRAM addresses.
+ *
+ * Note: On Blackhole, this API can only write to stream registers, writing to L1 will cause hangs!
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                         | Data type | Valid range   | required |
+ * |-------------------------------------|-----------------------------------------------------|-----------|---------------|----------|
+ * | val                                 | The value to be written                             | uint32_t  | Any uint32_t  | True     |
+ * | addr                                | The local address to write to (if not set in state) | uint32_t  | 0..1MB        | False    |
+ * | cmd_buf                             | Command buffer to use for the transaction           | uint8_t   | 0-3           | False    |
+ * | noc                                 | NOC to use for the transaction                      | uint8_t   | 0 or 1        | False    |
+ * | update_addr_lo (template parameter) | Whether to update the lower 32 bits of the address  | bool      | true or false | False    |
+ * | update_counter (template parameter) | Whether to update the write counters                | bool      | true or false | False    |
+ * | posted (template parameter)         | Whether the call is posted (i.e. ack requirement)   | bool      | true or false | False    |
+ * | update_addr_hi (template parameter) | Whether to update the upper 32 bits of the address  | bool      | true or false | False    |
+ * | update_val (template parameter)     | Whether to set the value to be written              | bool      | true or false | False    |
+ */
+// clang-format on
 template <
     bool update_addr_lo = false,
     bool update_counter = true,
@@ -1799,6 +1891,22 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTD");
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * with a transaction ID. Refer to \a noc_async_write_one_packet for more details.
+ *
+ * Extra arguments:
+ *
+ * | Argument                           | Description                                        | Type     | Valid Range       | Required |
+ * |------------------------------------|----------------------------------------------------|----------|-------------------|----------|
+ * | trid                               | Transaction ID to be used for the write operation  | uint32_t | 0-15              | True     |
+ * | cmd_buf                            | Command buffer to use for the transaction          | uint8_t  | 0-3               | False    |
+ * | vc                                 | VC to use for the transaction                      | uint8_t  | 0-3 (Unicast VCs) | False    |
+ * | update_counter (template argument) | Whether to update write counters or not            | bool     | true or false     | False    |
+ * | posted (template argument)         | Whether the write is posted (i.e. ack requirement) | bool     | true or false     | False    |
+ */
+// clang-format on
 template <bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid(
     uint32_t src_local_l1_addr,
@@ -1828,6 +1936,28 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     WAYPOINT("NWPD");
 }
 
+// clang-format off
+/**
+ * Sets the stateful registers for an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * to a specified destination node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function is used to set up the state for
+ * noc_async_write_one_packet_with_trid_with_state, which will issue the actual
+ * write request. \a noc_async_write_one_packet_with_trid can be used instead if the state preservation is not
+ * needed.
+ *
+ * The destination node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                            | Data type | Valid range                      | required |
+ * |----------------------------|--------------------------------------------------------|-----------|----------------------------------|----------|
+ * | dst_noc_addr               | Encoding of the destination NOC location (x,y)+address | uint64_t  | Results of \a get_noc_addr calls | True     |
+ * | cmd_buf                    | Command buffer to use for the transaction              | uint8_t   | 0-3                              | False    |
+ * | noc                        | NOC to use for the transaction                         | uint8_t   | 0 or 1                           | False    |
+ * | vc                         | VC to use for the transaction                          | uint8_t   | 0-3 (Unicast VCs)                | False    |
+ * | posted (template argument) | Whether the write is posted (i.e. ack requirement)     | bool      | true or false                    | False    |
+ */
+// clang-format on
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     uint64_t dst_noc_addr,
@@ -1842,10 +1972,33 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     WAYPOINT("NAWD");
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * with a transaction ID. This function must be preceded by a call to
+ * \a noc_async_write_one_packet_with_trid_set_state. This function is used to issue the actual
+ * write request after the state has been set up.
+ * \a noc_async_write_one_packet_with_trid can be used instead if the state preservation is not needed.
+ * Also, see \a noc_async_write_barrier.
+ *
+ * Return value: None
+ *
+ * | Argument                           | Description                                        | Data type | Valid range   | required |
+ * |------------------------------------|----------------------------------------------------|-----------|---------------|----------|
+ * | src_local_l1_addr                  | Address in local L1 memory on source core          | uint32_t  | 0..1MB        | True     |
+ * | dst_local_l1_addr                  | Address in local L1 memory on destination core     | uint32_t  | 0..1MB        | True     |
+ * | size                               | Size of the data transfer in bytes                 | uint32_t  | 0..1MB        | True     |
+ * | trid                               | Transaction ID to be used for the transaction      | uint32_t  | 0-15          | True     |
+ * | cmd_buf                            | Command buffer to use for the transaction          | uint8_t   | 0-3           | False    |
+ * | noc                                | NOC to use for the transaction                     | uint8_t   | 0 or 1        | False    |
+ * | update_counter (template argument) | Whether to update write counters or not            | bool      | true or false | False    |
+ * | posted (template argument)         | Whether the write is posted (i.e. ack requirement) | bool      | true or false | False    |
+ */
+// clang-format on
 template <bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     uint32_t src_local_l1_addr,
-    uint32_t dst_local_addr,
+    uint32_t dst_local_l1_addr,
     uint32_t size,
     uint32_t trid,
     uint8_t cmd_buf = write_cmd_buf,
@@ -1853,12 +2006,12 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_WITH_STATE, 0ull, size, -1);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_addr, src_local_l1_addr, size);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
 
     WAYPOINT("NWPW");
     ncrisc_noc_set_transaction_id(noc, cmd_buf, trid);
     ncrisc_noc_write_with_state<noc_mode, update_counter, !posted>(
-        noc, cmd_buf, src_local_l1_addr, dst_local_addr, size, trid);
+        noc, cmd_buf, src_local_l1_addr, dst_local_l1_addr, size, trid);
     WAYPOINT("NWPD");
 }
 
