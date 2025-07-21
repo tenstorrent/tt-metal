@@ -83,7 +83,6 @@ std::unordered_map<chip_id_t, uint64_t> smallestHostime;
 
 std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>>>
     deviceDeviceTimePair;
-std::mutex device_mutex;
 
 bool do_sync_on_close = true;
 std::unordered_set<chip_id_t> sync_set_devices;
@@ -702,10 +701,9 @@ void DumpDeviceProfileResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    std::scoped_lock<std::mutex> lock(device_mutex);
-
-    auto profiler_it = tt_metal_device_profiler_map.find(device->id());
-    if (getDeviceProfilerState() && profiler_it != tt_metal_device_profiler_map.end()) {
+    if (getDeviceProfilerState()) {
+        auto profiler_it = tt_metal_device_profiler_map.find(device->id());
+        TT_ASSERT(profiler_it != tt_metal_device_profiler_map.end());
         DeviceProfiler& profiler = profiler_it->second;
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
             if (tt::DevicePool::instance().is_dispatch_firmware_active() && !isGalaxyMMIODevice(device)) {
