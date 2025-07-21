@@ -463,9 +463,9 @@ struct LineSyncConfig {
             (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
     }
 
-    void global_sync_finish() {
+    void global_sync_finish(uint8_t sync_iter) {
         // sync wait
-        noc_semaphore_wait(line_sync_ptr, line_sync_val);
+        noc_semaphore_wait(line_sync_ptr, line_sync_val * (sync_iter + 1));
     }
 
 private:
@@ -489,7 +489,7 @@ struct LocalSyncConfig {
         }
     }
 
-    void local_sync() {
+    void local_sync(uint8_t sync_iter) {
         if constexpr (IS_MASTER_CORE) {
             // Master core: signal all local cores
             for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
@@ -497,9 +497,9 @@ struct LocalSyncConfig {
                 noc_semaphore_inc(dest_noc_addr, 1);
             }
             // Wait for all local cores to acknowledge
-            noc_semaphore_wait(sync_ptr, NUM_LOCAL_CORES);
+            noc_semaphore_wait(sync_ptr, NUM_LOCAL_CORES * (sync_iter + 1));
         } else {
-            noc_semaphore_wait(sync_ptr, 1);
+            noc_semaphore_wait(sync_ptr, (sync_iter + 1));
             // send ack back to master sender
             auto master_sender_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[0], sync_address);
             noc_semaphore_inc(master_sender_noc_addr, 1);
@@ -858,9 +858,9 @@ struct SenderKernelConfig {
         }
     }
 
-    void local_sync() {
+    void local_sync(uint8_t sync_iter) {
         if constexpr (LINE_SYNC) {
-            local_sync_config().local_sync();
+            local_sync_config().local_sync(sync_iter);
         }
     }
 
@@ -1211,7 +1211,7 @@ template <
 struct SyncKernelConfig {
     static SyncKernelConfig build_from_args(size_t& arg_idx) { return SyncKernelConfig(arg_idx); }
 
-    void global_sync() {
+    void global_sync(uint8_t sync_iter) {
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             sync_fabric_connections()[i].open();
         }
@@ -1219,13 +1219,13 @@ struct SyncKernelConfig {
             line_sync_configs()[i].global_sync_start();
         }
         // only need one of the config to check for the acks
-        line_sync_configs()[0].global_sync_finish();
+        line_sync_configs()[0].global_sync_finish(sync_iter);
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             sync_fabric_connections()[i].close();
         }
     }
 
-    void local_sync() { local_sync_config().local_sync(); }
+    void local_sync(uint8_t sync_iter) { local_sync_config().local_sync(sync_iter); }
 
     // Result buffer convenience methods
     uint32_t get_result_buffer_address() const { return memory_map.result_buffer_base; }

@@ -30,8 +30,9 @@ void kernel_main() {
     tt::tt_fabric::fabric_tests::write_test_status(sender_config.get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
 
     // Local sync (as participant, not master)
+    uint8_t sync_iter = 0;
     if constexpr (LINE_SYNC) {
-        sender_config.local_sync();
+        sender_config.local_sync(sync_iter++);
     }
 
     sender_config.open_connections();
@@ -58,9 +59,17 @@ void kernel_main() {
             packets_left_to_send |= traffic_config->has_packets_to_send();
         }
     }
-    uint64_t total_elapsed_cycles_outer_loop = get_timestamp() - start_timestamp;
 
     sender_config.close_connections();
+
+    // Local sync (as participant, not master) for end of sync, first sync tells sync core to start global sync, second
+    // sync is waiting for global sync done
+    if constexpr (LINE_SYNC) {
+        sender_config.local_sync(sync_iter++);
+        sender_config.local_sync(sync_iter++);
+    }
+
+    uint64_t total_elapsed_cycles_outer_loop = get_timestamp() - start_timestamp;
 
     // Collect results from all traffic configs
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
