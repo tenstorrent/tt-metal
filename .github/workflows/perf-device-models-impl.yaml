@@ -58,7 +58,7 @@ jobs:
       - name: non-civ2 tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
-          test_name: "non-civ2_tests"
+          model_name: "non-civ2_tests"
           commands: |
             pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
             pytest models/demos/mnist/tests -m models_device_performance_bare_metal
@@ -70,7 +70,7 @@ jobs:
       - name: yolov11 tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
-          test_name: "yolov11_tests"
+          model_name: "yolov11"
           commands: |
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests -m models_device_performance_bare_metal
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal
@@ -80,7 +80,7 @@ jobs:
       - name: stable_diffusion tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
-          test_name: "stable_diffusion_tests"
+          model_name: "stable_diffusion"
           commands: |
             pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
@@ -90,7 +90,7 @@ jobs:
       - name: distilbert tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
-          test_name: "distilbert_tests"
+          model_name: "distilbert"
           commands: |
             pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
@@ -366,6 +366,15 @@ jobs:
       #     export DEVICE_PERF_REPORT_FILENAME=${{ matrix.test-info.test-type }}_yolov6l_$(date +%Y_%m_%d).csv
       #     python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME yolov6l
       #     echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: yolov6l tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@kkabilar-reorg-devperf-1
+        with:
+          model_name: "yolov6l"
+          commands: |
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: Merge test reports
         id: generate-device-perf-report

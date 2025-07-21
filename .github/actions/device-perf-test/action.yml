@@ -1,7 +1,7 @@
 inputs:
-  test_name:
+  model_name:
     required: true
-    description: "Test name"
+    description: "Model name"
   commands:
     required: true
     description: "Shell commands to run the test"
@@ -22,8 +22,8 @@ runs:
 
         ${{ inputs.commands }}
 
-        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.test_name }}_$(date +%Y_%m_%d).csv
-        python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME ${{ inputs.test_name }}
+        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv
+        python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME ${{ inputs.model_name }}
         echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       shell: bash
       env:
