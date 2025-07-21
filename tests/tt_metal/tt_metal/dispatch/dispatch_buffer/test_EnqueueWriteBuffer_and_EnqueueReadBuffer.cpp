@@ -277,7 +277,6 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
 
-    std::cout << "got channel" << std::endl;
 
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
