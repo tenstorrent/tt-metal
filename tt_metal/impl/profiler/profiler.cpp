@@ -1464,11 +1464,6 @@ void DeviceProfiler::dumpResults(
 
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
-    FabricRoutingLookup routing_lookup;
-    if (state == ProfilerDumpState::NORMAL && rtoptions.get_profiler_noc_events_enabled()) {
-        routing_lookup = FabricRoutingLookup(device);
-    }
-
     if (rtoptions.get_profiler_noc_events_enabled()) {
         log_warning(
             tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
@@ -1538,14 +1533,14 @@ void DeviceProfiler::dumpResults(
         }
     }
 
-    // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
-    std::string rpt_path = rtoptions.get_profiler_noc_events_report_path();
-    if (rpt_path.empty()) {
-        rpt_path = output_dir.string();
-    }
-
     // serialize noc traces only in normal state, to avoid overwriting individual trace files
     if (state == ProfilerDumpState::NORMAL && rtoptions.get_profiler_noc_events_enabled()) {
+        // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
+        std::string rpt_path = rtoptions.get_profiler_noc_events_report_path();
+        if (rpt_path.empty()) {
+            rpt_path = output_dir.string();
+        }
+        FabricRoutingLookup routing_lookup(device);
         serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id, routing_lookup);
         dumpClusterCoordinatesAsJson(std::filesystem::path(rpt_path) / "cluster_coordinates.json");
     }
