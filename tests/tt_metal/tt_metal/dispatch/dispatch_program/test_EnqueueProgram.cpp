@@ -1148,8 +1148,6 @@ namespace compiler_workaround_hardware_bug_tests {
 TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
     for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program;
 
         CoreRange cr({0, 0}, {0, 0});
@@ -1162,7 +1160,7 @@ TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
             cr_set,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
         Finish(device->mesh_command_queue());
     }
@@ -1239,12 +1237,10 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
 
     for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program;
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
 
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
                                              .set_page_size(intermediate_cb, single_tile_size)
@@ -1311,12 +1307,10 @@ TEST_F(UnitMeshCQFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore
 TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program;
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
@@ -1665,9 +1659,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCore
         local_test_functions::initialize_dummy_semaphores(program, second_cr, initial_semaphore_vals);
         expected_semaphore_vals.push_back(initial_semaphore_vals);
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(
             device, device->mesh_command_queue(), workload, config, expected_semaphore_vals));
     }
@@ -1912,12 +1904,10 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         workloads.push_back(distributed::MeshWorkload());
         distributed::MeshWorkload& workload = workloads.back();
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
         Program program;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), this->device_range_);
+        auto& program_ = workload.get_programs().at(this->device_range_);
 
         std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
         std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
@@ -2188,15 +2178,13 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_WORKLOADS);
 
     vector<distributed::MeshWorkload> workloads;
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         workloads.push_back(distributed::MeshWorkload());
         distributed::MeshWorkload& workload = workloads.back();
 
         Program program;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), this->device_range_);
+        auto& program_ = workload.get_programs().at(this->device_range_);
 
         std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
         std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};

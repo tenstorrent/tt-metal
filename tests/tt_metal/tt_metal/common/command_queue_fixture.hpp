@@ -116,6 +116,8 @@ protected:
         }
     }
 
+    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(
+        distributed::MeshCoordinate::zero_coordinate(1), distributed::MeshCoordinate::zero_coordinate(1));
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
