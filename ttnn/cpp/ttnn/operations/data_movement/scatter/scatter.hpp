@@ -27,7 +27,6 @@ struct ScatterOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto scatter =
-    ttnn::register_operation<"ttnn::experimental::scatter", ttnn::operations::data_movement::ScatterOperation>();
+constexpr auto scatter = ttnn::register_operation<"ttnn::scatter", ttnn::operations::data_movement::ScatterOperation>();
 
 }  // namespace ttnn

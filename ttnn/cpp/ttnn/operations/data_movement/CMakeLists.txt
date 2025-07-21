@@ -102,7 +102,7 @@ target_sources(
         roll/roll.cpp
         scatter/scatter.cpp
         scatter/tosa_scatter.cpp
-        scatter/device/scatter_device_oepration.cpp
+        scatter/device/scatter_device_operation.cpp
         scatter/device/scatter_program_factory.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp

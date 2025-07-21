@@ -6,9 +6,9 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::data_movement::scatter::detail {
+namespace ttnn::operations::data_movement::detail {
 
 namespace py = pybind11;
-void bind_scatter_operation(py::module& module);
+void bind_scatter(py::module& module);
 
-}  // namespace ttnn::operations::data_movement::scatter::detail
+}  // namespace ttnn::operations::data_movement::detail

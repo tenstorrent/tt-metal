@@ -11,7 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-namespace ttnn::operations::experimental::scatter {
+namespace ttnn::operations::data_movement::scatter {
 
 namespace {
 constexpr uint32_t BIT_MASK_32 = 32 - 1;
@@ -254,4 +254,4 @@ KernelHandle ScatterProgramFactory::create_kernel(
     return kernel_id;
 }
 
-}  // namespace ttnn::operations::experimental::scatter
+}  // namespace ttnn::operations::data_movement::scatter

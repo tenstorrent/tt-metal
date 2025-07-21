@@ -23,7 +23,7 @@ struct TOSAScatterOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto tosa_scatter = ttnn::
-    register_operation<"ttnn::experimental::tosa_scatter", ttnn::operations::data_movement::TOSAScatterOperation>();
+constexpr auto tosa_scatter =
+    ttnn::register_operation<"ttnn::tosa_scatter", ttnn::operations::data_movement::TOSAScatterOperation>();
 
 }  // namespace ttnn
