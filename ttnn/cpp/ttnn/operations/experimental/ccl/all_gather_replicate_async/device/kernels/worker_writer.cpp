@@ -11,6 +11,42 @@
 #include <utility>
 
 using address_t = uint32_t;
+FORCE_INLINE void advance_local_read_address_for_fabric_write(
+    uint64_t noc0_dest_noc_addr,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection,
+    size_t& l1_read_addr,
+    uint32_t payload_size_bytes) {
+    // const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
+    const size_t payload_l1_address = l1_read_addr;
+    pkt_hdr_forward->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+    pkt_hdr_backward->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+
+    // noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr),
+    // payload_size_bytes);
+    if (fabric_connection.has_forward_connection()) {
+        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+        fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
+            l1_read_addr, payload_size_bytes);
+        fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+            (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    if (fabric_connection.has_backward_connection()) {
+        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
+            l1_read_addr, payload_size_bytes);
+        fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+            (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    noc_async_writes_flushed();
+
+    l1_read_addr += payload_size_bytes;
+}
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -122,13 +158,13 @@ void kernel_main() {
         DPRINT << "core_id: " << core_id << " noc0_dest_noc_addr: " << noc0_dest_noc_addr << ENDL();
 
         // This issues a flush barrier
-        /*write_and_advance_local_read_address_for_fabric_write(
+        advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
             fabric_connection,
             l1_read_addr,
-            num_tiles_to_read_this_core * tensor0_page_size);*/
+            num_tiles_to_read_this_core * tensor0_page_size);
         if constexpr (dynamic_alternate) {
             std::swap(
                 pkt_hdr_forward->routing_fields.value,
@@ -176,5 +212,5 @@ void kernel_main() {
     // uint64_t out_ready_sem_noc_addr =
     //     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     // noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-    // noc_async_write_barrier();
+    noc_async_write_barrier();
 }
