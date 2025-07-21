@@ -33,7 +33,8 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     uint32_t H_in = input_tensor_shape[2];
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
-    auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);
+    auto [T_out, H_out, W_out] =
+        detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.stride, config.kernel_size);
     uint32_t C_out = config.output_channels;
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -207,7 +208,9 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         out_row_size_bytes,
         is_padding_zeros,
         semaphore_id,
-    };
+        config.stride[0],
+        config.stride[1],
+        config.stride[2]};
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -270,7 +273,10 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         in0_block_w,
         out_subblock_h,
         out_subblock_w,
-        semaphore_id};
+        semaphore_id,
+        config.stride[0],
+        config.stride[1],
+        config.stride[2]};
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -429,6 +435,15 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         uint32_t w_out_block_end = std::min(w_out_block_start + w_out_per_core, W_out_blocks);
 
         // Calculate actual indices
+        uint32_t t_in_start = t_out_block_start * config.T_out_block * config.stride[0];
+        uint32_t t_in_end = std::min(t_out_block_end * config.T_out_block * config.stride[0], T_in);
+
+        uint32_t h_in_start = h_out_block_start * config.H_out_block * config.stride[1];
+        uint32_t h_in_end = std::min(h_out_block_end * config.H_out_block * config.stride[1], H_in);
+
+        uint32_t w_in_start = w_out_block_start * config.W_out_block * config.stride[2];
+        uint32_t w_in_end = std::min(w_out_block_end * config.W_out_block * config.stride[2], W_in);
+
         uint32_t t_out_start = t_out_block_start * config.T_out_block;
         uint32_t t_out_end = std::min(t_out_block_end * config.T_out_block, T_out);
 
@@ -493,12 +508,12 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
             c_in_block_end,
             c_out_block_start,
             c_out_block_end,
-            t_out_start,
-            t_out_end,
-            h_out_start,
-            h_out_end,
-            w_out_start,
-            w_out_end,
+            t_in_start,
+            t_in_end,
+            h_in_start,
+            h_in_end,
+            w_in_start,
+            w_in_end,
         };
 
         compute_args_per_core[core_id] = {
@@ -506,12 +521,12 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
             c_in_block_end,
             c_out_block_start,
             c_out_block_end,
-            t_out_start,
-            t_out_end,
-            h_out_start,
-            h_out_end,
-            w_out_start,
-            w_out_end,
+            t_in_start,
+            t_in_end,
+            h_in_start,
+            h_in_end,
+            w_in_start,
+            w_in_end,
             (uint32_t)is_reducer};
 
         writer_args_per_core[core_id] = {
