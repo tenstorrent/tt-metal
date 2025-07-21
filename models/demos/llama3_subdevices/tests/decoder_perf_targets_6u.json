@@ -46,7 +46,7 @@
     },
     "Matmul_0": {
       "op_name": "QKV_MM",
-      "kernel_duration": 7954.506944444444,
+      "kernel_duration": 7082.489583333333,
       "op_to_op": 758.6296296296297,
       "first_to_last_start": 1855.8074074074075,
       "non-overlapped-dispatch-time": 5367.539682539683,
@@ -124,11 +124,11 @@
     "Matmul_RS_0": {
       "op_name": "Matmul_FF3_ReduceScatter_FF1",
       "kernel_duration": 9292.354398148147,
-      "op_to_op": 708.7185185185185,
+      "op_to_op": 980.7777777777778,
       "first_to_last_start": 1914.9925925925927,
       "non-overlapped-dispatch-time": 17432.341269841272,
       "kernel_duration_relative_margin": 0.05,
-      "op_to_op_duration_relative_margin": 0.2,
+      "op_to_op_duration_relative_margin": 0.3,
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.3
     },
@@ -136,7 +136,7 @@
       "op_name": "ReduceScatter_FF3",
       "kernel_duration": 7218.590972222222,
       "op_to_op": 698.4148148148148,
-      "first_to_last_start": 470.5111111111111,
+      "first_to_last_start": 710.4444444444445,
       "non-overlapped-dispatch-time": 7398.333333333333,
       "kernel_duration_relative_margin": 0.05,
       "op_to_op_duration_relative_margin": 0.2,
@@ -167,7 +167,7 @@
     },
     "ScaledDotProductAttentionDecode_0": {
       "op_name": "SDPA",
-      "kernel_duration": 11864.18287037037,
+      "kernel_duration": 10285.326388888889,
       "op_to_op": 625.3407407407408,
       "first_to_last_start": 2315.9037037037037,
       "non-overlapped-dispatch-time": 8528.468253968254,
@@ -178,7 +178,7 @@
     },
     "BinaryDeviceOperation_0": {
       "op_name": "Binary_Mult_Silu",
-      "kernel_duration": 3966.1247685185185,
+      "kernel_duration": 2374.3958333333335,
       "op_to_op": 717.0592592592592,
       "first_to_last_start": 1613.674074074074,
       "non-overlapped-dispatch-time": 5580.150793650793,

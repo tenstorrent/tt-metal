@@ -15,7 +15,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
         ("LayerNorm", 12.5, 10.9, 0.05),
         ("ScaledDotProductAttentionDecode", 11.9, 10.95, 0.05),
         ("PagedUpdateCacheDeviceOperation", 4.5, 3.9, 0.16),
-        ("RotaryEmbeddingLlamaFusedQK", 4.15, 3.58, 0.05),
+        ("RotaryEmbeddingLlamaFusedQK", 3.92, 3.58, 0.05),
         ("Embeddings", 3.8, 3.3, 0.1),
         ("BinaryDeviceOperation", 2.78, 2.5, 0.05),
     ],
