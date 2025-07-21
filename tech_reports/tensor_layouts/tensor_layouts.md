@@ -46,7 +46,7 @@ In a tiled tensor, pages are represented as 2D tiles, with the default tile size
 
 
 #### 3.2.1 Tile Shapes
-The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metallium only supports `32x32`, and other tile shapes will be supported in Q4'2024**
+The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metalium only supports `32x32`, and other tile shapes will be supported in Q4'2024**
 
 
 ## 4. Memory Layout
