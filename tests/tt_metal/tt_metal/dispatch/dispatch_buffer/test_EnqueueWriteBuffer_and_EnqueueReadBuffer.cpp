@@ -233,20 +233,34 @@ void WriteToUnitMeshBuffer(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     const TestBufferConfig& config,
     const std::vector<uint32_t>& src,
-    std::shared_ptr<distributed::MeshBuffer> buf) {
+    std::shared_ptr<distributed::MeshBuffer> buf,
+    const std::optional<BufferShardingArgs>& sharding_args) {
     auto device = mesh_device->get_devices()[0];
-    auto slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
-    detail::WriteToBuffer(*slow_dispatch_buffer, src);
+    if (sharding_args.has_value()) {
+        auto slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
+        detail::WriteToBuffer(*slow_dispatch_buffer, src);
+    } else {
+        auto slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
+        detail::WriteToBuffer(*slow_dispatch_buffer, src);
+
+    }
 }
 
 void ReadFromUnitMeshBuffer(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     const TestBufferConfig& config,
     std::vector<uint32_t>& dst,
-    std::shared_ptr<distributed::MeshBuffer> buf) {
+    std::shared_ptr<distributed::MeshBuffer> buf,
+    const std::optional<BufferShardingArgs>& sharding_args) {
     auto device = mesh_device->get_devices()[0];
-    auto slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
-    detail::ReadFromBuffer(*slow_dispatch_buffer, dst);
+    if (sharding_args.has_value()) {
+        auto slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
+        detail::ReadFromBuffer(*slow_dispatch_buffer, dst);
+
+    } else {
+        auto slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
+        detail::ReadFromBuffer(*slow_dispatch_buffer, dst);
+    }
 }
 
 template <bool cq_dispatch_only = false>
@@ -305,6 +319,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
 
             if (config.sharding_args.has_value()) {
+                std::cout << "using sharded buffer" << std::endl;
                 distributed::DeviceLocalBufferConfig dram_config{
                     .page_size = config.page_size,
                     .buffer_type = config.buftype,
@@ -312,6 +327,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
                     .bottom_up = false};
                 bufa = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
             } else {
+                std::cout << "using interleaved buffer" << std::endl;
                 distributed::DeviceLocalBufferConfig dram_config{
                     .page_size = config.page_size,
                     .buffer_type = config.buftype,
@@ -323,9 +339,11 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             vector<uint32_t> src = generate_arange_vector(bufa->size());
 
             if (cq_write) {
+                std::cout << "using cq write" << std::endl;
                 distributed::WriteShard(cq, bufa, src, device_coord);
             } else {
-                WriteToUnitMeshBuffer(mesh_device, config, src, bufa);
+                std::cout << "using sd write" << std::endl;
+                WriteToUnitMeshBuffer(mesh_device, config, src, bufa, config.sharding_args);
                 if (config.buftype == BufferType::DRAM) {
                     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
                 } else {
@@ -337,13 +355,15 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             result.resize(buf_size / sizeof(uint32_t));
 
             if (cq_write and not cq_read) {
-                Finish(cq);
+                distributed::Finish(cq);
             }
 
             if (cq_read) {
+                std::cout << "using cq read" << std::endl;
                 distributed::ReadShard(cq, result, bufa, device_coord);
             } else {
-                ReadFromUnitMeshBuffer(mesh_device, config, result, bufa);
+                std::cout << "using sd read" << std::endl;
+                ReadFromUnitMeshBuffer(mesh_device, config, result, bufa, config.sharding_args);
             }
 
             EXPECT_EQ(src, result);
@@ -702,7 +722,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestSinglePageLargerThanMaxPrefetchCom
 TEST_F(UnitMeshCQSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeShardedBuffer) {
     const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 2048;
     for (const auto& mesh_device : devices_) {
-        log_info(tt::LogTest, "Running On Device {}", mesh_device->id());
+        log_info(tt::LogTest, "Running On Device {}", mesh_device->get_devices()[0]->id());
         CoreCoord start(0, 0);
         CoreCoord end(3, 0);
         CoreRange cores(start, end);
@@ -1735,7 +1755,8 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestNon32BAlignedPageSizeForL1) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
     for (const auto& mesh_device : devices_) {
-        if (mesh_device->is_mmio_capable()) {
+        auto device = mesh_device->get_devices()[0];
+        if (device->is_mmio_capable()) {
             continue;
         }
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
