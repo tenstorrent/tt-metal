@@ -246,9 +246,16 @@ def dump_callstacks(
                 dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
                 if gdb_callstack:
                     if risc_name == "ncrisc":
+                        # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
                         callstack = [CallstackEntry()]
                     else:
                         callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
+                    # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
+                    if len(callstack) > 0 and callstack[0].pc is None:
+                        try:
+                            callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                        except:
+                            pass
                 else:
                     callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
                 result.append(
