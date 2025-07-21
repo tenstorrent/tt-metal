@@ -161,6 +161,9 @@ private:
     // Storage for all core's control buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
 
+    // Storage for all core's L1 data buffers
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
+
     // 32bit FNV-1a hashing
     uint32_t hash32CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261));
 
@@ -201,11 +204,7 @@ private:
     void resetControlBufferForCore(IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state);
 
     // Read all L1 data buffers
-    void readL1DataBuffers(
-        IDevice* device,
-        const std::vector<CoreCoord>& virtual_cores,
-        ProfilerDumpState state,
-        std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_l1_data_buffers);
+    void readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
 
     // Read L1 data buffer for a single core
     void readL1DataBufferForCore(
@@ -280,7 +279,6 @@ private:
         IDevice* device,
         const CoreCoord& worker_core,
         ProfilerDumpState state,
-        const std::vector<uint32_t>& data_buffer,
         ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
@@ -330,8 +328,16 @@ public:
     // Change the output dir of device profile logs
     void setOutputDir(const std::string& new_output_dir);
 
-    // Traverse all cores on the device and dump the device profile results
-    void dumpResults(
+    // Traverse all cores on the device and read the device profile results
+    void readResults(
+        IDevice* device,
+        const std::vector<CoreCoord>& virtual_cores,
+        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
+        const std::optional<ProfilerOptionalMetadata>& metadata = {});
+
+    // Process the device profile results previously read
+    void processResults(
         IDevice* device,
         const std::vector<CoreCoord>& virtual_cores,
         ProfilerDumpState state = ProfilerDumpState::NORMAL,
