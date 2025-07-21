@@ -58,7 +58,7 @@ jobs:
     defaults:
         run:
           shell: bash
-          working-directory: /work # https://github.com/actions/runner/issues/878ujiiu
+          working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
