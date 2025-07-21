@@ -6,6 +6,70 @@
 
 #include "dataflow_api.h"
 #include "utils/bfloat16.h"
+#include "utils/float32.h"
+#include "utils/int32.h"
+#include "utils/uint32.h"
+
+template <DataFormat data_format>
+auto get_default_value() {
+    // Check for supported datatypes
+    if constexpr (data_format == DataFormat::Float16_b) {
+        return uint16_t{NEG_INF_BFLOAT16};
+    } else if constexpr (data_format == DataFormat::Float32) {
+        return float{NEG_INF_FLOAT32};
+    } else if constexpr (data_format == DataFormat::Int32) {
+        return int32_t{NEG_INF_INT32};
+    } else if constexpr (data_format == DataFormat::UInt32) {
+        return uint32_t{MIN_UINT32};
+    } else {
+        // Add other data formats as needed
+        static_assert(data_format != data_format, "Unsupported data format");
+    }
+}
+
+template <DataFormat data_format>
+void compare_values(
+    const uint32_t src_cb_addr,
+    decltype(get_default_value<data_format>())& max_val,
+    uint32_t& max_idx,
+    const uint32_t i,
+    const uint32_t j,
+    const uint32_t k,
+    const uint32_t red_dim_units,
+    bool reduce_all,
+    uint32_t inner_dim_units) {
+    if constexpr (data_format == DataFormat::Float16_b) {
+        volatile tt_l1_ptr uint16_t* in_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_cb_addr);
+        uint16_t val = in_vals[i];
+        if (bfloat16_greater(val, max_val)) {
+            max_idx = reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
+            max_val = val;
+        }
+    } else if constexpr (data_format == DataFormat::Float32) {
+        volatile tt_l1_ptr float* in_vals = reinterpret_cast<volatile tt_l1_ptr float*>(src_cb_addr);
+        float val = in_vals[i];
+        if (float32_greater(val, max_val)) {
+            max_idx = reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
+            max_val = val;
+        }
+    } else if constexpr (data_format == DataFormat::Int32) {
+        volatile tt_l1_ptr int32_t* in_vals = reinterpret_cast<volatile tt_l1_ptr int32_t*>(src_cb_addr);
+        int32_t val = in_vals[i];
+        if (int32_greater(val, max_val)) {
+            max_idx = reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
+            max_val = val;
+        }
+    } else if constexpr (data_format == DataFormat::UInt32) {
+        volatile tt_l1_ptr uint32_t* in_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_cb_addr);
+        uint32_t val = in_vals[i];
+        if (uint32_greater(val, max_val)) {
+            max_idx = reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
+            max_val = val;
+        }
+    } else {
+        static_assert(data_format != data_format, "Unsupported data format in compare_values");
+    }
+}
 
 void kernel_main() {
     // Runtime args
@@ -44,14 +108,14 @@ void kernel_main() {
 
     // CB in L1 memory for storing input
     const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
-    volatile tt_l1_ptr uint16_t* in_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_cb_addr);
+    constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
 
     // CB in L1 memory for storing output
     const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
     volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
 
     uint32_t max_idx = 0;
-    uint16_t max_val = NEG_INF_BFLOAT16;
+    auto max_val = get_default_value<src_cb_addr_data_format>();
 
     //-------------------------------------------------------------------------
     // Main loop - run by all cores
@@ -64,15 +128,12 @@ void kernel_main() {
             // Reset max_val for each new output
             if constexpr (not reduce_all) {
                 max_idx = 0;
-                max_val = NEG_INF_BFLOAT16;
+                max_val = get_default_value<src_cb_addr_data_format>();
             }
 
             for (uint32_t i = 0; i < red_dim_units; ++i) {
-                uint16_t val = in_vals[i];
-                if (bfloat16_greater(val, max_val)) {
-                    max_idx = reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
-                    max_val = val;
-                }
+                compare_values<src_cb_addr_data_format>(
+                    src_cb_addr, max_val, max_idx, i, j, k, red_dim_units, reduce_all, inner_dim_units);
             }
             if constexpr (not reduce_all) {
                 out_idxs[j] = max_idx;

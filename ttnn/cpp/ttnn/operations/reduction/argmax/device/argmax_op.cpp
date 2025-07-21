@@ -54,7 +54,10 @@ void ArgMax::validate_with_output_tensors(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
+    TT_FATAL(
+        input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32 ||
+            input_tensor_a.dtype() == DataType::INT32 || input_tensor_a.dtype() == DataType::UINT32,
+        "Only BFLOAT16, FLOAT32, INT32, and UINT32 are supported for inputs!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
@@ -114,10 +117,10 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto& output_tensor = output_tensors.at(0);
     const auto normalized_dim =
         this->dim.has_value() ? *this->dim + input_tensor.padded_shape().rank() * (*this->dim < 0) : this->dim;
-    if (this->use_multicore) {
-        return detail::argmax_multi_core(
-            input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);
-    }
+    // if (this->use_multicore) {
+    //     return detail::argmax_multi_core(
+    //         input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);
+    // }
     return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
 }
 
