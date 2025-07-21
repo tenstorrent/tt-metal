@@ -134,7 +134,7 @@ class CIv2ModelDownloadUtils_:
             model_path = model_path + "/"
 
         endpoint = f"{endpoint_prefix}/{model_path}"
-
+        logger.info(f"Resulted endpoint {endpoint}")
         try:
             # TODO: How do we add a timeout here without relying on native timeout command?
             subprocess.run(
