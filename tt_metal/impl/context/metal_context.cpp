@@ -420,7 +420,7 @@ void MetalContext::set_fabric_config(
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED &&
         fabric_config != tt_fabric::FabricConfig::DISABLED) {
         log_info(tt::LogMetal, "Resetting control plane for new fabric config: {}", fabric_config);
-        global_control_plane_.reset();
+        control_plane_.reset();
     }
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED || fabric_config == tt_fabric::FabricConfig::DISABLED) {
