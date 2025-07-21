@@ -249,6 +249,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherReplicateAsync::create_pr
                 input_tensors[0],
                 input_tensors[1],
                 input_tensors[2],
+                output_tensors[0],
                 target_device,
                 forward_device,
                 backward_device,

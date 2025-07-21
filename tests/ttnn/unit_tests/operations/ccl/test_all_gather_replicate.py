@@ -109,7 +109,7 @@ def run_all_gather_replicate_impl(
     # Intermediate shapes
     intermediate_num_cores = cluster_shape[cluster_axis]
     intermediate_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        ttnn.CoreCoord(1, 0), intermediate_num_cores, SUB_DEVICE_CRS, row_wise=True
+        ttnn.CoreCoord(3, 0), intermediate_num_cores, SUB_DEVICE_CRS, row_wise=False
     )
     aggregated_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
         ttnn.CoreCoord(1, 0), MCAST_NUM_CORES, MCAST_CRS, row_wise=True
