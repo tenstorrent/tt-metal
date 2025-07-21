@@ -43,7 +43,7 @@ def image_to_tensor(image):
 
 
 def load_torch_model(model_location_generator, module=None):
-    if model_location_generator == None:
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         model_path = "models"
     else:
         model_path = model_location_generator("vision-models/yolov4", model_subdir="", download_if_ci_v2=True)

@@ -16,10 +16,13 @@ from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_prepro
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def load_torch_model(model_location_generator=None):
+def load_torch_model(model_location_generator=None, use_pretrained_weight=False):
     torch_model = TuSimple34(input_height=320, input_width=800)
     torch_model.eval()
-    if model_location_generator == None:
+    if not use_pretrained_weight:
+        return torch_model
+
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
         if not os.path.exists(weights_path):
             os.system("bash models/demos/ufld_v2/weights_download.sh")

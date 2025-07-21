@@ -7,13 +7,13 @@ import os
 
 import numpy as np
 import pytest
-import torch
 from loguru import logger
 
 from models.demos.ufld_v2.demo import model_config as cfg
 from models.demos.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
 from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
+from models.demos.ufld_v2.runner.performant_runner_infra import load_torch_model
 
 
 @pytest.mark.parametrize(
@@ -42,15 +42,7 @@ def test_ufld_v2_demo(
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
         logger.info(f"Demo Inference using Pre-trained Weights")
-        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
-        if not os.path.exists(weights_path):
-            os.system("bash models/demos/ufld_v2/weights_download.sh")
-        state_dict = torch.load(weights_path)
-        new_state_dict = {}
-        for key, value in state_dict["model"].items():
-            new_key = key.replace("model.", "res_model.")
-            new_state_dict[new_key] = value
-        reference_model.load_state_dict(new_state_dict)
+        reference_model = load_torch_model(model_location_generator, use_pretrained_weight)
     else:
         logger.info(f"Demo Inference using Random Weights")
     cfg.row_anchor = np.linspace(160, 710, cfg.num_row) / 720
@@ -70,7 +62,7 @@ def test_ufld_v2_demo(
         device=None,
         is_overlay=True,
         n_images=1,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
     )
     run_test_tusimple(
         UFLDPerformantRunner,
