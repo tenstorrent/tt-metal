@@ -70,7 +70,7 @@ jobs:
       - name: yolov11 tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
-          test_name: "yolov11 tests"
+          test_name: "yolov11_tests"
           commands: |
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests -m models_device_performance_bare_metal
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal
@@ -80,7 +80,7 @@ jobs:
       - name: stable_diffusion tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
-          test_name: "stable_diffusion tests"
+          test_name: "stable_diffusion_tests"
           commands: |
             pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
@@ -90,7 +90,7 @@ jobs:
       - name: distilbert tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@kkabilar-reorg-devperf-1
         with:
-          test_name: "distilbert tests"
+          test_name: "distilbert_tests"
           commands: |
             pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
