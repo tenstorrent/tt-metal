@@ -23,7 +23,7 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
             // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
             // using that link to route dispatch or any other traffic
             wrap_around_mesh[mesh_id] = false;

@@ -44,7 +44,7 @@ public:
         std::sort(physical_chip_ids.begin(), physical_chip_ids.end());
 
         for (chip_id_t chip_id_src : physical_chip_ids) {
-            if (device->is_mmio_capable() && (cluster.get_cluster_type() == tt::ClusterType::TG)) {
+            if (device->is_mmio_capable() && (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG)) {
                 // skip lauching on gateways for TG
                 continue;
             }

@@ -234,6 +234,7 @@ PYBIND11_MODULE(_ttnn, module) {
 
     ttnn::types::py_module_types(m_types);
     ttnn::activation::py_module_types(m_activation);
+    ttnn::cluster::py_cluster_module_types(m_cluster);
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
     ttnn::fabric::py_bind_fabric_api(m_fabric);

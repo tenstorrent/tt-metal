@@ -135,6 +135,9 @@ from ttnn._ttnn.global_circular_buffer import (
 
 from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
 
+# Import cluster functions and types
+from ttnn._ttnn import cluster
+
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
