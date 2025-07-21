@@ -185,7 +185,7 @@ void MAIN {
     // - VectorMode::RC is equivalent to 32x32 tiles
     // - VectorMode::R is equivalent to 16x32 tiles
     // NOTE: Using VectorMode::RC for 16x32 tiles will be correct accuracy, just slower due to unnecessary math
-    constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
+    constexpr int vector_mode = VectorMode::RC;
 
     // Ping pong intermediate buffers between loops to avoid copies
     uint32_t cb_cur_max = cb_max_1;
@@ -380,7 +380,7 @@ void MAIN {
         if (do_reduce) {
             // cb_out_accumulate_im should contain o_1
             // cb_prev_max and cb_prev_sum should contain m_1 and l_1
-
+            /*
             if (k_chunk_end - k_chunk_start < k_num_chunks) {
                 // This indicates that there are computes done by other workers. Needs to wait for them and send to
                 // reducer's compute
@@ -414,12 +414,12 @@ void MAIN {
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
-            }
+            }*/
             /**
              * Performs final row-reduction on the partial sum.
              */
             matmul_reduce<Sq_chunk_t>(cb_col_identity, cb_prev_sum);
-            move_block<false>(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
+            move_block<true>(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
 
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(cb_cur_sum, Sq_chunk_t);
