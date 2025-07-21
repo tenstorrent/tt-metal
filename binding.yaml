@@ -1,0 +1,19 @@
+rank_bindings:
+  - rank: 0                  # MPI rank
+    mesh_id: 0               # Mesh ID
+    env_overrides:
+      RANK_0_ENV_VAR: "value"
+  - rank: 1
+    mesh_id: 0
+    env_overrides:
+      RANK_1_ENV_VAR: "value"
+global_env:                  # Environment variables for all ranks
+  PYTHONPATH: "/home/aliu/tt-metal"
+  TT_METAL_HOME: "/home/aliu/tt-metal"
+  TT_METAL_ENV: "dev"
+  HOME: "/home/aliu"
+  TT_METAL_CACHE: "/home/aliu/tt-metal"
+    #  TT_METAL_LOGGER_TYPES: "Fabric"
+    # TT_METAL_LOGGER_LEVEL: "debug"
+
+mesh_graph_desc_path:  "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml"

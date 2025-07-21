@@ -131,6 +131,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = common::get_linearized_index(mesh_coordinate, mesh_view);
+    std::cout << "linearized_mesh_coord " << linearized_mesh_coord << " fabric " << fabric_node_id << std::endl;
 
     log_debug(
         tt::LogOp,

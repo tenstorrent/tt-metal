@@ -338,8 +338,15 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
         log_info(
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
     }
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    std::cout << " here 1" << std::endl;
+    distributed_context.barrier();
     this->initialize_active_devices();
+    std::cout << " here 2" << std::endl;
+    distributed_context.barrier();
     this->wait_for_fabric_router_sync();
+    std::cout << " here 3" << std::endl;
+    distributed_context.barrier();
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -642,6 +649,8 @@ void DevicePool::wait_for_fabric_router_sync() const {
         if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
             return;
         }
+        std::cout << " wait for handshake on device " << dev->id() << " num oruters "
+                  << fabric_context.get_num_fabric_initialized_routers(dev->id()) << std::endl;
 
         const auto master_router_chan = fabric_context.get_fabric_master_router_chan(dev->id());
         const auto master_router_logical_core =
