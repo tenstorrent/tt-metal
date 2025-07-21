@@ -135,12 +135,13 @@ std::vector<CBInfo> get_cb_info(
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? input_tile_size : output_tile_size;
         const tt::DataFormat act_cb_data_format =
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
+        const bool overlap_act_cb = sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT,
-            .num_pages = skip_act_cb_create ? 0 : act_cb_num_tiles,
+            .num_pages = overlap_act_cb ? 0 : act_cb_num_tiles,
             .page_size = act_cb_tile_size,
             .data_format = act_cb_data_format,
-            .overlapped_by_cb = skip_act_cb_create ? std::optional<Conv2dCb>(Conv2dCb::ACT_TILIZED) : std::nullopt});
+            .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT_TILIZED) : std::nullopt});
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_SECOND_READER,
             .num_pages = act_block_split_num_tiles,
