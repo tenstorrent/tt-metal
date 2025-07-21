@@ -21,7 +21,7 @@
 
 namespace tt::tt_metal {
 
-class T3K2DFabricSendRecvFixture : public T3000MeshDevice2DFabricFixture,
+class T3K2DFabricSendRecvFixture : public MeshDevice2x4Fabric2DFixture,
                                    public testing::WithParamInterface<SocketTestArgs> {};
 
 template <typename T>

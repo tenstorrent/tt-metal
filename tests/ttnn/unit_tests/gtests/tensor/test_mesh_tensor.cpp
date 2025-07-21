@@ -29,7 +29,7 @@ using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 
 using MeshTensorTest = GenericMeshDeviceFixture;
-using MeshTensorTestT3K = T3000MeshDeviceFixture;
+using MeshTensorTest2x4 = MeshDevice2x4Fixture;
 
 TEST(MeshTensorHostTest, ToHostNonMeshTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};
@@ -221,7 +221,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     EXPECT_THAT(device_shard_coords, ElementsAreArray(coord_matchers));
 }
 
-TEST_F(MeshTensorTestT3K, CombineDeviceTensors) {
+TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -286,7 +286,7 @@ struct MeshTensorWriteTestParams {
     std::function<std::unique_ptr<ttnn::distributed::TensorToMesh>(MeshDevice*)> get_mapper;
 };
 
-class MeshTensorWriteTest : public MeshTensorTestT3K,
+class MeshTensorWriteTest : public MeshTensorTest2x4,
                             public ::testing::WithParamInterface<MeshTensorWriteTestParams> {};
 
 TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {

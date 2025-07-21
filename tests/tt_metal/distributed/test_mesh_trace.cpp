@@ -88,16 +88,16 @@ protected:
     MeshTraceTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (64 << 20)}) {}
 };
 
-class MeshTraceTestT3000 : public MeshDeviceFixtureBase {
+class MeshTraceTest2x4 : public MeshDeviceFixtureBase {
 protected:
-    MeshTraceTestT3000() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}, .trace_region_size = (64 << 20)}) {}
+    MeshTraceTest2x4() :
+        MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{2, 4}, .trace_region_size = (64 << 20)}) {}
 };
 
-class MeshTraceTestTG : public MeshDeviceFixtureBase {
+class MeshTraceTest4x8 : public MeshDeviceFixtureBase {
 protected:
-    MeshTraceTestTG() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .trace_region_size = (64 << 20)}) {}
+    MeshTraceTest4x8() :
+        MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{4, 8}, .trace_region_size = (64 << 20)}) {}
 };
 
 TEST_F(MeshTraceTestSuite, Sanity) {
@@ -149,7 +149,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
     }
 }
 
-TEST_F(MeshTraceTestT3000, EltwiseBinaryMeshTrace) {
+TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> intermed_bufs_0 = {};
@@ -557,19 +557,19 @@ void run_heterogenous_trace_sweep(
     ReleaseTrace(mesh_device.get(), trace_id);
 }
 
-class T3KMeshTraceSweepTest : public MeshTraceTestT3000,
+class MeshTraceSweepTest2x4 : public MeshTraceTest2x4,
                               public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
 
-class TGMeshTraceSweepTest : public MeshTraceTestTG,
-                             public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
+class MeshTraceSweepTest4x8 : public MeshTraceTest4x8,
+                              public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
 
-TEST_P(T3KMeshTraceSweepTest, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
+TEST_P(MeshTraceSweepTest2x4, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
 
-TEST_P(TGMeshTraceSweepTest, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
+TEST_P(MeshTraceSweepTest4x8, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
 
 INSTANTIATE_TEST_SUITE_P(
-    T3KMeshTraceSweepTests,
-    T3KMeshTraceSweepTest,
+    MeshTraceSweepTest2x4Tests,
+    MeshTraceSweepTest2x4,
     ::testing::Values(
         std::vector<std::vector<MeshCoordinateRange>>({
             {t3k_full_grid()},
@@ -668,8 +668,8 @@ INSTANTIATE_TEST_SUITE_P(
         })));
 
 INSTANTIATE_TEST_SUITE_P(
-    TGMeshTraceSweepTests,
-    TGMeshTraceSweepTest,
+    MeshTraceSweepTest4x8Tests,
+    MeshTraceSweepTest4x8,
     ::testing::Values(
         std::vector<std::vector<MeshCoordinateRange>>({
             // Run on full grid

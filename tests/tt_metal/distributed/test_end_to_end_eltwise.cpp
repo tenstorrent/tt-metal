@@ -110,7 +110,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
 namespace tt::tt_metal::distributed::test {
 
-using MeshEndToEndT3kTests = T3000MeshDeviceFixture;
+using MeshEndToEndT3kTests = MeshDevice2x4Fixture;
 using ::testing::Each;
 using ::testing::Eq;
 using ::testing::FloatEq;
@@ -243,17 +243,17 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
     }
 }
 
-class MeshEndToEndT3kTraceTests : public MeshDeviceFixtureBase {
+class MeshEndToEnd2x4TraceTests : public MeshDeviceFixtureBase {
 protected:
-    MeshEndToEndT3kTraceTests() :
+    MeshEndToEnd2x4TraceTests() :
         MeshDeviceFixtureBase(Config{
-            .mesh_device_types = {MeshDeviceFixtureBase::MeshDeviceType::T3000},
+            .system_mesh_shape = MeshShape{2, 4},
             .num_cqs = 2,
             .trace_region_size = 3072,  // 1024 per workload necessary
         }) {}
 };
 
-TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     constexpr uint8_t kAddOpId = 0;
 
     auto shard_shape = Shape2D{32, 32};
@@ -317,7 +317,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
     }
 }
 
-TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     constexpr uint8_t kMulOpId = 1;
 
     auto shard_shape = Shape2D{32, 32};
@@ -382,7 +382,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
 
 MATCHER_P(Bfloat16Eq, calculated, "") { return arg.to_float() == calculated; }
 
-TEST_F(MeshEndToEndT3kTraceTests, SimulEltwiseTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 

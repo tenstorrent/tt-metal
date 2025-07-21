@@ -32,7 +32,7 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshEventsTestT3000 = T3000MultiCQMeshDeviceFixture;
+using MeshEventsTest2x4 = MultiCQMeshDevice2x4Fixture;
 using MeshEventsTestSuite = GenericMultiCQMeshDeviceFixture;
 
 TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
@@ -73,7 +73,7 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     }
 }
 
-TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
+TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
     uint32_t num_iterations = 20;
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 

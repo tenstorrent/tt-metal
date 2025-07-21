@@ -176,8 +176,8 @@ void validate_sems(
     }
 }
 
-using MeshWorkloadTestT3000 = T3000MeshDeviceFixture;
-using MeshWorkloadTestTG = TGMeshDeviceFixture;
+using MeshWorkloadTest2x4 = MeshDevice2x4Fixture;
+using MeshWorkloadTest4x8 = MeshDevice4x8Fixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 
 TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
@@ -227,8 +227,7 @@ TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
         ThrowsMessage<std::runtime_error>(HasSubstr("overlaps with the previously added range")));
 }
 
-// Test running different configurations of heterogenous MeshWorkloads on T3000.
-TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
+TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     uint32_t num_programs = 100;
     uint32_t num_heterogeneous_programs = 64;
     uint32_t num_iterations = 1000;
@@ -311,8 +310,7 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-// Test running different configurations of heterogenous MeshWorkloads on TG.
-TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
+TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
     uint32_t num_programs_0 = 16;
     uint32_t num_programs_1 = 24;
     uint32_t num_iterations = 1000;

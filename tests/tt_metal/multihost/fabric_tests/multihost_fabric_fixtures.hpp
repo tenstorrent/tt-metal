@@ -127,19 +127,19 @@ public:
 };
 
 // Base fixture for Multi-Host MeshDevice tests relying on Inter-Mesh Routing.
-class MultiMeshDeviceFabricFixture : public tt::tt_metal::GenericMeshDevice2DFabricFixture {
+class MultiMeshDeviceFabricFixture : public tt::tt_metal::GenericMeshDeviceFabric2DFixture {
 public:
     void SetUp() override {
         if (not system_supported()) {
             GTEST_SKIP() << "Skipping since this is not a supported system.";
         }
         validate_and_setup_control_plane_config(this);
-        tt::tt_metal::GenericMeshDevice2DFabricFixture::SetUp();
+        tt::tt_metal::GenericMeshDeviceFabric2DFixture::SetUp();
     }
 
     void TearDown() override {
         if (system_supported()) {
-            tt::tt_metal::GenericMeshDevice2DFabricFixture::TearDown();
+            tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
         }
     }
 
