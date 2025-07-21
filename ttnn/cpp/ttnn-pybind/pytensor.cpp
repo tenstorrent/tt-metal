@@ -280,6 +280,7 @@ struct PyTensorHostConversionStrategy {
     Layout construct_with_layout = Layout::TILE;
     std::optional<DataType> construct_with_data_type = std::nullopt;
     py::object tensor;
+    MemoryConfig memory_config;
 };
 
 template <typename... Args>
@@ -311,10 +312,14 @@ void log_from_cpp(Args&&... message) {
     std::cout << formatted_message.cast<std::string>() << std::endl;
 }
 
-#define py_log(...)  // `log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(,) __VA_ARGS__);
+#define py_log(...) log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(, ) __VA_ARGS__);
 
 PyTensorHostConversionStrategy prepare_conversion_strategy(
-    const py::handle& py_tensor, std::optional<DataType> const& dtype, std::optional<Layout> layout, bool has_device) {
+    const py::handle& py_tensor,
+    std::optional<DataType> const& dtype,
+    std::optional<Layout> layout,
+    bool has_device,
+    MemoryConfig const& memory_config) {
     PyTensorHostConversionStrategy res;
     bool HANDLE_FLOAT32_BUG_23405 = true;
     py::object torch = py::module_::import("torch");
@@ -474,6 +479,14 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         }
     }
 
+    if (memory_config.is_sharded()) {
+        // Tiling for typecast requires height sharded memory layout
+        res.memory_config =
+            MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, memory_config.buffer_type(), memory_config.shard_spec());
+    } else {
+        res.memory_config = memory_config;
+    }
+
     res.tensor = tensor;
 
     return res;
@@ -505,7 +518,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<PyTensorHostConversionStrategy> strategy;
     if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
         py_log();
-        strategy = prepare_conversion_strategy(py_tensor, optional_data_type, optional_layout, device != nullptr);
+        strategy = prepare_conversion_strategy(
+            py_tensor, optional_data_type, optional_layout, device != nullptr, memory_config);
         if (strategy) {
             if (strategy->construct_with_data_type) {
                 py_log("construct with data type", strategy->construct_with_data_type.value());
@@ -554,7 +568,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             strategy && strategy->construct_with_data_type ? strategy->construct_with_data_type.value()
                                                            : preprocessed_py_tensor.data_type,
             PageConfig(strategy ? strategy->construct_with_layout : layout, optional_tile),
-            memory_config),
+            strategy ? strategy->memory_config : memory_config),
         device,
         pydata_pin,
         cq_id,
@@ -567,7 +581,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         if (strategy->host_side_conversion) {
             if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout.value()) {
                 py_log();
-                output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
+                output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, output.memory_config());
             }
         } else {
             if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
@@ -575,7 +589,7 @@ Tensor convert_python_tensor_to_tt_tensor(
                 if (output.layout() != Layout::TILE) {
                     py_log();
                     ZoneScopedN("pre-typecast layout conversion");
-                    output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, memory_config);
+                    output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output.memory_config());
                 }
 
                 output = ttnn::typecast(output, optional_data_type.value());
