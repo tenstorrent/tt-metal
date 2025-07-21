@@ -36,11 +36,6 @@ class EfficientNetb0Conv2D:
         self.cache = cache
         self.parameters = parameters
         self.shard_layout = shard_layout
-<<<<<<< HEAD
-=======
-        self.use_shallow_covariant = use_shallow_covariant
-        self.activation_dtype = activation_dtype
->>>>>>> 84af45e0f4 (13047: EfficientNetb0 ttnn bringup)
         self.output_layout = output_layout
         self.shard_layout = shard_layout
         self.dilation = dilation
@@ -50,10 +45,6 @@ class EfficientNetb0Conv2D:
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
-<<<<<<< HEAD
-=======
-            dtype=self.activation_dtype,
->>>>>>> 84af45e0f4 (13047: EfficientNetb0 ttnn bringup)
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=self.shard_layout,
@@ -112,10 +103,6 @@ class Conv2dDynamicSamePadding:
         conv_params,
         batch=1,
         is_width_sharded=False,
-<<<<<<< HEAD
-=======
-        use_shallow_covariant=False,
->>>>>>> 84af45e0f4 (13047: EfficientNetb0 ttnn bringup)
     ):
         self.device = device
         self.batch = batch
@@ -128,10 +115,6 @@ class Conv2dDynamicSamePadding:
         self.input_height = conv_params.input_height
         self.input_width = conv_params.input_width
         self.shard_layout = shard_layout
-<<<<<<< HEAD
-=======
-        self.use_shallow_covariant = use_shallow_covariant
->>>>>>> 84af45e0f4 (13047: EfficientNetb0 ttnn bringup)
         ih, iw = self.input_height, self.input_width
         kh, kw = self.kernel_size
         sh, sw = self.stride
@@ -147,10 +130,6 @@ class Conv2dDynamicSamePadding:
                 conv_params,
                 device,
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-<<<<<<< HEAD
-=======
-                use_shallow_covariant=self.use_shallow_covariant,
->>>>>>> 84af45e0f4 (13047: EfficientNetb0 ttnn bringup)
             )
         else:
             self.dynamic_conv = EfficientNetb0Conv2D(
@@ -158,10 +137,6 @@ class Conv2dDynamicSamePadding:
                 conv_params,
                 device=device,
                 shard_layout=self.shard_layout,
-<<<<<<< HEAD
-=======
-                use_shallow_covariant=self.use_shallow_covariant,
->>>>>>> 84af45e0f4 (13047: EfficientNetb0 ttnn bringup)
             )
 
         self.parameters_conv = conv_params
