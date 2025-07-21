@@ -16,28 +16,32 @@ from models.demos.segformer.tt.ttnn_segformer_attention import (
 )
 from models.demos.segformer.reference.segformer_attention import SegformerAttention
 from tests.ttnn.integration_tests.segformer.test_segformer_efficient_selfattention import (
-    create_custom_preprocessor as create_customer_preprocessor_selfattention,
+    create_custom_mesh_preprocessor as create_customer_preprocessor_selfattention,
 )
 from tests.ttnn.integration_tests.segformer.test_segformer_selfoutput import (
-    create_custom_preprocessor as create_customer_preprocessor_selfoutput,
+    create_custom_mesh_preprocessor as create_customer_preprocessor_selfoutput,
 )
+from models.demos.segformer.tt.common import get_mesh_mappers
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper):
         parameters = {}
         if isinstance(model, SegformerAttention):
             parameters["self"] = {}
-            self_attention_prepocessor = create_customer_preprocessor_selfattention(device)
-            parameters["self"] = self_attention_prepocessor(model.self, None, None)
+            self_attention_prepocessor = create_customer_preprocessor_selfattention(mesh_mapper)
+            parameters["self"] = self_attention_prepocessor(model.self, None, None, None)
 
             parameters["output"] = {}
-            self_output_prepocessor = create_customer_preprocessor_selfoutput(device)
-            parameters["output"] = self_output_prepocessor(model.output, None, None)
+            self_output_prepocessor = create_customer_preprocessor_selfoutput(mesh_mapper)
+            parameters["output"] = self_output_prepocessor(model.output, None, None, None)
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -94,9 +98,11 @@ def test_segformer_attention(
 
     torch_input_tensor = torch.reshape(torch_input_tensor, (batch_size, seq_len, hidden_size))
     output = reference_model(torch_input_tensor, height, width)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=device
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
     if "sr" in parameters["self"]:
         parameters["self"]["sr"]["weight"] = ttnn.from_device(parameters["self"]["sr"]["weight"])

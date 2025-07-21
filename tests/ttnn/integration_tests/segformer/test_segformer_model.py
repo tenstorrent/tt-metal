@@ -6,7 +6,7 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters, ParameterDict, ParameterList
 from tests.ttnn.integration_tests.segformer.test_segformer_encoder import (
-    create_custom_preprocessor as create_customer_preprocessor_encoder,
+    create_custom_mesh_preprocessor as create_customer_preprocessor_encoder,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -17,19 +17,23 @@ from models.demos.segformer.tt.ttnn_segformer_model import (
 )
 from models.demos.segformer.reference.segformer_model import SegformerModelReference
 from models.utility_functions import skip_for_grayskull
+from models.demos.segformer.tt.common import get_mesh_mappers
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         parameters["encoder"] = {}
         if isinstance(model, SegformerModelReference):
-            encoder_prepocessor = create_customer_preprocessor_encoder(device)
-            parameters["encoder"] = encoder_prepocessor(model.encoder, None, None)
+            encoder_prepocessor = create_customer_preprocessor_encoder(mesh_mapper)
+            parameters["encoder"] = encoder_prepocessor(model.encoder, None, None, None)
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 def move_to_device(object, device):
@@ -83,11 +87,12 @@ def test_segformer_model(
 
     reference_model.load_state_dict(new_state_dict)
     reference_model.eval()
-
     torch_output = reference_model(torch_input_tensor)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
     )
     parameters = move_to_device(parameters, device)
 
