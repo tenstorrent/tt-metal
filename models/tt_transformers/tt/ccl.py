@@ -152,8 +152,7 @@ def tt_all_reduce(
             memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if not tt_ccl.is_using_preallocated_persistent_buffers():
-            gathered_tensor.deallocate(True)
+        gathered_tensor.deallocate(True)
     else:
         input_mem_cfg = input_tensor.memory_config()
         reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
@@ -275,8 +274,7 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, tt_ccl, compute_ker
         inp, tt_stats_gathered, epsilon=epsilon, weight=gamma, compute_kernel_config=compute_kernel_config
     )
 
-    if not tt_ccl.is_using_preallocated_persistent_buffers():
-        tt_stats_gathered.deallocate(True)
+    tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)
 
     return tt_out
@@ -315,7 +313,6 @@ def tt_sharded_distributed_rmsnorm(
         program_config=ln_sharded_progcfg,
         stats=tt_stats,
     )
-    if not tt_ccl.is_using_preallocated_persistent_buffers():
-        tt_stats.deallocate(True)
+    tt_stats.deallocate(True)
 
     return tt_out
