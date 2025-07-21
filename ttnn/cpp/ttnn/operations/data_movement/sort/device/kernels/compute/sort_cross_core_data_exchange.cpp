@@ -70,7 +70,7 @@ void MAIN {
     transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
-        bool dir = ascending ^ ((core_id & 1) == 1);
+        bool start_dir = ascending ^ ((core_id & 1) == 1);
 
         // Read input value data
         sort_Wt_tiles_row_to_bitonic_sequence(
@@ -80,7 +80,7 @@ void MAIN {
             index_tensor_transposed_cb_index,
             number_of_tiles_per_core,
             /*switch_dir=*/true,
-            dir,
+            start_dir,
             /*end_phase(log2(K))=*/5);
 
         global_old_cb = index_tensor_cb_index;
@@ -109,7 +109,6 @@ void MAIN {
                     // Determine direction for this comparison block
                     const bool ascending_block = ((i >> stage) & 1) == 0;
                     const bool dir = ascending_block == ascending;
-                    // ---------- FROM here change
                     if (j >= global_tile_start && j < global_tile_end) {
                         if (j > i) {
                             // Local sorting - both tiles in core memory
@@ -166,15 +165,13 @@ void MAIN {
                             pack_tile<true>(tile_index_high, index_tensor_transposed_cb_index, right_tile_id);
 
                             tile_regs_release();
-                            // TODO ----- TO BE CHECKED
-                            // UNPACK(DPRINT << "COMPUTE: 1. Processing: left: " << left_tile_id << " and: " <<
-                            // right_tile_id << " sub: " << sub<< ENDL());
                             if (sub == 1 && j == (uint32_t)(global_tile_end - 1) && stage != stages &&
                                 stage >= (exchange_start_stage - 1)) {
                                 // Last pair of tiles processed - send to reader
                                 UNPACK(
                                     DPRINT << "COMPUTE: 1. Sending tiles: i: " << i << " and j: " << j << " to reader"
                                            << ENDL());
+                                UNPACK(DPRINT << ENDL());
                                 // Next tile will be processed by the next core
                                 // Pack and send to reader the first pair of tiles
                                 cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
@@ -212,7 +209,6 @@ void MAIN {
                                 sync_packer_unpacker(packer_unpacker_sync_cb_index);
                                 prev_send_start = false;
                             }
-                            // ----- TOD BE CHECKED -------------
                         }
                     } else {
                         const uint32_t tile_id = i - global_tile_start;
@@ -245,9 +241,9 @@ void MAIN {
                                 global_old_cb, input_tensor_transposed_cb_index, 1, value_tensor_intermediate_cb_index);
                             cb_push_back(value_tensor_intermediate_cb_index, one_tile);
                             sync_packer_unpacker(packer_unpacker_sync_cb_index);
-                            // prev_send_start = true;
                         } else if (
-                            i % 2 == 0 && i != (uint32_t)global_tile_start && i != (uint32_t)(global_tile_end - 1)) {
+                            ((i % 2) == 0) && (i != (uint32_t)global_tile_start) &&
+                            (i != (uint32_t)(global_tile_end - 1))) {
                             UNPACK(
                                 DPRINT << "COMPUTE:      > 2.2 Sending tiles to reader: " << i << " and: " << i + 1
                                        << ENDL());
@@ -285,8 +281,7 @@ void MAIN {
                                 value_tensor_intermediate_cb_index);
                             cb_push_back(value_tensor_intermediate_cb_index, one_tile);
                             sync_packer_unpacker(packer_unpacker_sync_cb_index);
-                            // prev_send_start = true;
-                        } else if (i % 2 == 0 && i == (uint32_t)(global_tile_end - 1) && (sub - 1) != 1) {
+                        } else if (((i % 2) == 0) && (i == (uint32_t)(global_tile_end - 1)) && ((sub - 1) != 1)) {
                             UNPACK(
                                 DPRINT << "COMPUTE:      > 2.3 Sending tiles to reader: " << 0 << " and: " << 1
                                        << ENDL());
@@ -312,18 +307,17 @@ void MAIN {
                                 global_old_cb, input_tensor_transposed_cb_index, 1, value_tensor_intermediate_cb_index);
                             cb_push_back(value_tensor_intermediate_cb_index, one_tile);
                             sync_packer_unpacker(packer_unpacker_sync_cb_index);
-                            // prev_send_start = true;
                         } else if (prev_send_start == true && i == (uint32_t)global_tile_start) {
                             UNPACK(
                                 DPRINT << "COMPUTE:      > 2.4 Sending tiles to reader: " << 0 << " and: " << 1
                                        << ENDL());
-                            cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
-                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
 
+                            cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
                             copy_tile_between_cbs(
                                 global_old_cb, index_tensor_transposed_cb_index, 0, index_tensor_intermediate_cb_index);
                             cb_push_back(index_tensor_intermediate_cb_index, one_tile);
 
+                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
                             copy_tile_between_cbs(
                                 global_old_cb, input_tensor_transposed_cb_index, 0, value_tensor_intermediate_cb_index);
                             cb_push_back(value_tensor_intermediate_cb_index, one_tile);
@@ -339,56 +333,14 @@ void MAIN {
                                 global_old_cb, input_tensor_transposed_cb_index, 1, value_tensor_intermediate_cb_index);
                             cb_push_back(value_tensor_intermediate_cb_index, one_tile);
                             sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                        } else {
+                            UNPACK(DPRINT << "COMPUTE: ELSE!" << ENDL());
                         }
                         prev_send_start = true;
                         UNPACK(
                             DPRINT << "COMPUTE:      > Sorting i: " << i << " j: " << j << " stage: " << stage
                                    << " sub: " << sub << ENDL());
-                        // tile_regs_acquire();
-
-                        // // Copy index tiles to DST register for exchange
-
-                        // cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
-                        // copy_tile_between_cbs(
-                        //     global_old_cb,
-                        //     index_tensor_transposed_cb_index,
-                        //     tile_id,
-                        //     index_tensor_intermediate_cb_index);
-                        // cb_push_back(index_tensor_intermediate_cb_index, one_tile);
-
-                        // copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_index, global_old_cb);
-                        // copy_tile(index_tensor_transposed_cb_index, tile_id, index_dest_start);
-
-                        // Copy value tiles to DST register for exchange
-
-                        // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                        // copy_tile_between_cbs(
-                        //     global_old_cb,
-                        //     input_tensor_transposed_cb_index,
-                        //     tile_id,
-                        //     value_tensor_intermediate_cb_index);
-                        // cb_push_back(value_tensor_intermediate_cb_index, one_tile);
-
-                        // copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
-                        // copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
-
-                        // tile_regs_commit();
-                        // tile_regs_wait();
-
-                        // Send current index tile reader for exchange
-                        // cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
-                        // pack_reconfig_data_format(index_tensor_intermediate_cb_index);
-                        // pack_tile(index_dest_start, index_tensor_intermediate_cb_index, FIRST_TILE);
-                        // cb_push_back(index_tensor_intermediate_cb_index, one_tile);
-
-                        // Send current value tile reader for exchange
-                        // cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                        // pack_reconfig_data_format(value_tensor_intermediate_cb_index);
-                        // pack_tile(input_dest_start, value_tensor_intermediate_cb_index, FIRST_TILE);
-                        // cb_push_back(value_tensor_intermediate_cb_index, one_tile);
-
-                        // tile_regs_release();
-
+                        UNPACK(DPRINT << ENDL());
                         // Process received tiles from other core
                         tile_regs_acquire();
 
@@ -417,7 +369,7 @@ void MAIN {
 
                         cb_pop_front(value_tensor_peer_cb_index, one_tile);
 
-                        ckernel::topk_merge(0, m_iter, 32);
+                        ckernel::topk_merge(0, m_iter, 64);
 
                         // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                         // If core must keep smallest values, then keep DEST[1] instead of DEST[0]

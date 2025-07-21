@@ -69,6 +69,7 @@ void sort_noc_exchange_Wt_tiles(
 
         // Handshake for tile exchange
         noc_semaphore_inc(sem_noc_addr, 1);
+        noc_async_atomic_barrier();
         noc_semaphore_wait(sem_self_ptr, sem_counter);
 
         // Send local indices and values to peer
@@ -76,26 +77,22 @@ void sort_noc_exchange_Wt_tiles(
         cb_wait_front(index_tensor_this_cb_index, ONE_TILE);
         uint32_t value_cb_self_read_addr = get_read_ptr(value_tensor_this_cb_index);
         uint32_t index_cb_self_read_addr = get_read_ptr(index_tensor_this_cb_index);
-        DPRINT << "READER:      > Received tiles form compute" << ENDL();
         // Write tiles to peer core
         noc_async_write(value_cb_self_read_addr, cb_value_peer_noc_write_addr, value_cb_tile_size);
         noc_async_write(index_cb_self_read_addr, cb_index_peer_noc_write_addr, index_cb_tile_size);
-        // DPRINT << "READER: 1" << ENDL();
         noc_async_write_barrier();
 
-        // DPRINT << "READER: 2" << ENDL();
         cb_pop_front(value_tensor_this_cb_index, ONE_TILE);
         cb_pop_front(index_tensor_this_cb_index, ONE_TILE);
 
         // Indicate finish reading and wait for other core to finish
         noc_semaphore_inc(sem_noc_addr, 1);
+        noc_async_atomic_barrier();
         noc_semaphore_wait(sem_self_ptr, sem_counter + 1);
-        // DPRINT << "READER: 3" << ENDL();
+
         // Push incoming tiles to compute buffers
         cb_push_back(cb_index_peer_index, ONE_TILE);
-        // DPRINT << "READER: 4" << ENDL();
         cb_push_back(cb_value_peer_index, ONE_TILE);
-        DPRINT << "READER:     > Pushed tiles to compute" << ENDL();
     }  // Wt
 
     // Reset semaphore value
@@ -174,7 +171,7 @@ void sort_barrier(
         // Wait for all other cores to reach the barrier
         noc_semaphore_wait(sem_self_barrier_ptr, num_cores - 1);
         noc_semaphore_set(sem_self_barrier_ptr, 0);
-
+        noc_async_atomic_barrier();
         // Broadcast to all other cores
         for (uint32_t core_id = start_core_id; core_id < num_cores; core_id++) {
             if (core_id == this_core_id) {
@@ -186,6 +183,7 @@ void sort_barrier(
             uint64_t sem_barrier_noc_addr =
                 get_noc_addr(remote_core_physical.first, remote_core_physical.second, sem_barrier_addr);
             noc_semaphore_inc(sem_barrier_noc_addr, 1);
+            noc_async_atomic_barrier();
         }
     } else {
         // Indicate finish reading and wait for leader core to signal
@@ -194,6 +192,7 @@ void sort_barrier(
         uint64_t sem_barrier_noc_addr =
             get_noc_addr(remote_core_physical.first, remote_core_physical.second, sem_barrier_addr);
         noc_semaphore_inc(sem_barrier_noc_addr, 1);
+        noc_async_atomic_barrier();
         noc_semaphore_wait(sem_self_barrier_ptr, 1);
         noc_semaphore_set(sem_self_barrier_ptr, 0);
     }
