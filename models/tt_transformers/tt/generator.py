@@ -501,11 +501,11 @@ class Generator:
 
         output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
 
-        out_list = [[None for _ in range(max_batch_size_per_model)] for _ in range(self.data_parallel)]
-        prefill_output_xattn_masks = [None for _ in range(batch_size)]
-        prefill_output_full_text_row_masked_out_masks = [None for _ in range(batch_size)]
-        decode_output_xattn_masks = [None for _ in range(batch_size)]
-        decode_output_full_text_row_masked_out_masks = [None for _ in range(batch_size)]
+        out_list = []
+        prefill_output_xattn_masks = []
+        prefill_output_full_text_row_masked_out_masks = []
+        decode_output_xattn_masks = []
+        decode_output_full_text_row_masked_out_masks = []
 
         if empty_slots is None:
             empty_slots = list(range(batch_size))
@@ -546,21 +546,20 @@ class Generator:
             if xattn_caches is not None:
                 xattn_caches[model_id] = xattn_cache
 
-            out_list[model_id][group_user_id] = logits
-            prefill_output_xattn_masks[idx] = prefill_cross_attention_masks
-            prefill_output_full_text_row_masked_out_masks[idx] = prefill_full_text_row_masked_out_mask
-            decode_output_xattn_masks[idx] = decode_cross_attention_masks
-            decode_output_full_text_row_masked_out_masks[idx] = decode_full_text_row_masked_out_mask
+            out_list.append(logits)
+            prefill_output_xattn_masks.append(prefill_cross_attention_masks)
+            prefill_output_full_text_row_masked_out_masks.append(prefill_full_text_row_masked_out_mask)
+            decode_output_xattn_masks.append(decode_cross_attention_masks)
+            decode_output_full_text_row_masked_out_masks.append(decode_full_text_row_masked_out_mask)
 
         # We gather prefill output at the end of prefill to reduce unnecessary device sync
-        for idx in range(batch_size):
-            user_id = empty_slots[idx]
+        for idx, user_id in enumerate(empty_slots):
             model_id = user_id // max_batch_size_per_model
             group_user_id = user_id % max_batch_size_per_model
 
             last_token_idx = prompt_lens[idx] - 1
             output_logits[idx] = self.model[model_id].process_output_prefill(
-                out_list[model_id][group_user_id], 1, last_token_idx=(last_token_idx % 32)
+                out_list[idx], 1, last_token_idx=(last_token_idx % 32)
             )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
