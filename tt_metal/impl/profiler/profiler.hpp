@@ -158,15 +158,6 @@ private:
     // Storage for all core's L1 data buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
 
-    // 32bit FNV-1a hashing
-    uint32_t hash32CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261));
-
-    // XORe'd 16-bit FNV-1a hashing functions
-    uint16_t hash16CT(const std::string& str);
-
-    void populateZoneSrcLocations(
-        const std::string& new_log_name, const std::string& log_name = "", bool push_new = false);
-
     // serialize all noc trace data into per-op json trace files
     void serializeJsonNocTraces(
         const nlohmann::ordered_json& noc_trace_json_log,
