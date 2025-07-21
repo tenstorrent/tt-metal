@@ -41,7 +41,6 @@ jobs:
       - ${{ inputs.topology }}
       - bare-metal
       - pipeline-functional
-      - ${{ inputs.extra-tag }}
     container:
         image: ${{ inputs.docker-image }}
         env:
