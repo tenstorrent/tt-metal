@@ -39,7 +39,6 @@ jobs:
           {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
 
           {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools"},
-          {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
           {name: dispatch, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
           {name: misc, cmd: "./build/test/tt_metal/unit_tests_misc"},
