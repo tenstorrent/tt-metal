@@ -125,7 +125,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     v_if((base == 0.f) && pow < 0.f) {
         y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
     }
-    v_endblock;
+    v_endif;
 
     v_if(base < 0.0f) {  // negative base
         // Check for integer power
@@ -133,15 +133,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
             // if pow is odd integer, set result to negative
             v_if(pow_int & 0x1) {
                 // if negative base and negative pow then x**y = -(abs(x))**(abs(y))
-                // `sign` will be used at the end
                 y = setsgn(y, 1);
             }
             v_endif;
         }
         v_else {
-            // multiplication by NaN gives NaN.
-            // Since we are going to multiply the result by `sign` to handle negative bases, we also use
-            // `sign` to handle NaN results
             y = sfpi::vConstFloatPrgm2;  // = NaN
         }
         v_endif;
