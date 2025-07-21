@@ -362,6 +362,12 @@ jobs:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: in-service-dedicated-apc },
+        ]
     uses: ./.github/workflows/tg-demo-all-post-commmit-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
