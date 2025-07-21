@@ -651,25 +651,20 @@ class Generator:
         return torch.chunk(mask, self.data_parallel, 0)
 
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False, empty_slots=None):
+    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        masks = self._get_mask_tensors(unpadded_batch, empty_slots)
+        max_batch_size_per_model = self.model_args[0].max_batch_size
 
         logits = []
         for i in range(self.data_parallel):
-            B = masks[i].sum().item()
-            if B == 0:
-                continue
-
-            logits_i = self.model[i].process_output_decode(tt_out[i], B, S=1, is_tokens=is_tokens, mask=masks[i])
+            logits_i = self.model[i].process_output_decode(
+                tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
+            )
             logits.append(logits_i)
 
-        logits = torch.cat(logits, 0)
-        assert logits.shape[0] == unpadded_batch
-
-        return logits
+        return torch.cat(logits, 0)
 
     def _decode_forward_no_trace(
         self,
