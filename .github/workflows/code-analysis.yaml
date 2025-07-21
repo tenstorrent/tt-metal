@@ -103,7 +103,11 @@ jobs:
         run: |
           echo "🔄 Ensuring parent repo is up to date with latest main..."
           git checkout main
-          git pull origin main
+          # Force parent repo to match remote main, discarding any local changes
+          git fetch origin main
+          git clean -fd
+          git reset --hard origin/main
+          
           # Force submodules to match parent repo expectations, discarding any local changes
           git submodule foreach --recursive 'git clean -fdx'
           git submodule foreach --recursive 'git reset --hard HEAD'
