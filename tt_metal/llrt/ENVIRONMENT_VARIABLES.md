@@ -1,6 +1,6 @@
 # TT-Metal Runtime Environment Variables
 
-This document provides a comprehensive overview of all environment variables read by the TT-Metal runtime system. These variables allow you to configure various aspects of the runtime behavior including debugging, profiling, caching, and hardware-specific settings.
+This document provides a comprehensive overview of all environment variables read by the TT-Metalium runtime system. These variables allow you to configure various aspects of the runtime behavior including debugging, profiling, caching, and hardware-specific settings.
 
 ## Core Path Configuration
 
