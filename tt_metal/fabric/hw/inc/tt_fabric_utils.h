@@ -15,6 +15,10 @@
 namespace tt::tt_fabric {
 
 /* Termination signal handling*/
+FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE;
+}
+
 FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // mailboxes defined in tt_metal/hw/inc/ethernet/tunneling.h
     invalidate_l1_cache();
@@ -29,14 +33,14 @@ FORCE_INLINE bool connect_is_requested(uint32_t cached) {
            cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
 }
 
-template <uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void establish_worker_connection(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface) {
-    local_sender_channel_worker_interface.cache_producer_noc_addr();
+    local_sender_channel_worker_interface.template cache_producer_noc_addr<MY_ETH_CHANNEL>();
     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
 }
 
-template <uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void check_worker_connections(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
     bool& channel_connection_established,
@@ -55,7 +59,7 @@ FORCE_INLINE void check_worker_connections(
             channel_connection_established = true;
 
             ASSERT(get_ptr_val(stream_id) <= static_cast<int32_t>(SENDER_NUM_BUFFERS));
-            establish_worker_connection(local_sender_channel_worker_interface);
+            establish_worker_connection<MY_ETH_CHANNEL>(local_sender_channel_worker_interface);
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;

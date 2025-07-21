@@ -50,25 +50,97 @@ namespace tt::tt_fabric {
 //                         ------------------
 //
 
+/**
+ * Configure RISC settings based on architecture and RISC ID.
+ * This function centralizes the per-ERISC configuration logic for easy modification.
+ *
+ * @param risc_id The RISC ID (0 or 1)
+ * @param arch The architecture (WORMHOLE_B0 or BLACKHOLE)
+ * @param enable_handshake Output parameter for handshake enable
+ * @param enable_context_switch Output parameter for context switch enable
+ * @param enable_interrupts Output parameter for interrupts enable
+ * @param is_sender_channel_serviced Output parameter for sender channel service flags
+ * @param is_receiver_channel_serviced Output parameter for receiver channel service flags
+ */
+static void configure_risc_settings(
+    size_t num_riscv_cores,
+    size_t risc_id,
+    tt::ARCH arch,
+    bool& enable_handshake,
+    bool& enable_context_switch,
+    bool& enable_interrupts,
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>& is_sender_channel_serviced,
+    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels>& is_receiver_channel_serviced) {
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        // Wormhole: All RISC cores handle both sender and receiver channels
+        enable_handshake = true;
+        enable_context_switch = true;
+        enable_interrupts = false;
+        is_sender_channel_serviced.fill(true);
+        is_receiver_channel_serviced.fill(true);
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        if (num_riscv_cores == 1) {
+            enable_handshake = true;
+            enable_context_switch = false;
+            enable_interrupts = false;
+            is_sender_channel_serviced.fill(true);
+            is_receiver_channel_serviced.fill(true);
+        } else {
+            // Blackhole: Distribute sender/receiver across two RISC cores
+            if (risc_id == 0) {
+                // ERISC0: Handle sender channels only
+                enable_handshake = true;
+                enable_context_switch = false;
+                enable_interrupts = false;
+                is_sender_channel_serviced.fill(true);
+                is_receiver_channel_serviced.fill(false);
+            } else if (risc_id == 1) {
+                // ERISC1: Handle receiver channels only
+                enable_handshake = false;
+                enable_context_switch = false;
+                enable_interrupts = false;
+                is_sender_channel_serviced.fill(false);
+                is_receiver_channel_serviced.fill(true);
+            } else {
+                TT_THROW("Invalid RISC ID {} for BLACKHOLE architecture", risc_id);
+            }
+        }
+    } else {
+        TT_THROW("Unsupported architecture for RISC configuration: {}", magic_enum::enum_name(arch));
+    }
+}
+
+static size_t get_num_riscv_cores() {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
+        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        if (nriscs > 1) {
+            log_warning(tt::LogFabric, "Launching fabric in experimental 2-erisc mode.");
+        }
+        return nriscs;
+    } else {
+        return 1;
+    }
+}
+
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
+    noc_(risc_id == 0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1),
     enable_handshake_(true),
     enable_context_switch_(true),
     enable_interrupts_(true),
     iterations_between_ctx_switch_and_teardown_checks_(
         FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks) {
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::WORMHOLE_B0) {
-        this->is_sender_channel_serviced_.fill(true);
-        this->is_receiver_channel_serviced_.fill(true);
-    } else if (arch == tt::ARCH::BLACKHOLE) {
-        this->is_sender_channel_serviced_.fill(risc_id == 0);
-        // TODO: set this to be risc_id == 1 when we want to split sender/receiver on the two eriscs
-        this->is_receiver_channel_serviced_.fill(risc_id == 0);
-        this->enable_context_switch_ = false;
-        this->enable_interrupts_ = false;
-    } else {
-        TT_THROW("Unsupported architecture for FabricRiscConfig: {}", magic_enum::enum_name(arch));
-    }
+
+    configure_risc_settings(
+        get_num_riscv_cores(),
+        risc_id,
+        arch,
+        this->enable_handshake_,
+        this->enable_context_switch_,
+        this->enable_interrupts_,
+        this->is_sender_channel_serviced_,
+        this->is_receiver_channel_serviced_);
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
@@ -80,11 +152,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
 
+    // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
     if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
         this->receiver_txq_id = 1;
     }
-    this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    this->num_riscv_cores = get_num_riscv_cores();
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(risc_id);
     }
@@ -709,19 +781,11 @@ void append_worker_to_fabric_edm_sender_rt_args(
 
 void append_worker_to_fabric_edm_sender_rt_args(
     chan_id_t eth_channel,
-    size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    TT_FATAL(
-        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
-        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
-
     const std::vector<uint32_t> values = {
-        eth_channel,
-        sender_worker_flow_control_semaphore_id,
-        sender_worker_terminate_semaphore_id,
-        sender_worker_buffer_index_semaphore_id};
+        eth_channel, sender_worker_terminate_semaphore_id, sender_worker_buffer_index_semaphore_id};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
@@ -731,14 +795,9 @@ void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     chip_id_t chip_id,
     const CoreRangeSet& worker_cores,
-    size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    TT_FATAL(
-        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
-        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
-
     chan_id_t eth_channel =
         tt::tt_metal::MetalContext::instance()
             .get_cluster()
@@ -781,10 +840,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     }
 
     const std::vector<uint32_t> values = {
-        eth_channel,
-        sender_worker_flow_control_semaphore_id,
-        sender_worker_terminate_semaphore_id,
-        sender_worker_buffer_index_semaphore_id};
+        eth_channel, sender_worker_terminate_semaphore_id, sender_worker_buffer_index_semaphore_id};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
@@ -828,6 +884,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     bool build_in_worker_connection_mode,
     bool dateline_connection) :
     my_eth_core_logical(my_eth_core_logical),
+    my_eth_channel(my_eth_core_logical.y),
     my_noc_x(my_noc_x),
     my_noc_y(my_noc_y),
     config(config),
@@ -904,6 +961,18 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const size_t default_handshake_context_switch_timeout = 4096;
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
+    auto dispatch_core_type =
+        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config().get_core_type();
+    uint32_t my_eth_channel_ = [&]() -> uint32_t {
+        if (dispatch_core_type == CoreType::WORKER) {
+            return this->my_eth_channel;
+        } else if (dispatch_core_type == CoreType::ETH) {
+            return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+        } else {
+            TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(dispatch_core_type));
+        }
+    }();
+
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
     auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
@@ -1011,6 +1080,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         default_handshake_context_switch_timeout,
         static_cast<uint32_t>(
             this->firmware_context_switch_type == FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE),
+        my_eth_channel_,
+
+        risc_id,
+        this->get_configured_risc_count(),
+
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 

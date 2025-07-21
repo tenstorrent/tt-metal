@@ -121,6 +121,7 @@ template struct ExecuteUnary<UnaryOpType::ALT_COMPLEX_ROTATE90>;
 template struct ExecuteUnary<UnaryOpType::CEIL>;
 template struct ExecuteUnary<UnaryOpType::FLOOR>;
 template struct ExecuteUnary<UnaryOpType::TRUNC>;
+template struct ExecuteUnary<UnaryOpType::FRAC>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -316,7 +317,7 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    DataType input_dtype = input_tensor.get_dtype();
+    DataType input_dtype = input_tensor.dtype();
 
     if (input_dtype != DataType::UINT8) {
         return detail::unary_impl(

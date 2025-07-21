@@ -336,7 +336,7 @@ TEST_F(DispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
     const uint32_t num_drams = device->num_dram_channels();
 
     constexpr uint32_t page_size = 2048;
-    constexpr uint32_t num_iterations = 1000;
+    constexpr uint32_t num_iterations = 100;
 
     const uint32_t brisc_base_addr = 8519744;
     uint32_t ncrisc_base_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);

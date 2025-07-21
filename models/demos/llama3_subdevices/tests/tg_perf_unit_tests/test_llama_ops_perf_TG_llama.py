@@ -10,22 +10,30 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
-    ("op_name", "expected_kernel_duration_us", "perf_margin"),
+    ("op_name", "expected_kernel_duration_4u_us", "expected_kernel_duration_6u_us", "perf_margin"),
     [
-        ("LayerNorm", 12.5, 0.05),
-        ("ScaledDotProductAttentionDecode", 13.2, 0.05),
-        ("PagedUpdateCacheDeviceOperation", 4.5, 0.16),
-        ("RotaryEmbeddingLlamaFusedQK", 4.15, 0.05),
-        ("Embeddings", 3.8, 0.1),
-        ("BinaryDeviceOperation", 3.1, 0.05),
+        ("LayerNorm", 12.5, 10.9, 0.05),
+        ("ScaledDotProductAttentionDecode", 11.9, 10.95, 0.05),
+        ("PagedUpdateCacheDeviceOperation", 4.5, 3.9, 0.16),
+        ("RotaryEmbeddingLlamaFusedQK", 3.92, 3.58, 0.05),
+        ("Embeddings", 3.8, 3.3, 0.1),
+        ("BinaryDeviceOperation", 2.78, 2.5, 0.05),
     ],
 )
-def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us, perf_margin):
+def test_llama_tg_ops_perf_device(
+    op_name,
+    expected_kernel_duration_4u_us,
+    expected_kernel_duration_6u_us,
+    perf_margin,
+    galaxy_type,
+):
     batch = 32
     test = "llama-distributed-ln"
     subdir = "llama-unit-tests"
     num_iterations = 3
-
+    expected_kernel_duration_us = (
+        expected_kernel_duration_4u_us if galaxy_type == "4U" else expected_kernel_duration_6u_us
+    )
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"Llama_TG_{op_name}"

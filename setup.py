@@ -191,8 +191,8 @@ class CMakeBuild(build_ext):
                     "Ninja",
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DCMAKE_INSTALL_PREFIX=build_Release",
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    "-DTT_INSTALL=OFF",
+                    "-DBUILD_SHARED_LIBS=ON",
+                    "-DTT_INSTALL=ON",
                     "-DTT_UNITY_BUILDS=ON",
                     "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
                     "-DWITH_PYTHON_BINDINGS=ON",
@@ -205,6 +205,12 @@ class CMakeBuild(build_ext):
                     cmake_args.extend(
                         [
                             "-DENABLE_TRACY=ON",
+                        ]
+                    )
+                else:
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=OFF",
                         ]
                     )
 

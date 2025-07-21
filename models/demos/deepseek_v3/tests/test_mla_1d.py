@@ -68,7 +68,7 @@ def get_cache_on_host(tt_cache, mesh_device):
     """
     host_cache = []
     for i, t in enumerate(
-        ttnn.get_device_tensors(tt_cache)[: list(mesh_device.shape)[0]]
+        ttnn.get_device_tensors(tt_cache)[: list(mesh_device.shape)[1]]
     ):  # Only get from first row of mesh_device
         host_t = t.cpu().to_torch()
         host_cache.append(host_t)
@@ -81,7 +81,7 @@ def get_cache_on_host(tt_cache, mesh_device):
     "mode, seq_len, batch_size",
     [
         ("decode", 1, 32),
-        # ("prefill", 128, 1),
+        ("prefill", 128, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -97,7 +97,6 @@ def get_cache_on_host(tt_cache, mesh_device):
     ],
     indirect=True,
 )
-@pytest.mark.skip(reason="FIXME: Reduce-scatter was unable to identify either a sender or receiver device ID")
 def test_forward_pass(
     mode,
     seq_len,
@@ -169,6 +168,7 @@ def test_forward_pass(
     ############################
     ### TTNN inputs
     ############################
+    logger.info("Preparing TTNN inputs")
     if mode == "decode":
         # TT Shape: [1, seq_len, batch_size, hidden_size]
         torch_input = torch_input.permute(1, 0, 2)
@@ -178,7 +178,7 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_row,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_row, dims=(-1, None), mesh_shape=mesh_shape),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_row, dims=(None, -1), mesh_shape=mesh_shape),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -231,14 +231,18 @@ def test_forward_pass(
     ############################
     ### TTNN forward pass
     ############################
+    logger.info("Running TTNN forward pass")
     if mode == "prefill":
         tt_output = MLA1D.forward_prefill(tt_input, user_id, rope_tensors, run_config)
-        tt_output_torch = ttnn.to_torch(tt_output)
     else:
         tt_output = MLA1D.forward_decode(tt_input, position_idxs_tensor, rope_tensors, run_config)
-        tt_output_torch = ttnn.to_torch(
-            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(-1, 0), mesh_shape=mesh_shape)
-        )[:1, ...]
+
+    tt_output_torch = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(0, -1), mesh_shape=mesh_shape)
+    )[:1, ...]
+
+    if mode == "decode":
+        # Torch Shape: [batch_size, seq_len, hidden_size]
         tt_output_torch = tt_output_torch.squeeze(0).permute(1, 0, 2)
 
     ############################
