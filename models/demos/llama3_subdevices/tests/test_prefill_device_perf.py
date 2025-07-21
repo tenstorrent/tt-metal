@@ -169,6 +169,7 @@ def is_collective_op(op_code):
 def test_llama_TG_perf_device(
     seqlen,
     reset_seeds,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -466,7 +467,7 @@ def test_llama_TG_perf_device(
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_demo_prefill_{seqlen}",
+        run_type=f"tg_llama_demo_prefill_{galaxy_type}_{seqlen}",
         ml_model_name="llama70b-tg",
     )
 
