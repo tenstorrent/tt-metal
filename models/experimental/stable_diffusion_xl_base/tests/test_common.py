@@ -14,7 +14,7 @@ import ttnn
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
-SDXL_L1_SMALL_SIZE = 57344
+SDXL_L1_SMALL_SIZE = 47000
 
 
 # Copied from sdxl pipeline
