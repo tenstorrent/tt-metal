@@ -1431,6 +1431,60 @@ std::vector<Tensor> matmul_batched_weights(
         queue_id);
 }
 
+SparseMatmul create_sparse_matmul_struct(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const struct SparseMatmul& parameters,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    auto matmul_parameters = Matmul{
+        parameters.program_config,
+        /*bcast_batch=*/std::nullopt,
+        parameters.output_mem_config,
+        parameters.output_dtype,
+        parameters.compute_kernel_config,
+        /*untilize_out=*/false,
+        parameters.user_core_coord,
+        parameters.user_fused_activation,
+        /*user_run_batched=*/false,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        parameters.output_tile,
+        parameters.global_cb,
+        parameters.sub_device_id};
+
+    auto matmul_struct =
+        create_matmul_struct(input_tensor_a, input_tensor_b, matmul_parameters, {optional_output_tensors.at(0)});
+    return SparseMatmul{
+        parameters.num_batches,
+        matmul_struct.program_config,
+        matmul_struct.output_mem_config,
+        matmul_struct.output_dtype,
+        matmul_struct.compute_kernel_config,
+        matmul_struct.user_core_coord,
+        matmul_struct.user_fused_activation,
+        matmul_struct.output_tile,
+        matmul_struct.global_cb,
+        matmul_struct.sub_device_id};
+}
+
+Tensor sparse_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const struct SparseMatmul& parameters,
+    const QueueId queue_id,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return operation::run(
+               create_sparse_matmul_struct(
+                   input_tensor_a, input_tensor_b, sparsity, parameters, {optional_output_tensor}),
+               {input_tensor_a, input_tensor_b, sparsity},
+               {},
+               {optional_output_tensor},
+               queue_id)
+        .at(0);
+}
+
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     // Validate tensor is within grid if sharded and not in DRAM
     if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
@@ -2533,6 +2587,160 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
     std::vector<Tensor>& output_tensors) const {
     return ::create_op_performance_model_for_matmul(
         input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config.value());
+}
+
+void SparseMatmul::validate(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    // TODO: Implement
+}
+
+std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    TT_FATAL(
+        optional_output_tensors.size() <= 1,
+        "None or One Optional output tensor can be passed when accessing it "
+        "for computing SparseMatmul's output specs");
+
+    const bool is_output_tensor_given = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
+
+    if (is_output_tensor_given) {
+        return {optional_output_tensors.at(0)->tensor_spec()};
+    }
+
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+
+    // Use the compute_matmul_output_shape function to get the output shape
+    const auto output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
+
+    auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
+    auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
+    auto output_tile = this->output_tile.value();
+    auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
+    auto output_layout = Layout::TILE;
+
+    auto matmul_parameters = Matmul{
+        this->program_config,
+        /*bcast_batch=*/std::nullopt,
+        this->output_mem_config,
+        this->output_dtype,
+        this->compute_kernel_config,
+        /*untilize_out=*/false,
+        this->user_core_coord,
+        this->user_fused_activation,
+        /*user_run_batched=*/false,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        this->output_tile,
+        this->global_cb,
+        this->sub_device_id};
+
+    if (this->output_mem_config.is_sharded()) {
+        MatmulProgramConfig chosen_program_config =
+            get_program_config(input_tensor_a, input_tensor_b, /*bias_single_tile_size=*/0, &matmul_parameters);
+        return std::visit(
+            [&](const auto& program_config) -> std::vector<TensorSpec> {
+                using ProgramConfigType = std::decay_t<decltype(program_config)>;
+                if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
+                    uint32_t M =
+                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+                    uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
+                    uint32_t per_core_M = program_config.per_core_M;
+                    uint32_t per_core_N = program_config.per_core_N;
+
+                    TT_FATAL(
+                        per_core_N % tile_width_ratio == 0,
+                        "per_core_N must be divisible by override output tile width");
+
+                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
+                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                    uint32_t num_cores = num_blocks_x * num_blocks_y;
+                    ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
+                    if (input_tensor_a.is_sharded()) {
+                        shard_orientation = input_tensor_a.shard_spec().value().orientation;
+                    } else if (input_tensor_b.is_sharded()) {
+                        shard_orientation = input_tensor_b.shard_spec().value().orientation;
+                    }
+
+                    CoreRangeSet all_cores = num_cores_to_corerangeset(
+                        num_cores,
+                        program_config.compute_with_storage_grid_size,
+                        shard_orientation == ShardOrientation::ROW_MAJOR);
+                    ShardSpec shard_spec = ShardSpec{
+                        all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, shard_orientation};
+                    auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
+                } else {
+                    TT_THROW("Unsupported program config {} when output tensor is sharded", chosen_program_config);
+                }
+            },
+            chosen_program_config);
+    }
+
+    return {TensorSpec(
+        output_shape, TensorLayout(output_dtype.value(), PageConfig(Layout::TILE, output_tile), output_mem_config))};
+}
+
+std::vector<Tensor> SparseMatmul::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    return operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
+}
+
+operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    auto matmul_parameters = Matmul{
+        this->program_config,
+        /*bcast_batch=*/std::nullopt,
+        this->output_mem_config,
+        this->output_dtype,
+        this->compute_kernel_config,
+        /*untilize_out=*/false,
+        this->user_core_coord,
+        this->user_fused_activation,
+        /*user_run_batched=*/false,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        this->output_tile,
+        this->global_cb,
+        this->sub_device_id};
+
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& sparsity = input_tensors.at(2);
+    auto& output_tensor = output_tensors.at(0);
+
+    auto chosen_program_config =
+        get_program_config(input_tensor_a, input_tensor_b, /*bias_single_tile_size=*/0, &matmul_parameters);
+
+    return std::visit(
+        [&](const auto& program_config) -> tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
+                auto sparse_bmm_program = sparse_bmm_multi_core_reuse(
+                    input_tensor_a,
+                    input_tensor_b,
+                    sparsity,
+                    this->num_batches,
+                    output_tensor,
+                    program_config.compute_with_storage_grid_size,
+                    this->output_dtype.value(),
+                    this->compute_kernel_config.value(),
+                    program_config.in0_block_w,
+                    program_config.out_subblock_h,
+                    program_config.out_subblock_w,
+                    program_config.per_core_M,
+                    program_config.per_core_N);
+
+                return create_homogenous_mesh_workload(sparse_bmm_program, tensor_coords);
+            } else {
+                TT_THROW("Unsupported program config {}", chosen_program_config);
+            }
+        },
+        chosen_program_config);
 }
 
 }  // namespace matmul
