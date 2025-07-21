@@ -155,6 +155,10 @@ void MAIN {
 
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(25);
 
+    constexpr uint32_t stride_t = get_compile_time_arg_val(26);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(27);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(28);
+
     constexpr uint32_t patch_tiles = matmul_M_t * matmul_K_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
@@ -176,6 +180,10 @@ void MAIN {
     const uint32_t is_reducer = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
+    constexpr uint32_t T_strided_block_size = T_block_size * stride_t;
+    constexpr uint32_t H_strided_block_size = H_block_size * stride_h;
+    constexpr uint32_t W_strided_block_size = W_block_size * stride_w;
+
     for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
         // Process only assigned C_out blocks
         for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
@@ -189,9 +197,9 @@ void MAIN {
             }
 
             // 3D blocking loops over assigned ranges:
-            for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
-                for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
-                    for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
+            for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_strided_block_size) {
+                for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_strided_block_size) {
+                    for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_strided_block_size) {
                         // Tilize row-major patches
                         uint32_t patch_rows_left = num_patches;
                         tilize_init(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
