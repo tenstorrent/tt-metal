@@ -130,7 +130,8 @@
 | Model                                               | Batch | Hardware                                           | Sentence/sec | Target sentence/sec | Release |
 |-----------------------------------------------------|-------|----------------------------------------------------|---------|----------------|---------|
 | [BERT-Large](./models/demos/metal_BERT_large_11/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 270     | 400            |         |
-| [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 233     | 360            |         |
+| [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 403     | 550            |         |
+| [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 64     | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox)  | 2961     | 4400            |         |
 
 ## Model Updates
 
