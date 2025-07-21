@@ -1719,6 +1719,8 @@ class ModelArgs:
                 state_dict.pop(k)
         if self.is_mixture_of_experts:
             self.initialize_mixture_of_experts_configs()
+            self.moe = True
+            self.num_experts = 8
         return state_dict
 
     def initialize_mixture_of_experts_configs(self):
