@@ -92,6 +92,13 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Ensure fresh branch
+        run: |
+          # Delete existing branch if it exists to ensure we start fresh from main
+          git push origin --delete "${{ env.BRANCH_NAME }}" 2>/dev/null || echo "Branch ${{ env.BRANCH_NAME }} doesn't exist remotely, continuing..."
+          git branch -D "${{ env.BRANCH_NAME }}" 2>/dev/null || echo "Branch ${{ env.BRANCH_NAME }} doesn't exist locally, continuing..."
+          echo "✅ Ensured fresh branch - any existing ${{ env.BRANCH_NAME }} branch has been deleted"
+
       - name: Update submodule
         id: update-submodule
         run: |
