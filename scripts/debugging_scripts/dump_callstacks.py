@@ -10,22 +10,23 @@ Usage:
 Options:
     --full_callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb_callstack    Dump callstack using GDB client instead of built-in methods.
+    --port=<port>      Port to use for GDB client.
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
     If will also dump dispatcher data for each risc processor, including firmware path, kernel path, kernel offset, etc.
 """
 
-from triage import ScriptConfig, recurse_field, triage_field, hex_serializer, run_script
+from triage import ScriptConfig, TTTriageError, recurse_field, triage_field, hex_serializer, run_script
 from check_per_device import dataclass, run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
+from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack, parse_elf
 from utils import BLUE, GREEN, ORANGE, RST
-from ttexalens.uistate import UIState
 
 import re
 import subprocess
@@ -35,21 +36,21 @@ script_config = ScriptConfig(
 )
 
 
-def get_process_ids(ui_state: UIState):
-    process_ids = {}
-    for pid, process in ui_state.gdb_server.available_processes.items():
-        loc = process.risc_debug.risc_location.location
+def get_process_ids(gdb_server: GdbServer):
+    process_ids: dict[OnChipCoordinate, dict[str, int]] = {}
+    for pid, process in gdb_server.available_processes.items():
+        location = process.risc_debug.risc_location.location
         risc_name = process.risc_debug.risc_location.risc_name
 
-        if loc in process_ids:
-            process_ids[loc][risc_name] = pid
+        if location in process_ids:
+            process_ids[location][risc_name] = pid
         else:
-            process_ids[loc] = {risc_name: pid}
+            process_ids[location] = {risc_name: pid}
 
     return process_ids
 
 
-def make_add_symbol_file_command(paths: list[str], offsets: list[int]) -> str:
+def make_add_symbol_file_command(paths: list[str], offsets: list[int | None]) -> str:
     add_symbol_file_cmd = ""
     for path, offset in zip(paths, offsets):
         add_symbol_file_cmd += (
@@ -61,7 +62,7 @@ def make_add_symbol_file_command(paths: list[str], offsets: list[int]) -> str:
 
 
 def make_gdb_script(
-    pid: int, elf_paths: list[str], offsets: list[int], port: int, start_callstack_label: str, end_callstack_label: str
+    pid: int, elf_paths: list[str], offsets: list[int | None], port: int, start_callstack_label: str, end_callstack_label: str
 ) -> str:
     return f"""\
         target extended-remote localhost:{port}
@@ -92,7 +93,7 @@ def get_callstack_entry(line: str) -> CallstackEntry:
         entry.pc = int(match.groupdict()["pc"], 16) if match.groupdict()["pc"] is not None else None
         entry.function_name = match.groupdict()["function_name"]
         entry.file = match.groupdict()["file_path"]
-        entry.line = match.groupdict()["line"]
+        entry.line = int(match.groupdict()["line"]) if match.groupdict()["line"] is not None else None
 
     return entry
 
@@ -153,8 +154,9 @@ def get_gdb_callstack(
     )
 
     # Run gdb script
-    gdb_client.stdin.write(gdb_script)
-    gdb_client.stdin.flush()
+    if gdb_client.stdin is not None:
+        gdb_client.stdin.write(gdb_script)
+        gdb_client.stdin.flush()
 
     return extract_callstack_from_gdb_output(gdb_client.communicate()[0], start_callstack_label, end_callstack_label)
 
@@ -222,58 +224,64 @@ def dump_callstacks(
     context: Context,
     full_callstack: bool,
     gdb_callstack: bool,
-    port: int,
+    port: int | None,
 ) -> list[DumpCallstacksData]:
     blocks_to_test = ["functional_workers", "eth"]
     elfs_cache: dict[str, ParsedElfFile] = {}
     result: list[DumpCallstacksData] = []
+    gdb_server: GdbServer | None = None
 
     if gdb_callstack:
-        # Start GDB server
-        ui_state = UIState(context)
+        if port is None:
+            raise TTTriageError("Port must be specified when using GDB callstack.")
         try:
-            ui_state.start_gdb(port)
+            server = ServerSocket(port)
+            server.start()
+            gdb_server = GdbServer(context, server)
+            gdb_server.start()
         except Exception as e:
-            raise Exception(f"Failed to start GDB server on port {port}. Error: {e}")
+            raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
         # Get mapping form risc location and name to process id
-        process_ids = get_process_ids(ui_state)
+        process_ids = get_process_ids(gdb_server)
 
-    for block_to_test in blocks_to_test:
-        for location in device.get_block_locations(block_to_test):
-            noc_block = device.get_block(location)
+    try:
+        for block_to_test in blocks_to_test:
+            for location in device.get_block_locations(block_to_test):
+                noc_block = device.get_block(location)
 
-            # We support only idle eth blocks for now
-            if noc_block.block_type == "eth" and noc_block not in device.idle_eth_blocks:
-                continue
+                # We support only idle eth blocks for now
+                if noc_block.block_type == "eth" and noc_block not in device.idle_eth_blocks:
+                    continue
 
-            for risc_name in noc_block.risc_names:
-                dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-                if gdb_callstack:
-                    if risc_name == "ncrisc":
-                        # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
-                        callstack = [CallstackEntry()]
+                for risc_name in noc_block.risc_names:
+                    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+                    if gdb_callstack:
+                        if risc_name == "ncrisc":
+                            # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
+                            callstack = [CallstackEntry()]
+                        else:
+                            callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
+                        # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
+                        if len(callstack) > 0 and callstack[0].pc is None:
+                            try:
+                                callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                            except:
+                                pass
                     else:
-                        callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
-                    # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
-                    if len(callstack) > 0 and callstack[0].pc is None:
-                        try:
-                            callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
-                        except:
-                            pass
-                else:
-                    callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
-                result.append(
-                    DumpCallstacksData(
-                        location=location,
-                        risc_name=risc_name,
-                        dispatcher_core_data=dispatcher_core_data,
-                        pc=callstack[0].pc if len(callstack) > 0 else None,
-                        kernel_callstack=callstack,
+                        callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
+                    result.append(
+                        DumpCallstacksData(
+                            location=location,
+                            risc_name=risc_name,
+                            dispatcher_core_data=dispatcher_core_data,
+                            pc=callstack[0].pc if len(callstack) > 0 else None,
+                            kernel_callstack=callstack,
+                        )
                     )
-                )
 
-    if gdb_callstack:
-        ui_state.stop_gdb()
+    except:
+        if gdb_server is not None:
+            gdb_server.stop()
 
     return result
 
