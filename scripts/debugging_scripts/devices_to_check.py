@@ -9,6 +9,9 @@ Usage:
 
 Options:
     --dev=<device_id>   Specify the device id. 'all' is also an option  [default: in_use]
+
+Description:
+    Provides list of devices that should be checked for other scripts.
 """
 
 from inspector_data import run as get_inspector_data, InspectorData

@@ -6,6 +6,10 @@
 """
 Usage:
     dispatcher_data
+
+Description:
+    Provides dispatcher data noc locations on devices.
+    Data include firmware path, kernel path, kernel offset, etc.
 """
 
 from dataclasses import dataclass

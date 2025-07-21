@@ -6,6 +6,12 @@
 """
 Usage:
     check_per_device
+
+Description:
+    Provides a way to run checks on each device in the system.
+    This script will iterate over all devices and apply the specified checks.
+    If check method returns value, data will be collected and returned. You can use this as a way to dump data for device (see `dump_callstacks.py` for example).
+    If check method returns None, no data will be collected for that device. You can use this just to execute some checks on devices without collecting data (see `check_noc_locations.py` for example).
 """
 
 from collections.abc import Callable

@@ -10,6 +10,10 @@ Usage:
 Options:
     --full_callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb_callstack    Dump callstack using GDB client instead of built-in methods.
+
+Description:
+    Dumps callstacks for all devices in the system and for every supported risc processor.
+    If will also dump dispatcher data for each risc processor, including firmware path, kernel path, kernel offset, etc.
 """
 
 from triage import ScriptConfig, recurse_field, triage_field, hex_serializer, run_script

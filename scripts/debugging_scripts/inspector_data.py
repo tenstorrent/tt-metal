@@ -9,6 +9,10 @@ Usage:
 
 Options:
     --inspector-log-path=<inspector_log_path>  Path to the inspector log directory.
+
+Description:
+    Provides inspector data for other scripts.
+    This script will parse the inspector logs and provide structured data about the devices, workloads, kernels, programs, mesh devices, and mesh workloads.
 """
 
 from abc import ABC, abstractmethod
