@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "accumulation_program_factory.hpp"
 
 #include <optional>

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "accumulation_device_operation_types.hpp"
 
 #include <optional>
