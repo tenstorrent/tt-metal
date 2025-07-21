@@ -56,7 +56,8 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_SCATTER_WRITE = 4,
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
-    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
+    NOC_READ = 7,
+    NOC_SEND_TYPE_LAST = NOC_READ,
 };
 // How to send the payload across the cluster
 // 1 bit
@@ -88,7 +89,7 @@ static_assert(
     sizeof(MulticastRoutingCommandHeader) <= sizeof(RoutingFields), "MulticastRoutingCommandHeader size is not 1 byte");
 
 struct NocUnicastCommandHeader {
-    uint64_t noc_address;
+    uint64_t noc_address = 0;
 };
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 2
 struct NocUnicastScatterCommandHeader {
@@ -96,44 +97,48 @@ struct NocUnicastScatterCommandHeader {
     uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
 };
 struct NocUnicastInlineWriteCommandHeader {
-    uint64_t noc_address;
-    uint32_t value;
+    uint64_t noc_address = 0;
+    uint32_t value = 0;
 };
 struct NocUnicastAtomicIncCommandHeader {
+    NocUnicastAtomicIncCommandHeader() = default;
+
     NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
         noc_address(noc_address), wrap(wrap), val(val), flush(flush) {}
 
-    uint64_t noc_address;
-    uint16_t wrap;
-    uint8_t val;
-    bool flush;
+    uint64_t noc_address = 0;
+    uint16_t wrap = 0;
+    uint8_t val = 0;
+    bool flush = true;
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
+    NocUnicastAtomicIncFusedCommandHeader() = default;
+
     NocUnicastAtomicIncFusedCommandHeader(
         uint64_t noc_address, uint64_t semaphore_noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
         noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), wrap(wrap), val(val), flush(flush) {}
 
-    uint64_t noc_address;
-    uint64_t semaphore_noc_address;
-    uint16_t wrap;
-    uint8_t val;
-    bool flush;
+    uint64_t noc_address = 0;
+    uint64_t semaphore_noc_address = 0;
+    uint16_t wrap = 0;
+    uint8_t val = 0;
+    bool flush = true;
 };
 struct NocMulticastCommandHeader {
-    uint32_t address;
-    uint8_t noc_x_start;
-    uint8_t noc_y_start;
-    uint8_t mcast_rect_size_x;
-    uint8_t mcast_rect_size_y;
+    uint32_t address = 0;
+    uint8_t noc_x_start = 0;
+    uint8_t noc_y_start = 0;
+    uint8_t mcast_rect_size_x = 0;
+    uint8_t mcast_rect_size_y = 0;
 };
 struct NocMulticastAtomicIncCommandHeader {
-    uint32_t address;
-    uint16_t val;
-    uint16_t wrap;
-    uint8_t noc_x_start;
-    uint8_t noc_y_start;
-    uint8_t size_x;
-    uint8_t size_y;
+    uint32_t address = 0;
+    uint16_t val = 0;
+    uint16_t wrap = 0;
+    uint8_t noc_x_start = 0;
+    uint8_t noc_y_start = 0;
+    uint8_t size_x = 0;
+    uint8_t size_y = 0;
 };
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
@@ -194,8 +199,8 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
@@ -207,15 +212,31 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_write = modified_command_header;
         this->payload_size_bytes = payload_size_bytes;
-#else
-        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return *static_cast<Derived*>(this);
+    }
+
+    inline Derived& to_noc_read(const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
+        this->noc_send_type = NOC_READ;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_write = modified_command_header;
+        this->payload_size_bytes = payload_size_bytes;
 #endif
         return *static_cast<Derived*>(this);
     }
 
     inline Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
@@ -243,8 +264,8 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_atomic_inc(
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) {
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
@@ -283,8 +304,8 @@ struct PacketHeaderBase {
 
     inline volatile Derived* to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
@@ -302,8 +323,8 @@ struct PacketHeaderBase {
 
     inline volatile Derived* to_noc_unicast_scatter_write(
         const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
             auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
             auto noc_addr = safe_get_noc_addr(

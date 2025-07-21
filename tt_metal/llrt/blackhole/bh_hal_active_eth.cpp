@@ -64,6 +64,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS)] =
         MEM_AERISC_LIVE_LINK_STATUS_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_METAL_RUN_FLAG)] = MEM_AERISC_RUN_FW_FLAG;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_LITE_FABRIC_CONFIG)] =
+        MEM_AERISC_LITE_FABRIC_CONFIG_BASE;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -92,6 +94,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS)] =
         MEM_AERISC_LIVE_LINK_STATUS_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_METAL_RUN_FLAG)] = MEM_AERISC_RUN_FW_FLAG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_LITE_FABRIC_CONFIG)] =
+        MEM_AERISC_LITE_FABRIC_CONFIG_SIZE;
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_STATUS_MASK)] =
