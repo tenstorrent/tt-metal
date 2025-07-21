@@ -358,7 +358,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t out_cb_pagesize = std::min((uint32_t)16, output.shard_spec().value().shape[1]) *
                                      params.nbytes;  // there is just one row of channels after each reduction (or 1
                                                      // block of c if its greater than 8 tiles)
-    const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * params.in_ntiles_c;
+    const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * params.out_ntiles_c;
 
     const auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, output.buffer());
@@ -501,6 +501,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     uint32_t l1_usage = calculate_L1_usage(
         input,
+        in_c,
         pad_h,
         pad_w,
         ceil_pad_h,
@@ -555,6 +556,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "in_w: {}", in_w);
         log_debug(tt::LogOp, "in_c: {}", input_shape[3]);
         log_debug(tt::LogOp, "in_ntiles_c: {}", params.in_ntiles_c);
+        log_debug(tt::LogOp, "out_ntiles_c: {}", params.out_ntiles_c);
         log_debug(tt::LogOp, "in_nblocks_c: {}", in_nblocks_c);
         log_debug(tt::LogOp, "in_nbytes_c: {}", in_nbytes_c);
         log_debug(tt::LogOp, "ncores: {}", ncores);

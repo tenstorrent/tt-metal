@@ -107,23 +107,14 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_c = 1;
         uint32_t c_per_core = channels / num_cores_c;
-        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
-            return std::nullopt;
-        }
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto grid_x = pconfig.grid.ranges()[0].end_coord.x - pconfig.grid.ranges()[0].start_coord.x + 1;
         auto grid_y = pconfig.grid.ranges()[0].end_coord.y - pconfig.grid.ranges()[0].start_coord.y + 1;
         uint32_t num_cores_c = block_shard_orientation == ShardOrientation::COL_MAJOR ? grid_y : grid_x;
         uint32_t c_per_core = channels / num_cores_c;
-        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
-            return std::nullopt;
-        }
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t num_cores_c = pconfig.grid.num_cores();
         uint32_t c_per_core = channels / num_cores_c;
-        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
-            return std::nullopt;
-        }
     }
 
     return pconfig;
@@ -146,11 +137,12 @@ FactoryParameters get_factory_parameters(
     // face_r_dim to only tilize the necessary number of rows, thus we can make the in_cb height smaller
     uint32_t num_tilized_rows = kernel_size_hw <= 16 ? kernel_size_hw : tt::constants::TILE_HEIGHT;
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / 16);
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
-    const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
+    const bool last_tile_is_partial = (in_c / num_shards_c) % 32 != 0 && (in_c / num_shards_c) % 32 < 17;
     const uint32_t max_rows_for_reduction =
-        !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+        !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
@@ -161,6 +153,7 @@ FactoryParameters get_factory_parameters(
         .nbytes = nbytes,
         .data_format = data_format,
         .in_ntiles_c = in_ntiles_c,
+        .out_ntiles_c = out_ntiles_c,
         .is_avg_pool = is_avg_pool,
         .max_rows_for_reduction = max_rows_for_reduction,
         .is_large_kernel = is_large_kernel,
@@ -171,6 +164,7 @@ FactoryParameters get_factory_parameters(
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
+    uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
     uint32_t ceil_pad_h,
@@ -201,6 +195,7 @@ uint32_t calculate_L1_usage(
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
+    const bool last_tile_is_partial = (in_channels / num_shards_c) % 32 != 0 && (in_channels / num_shards_c) % 32 < 17;
 
     // scalar CB as coefficient of reduce
     uint32_t in_scalar_cb_pagesize = tt::constants::TILE_HW * params.nbytes;
@@ -233,7 +228,7 @@ uint32_t calculate_L1_usage(
 
     // after reduction
     uint32_t out_cb_pagesize =
-        std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * params.nbytes;
+        std::min((uint32_t)16, output_memory.shard_spec().value().shape[1]) * params.nbytes;
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.in_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
@@ -292,6 +287,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
         }
         uint32_t l1_usage = calculate_L1_usage(
             input_tensor,
+            sliding_window_config.channels,
             sliding_window_config.get_pad_h(),
             sliding_window_config.get_pad_w(),
             sliding_window_config.get_ceil_pad_h(),
