@@ -167,7 +167,6 @@ void MAIN {
                                 tile_id,
                                 index_tensor_intermediate_cb_index);
                             cb_push_back(index_tensor_intermediate_cb_index, one_tile);
-                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
@@ -175,7 +174,9 @@ void MAIN {
                                 tile_id,
                                 value_tensor_intermediate_cb_index);
                             cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+
                             cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
