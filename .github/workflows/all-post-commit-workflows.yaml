@@ -139,6 +139,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
   # FD Model Tests
   models-unit-tests:
     needs: build-artifact
@@ -191,7 +192,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   run-profiler-regression:
-    needs: build-artifact-profiler
+    needs: [build-artifact-profiler]
     strategy:
       fail-fast: false
       matrix:
@@ -270,7 +271,7 @@ jobs:
           #  publish-artifact: false
           #  skip-tt-train: true
           - version: "24.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Release"
             publish-artifact: false
             skip-tt-train: false
