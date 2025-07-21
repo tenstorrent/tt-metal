@@ -78,6 +78,10 @@ public:
 
     virtual bool hook_write_to_device(tt::tt_metal::Buffer* buffer) = 0;
 
+    virtual bool hook_write_to_device(const tt::tt_metal::Buffer* buffer) = 0;
+
+    virtual bool hook_read_from_device(tt::tt_metal::Buffer* buffer) = 0;
+
     virtual ~IGraphHooks() = default;
 };
 
@@ -149,6 +153,10 @@ public:
     bool hook_deallocate(Buffer* buffer);
 
     bool hook_write_to_device(Buffer* buffer);
+
+    bool hook_write_to_device(const Buffer* buffer);
+
+    bool hook_read_from_device(Buffer* buffer);
 
     bool hook_program(tt::tt_metal::Program* program);
 
