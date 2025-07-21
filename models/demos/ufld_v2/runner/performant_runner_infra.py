@@ -16,12 +16,19 @@ from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_prepro
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def load_torch_model():
+def load_torch_model(model_location_generator=None):
     torch_model = TuSimple34(input_height=320, input_width=800)
     torch_model.eval()
-    weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/demos/ufld_v2/weights_download.sh")
+    if model_location_generator == None:
+        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
+        if not os.path.exists(weights_path):
+            os.system("bash models/demos/ufld_v2/weights_download.sh")
+    else:
+        weights_path = (
+            model_location_generator("vision-models/ufldv2", model_subdir="", download_if_ci_v2=True)
+            + "/tusimple_res34.pth"
+        )
+
     state_dict = torch.load(weights_path)
     new_state_dict = {}
     for key, value in state_dict["model"].items():

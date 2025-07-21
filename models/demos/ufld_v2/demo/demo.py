@@ -36,7 +36,9 @@ from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
-def test_ufld_v2_demo(batch_size, input_channels, height, width, device, use_pretrained_weight, reset_seeds):
+def test_ufld_v2_demo(
+    batch_size, input_channels, height, width, device, use_pretrained_weight, reset_seeds, model_location_generator
+):
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
         logger.info(f"Demo Inference using Pre-trained Weights")
@@ -68,6 +70,7 @@ def test_ufld_v2_demo(batch_size, input_channels, height, width, device, use_pre
         device=None,
         is_overlay=True,
         n_images=1,
+        model_location_generator=None,
     )
     run_test_tusimple(
         UFLDPerformantRunner,
@@ -84,6 +87,7 @@ def test_ufld_v2_demo(batch_size, input_channels, height, width, device, use_pre
         device=device,
         is_overlay=True,
         n_images=1,
+        model_location_generator=model_location_generator,
     )
 
     gt_file_path = os.path.join(cfg.data_root, "ground_truth_labels" + ".json")
