@@ -178,7 +178,7 @@ def create_tt_model(
 
 # List of supported Parameters for demo.py
 #
-# input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
+# input_prompts (string): input json file with prompts to process. See models/demos/llama3_subdevices/demo/sample_prompts/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
 # max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
@@ -212,7 +212,7 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -229,7 +229,7 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             2,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -245,8 +245,42 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # long-context-batch32 - multiple users, long prompt (adapted to the model being used and architecture)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+        (  # long-4k-b1 - Single user, 4K long prompt
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # long-8k-b1 - Single user, 8K long prompt
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # long-16k-b32 - 32 users, 16K long prompt
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -262,8 +296,8 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # long-context-32k - Single user, long prompt (adapted to the model being used and architecture)
-            "models/demos/llama3_subdevices/demo/input_data_long_32k.json",  # input_prompts
+        (  # long-context-32k - Single user, 32K long prompt
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -280,7 +314,7 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
-            "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -335,8 +369,10 @@ def create_tt_model(
         "batch-32",  # throughput
         "batch-1",  # latency
         "repeat2",  # latency with 5 repeat batches
-        "long-context-batch32",  # max-length for 32 users
-        "long-context-32k",  # max-length
+        "long-4k-b1",  # 4k context for 1 user
+        "long-8k-b1",  # 4k context for 1 user
+        "long-16k-b32",  # 16K context for 32 users
+        "long-32k-b1",  # 32k context for 1 user
         "prefill-profile",  # prefill-only profile run
         "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-80L",  # pcc check for 80L + teacher forced
@@ -1074,7 +1110,7 @@ def test_demo_text(
             profiler,
             1,  # grab the second repeat batch of prefill
             "inference_prefill",
-            "ttft_e2e",
+            f"ttft_e2e_{galaxy_type}",
             round(avg_time_to_first_token * 1000, 2),
         )  # average TTFT in ms
 
