@@ -188,7 +188,8 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_i
                     JitBuiltStateConfig{
                         .processor_id = processor_class,
                         .is_fw = is_fw,
-                        .dispatch_message_addr = dispatch_message_addr});
+                        .dispatch_message_addr = dispatch_message_addr,
+                        .is_cooperative = hal.get_eth_fw_is_cooperative()});
                 break;
             }
             default:
