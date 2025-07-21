@@ -446,7 +446,6 @@ struct profileScopeGuaranteed {
                 if (trace_controls & TRACE_ID_SET_BIT) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
                     profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_ID_KERNEL_SET_BIT;
-                    profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = CUSTOM_MARKERS;
                 } else if (trace_controls == 0) {
                     init_profiler();
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
