@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# ======================================================================================
+# Optional Top-Level Configuration: Physical Mesh
+# This section allows you to specify a custom mesh descriptor pased on a mesh graph
+# descriptor YAML file and ethernet coord mapping. If not specified, the default mesh
+# descriptor will be used. Both the ethernet mapping and yaml path are required
+# ======================================================================================
+physical_mesh:
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml"
+   eth_coord_mapping: [
+      [
+        [0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 2, 0, 0, 0],
+        [0, 3, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 1, 1, 0, 0],
+        [0, 2, 1, 0, 0],
+        [0, 3, 1, 0, 0],
+      ],
+      [
+        [0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 2, 0, 0, 0],
+        [0, 3, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 1, 1, 0, 0],
+        [0, 2, 1, 0, 0],
+        [0, 3, 1, 0, 0],
+      ],
+      [
+        [0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 2, 0, 0, 0],
+        [0, 3, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 1, 1, 0, 0],
+        [0, 2, 1, 0, 0],
+        [0, 3, 1, 0, 0],
+      ],
+      [
+        [0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 2, 0, 0, 0],
+        [0, 3, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 1, 1, 0, 0],
+        [0, 2, 1, 0, 0],
+        [0, 3, 1, 0, 0],
+      ],
+      [
+        [0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 2, 0, 0, 0],
+        [0, 3, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 1, 1, 0, 0],
+        [0, 2, 1, 0, 0],
+        [0, 3, 1, 0, 0],
+      ]
+    ]
+
+Tests:
+  # ======================================================================================
+  # Test 1: A simple, fully specified unicast test for multi-host.
+  # This demonstrates the most basic configuration using ChipIds.
+  # Fabric must be 2D Dynamic.
+  # ======================================================================================
+  - name: UnicastWithChipId
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [4, 4]
