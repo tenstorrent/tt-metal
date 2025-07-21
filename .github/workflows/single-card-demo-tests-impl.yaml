@@ -91,8 +91,20 @@ jobs:
     env:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on:
-      - tt-beta-ubuntu-2204-n300-large-stable
+    runs-on: >-
+      ${{
+        matrix.test-group.civ2-compatible == true
+        && format('tt-beta-ubuntu-2204-{0}-large-stable', matrix.test-group.runner-label)
+        || (matrix.test-group.runner-label == 'N300' && matrix.test-group.performance)
+          && fromJSON(format('["{0}", "{1}", "bare-metal", "pipeline-perf"]',
+              matrix.test-group.runner-label,
+              inputs.extra-tag
+            ))
+          || fromJSON(format('["{0}", "{1}", "cloud-virtual-machine"]',
+              matrix.test-group.runner-label,
+              inputs.extra-tag
+            ))
+      }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -110,9 +122,18 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
+      - name: Check for invalid performance + civ2-compatible combination
+        if: ${{ matrix.test-group.performance && matrix.test-group.civ2-compatible }}
+        run: |
+          echo "::error::Performance tests are not compatible with civ2-compatible tests"
+          echo "::error::test-group.performance: ${{ matrix.test-group.performance }}"
+          echo "::error::test-group.civ2-compatible: ${{ matrix.test-group.civ2-compatible }}"
+          exit 1
       - name: Enable Performance mode
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
         run: sudo cpupower frequency-set -g performance
+      - uses: ./.github/actions/ensure-active-weka-mount
+        if: ${{ !matrix.test-group.civ2-compatible }}
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
@@ -123,9 +144,9 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
-            -e TT_GH_CI_INFRA=1
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
+            ${{ matrix.test-group.civ2-compatible && '-e TT_METAL_CI_INFRA' || '' }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             --cap-add=ALL
             --security-opt seccomp=unconfined
@@ -170,5 +191,5 @@ jobs:
           path: generated/test_reports/
           prefix: "test_reports_"
       - name: Disable Performance mode
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
         run: sudo cpupower frequency-set -g ondemand
