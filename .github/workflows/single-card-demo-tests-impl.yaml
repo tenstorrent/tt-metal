@@ -113,7 +113,6 @@ jobs:
       - name: Enable Performance mode
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance }}
         run: sudo cpupower frequency-set -g performance
-      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
