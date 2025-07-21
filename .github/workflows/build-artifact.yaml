@@ -65,6 +65,11 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
+      fetch-depth:
+        required: false
+        type: number
+        default: 500
+        description: "Git fetch depth for the checkout step. Must be large enough to include all tags and history needed for `git describe`."
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -209,7 +214,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
@@ -350,7 +355,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
 
       - name: Set up Python 3.12
