@@ -207,6 +207,12 @@ class CMakeBuild(build_ext):
                             "-DENABLE_TRACY=ON",
                         ]
                     )
+                else:
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=OFF",
+                        ]
+                    )
 
                 cmake_args.extend(["-S", source_dir])
 
