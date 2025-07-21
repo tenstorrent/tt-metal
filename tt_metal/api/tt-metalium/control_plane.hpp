@@ -53,8 +53,12 @@ public:
     // Printing functions
     void print_routing_tables() const;
     void print_ethernet_channels() const;
+    void print_detailed_ethernet_connections() const;
     void print_active_ethernet_connections() const;
     void print_all_ethernet_connections() const;
+    
+    // Debug function to print ethernet channel connections
+    void print_ethernet_channel_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
     void configure_routing_tables_for_fabric_ethernet_channels(
@@ -81,7 +85,11 @@ public:
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 
-    // Return path from device to device in the fabric
+    // Return path from device to device in the fabric.
+    // Constraints:
+    // - src_fabric_node_id must be local to the host on which this ControlPlane is running.
+    // - If dst_fabric_node_id is not local to the current host, the path will end at a local
+    // fabric node routing to the remote cluster.
     std::vector<std::pair<FabricNodeId, chan_id_t>> get_fabric_route(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const;
 
@@ -188,13 +196,17 @@ private:
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
+    // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
     // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
     IntermeshLinkTable intermesh_link_table_;
 
-    std::unordered_map<MeshId, std::map<EthChanDescriptor, EthChanDescriptor>> peer_intermesh_link_tables_;
+    std::unordered_map<MeshId, std::unordered_map<HostRankId, std::map<EthChanDescriptor, EthChanDescriptor>>>
+        peer_intermesh_link_tables_;
 
+    // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
+
     // custom logic to order eth channels
     void order_ethernet_channels();
 
@@ -237,15 +249,18 @@ private:
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
 
+    // TODO: remove once UMD can provide all intermesh links
     // Populate the local intermesh link to remote intermesh link table
     void generate_local_intermesh_link_table();
 
     // All to All exchange of intermesh link tables between all hosts in the system
     void exchange_intermesh_link_tables();
 
+    // TODO: remove once UMD can provide all intermesh links
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
 
+    // TODO: remove once UMD can provide all intermesh links
     // Check if intermesh links are available by reading SPI ROM config from first chip
     bool is_intermesh_enabled() const;
 
@@ -265,27 +280,6 @@ private:
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;
-};
-
-class GlobalControlPlane {
-public:
-    explicit GlobalControlPlane(const std::string& mesh_graph_desc_yaml_file);
-    explicit GlobalControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-    ~GlobalControlPlane();
-
-    void initialize_host_mapping();
-
-    tt::tt_fabric::ControlPlane& get_local_node_control_plane() { return *control_plane_; }
-
-private:
-    std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
-    // Host rank to sub mesh shape
-    std::unordered_map<HostRankId, std::vector<MeshCoordinate>> host_rank_to_sub_mesh_shape_;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
-
-    std::string mesh_graph_desc_file_;
 };
 
 }  // namespace tt::tt_fabric

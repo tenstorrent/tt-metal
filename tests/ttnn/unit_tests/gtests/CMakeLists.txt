@@ -87,7 +87,6 @@ target_link_libraries(
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
-        TTNN::Test::Basic::Tensor
         TTNN::Test::Slow
 )
 
@@ -117,7 +116,12 @@ target_link_libraries(
 # unit_tests_ttnn_ccl_ops
 
 add_executable(unit_tests_ttnn_ccl_ops)
-target_sources(unit_tests_ttnn_ccl_ops PRIVATE ccl/test_persistent_fabric_ccl_ops.cpp)
+target_sources(
+    unit_tests_ttnn_ccl_ops
+    PRIVATE
+        ccl/test_persistent_fabric_ccl_ops.cpp
+        ccl/test_send_recv_ops.cpp
+)
 setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
 
 # unit_tests_ttnn_fabric_edm
@@ -155,7 +159,6 @@ setup_ttnn_test_target(unit_tests_ttnn_accessor)
 
 add_library(unit_tests_ttnn_tensor_lib OBJECT)
 add_library(TTNN::Test::Basic::Tensor ALIAS unit_tests_ttnn_tensor_lib)
-TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_tensor_lib)
 target_sources(
     unit_tests_ttnn_tensor_lib
     PRIVATE

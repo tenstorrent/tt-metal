@@ -15,17 +15,18 @@ void kernel_main() {
     constexpr uint32_t valid_Sqt = get_compile_time_arg_val(4);
     constexpr uint32_t unpadded_Sk = get_compile_time_arg_val(5);
     constexpr uint32_t DHt = get_compile_time_arg_val(6);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(7);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(8);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(9);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(10);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(11);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(12);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(13);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t vDHt = get_compile_time_arg_val(7);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(8);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(9);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(10);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(12);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(13);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(15) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -40,7 +41,7 @@ void kernel_main() {
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
@@ -52,7 +53,7 @@ void kernel_main() {
     const InterleavedAddrGenFast<is_dram> out_writer = {
         .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = data_format};
 
-    const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
+    const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
@@ -123,7 +124,7 @@ void kernel_main() {
                 barrier_count = 0;
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
                 for (uint32_t row = 0; row < out_row_tile_count; ++row) {
-                    for (uint32_t col = 0; col < DHt; ++col) {
+                    for (uint32_t col = 0; col < vDHt; ++col) {
                         noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
                         ++out_tile_id;
                         l1_read_addr += tile_bytes;

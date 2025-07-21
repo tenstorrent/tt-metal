@@ -5,6 +5,7 @@
 #pragma once
 
 #include <type_traits>
+#include "tensor_accessor_args.h"
 #include "array_wrapper.h"
 #include "dspec.h"
 #include "helpers.h"
@@ -12,6 +13,22 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api_addrgen.h"
 #endif
+
+namespace tensor_accessor {
+// This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
+//      Adds proper xy coordinates for NOC address
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
+    // TODO: Should interleaved_addr_gen:: functions moved into common helper?
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(bank_id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(bank_id, bank_offset_index);
+    uint32_t bank_offset = interleaved_addr_gen::get_bank_offset<true>(bank_index);
+    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
+    uint64_t noc_addr = get_noc_addr_helper(noc_xy, bank_offset);
+    return noc_addr;
+}
+#endif
+}  // namespace tensor_accessor
 
 /**
  * @brief Accessor that encapsulates the logic for accessing tensors pages.
@@ -43,6 +60,13 @@ public:
     TensorAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
         bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
+    template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
+    TensorAccessor(
+        const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
+        const size_t bank_base_address_in,
+        const uint32_t page_size_in = 0) :
+        TensorAccessor(tensor_accessor::make_dspec_from_args(args), bank_base_address_in, page_size_in) {}
+
     constexpr auto& dspec() const {
         if constexpr (DSpec::is_static) {
             return StaticDspec::instance;
@@ -61,6 +85,29 @@ public:
     FORCE_INLINE std::uint64_t get_noc_addr(
         const ArrType page_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
+    }
+
+    // Shard NOC APIs
+    FORCE_INLINE
+    std::uint64_t get_shard_noc_addr(
+        const uint32_t shard_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        PageMapping page_mapping{
+            .bank_id = shard_id % dspec().num_banks(),
+            .bank_page_offset = shard_id / dspec().num_banks() * dspec().shard_volume(),
+        };
+        return get_noc_addr(page_mapping, offset, noc);
+    }
+
+    template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
+    FORCE_INLINE std::uint64_t get_shard_noc_addr(
+        const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        uint32_t shard_id = 0;
+        for (uint32_t i = 0; i < dspec().rank(); ++i) {
+            // Check that shard_coord is within bounds
+            ASSERT(shard_coord[i] < dspec().shard_shape()[i]);
+            shard_id *= dspec().shard_grid_strides()[i];
+        }
+        return get_shard_noc_addr(shard_id, offset, noc);
     }
 
     // Helpers
@@ -119,18 +166,49 @@ public:
         return {bank_id, bank_page_offset};
     }
 
+    // Locality APIs
+    FORCE_INLINE
+    bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y, uint8_t noc = noc_index) const {
+        return virtual_x == my_x[noc] && virtual_y == my_y[noc];
+    }
+
+    FORCE_INLINE
+    bool is_local_addr(const uint64_t noc_addr, uint8_t noc = noc_index) const {
+        uint32_t x = NOC_UNICAST_ADDR_X(noc_addr);
+        uint32_t y = NOC_UNICAST_ADDR_Y(noc_addr);
+        return is_local_bank(x, y, noc);
+    }
+
+    FORCE_INLINE
+    bool is_local_page(const uint32_t page_id, uint8_t noc = noc_index) const {
+        auto page_mapping = get_bank_and_offset(page_id);
+        const auto& packed_xy_coords = dspec().packed_xy_coords();
+        auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
+        return is_local_bank(bank_x, bank_y, noc);
+    }
+
+    FORCE_INLINE
+    bool is_local_shard(const uint32_t shard_id, uint8_t noc = noc_index) const {
+        uint32_t bank_id = shard_id % dspec().num_banks();
+
+        const auto& packed_xy_coords = dspec().packed_xy_coords();
+        auto bank_x = get_bank_x(packed_xy_coords[bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[bank_id]);
+        return is_local_bank(bank_x, bank_y, noc);
+    }
+
 private:
     // NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(
         const PageMapping page_mapping, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         const auto& packed_xy_coords = dspec().packed_xy_coords();
-        auto bank_x = (packed_xy_coords[page_mapping.bank_id] >> 8) & 0xFF;
-        auto bank_y = packed_xy_coords[page_mapping.bank_id] & 0xFF;
-        return NOC_XY_ADDR(
-            DYNAMIC_NOC_X(noc, bank_x),
-            DYNAMIC_NOC_Y(noc, bank_y),
-            bank_base_address + page_mapping.bank_page_offset * page_size + offset);
+        auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
+        auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
+        auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
+                                         : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
+        return bank_start + bank_base_address + page_mapping.bank_page_offset * page_size + offset;
     }
 
     PageMapping get_bank_and_offset_from_page_id(uint32_t page_id) const {
@@ -154,60 +232,42 @@ private:
         return {bank_id, bank_page_offset};
     }
 
+    FORCE_INLINE
+    uint16_t get_bank_x(uint16_t packed_xy_coord) const { return (packed_xy_coord >> 8) & 0xFF; }
+
+    FORCE_INLINE
+    uint16_t get_bank_y(uint16_t packed_xy_coord) const { return packed_xy_coord & 0xFF; }
+
 public:
     const size_t bank_base_address = 0;
     const uint32_t page_size = 0;
 };
 
-// Factory functions to create TensorAccessor instance
-template <size_t CTA_BASE, size_t CRTA_BASE = 0>
-FORCE_INLINE constexpr auto make_tensor_accessor_args() {
-    return tensor_accessor::ArgsOffsets<CTA_BASE, CRTA_BASE>();
-}
-
-template <size_t CTA_BASE>
-FORCE_INLINE constexpr auto make_tensor_accessor_args(const size_t crta_base) {
-    return tensor_accessor::ArgsOffsets<CTA_BASE>(crta_base);
-}
-
-template <typename ArgsOffsetsT>
-FORCE_INLINE auto make_tensor_accessor_from_args(
-    const ArgsOffsetsT& args, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    if constexpr (ArgsOffsetsT::is_sharded) {
-        auto dspec = tensor_accessor::make_dspec_from_args(args);
-        return TensorAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
-    } else {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        constexpr bool is_dram = ArgsOffsetsT::is_dram;
-        return InterleavedAddrGen<is_dram>{
-            .bank_base_address = bank_base_address_in,
-            .page_size = page_size_in,
-        };
-#else
-        return nullptr;
-#endif
-    }
-}
-
 template <
-    uint32_t RankCT = 0,
-    uint32_t NumBanksCT = 0,
-    typename TensorShapeWrapper = tensor_accessor::ArrayDynamicWrapper,
-    typename ShardShapeWrapper = tensor_accessor::ArrayDynamicWrapper,
-    typename BankCoordsWrapper = tensor_accessor::ArrayDynamicWrapper>
-FORCE_INLINE auto make_tensor_dspec(
-    uint32_t rank_rt = 0,
-    uint32_t num_banks_rt = 0,
-    uint32_t* tensor_shape_ptr = nullptr,
-    uint32_t* shard_shape_ptr = nullptr,
-    uint16_t* bank_coords_ptr = nullptr) {
-    return tensor_accessor::make_dspec<RankCT, NumBanksCT, TensorShapeWrapper, ShardShapeWrapper, BankCoordsWrapper>(
-        rank_rt, num_banks_rt, tensor_shape_ptr, shard_shape_ptr, bank_coords_ptr);
-}
+    uint32_t RankCT,
+    uint32_t NumBanksCT,
+    typename TensorShapeWrapper,
+    typename ShardShapeWrapper,
+    typename BankCoordsWrapper,
+    bool IsDram>
+struct TensorAccessor<tensor_accessor::DistributionSpec<
+    RankCT,
+    NumBanksCT,
+    TensorShapeWrapper,
+    ShardShapeWrapper,
+    BankCoordsWrapper,
+    /* IsInterleaved */ true,
+    IsDram>> : public InterleavedAddrGen<IsDram> {
+    template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
+    TensorAccessor(
+        const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
+        const size_t bank_base_address_in,
+        const uint32_t page_size_in = 0) :
+        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+};
+#endif
 
-template <typename DSpec>
-FORCE_INLINE auto make_tensor_accessor_from_dspec(
-    DSpec&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    return TensorAccessor<std::decay_t<decltype(dspec)>>(
-        std::forward<DSpec>(dspec), bank_base_address_in, page_size_in);
-}
+template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
+TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
+    -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;

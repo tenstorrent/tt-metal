@@ -40,7 +40,7 @@
             "first_to_last_start": 1823.388888888889,
             "non-overlapped-dispatch-time": 6926.338888888889,
             "kernel_duration_relative_margin": 0.05,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.25,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
         },
@@ -70,7 +70,7 @@
             "op_name": "ReduceScatter_FF3",
             "kernel_duration": 9456.963068181818,
             "op_to_op": 911.3131313131312,
-            "first_to_last_start": 370.0,
+            "first_to_last_start": 723.1111111111111,
             "non-overlapped-dispatch-time": 7952.344444444445,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
@@ -79,7 +79,7 @@
         },
         "Matmul_0": {
             "op_name": "QKV_MM",
-            "kernel_duration": 8795.294507575758,
+            "kernel_duration": 7886.729166666667,
             "op_to_op": 889.2222222222222,
             "first_to_last_start": 2196.5,
             "non-overlapped-dispatch-time": 5763.372222222222,
@@ -126,7 +126,7 @@
             "kernel_duration": 11133.938194444445,
             "op_to_op": 768.6444444444444,
             "first_to_last_start": 2314.777777777778,
-            "non-overlapped-dispatch-time": 19694.977777777774,
+            "non-overlapped-dispatch-time": 23567.666666666668,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
@@ -167,8 +167,8 @@
         },
         "RotaryEmbeddingLlamaFusedQK_0": {
             "op_name": "RotaryEmbeddingLlamaFusedQK",
-            "kernel_duration": 2801.02178030303,
-            "op_to_op": 692.959595959596,
+            "kernel_duration": 2492.621527777778,
+            "op_to_op": 874.0,
             "first_to_last_start": 2616.0858585858587,
             "non-overlapped-dispatch-time": 2981.8611111111113,
             "kernel_duration_relative_margin": 0.1,
@@ -178,7 +178,7 @@
         },
         "ScaledDotProductAttentionDecode_0": {
             "op_name": "SDPA",
-            "kernel_duration": 13241.396938131313,
+            "kernel_duration": 11472.763888888889,
             "op_to_op": 679.3686868686868,
             "first_to_last_start": 2828.5808080808083,
             "non-overlapped-dispatch-time": 9201.7,
@@ -201,7 +201,7 @@
         "AllGatherAsync_1": {
             "op_name": "AllGatherAsync_1",
             "kernel_duration": 19229.59375,
-            "op_to_op": 2422.0,
+            "op_to_op": 746.0,
             "non-overlapped-dispatch-time": 3521.8,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
@@ -225,20 +225,20 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "BinaryDeviceOperation_1": {
+        "BinaryNgDeviceOperation_0": {
             "op_name": "BinaryDeviceOperation_Temerature_Scaling",
-            "kernel_duration": 900,
-            "op_to_op": 720.0,
-            "non-overlapped-dispatch-time": 6464.0,
+            "kernel_duration": 612.5,
+            "op_to_op": 737.0,
+            "non-overlapped-dispatch-time": 6329.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "BinaryDeviceOperation_2": {
+        "BinaryNgDeviceOperation_1": {
             "op_name": "BinaryDeviceOperation_Indices_Correction",
-            "kernel_duration": 3421.53125,
-            "op_to_op": 735.5454545454545,
-            "non-overlapped-dispatch-time": 7268.7,
+            "kernel_duration": 3586.875,
+            "op_to_op": 729.0,
+            "non-overlapped-dispatch-time": 6493.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5

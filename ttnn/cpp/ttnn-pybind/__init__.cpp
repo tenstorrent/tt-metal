@@ -17,6 +17,7 @@
 #include "ttnn-pybind/fabric.hpp"
 #include "ttnn-pybind/global_circular_buffer.hpp"
 #include "ttnn-pybind/global_semaphore.hpp"
+#include "ttnn-pybind/mesh_socket.hpp"
 #include "ttnn-pybind/operations/copy.hpp"
 #include "ttnn-pybind/operations/core.hpp"
 #include "ttnn-pybind/operations/creation.hpp"
@@ -219,6 +220,7 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_events = module.def_submodule("events", "ttnn events");
     auto m_global_circular_buffer = module.def_submodule("global_circular_buffer", "ttnn global circular buffer");
     auto m_global_semaphore = module.def_submodule("global_semaphore", "ttnn global semaphore");
+    auto m_mesh_socket = module.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = module.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = module.def_submodule("reports", "ttnn reports");
     auto m_operations = module.def_submodule("operations", "ttnn Operations");
@@ -239,6 +241,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
+    ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
 
@@ -264,6 +267,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::events::py_module(m_events);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);
+    ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
 
