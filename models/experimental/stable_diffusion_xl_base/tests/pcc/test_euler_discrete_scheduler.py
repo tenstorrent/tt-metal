@@ -20,7 +20,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 )
 @pytest.mark.parametrize("num_inference_steps", [5])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_euler_discrete_scheduler(device, input_shape, num_inference_steps):
+def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_ci_env):
     try:
         from tracy import signpost
     except ImportError:
@@ -29,7 +29,10 @@ def test_euler_discrete_scheduler(device, input_shape, num_inference_steps):
             pass
 
     pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_env,
     )
 
     scheduler = pipe.scheduler
