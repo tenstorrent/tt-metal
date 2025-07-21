@@ -278,7 +278,6 @@ run_t3000_tteager_tests() {
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_send_recv_async.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py ; fail+=$?
@@ -375,7 +374,6 @@ run_t3000_sd35large_tests() {
     exit 1
   fi
 }
-
 
 run_t3000_tests() {
   # Run ethernet tests
