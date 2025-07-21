@@ -74,17 +74,10 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
     )
     ttnn_model = TtnnUFLDv2(conv_args=parameters.conv_args, conv_pth=parameters, device=device)
     n, c, h, w = torch_input_tensor.shape
-    if c == 3:  # for sharding config of padded input
-        c = min_channels
-    input_mem_config = ttnn.create_sharded_memory_config(
-        [n, c, h, w],
-        ttnn.CoreGrid(x=8, y=8),
-        ttnn.ShardStrategy.HEIGHT,
-    )
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     durations = []
     for i in range(2):
-        ttnn_input_tensor_sharded = ttnn_input_tensor.to(device, input_mem_config)
+        ttnn_input_tensor_sharded = ttnn_input_tensor.to(device, ttnn.L1_MEMORY_CONFIG)
         start = time.time()
         ttnn_model_output = ttnn_model(ttnn_input_tensor_sharded, batch_size=batch_size)
         end = time.time()
@@ -119,7 +112,7 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
 @pytest.mark.parametrize(
     "batch_size, expected_perf,test",
     [
-        [1, 340, "UFLD-v2"],
+        [1, 295, "UFLD-v2"],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

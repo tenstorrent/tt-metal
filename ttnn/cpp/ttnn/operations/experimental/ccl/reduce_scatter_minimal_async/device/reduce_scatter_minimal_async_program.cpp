@@ -178,7 +178,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     // Tensor Info
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto& input_tensor_shape = input_tensor.get_padded_shape();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto num_batches = input_tensor_shape[0];
@@ -209,7 +209,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t tile_granularity = num_tiles_to_write_per_packet < 4 ? 4 * num_tiles_to_write_per_packet : 8;
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_input_config =
@@ -549,7 +549,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     uint32_t tiles_to_write_per_packet = std::min(num_pages_per_packet, max_scatter_write_pages);
     uint32_t tile_granularity = std::min(4 * num_pages_per_packet, max_dst_size);
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_input_config =
@@ -591,7 +591,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     // Tensor Info
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto& input_tensor_shape = input_tensor.get_padded_shape();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto num_batches = input_tensor_shape[0];

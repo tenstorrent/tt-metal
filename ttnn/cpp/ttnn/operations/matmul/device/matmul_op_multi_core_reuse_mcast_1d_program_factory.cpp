@@ -2229,7 +2229,7 @@ inline void override_mcast_in1_program_parameters(
 
     auto src_buffer_a = input_tensors.at(0).buffer();
     auto src_buffer_b = input_tensors.at(1).buffer();
-    auto bias_tensor = optional_input_tensors.at(0);
+    const auto& bias_tensor = optional_input_tensors.at(0);
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
     if (bias_tensor.has_value()) {
@@ -2306,7 +2306,7 @@ inline void override_mcast_in0_program_parameters(
 
     auto src_buffer_a = input_tensors.at(0).buffer();
     auto src_buffer_b = input_tensors.at(1).buffer();
-    auto bias_tensor = optional_input_tensors.at(0);
+    const auto& bias_tensor = optional_input_tensors.at(0);
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
     if (bias_tensor.has_value()) {

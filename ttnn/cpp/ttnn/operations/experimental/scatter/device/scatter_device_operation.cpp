@@ -74,8 +74,8 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
     return TensorSpec{
-        tensor_args.input_tensor.get_logical_shape(),
-        TensorLayout{tensor_args.input_tensor.get_dtype(), PageConfig{Layout::ROW_MAJOR}, args.output_memory_config}};
+        tensor_args.input_tensor.logical_shape(),
+        TensorLayout{tensor_args.input_tensor.dtype(), PageConfig{Layout::ROW_MAJOR}, args.output_memory_config}};
 }
 
 ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_output_tensors(
