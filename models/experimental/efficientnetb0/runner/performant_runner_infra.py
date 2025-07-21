@@ -16,6 +16,7 @@ from models.utility_functions import (
     divup,
     is_wormhole_b0,
 )
+from efficientnet_pytorch import EfficientNet
 
 
 class EfficientNetb0PerformanceRunnerInfra:
@@ -39,7 +40,21 @@ class EfficientNetb0PerformanceRunnerInfra:
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
+
+        model = EfficientNet.from_pretrained("efficientnet-b0").eval()
+        state_dict = model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+
         self.torch_model = efficientnetb0.Efficientnetb0()
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(
+            self.torch_model.state_dict().items(), ds_state_dict.items()
+        ):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+        self.torch_model.load_state_dict(new_state_dict)
+        self.torch_model.eval()
+
         self.torch_input_tensor = (
             torch.randn((1, 3, 224, 224), dtype=torch.float32)
             if self.torch_input_tensor is None
@@ -51,7 +66,7 @@ class EfficientNetb0PerformanceRunnerInfra:
         )
 
         self.efficientnetb0_model = ttnn_efficientnetb0.Efficientnetb0(self.device, self.parameters, self.conv_params)
-        self.torch_output_tensor = self.torch_model(self.torch_input_tensor)[0]
+        self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if is_wormhole_b0():
@@ -96,14 +111,14 @@ class EfficientNetb0PerformanceRunnerInfra:
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def run(self):
-        self.output_tensor = self.efficientnetb0_model(self.input_tensor)[0]
+        self.output_tensor = self.efficientnetb0_model(self.input_tensor)
 
     def validate(self, output_tensor=None, torch_output_tensor=None):
         ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
         output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.11)
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.95)
 
         logger.info(
             f"EfficientNetb0 - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
