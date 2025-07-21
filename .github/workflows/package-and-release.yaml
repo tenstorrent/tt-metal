@@ -53,6 +53,7 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
+      fetch-depth: 0
   build-artifact-profiler:
     needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
@@ -63,6 +64,7 @@ jobs:
       version: 22.04
       tracy: true
       build-wheel: true
+      fetch-depth: 0
   test-wheels:
     needs: [build-artifact, get-params]
     if: needs.get-params.outputs.is-release-candidate == 'true'
