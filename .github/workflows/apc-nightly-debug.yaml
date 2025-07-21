@@ -18,7 +18,12 @@ permissions:
 
 jobs:
   nightly-debug:
+    name: apc nightly debug run (${{ matrix.version }})
+    strategy:
+      matrix:
+        version: ["22.04", "24.04"]
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
+      version: ${{ matrix.version }}
