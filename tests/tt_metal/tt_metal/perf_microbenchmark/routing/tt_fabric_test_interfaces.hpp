@@ -55,6 +55,11 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const = 0;
+    virtual void set_local_runtime_args(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t local_args_address,
+        const std::vector<uint32_t>& args) const = 0;
 };
 
 class IRouteManager {
