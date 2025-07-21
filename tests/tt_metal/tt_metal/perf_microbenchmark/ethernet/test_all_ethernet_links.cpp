@@ -161,7 +161,7 @@ private:
         auto physical_eth_core =
             soc_d.get_physical_ethernet_core_from_logical(CoreCoord{logical_eth_core.x, logical_eth_core.y});
 
-        const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_d.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
+        const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0);
 
         std::optional<CoreCoord> closest_phys_tensix = std::nullopt;
         for (auto phys_tensix : tensix_cores) {
@@ -181,7 +181,7 @@ private:
         assigned_phys_tensix.insert(closest_phys_tensix.value());
 
         auto logical_tensix = soc_d.translate_coord_to(
-            {closest_phys_tensix.value(), CoreType::TENSIX, CoordSystem::PHYSICAL}, CoordSystem::LOGICAL);
+            {closest_phys_tensix.value(), CoreType::TENSIX, CoordSystem::NOC0}, CoordSystem::LOGICAL);
 
         tt_metal::ShardSpecBuffer shard_spec = tt_metal::ShardSpecBuffer(
             CoreRangeSet(std::set<CoreRange>({CoreRange(logical_tensix)})),
