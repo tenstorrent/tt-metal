@@ -111,16 +111,9 @@ static void configure_risc_settings(
 }
 
 static size_t get_num_riscv_cores() {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
-        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        if (nriscs > 1) {
-            log_warning(tt::LogFabric, "Launching fabric in experimental 2-erisc mode.");
-        }
-        return nriscs;
-    } else {
-        return 1;
-    }
+    size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    return nriscs;
 }
 
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
