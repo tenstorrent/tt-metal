@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.ccl import tt_all_reduce
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
@@ -122,7 +123,7 @@ class TtMoeLayer(LightweightModule):
             mask_B2.deallocate(True)
 
         gate_logits_1SB8.deallocate()
-        breakpoint()
+
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH, mode=mode)
         if mode == "prefill":
@@ -143,6 +144,27 @@ class TtMoeLayer(LightweightModule):
                 output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
             )
             output_11BH_gathered.deallocate(True)
+
+            output = tt_all_reduce(
+                output_11BH_reduced,
+                self.mesh_device,
+                cluster_axis=0,
+                dim=3,
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                sharded=(mode == "decode"),
+                memory_config=(w2_out.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
+                dtype=self.args.ccl_dtype,
+                use_composite=False,
+                topology=self.args.ccl_topology(),
+            )
+
+            # Ensure dim 0 and 1 are 1
+            original_shape = output.shape
+            output = ttnn.reshape(
+                output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+            )
+
         else:  # Decode mode
             output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
             results_11BH.deallocate(True)
@@ -151,4 +173,35 @@ class TtMoeLayer(LightweightModule):
                 self.reduce_mask, output_11BH_gathered, compute_kernel_config=self.compute_kernel_reduce
             )
 
-        return output_11BH_reduced
+            seq_len = output_11BH_reduced.shape[-2]
+
+            if seq_len >= 2048:  # Reshape back to intended shape
+                output_11BH_reduced = ttnn.reshape(output_11BH_reduced, [1, 1, seq_len, self.model_args.dim])
+
+            output = tt_all_reduce(
+                output_11BH_reduced,
+                self.mesh_device,
+                cluster_axis=0,
+                dim=3,
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                sharded=(mode == "decode"),
+                memory_config=(output_11BH_reduced.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
+                dtype=self.args.ccl_dtype,
+                use_composite=False,
+                topology=self.args.ccl_topology(),
+            )
+
+            # # Ensure dim 0 and 1 are 1
+            original_shape = output.shape
+
+            output = ttnn.reshape(
+                output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+            )
+
+            output = ttnn.to_memory_config(
+                output,
+                self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            )
+
+        return output
