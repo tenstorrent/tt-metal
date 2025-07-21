@@ -75,41 +75,51 @@ enum compressed_routing_values : std::uint8_t {
 };
 
 // Compressed routing table using 3 bits
+template <std::uint32_t ArraySize>
 struct compressed_routing_table_t {
+    static constexpr std::uint32_t BITS_PER_COMPRESSED_ENTRY = 3;
+    static constexpr std::uint8_t COMPRESSED_ENTRY_MASK = 0x7;                // 3-bit mask (2^3 - 1)
+    static constexpr std::uint32_t BITS_PER_BYTE = sizeof(std::uint8_t) * 8;  // 8 bits in a byte
+    static_assert(
+        (ArraySize * BITS_PER_COMPRESSED_ENTRY) % BITS_PER_BYTE == 0,
+        "ArraySize * BITS_PER_COMPRESSED_ENTRY must be divisible by BITS_PER_BYTE for optimal packing");
+
     // 3 bits per entry, so 8 entries per 3 bytes (24 bits)
-    // For 1024 entries: ceil(1024 * 3 / 8) = 384 bytes
-    std::uint8_t packed_directions[MAX_MESH_SIZE * 3 / 8];  // 384 bytes
+    // For 1024 entries: 1024 * 3 / 8 = 384 bytes
+    std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];  // 384 bytes
 
     inline std::uint8_t get_direction(std::uint16_t index) const {
-        std::uint32_t bit_index = index * 3;
-        std::uint32_t byte_index = bit_index / 8;
-        std::uint32_t bit_offset = bit_index % 8;
+        std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
+        std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
+        std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
 
         if (bit_offset <= 5) {
             // All 3 bits are in the same byte
-            return (packed_directions[byte_index] >> bit_offset) & 0x7;
+            return (packed_directions[byte_index] >> bit_offset) & COMPRESSED_ENTRY_MASK;
         } else {
             // Bits span across two bytes
-            std::uint8_t low_bits = (packed_directions[byte_index] >> bit_offset) & ((1 << (8 - bit_offset)) - 1);
-            std::uint8_t high_bits = (packed_directions[byte_index + 1] & ((1 << (3 - (8 - bit_offset))) - 1))
-                                     << (8 - bit_offset);
+            std::uint8_t low_bits =
+                (packed_directions[byte_index] >> bit_offset) & ((1 << (BITS_PER_BYTE - bit_offset)) - 1);
+            std::uint8_t high_bits = (packed_directions[byte_index + 1] &
+                                      ((1 << (BITS_PER_COMPRESSED_ENTRY - (BITS_PER_BYTE - bit_offset))) - 1))
+                                     << (BITS_PER_BYTE - bit_offset);
             return low_bits | high_bits;
         }
     }
 
     inline void set_direction(std::uint16_t index, std::uint8_t direction) {
-        std::uint32_t bit_index = index * 3;
-        std::uint32_t byte_index = bit_index / 8;
-        std::uint32_t bit_offset = bit_index % 8;
+        std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
+        std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
+        std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
 
         if (bit_offset <= 5) {
             // All 3 bits are in the same byte
-            packed_directions[byte_index] &= ~(0x7 << bit_offset);             // Clear bits
-            packed_directions[byte_index] |= (direction & 0x7) << bit_offset;  // Set bits
+            packed_directions[byte_index] &= ~(COMPRESSED_ENTRY_MASK << bit_offset);             // Clear bits
+            packed_directions[byte_index] |= (direction & COMPRESSED_ENTRY_MASK) << bit_offset;  // Set bits
         } else {
             // Bits span across two bytes
-            std::uint8_t bits_in_first_byte = 8 - bit_offset;
-            std::uint8_t bits_in_second_byte = 3 - bits_in_first_byte;
+            std::uint8_t bits_in_first_byte = BITS_PER_BYTE - bit_offset;
+            std::uint8_t bits_in_second_byte = BITS_PER_COMPRESSED_ENTRY - bits_in_first_byte;
 
             // Clear and set bits in first byte
             packed_directions[byte_index] &= ~(((1 << bits_in_first_byte) - 1) << bit_offset);
@@ -176,8 +186,8 @@ struct fabric_router_l1_config_t {
 
 struct tensix_routing_l1_info_t {
     uint32_t mesh_id;           // Current mesh ID
-    compressed_routing_table_t intra_mesh_routing_table;  // 384 bytes
-    compressed_routing_table_t inter_mesh_routing_table;  // 384 bytes
+    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table;   // 384 bytes
+    compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table;  // 384 bytes
     uint8_t padding[12];                                  // pad to 16-byte alignment
 } __attribute__((packed));
 
