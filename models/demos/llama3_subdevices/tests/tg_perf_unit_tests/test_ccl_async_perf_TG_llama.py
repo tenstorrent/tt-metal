@@ -289,6 +289,7 @@ def test_fused_all_gather_concat_perf(
     assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
 
 
+@pytest.mark.skip(reason="Op not used in model anymore")
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
