@@ -145,14 +145,14 @@ ARCH get_arch_from_string(const std::string& arch_str);
 
 enum RISCV : uint8_t {
     BRISC = 0,
-    NCRISC = 1,
-    TRISC0 = 2,
-    TRISC1 = 3,
-    TRISC2 = 4,
-    ERISC = 5,
-    ERISC1 = 6,
-    COMPUTE = 7,  // Encompasses TRISC0, TRISC1, and TRISC2
-    MAX = 8,
+    NCRISC,
+    TRISC0,
+    TRISC1,
+    TRISC2,
+    ERISC0,
+    ERISC1,
+    COMPUTE,  // Encompasses TRISC0, TRISC1, and TRISC2
+    MAX,
 };
 
 inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {
@@ -162,7 +162,7 @@ inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {
         case RISCV::TRISC0: os << "TRISC0"; break;
         case RISCV::TRISC1: os << "TRISC1"; break;
         case RISCV::TRISC2: os << "TRISC2"; break;
-        case RISCV::ERISC: os << "ERISC"; break;
+        case RISCV::ERISC0: os << "ERISC0"; break;
         case RISCV::ERISC1: os << "ERISC1"; break;
         case RISCV::COMPUTE: os << "COMPUTE"; break;
         default: throw std::invalid_argument("Unknown format");
