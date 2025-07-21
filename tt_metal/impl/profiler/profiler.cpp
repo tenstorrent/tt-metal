@@ -380,10 +380,7 @@ void DeviceProfiler::readL1DataBufferForCore(
 }
 
 void DeviceProfiler::readL1DataBuffers(
-    IDevice* device,
-    const std::vector<CoreCoord>& virtual_cores,
-    const ProfilerDumpState state,
-    std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_l1_data_buffers) {
+    IDevice* device, const std::vector<CoreCoord>& virtual_cores, const ProfilerDumpState state) {
     ZoneScoped;
 
     for (const CoreCoord& virtual_core : virtual_cores) {
@@ -472,7 +469,6 @@ void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
     const CoreCoord& worker_core,
     const ProfilerDumpState state,
-    const std::vector<uint32_t>& data_buffer,
     const ProfilerDataBufferSource data_source,
     const std::optional<ProfilerOptionalMetadata>& metadata,
     std::ofstream& log_file_ofs,
@@ -480,6 +476,9 @@ void DeviceProfiler::readRiscProfilerResults(
     ZoneScoped;
 
     const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
+
+    const std::vector<uint32_t>& data_buffer =
+        (data_source == ProfilerDataBufferSource::DRAM) ? profile_buffer : core_l1_data_buffers.at(worker_core);
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
@@ -1444,7 +1443,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
         tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG, true);
 }
 
-void DeviceProfiler::dumpResults(
+void DeviceProfiler::readResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     const ProfilerDumpState state,
@@ -1454,8 +1453,41 @@ void DeviceProfiler::dumpResults(
     ZoneScoped;
 
     const chip_id_t device_id = device->id();
-    const std::string zone_name =
-        fmt::format("{}-{}-{}", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
+    const std::string zone_name = fmt::format(
+        "{}-{}-{}", "readResults", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
+    ZoneName(zone_name.c_str(), zone_name.size());
+
+    TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
+
+    if (data_source == ProfilerDataBufferSource::DRAM) {
+        readControlBuffers(device, virtual_cores, state);
+
+        readProfilerBuffer(device, state);
+
+        resetControlBuffers(device, virtual_cores, state);
+    } else {
+        TT_ASSERT(data_source == ProfilerDataBufferSource::L1);
+        readControlBuffers(device, virtual_cores, state);
+
+        resetControlBuffers(device, virtual_cores, state);
+
+        readL1DataBuffers(device, virtual_cores, state);
+    }
+#endif
+}
+
+void DeviceProfiler::processResults(
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    const ProfilerDumpState state,
+    const ProfilerDataBufferSource data_source,
+    const std::optional<ProfilerOptionalMetadata>& metadata) {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    const chip_id_t device_id = device->id();
+    const std::string zone_name = fmt::format(
+        "{}-{}-{}-{}", "processResults", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
     ZoneName(zone_name.c_str(), zone_name.size());
 
     device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
@@ -1489,48 +1521,8 @@ void DeviceProfiler::dumpResults(
     // create nlohmann json log object
     nlohmann::ordered_json noc_trace_json_log = nlohmann::json::array();
 
-    // Dispatch cores must be added after non-dispatch cores as they must be profiled after non-dispatch cores in order
-    // to minimize the amount of dispatch data that is lost
-    TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
-
-    if (data_source == ProfilerDataBufferSource::DRAM) {
-        readControlBuffers(device, virtual_cores, state);
-
-        readProfilerBuffer(device, state);
-
-        resetControlBuffers(device, virtual_cores, state);
-
-        for (const auto& virtual_core : virtual_cores) {
-            readRiscProfilerResults(
-                device,
-                virtual_core,
-                state,
-                profile_buffer,
-                ProfilerDataBufferSource::DRAM,
-                metadata,
-                log_file_ofs,
-                noc_trace_json_log);
-        }
-    } else {
-        TT_ASSERT(data_source == ProfilerDataBufferSource::L1);
-        readControlBuffers(device, virtual_cores, state);
-
-        resetControlBuffers(device, virtual_cores, state);
-
-        std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
-        readL1DataBuffers(device, virtual_cores, state, core_l1_data_buffers);
-
-        for (const auto& virtual_core : virtual_cores) {
-            readRiscProfilerResults(
-                device,
-                virtual_core,
-                state,
-                core_l1_data_buffers.at(virtual_core),
-                ProfilerDataBufferSource::L1,
-                metadata,
-                log_file_ofs,
-                noc_trace_json_log);
-        }
+    for (const auto& virtual_core : virtual_cores) {
+        readRiscProfilerResults(device, virtual_core, state, data_source, metadata, log_file_ofs, noc_trace_json_log);
     }
 
     // serialize noc traces only in normal state, to avoid overwriting individual trace files

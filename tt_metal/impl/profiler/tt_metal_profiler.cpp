@@ -166,7 +166,9 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     }
     tt_metal::detail::WaitProgramDone(device, sync_program, false);
     std::vector<CoreCoord> cores = {core};
-    tt_metal_device_profiler_map.at(device_id).dumpResults(
+    tt_metal_device_profiler_map.at(device_id).readResults(
+        device, cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
+    tt_metal_device_profiler_map.at(device_id).processResults(
         device, cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
 
     log_info(tt::LogMetal, "SYNC PROGRAM FINISH IS DONE ON {}", device_id);
@@ -318,7 +320,9 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     if (device_profiler_it != tt_metal_device_profiler_map.end()) {
         DeviceProfiler& device_profiler = device_profiler_it->second;
         device_profiler.device_sync_new_events.clear();
-        device_profiler.dumpResults(
+        device_profiler.readResults(
+            device, worker_cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
+        device_profiler.processResults(
             device, worker_cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
         for (auto& event : device_profiler.device_events) {
             const ZoneDetails zone_details = device_profiler.getZoneDetails(event.timer_id);
@@ -764,7 +768,8 @@ void DumpDeviceProfileResults(
             "Debug print server is running, cannot dump device profiler data");
 
         profiler.setDeviceArchitecture(device->arch());
-        profiler.dumpResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
             profiler.pushTracyDeviceResults();
         }
