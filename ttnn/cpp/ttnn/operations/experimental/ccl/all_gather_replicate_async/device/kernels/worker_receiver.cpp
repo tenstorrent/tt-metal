@@ -66,7 +66,8 @@ void kernel_main() {
     const uint64_t multicast_addr = multicast_addr_noc | (uint64_t)aggregated_tensor_addr;
     // noc_async_write_multicast(
     //     l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
+
     noc_async_write_multicast(
-        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, false);
-    // noc_async_write_barrier();
+        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size - 1, false);
+    noc_async_write_barrier();
 }

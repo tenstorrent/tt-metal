@@ -50,6 +50,7 @@ void kernel_main() {
     DPRINT << "num_tiles_per_core: " << num_tiles_per_core << ENDL();
     DPRINT << "num_tiles_to_read: " << num_tiles_to_read << ENDL();
     DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << ENDL();
+    DPRINT << "intermediate_first_core_tile_start_offset: " << intermediate_first_core_tile_start_offset << ENDL();
     DPRINT << "num_cores: " << num_cores << ENDL();
     DPRINT << "ring_index: " << ring_index << ENDL();
     DPRINT << "out_ready_sem_bank_addr: " << static_cast<uint32_t>(out_ready_sem_bank_addr) << ENDL();
@@ -94,7 +95,7 @@ void kernel_main() {
     cb_push_back(cb0_id, num_tiles_to_read);
     core_id = 0;
     uint64_t noc0_dest_noc_addr = get_noc_addr(
-        core_noc_x_to_write_to[core_id], core_noc_y_to_write_to[core_id], intermediate_tensor_address0, 1 /*noc_id*/);
+        core_noc_x_to_write_to[core_id], core_noc_y_to_write_to[core_id], intermediate_tensor_address0, 0 /*noc_id*/);
     uint32_t l1_read_addr = get_read_ptr(cb0_id);
     noc_async_write(
         l1_read_addr,

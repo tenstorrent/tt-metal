@@ -115,7 +115,7 @@ def run_all_gather_replicate_impl(
         ttnn.CoreCoord(1, 0), MCAST_NUM_CORES, MCAST_CRS, row_wise=True
     )
     intermediate_shape = [*cluster_shape, M, N * cluster_shape[cluster_axis]]
-    aggregated_shape = [*cluster_shape, M * intermediate_num_cores, N * MCAST_NUM_CORES]
+    aggregated_shape = [*cluster_shape, M, N * intermediate_num_cores * MCAST_NUM_CORES]
 
     interemediate_N_per_shard = round_up(math.ceil(intermediate_shape[-1] / intermediate_num_cores), ttnn.TILE_SIZE)
 
@@ -147,7 +147,7 @@ def run_all_gather_replicate_impl(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             aggregated_core_range_set,
-            [M * intermediate_num_cores, interemediate_N_per_shard],
+            [M, interemediate_N_per_shard * intermediate_num_cores],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )

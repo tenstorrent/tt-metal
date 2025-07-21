@@ -70,7 +70,6 @@ constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targe
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
-    // return;
     DPRINT << "Kernel = worker_writer" << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
     DPRINT << "reserved_packet_header_cb_id: " << reserved_packet_header_cb_id << ENDL();
@@ -181,7 +180,7 @@ void kernel_main() {
     }
 
     // 2. mcast output ready semaphore
-    /*
+
     auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
@@ -205,7 +204,6 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
-    */
 
     fabric_connection.close();
     // increment locally
