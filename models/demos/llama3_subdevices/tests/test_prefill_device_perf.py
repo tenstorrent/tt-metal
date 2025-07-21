@@ -463,7 +463,7 @@ def test_llama_TG_perf_device(
     ttft_estimate_80l = ttft_estimate_80l / 1000000
     print(f"80L TTFT time estimate: {ttft_estimate_80l}")
 
-    benchmark_data.add_measurement(profiler, 0, step_name, "ttft_estimate_80l", ttft_estimate_80l)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"ttft_estimate_80l_{galaxy_type}", ttft_estimate_80l)
 
     benchmark_data.save_partial_run_json(
         profiler,
