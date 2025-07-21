@@ -32,7 +32,6 @@ script_config = ScriptConfig(
 )
 
 
-
 # TODO: This method should be removed and ElfFile::Impl::XIPify() should be used to store corrected binaries.
 def apply_kernel_relocations(section: ELFSection) -> bytes:
     # Check for relocation section
@@ -42,15 +41,17 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
         return section.data()
 
     # Create a stream to hold the section data
-    section_address: int = section['sh_addr']
+    section_address: int = section["sh_addr"]
     section_stream = BytesIO()
     section_stream.write(section.data())
+
     def write32(offset: int, value: int) -> None:
         section_stream.seek(offset - section_address)
-        section_stream.write(value.to_bytes(4, byteorder='little'))
+        section_stream.write(value.to_bytes(4, byteorder="little"))
+
     def read32(offset: int) -> int:
         section_stream.seek(offset - section_address)
-        return int.from_bytes(section_stream.read(4), byteorder='little')
+        return int.from_bytes(section_stream.read(4), byteorder="little")
 
     # Constants for RISC-V relocations
     R_RISCV_32 = 1
@@ -60,17 +61,17 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
     R_RISCV_HI20 = 26
     R_RISCV_LO12_I = 27
     R_RISCV_LO12_S = 28
-    SHF_ALLOC = (1 << 1)
+    SHF_ALLOC = 1 << 1
 
     # We have to translate these two instructions
     insn_opc_auipc = 0x00000017
     insn_opc_lui = 0x00000037
-    insn_mask_u = 0x0000007f
-    mask_hi20 = 0x00000fff
+    insn_mask_u = 0x0000007F
+    mask_hi20 = 0x00000FFF
     mask_hi20_shift = 12
-    mask_lo12_i = 0x000fffff
+    mask_lo12_i = 0x000FFFFF
     mask_lo12_i_shift = 20
-    mask_lo12_s = 0x01fff07f
+    mask_lo12_s = 0x01FFF07F
     mask_lo12_s_split = 5
     mask_lo12_s_shift_1 = 7
     mask_lo12_s_shift_2 = 25
@@ -81,12 +82,18 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
         "PCREL": [],
         "ABS": [],
     }
-    composed: dict[str, SortedDict] = {   # SortedDict[int, ComposedRelocation]
+    composed: dict[str, SortedDict] = {  # SortedDict[int, ComposedRelocation]
         "PCREL": SortedDict(),
         "ABS": SortedDict(),
     }
+
     def in_segment(section: ELFSection, segment: ELFSegment) -> bool:
-        return section['sh_flags'] & SHF_ALLOC and section['sh_addr'] >= segment['p_vaddr'] and section['sh_addr'] + section['sh_size'] <= segment['p_vaddr'] + segment['p_memsz']
+        return (
+            section["sh_flags"] & SHF_ALLOC
+            and section["sh_addr"] >= segment["p_vaddr"]
+            and section["sh_addr"] + section["sh_size"] <= segment["p_vaddr"] + segment["p_memsz"]
+        )
+
     segment_ix = -1
     for segment_index in range(elf_file.num_segments(), 0, -1):
         segment = elf_file.get_segment(segment_index - 1)
@@ -94,11 +101,11 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
             segment_ix = segment_index - 1
             break
     segment = elf_file.get_segment(segment_ix)
-    symtab = section.elffile.get_section(rel_section['sh_link'])
+    symtab = section.elffile.get_section(rel_section["sh_link"])
     text_segment = None
     for i in range(elf_file.num_segments()):
         seg = elf_file.get_segment(i)
-        if seg['p_type'] != 'PT_RISCV_ATTRIBUTES':
+        if seg["p_type"] != "PT_RISCV_ATTRIBUTES":
             text_segment = seg
             break
     assert text_segment is not None, "Text segment not found in ELF file"
@@ -106,12 +113,21 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
     for i in range(rel_section.num_relocations(), 0, -1):
         relocation = rel_section.get_relocation(i - 1)
         # for relocation in rel_section.iter_relocations():
-        symbol = symtab.get_symbol(relocation['r_info_sym'])
-        symbol_section = elf_file.get_section(symbol['st_shndx']) if isinstance(symbol['st_shndx'], int) and symbol['st_shndx'] < elf_file.num_sections() else None
+        symbol = symtab.get_symbol(relocation["r_info_sym"])
+        symbol_section = (
+            elf_file.get_section(symbol["st_shndx"])
+            if isinstance(symbol["st_shndx"], int) and symbol["st_shndx"] < elf_file.num_sections()
+            else None
+        )
         is_to_text = symbol_section is not None and in_segment(symbol_section, text_segment)
-        type = relocation['r_info_type']
+        type = relocation["r_info_type"]
         kind = "PCREL"
-        if type == R_RISCV_LO12_I or type == R_RISCV_LO12_S or type == R_RISCV_PCREL_LO12_I or type == R_RISCV_PCREL_LO12_S:
+        if (
+            type == R_RISCV_LO12_I
+            or type == R_RISCV_LO12_S
+            or type == R_RISCV_PCREL_LO12_I
+            or type == R_RISCV_PCREL_LO12_S
+        ):
             if type == R_RISCV_LO12_I or type == R_RISCV_LO12_S:
                 kind = "ABS"
             if kind != "ABS" or is_to_text:
@@ -124,12 +140,14 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
             if type == R_RISCV_HI20:
                 kind = "ABS"
             if kind != "ABS" or is_to_text:
-                assert relocation['r_offset'] not in composed[kind], f"Duplicate relocation {relocation['r_offset']} for kind {kind}"
-                composed[kind][relocation['r_offset']] = ComposedRelocation([], relocation)
+                assert (
+                    relocation["r_offset"] not in composed[kind]
+                ), f"Duplicate relocation {relocation['r_offset']} for kind {kind}"
+                composed[kind][relocation["r_offset"]] = ComposedRelocation([], relocation)
         elif type == R_RISCV_32:
             if is_to_text:
-                value = symbol['st_value'] + relocation['r_addend'] - elf_file.get_segment(0)['p_vaddr']
-                write32(relocation['r_offset'], value)
+                value = symbol["st_value"] + relocation["r_addend"] - elf_file.get_segment(0)["p_vaddr"]
+                write32(relocation["r_offset"], value)
                 # TODO: Save relocation?!?
                 # TODO: auto& seg = GetSegments()[segment_ix];
                 # TODO: seg.relocs.push_back(reloc.r_offset - seg.address);
@@ -150,18 +168,20 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
             # Find the matching hi-reloc by searching backwards. This
             # presumes block reordering hasn't done something to
             # break that.
-            sym_ix = lo_reloc['r_info_sym']
+            sym_ix = lo_reloc["r_info_sym"]
             if kind == "ABS":
                 hi_reloc = None
                 for o, c in comp.items():
-                    if o > lo_reloc['r_offset']:
+                    if o > lo_reloc["r_offset"]:
                         break
-                    if c.hi_reloc['r_info_sym'] == sym_ix:
+                    if c.hi_reloc["r_info_sym"] == sym_ix:
                         hi_reloc = c
             else:
-                hi_offset = symtab.get_symbol(sym_ix)['st_value'] + lo_reloc['r_addend']
+                hi_offset = symtab.get_symbol(sym_ix)["st_value"] + lo_reloc["r_addend"]
                 hi_reloc = comp.get(hi_offset)
-            assert hi_reloc is not None, f"No matching hi reloc for {kind} reloc at {lo_reloc['r_offset']} with symbol index {sym_ix}"
+            assert (
+                hi_reloc is not None
+            ), f"No matching hi reloc for {kind} reloc at {lo_reloc['r_offset']} with symbol index {sym_ix}"
             hi_reloc.lo_relocs.append(lo_reloc)
 
     # Process composed relocations
@@ -169,41 +189,45 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
         for o, c in composed[kind].items():
             assert len(c.lo_relocs) > 0, f"No lo relocs for composed {kind} reloc at {o}"
             hi_reloc = c.hi_reloc
-            sym_ix = hi_reloc['r_info_sym']
+            sym_ix = hi_reloc["r_info_sym"]
             symbol = symtab.get_symbol(sym_ix)
-            symbol_section = elf_file.get_section(symbol['st_shndx']) if isinstance(symbol['st_shndx'], int) and symbol['st_shndx'] < elf_file.num_sections() else None
+            symbol_section = (
+                elf_file.get_section(symbol["st_shndx"])
+                if isinstance(symbol["st_shndx"], int) and symbol["st_shndx"] < elf_file.num_sections()
+                else None
+            )
             is_to_text = symbol_section is not None and in_segment(symbol_section, text_segment)
             if kind == "PCREL" and is_to_text == is_from_text:
                 # intra-text PCREL is ok.
                 continue
-            value = symbol['st_value'] + hi_reloc['r_addend']
+            value = symbol["st_value"] + hi_reloc["r_addend"]
             if kind == "ABS":
                 value -= o
                 sym_ix = 0
 
             # Translate hi
-            insn = read32(hi_reloc['r_offset'])
+            insn = read32(hi_reloc["r_offset"])
             insn &= mask_hi20  # Remove old immediate
             insn ^= insn_opc_auipc ^ insn_opc_lui  # Convert opcode
             # Insert new immediate
             insn |= ((value + (1 << 11)) >> 12) << mask_hi20_shift
-            write32(hi_reloc['r_offset'], insn)
+            write32(hi_reloc["r_offset"], insn)
             # TODO: hi_reloc->r_info ^= ELF32_R_INFO(0, R_RISCV_HI20 ^ R_RISCV_PCREL_HI20);
 
             # Translate lo
             for lo_reloc in c.lo_relocs:
-                type = lo_reloc['r_info_type']
+                type = lo_reloc["r_info_type"]
                 is_form_i = type == (R_RISCV_PCREL_LO12_I if kind == "PCREL" else R_RISCV_LO12_I)
-                insn = read32(lo_reloc['r_offset'])
+                insn = read32(lo_reloc["r_offset"])
                 if is_form_i:
                     insn &= mask_lo12_i
-                    insn |= (value & 0x0fff) << mask_lo12_i_shift
+                    insn |= (value & 0x0FFF) << mask_lo12_i_shift
                 else:
                     # S form splits the immediate
                     insn &= mask_lo12_s
                     insn |= (value & ((1 << mask_lo12_s_split) - 1)) << mask_lo12_s_shift_1
-                    insn |= ((value & 0x0fff) >> mask_lo12_s_split) << mask_lo12_s_shift_2
-                write32(lo_reloc['r_offset'], insn)
+                    insn |= ((value & 0x0FFF) >> mask_lo12_s_split) << mask_lo12_s_shift_2
+                write32(lo_reloc["r_offset"], insn)
 
     # TODO: Do we need to update lo_reloc?
     #                 // We can't convert to PCREL with fidelity, as
@@ -225,10 +249,12 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
 
 def check_binary_integrity(device: Device, dispatcher_data: DispatcherData):
     elf_cache: dict[str, ELFFile] = {}
+
     def load_elf_file(path: str) -> ELFFile:
         if path not in elf_cache:
             elf_cache[path] = ELFFile.load_from_path(path)
         return elf_cache[path]
+
     block_types = ["functional_workers", "eth"]
     for block_type in block_types:
         for location in device.get_block_locations(block_type):
@@ -245,37 +271,59 @@ def check_binary_integrity(device: Device, dispatcher_data: DispatcherData):
                     print(location.to_user_str())
 
                 # Check firmware ELF binary state on the device
-                log_check(os.path.exists(dispatcher_core_data.firmware_path), f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.")
+                log_check(
+                    os.path.exists(dispatcher_core_data.firmware_path),
+                    f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
+                )
                 if os.path.exists(dispatcher_core_data.firmware_path):
                     elf_file = load_elf_file(dispatcher_core_data.firmware_path)
-                    sections_to_verify  = [".text"]
+                    sections_to_verify = [".text"]
                     for section_name in sections_to_verify:
                         section = elf_file.get_section_by_name(section_name)
                         if section is None:
-                            log_check(False, f"Section {section_name} not found in ELF file {dispatcher_core_data.firmware_path}.")
+                            log_check(
+                                False,
+                                f"Section {section_name} not found in ELF file {dispatcher_core_data.firmware_path}.",
+                            )
                         else:
                             address: int = section["sh_addr"]
                             data: bytes = section.data()
                             read_data = read_from_device(location, address, device._id, len(data), device._context)
-                            log_check(read_data == data, f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.")
+                            log_check(
+                                read_data == data,
+                                f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
+                            )
 
                 # Check kernel ELF binary state on the device
                 if dispatcher_core_data.kernel_path is not None:
-                    log_check(os.path.exists(dispatcher_core_data.kernel_path), f"Kernel ELF file {dispatcher_core_data.kernel_path} does not exist.")
+                    log_check(
+                        os.path.exists(dispatcher_core_data.kernel_path),
+                        f"Kernel ELF file {dispatcher_core_data.kernel_path} does not exist.",
+                    )
 
                     # We cannot read 0xFFC00000 address on wormhole as we don't have debug hardware on NCRISC (only NCRISC has private code memory at that address).
-                    if os.path.exists(dispatcher_core_data.kernel_path) and dispatcher_core_data.kernel_offset is not None and dispatcher_core_data.kernel_offset != 0xFFC00000:
+                    if (
+                        os.path.exists(dispatcher_core_data.kernel_path)
+                        and dispatcher_core_data.kernel_offset is not None
+                        and dispatcher_core_data.kernel_offset != 0xFFC00000
+                    ):
                         elf_file = load_elf_file(dispatcher_core_data.kernel_path)
-                        sections_to_verify  = [".text"]
+                        sections_to_verify = [".text"]
                         for section_name in sections_to_verify:
                             section = elf_file.get_section_by_name(section_name)
                             if section is None:
-                                log_check(False, f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_path}.")
+                                log_check(
+                                    False,
+                                    f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_path}.",
+                                )
                             else:
                                 data = apply_kernel_relocations(section)
                                 address: int = dispatcher_core_data.kernel_offset
                                 read_data = read_from_device(location, address, device._id, len(data), device._context)
-                                log_check(read_data == data, f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_path}.")
+                                log_check(
+                                    read_data == data,
+                                    f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_path}.",
+                                )
 
 
 def run(args, context: Context):

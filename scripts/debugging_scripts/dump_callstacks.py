@@ -62,7 +62,12 @@ def make_add_symbol_file_command(paths: list[str], offsets: list[int | None]) ->
 
 
 def make_gdb_script(
-    pid: int, elf_paths: list[str], offsets: list[int | None], port: int, start_callstack_label: str, end_callstack_label: str
+    pid: int,
+    elf_paths: list[str],
+    offsets: list[int | None],
+    port: int,
+    start_callstack_label: str,
+    end_callstack_label: str,
 ) -> str:
     return f"""\
         target extended-remote localhost:{port}
@@ -264,7 +269,9 @@ def dump_callstacks(
                         # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
                         if len(callstack) > 0 and callstack[0].pc is None:
                             try:
-                                callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                                callstack[0].pc = (
+                                    location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                                )
                             except:
                                 pass
                     else:
