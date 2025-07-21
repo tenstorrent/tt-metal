@@ -103,6 +103,7 @@ void MAIN {
                     curr_in_cb_id,
                     curr_scalar_cb_id,
                     tiles_to_reduce,
+                    tile_id,
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
                     num_faces_in_input_tile,
                     face_r_dim);
@@ -116,10 +117,10 @@ void MAIN {
             if (last_c_block) {
                 pack_untilize_dest<partial_iter_output_tiles>(
                     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                cb_push_back(out_cb_id, partial_iter_output_tiles);
+                cb_push_back(out_cb_id, partial_iter_output_tiles * num_faces_in_output_tile);
             } else {
                 pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                cb_push_back(out_cb_id, max_tiles_per_iter);
+                cb_push_back(out_cb_id, max_tiles_per_iter * num_faces_in_output_tile);
             }
             tile_regs_release();
         }
