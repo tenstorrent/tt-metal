@@ -299,7 +299,6 @@ def create_tt_model(
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
-            True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
