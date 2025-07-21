@@ -358,7 +358,10 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
             program,
             compute_kernel,
             core_range_cliff,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_cliff});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .compile_args = compute_args_cliff,
+                .defines = compute_kernel_defines});
     }
 
     uint32_t ncores_full = ncores;
@@ -1109,7 +1112,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // Compute kernel file
     std::string compute_kernel;
-    if (num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (a.dtype() == DataType::FLOAT32 && num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = std::string(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
@@ -1150,7 +1154,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
             program,
             compute_kernel,
             cliff_compute_core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args_cliff});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .compile_args = compute_compile_time_args_cliff,
+                .defines = compute_kernel_defines});
     }
 
     // Run-time arg assignment
