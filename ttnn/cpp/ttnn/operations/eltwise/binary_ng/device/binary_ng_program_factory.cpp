@@ -462,14 +462,17 @@ KernelName get_reader_kernel_name_and_defines(
 }
 
 void overwrite_compute_kernel_name_and_defines(
+    bool is_sfpu_op,
     KernelName& kernel_name,
     const SubtileBroadcastType subtile_broadcast_type,
     std::map<std::string, std::string>& compute_defines) {
-    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
-        compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
-        compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
-        kernel_name = KernelName::ComputeRowBcastLLK;
+    if (not is_sfpu_op) {
+        if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+            subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+            compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
+            compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
+            kernel_name = KernelName::ComputeRowBcastLLK;
+        }
     }
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -720,7 +723,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
     CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
-        compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
+        is_sfpu_op, compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(compute_kernel, is_sfpu_op),
