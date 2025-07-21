@@ -27,8 +27,6 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program{};
 
-    // CoreRange core({0, 0}, {0, 0});
-
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.padded_shape()[-1] * input.element_size();
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -106,19 +104,19 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     std::vector<uint32_t> reader_rt_arguments{
         src_buffer->address(),
         input_unit_size,
-        0,  // set in loop, num sticks
-        0   // set in loop, start_id
+        0,  // set in loop, num of sticks on core
+        0   // set in loop, start_id of stick in core
     };
 
     std::vector<uint32_t> writer_rt_arguments{
         dst_buffer->address(),
         input_unit_size,
-        0,  // set in loop, num sticks
+        0,  // set in loop, num of sticks on core
         (uint32_t)scale_factor_h,
         (uint32_t)scale_factor_w,
         (uint32_t)output_shape[1],
         (uint32_t)output_shape[2],
-        0  // set in loop, stard_id
+        0  // set in loop, stard_id of stick on core
     };
 
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores; i++) {
@@ -157,18 +155,6 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
             UpdateDynamicCircularBufferAddress(program, src0_cb_index, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, output_cb_index, *dst_buffer);
-
-            // for (uint32_t i = 0, num_sticks_written = 0; i < num_cores; i++) {
-            //     CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            //     {
-            //         auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            //         runtime_args[0] = src_buffer->address();
-            //     }
-
-            //     {
-            //         auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            //         runtime_args[0] = dst_buffer->address();
-            //     }
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
