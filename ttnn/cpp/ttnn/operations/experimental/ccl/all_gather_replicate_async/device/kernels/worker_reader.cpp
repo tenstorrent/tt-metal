@@ -101,6 +101,8 @@ void kernel_main() {
         l1_read_addr,
         noc0_dest_noc_addr + intermediate_first_core_tile_start_offset * tensor0_page_size,
         num_tiles_to_read * tensor0_page_size);
+
+    // notify local receiver core
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);

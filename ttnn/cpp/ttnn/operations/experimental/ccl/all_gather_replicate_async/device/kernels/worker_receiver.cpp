@@ -45,9 +45,9 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
-    if (core_id != ring_index) {
-        return;
-    }
+    // if (core_id != ring_index) {
+    //     return;
+    // }
     DPRINT << "core that handles local noc multicast: " << core_id << ENDL();
 
     // 1. Wait for signal
@@ -63,7 +63,9 @@ void kernel_main() {
     // 2. multicast data to mm cores
     size_t l1_read_addr = get_read_ptr(inter_cb_index);
     const uint64_t multicast_addr_noc = get_noc_multicast_addr(bbox_end_x, bbox_end_y, bbox_start_x, bbox_start_y, 0);
-    const uint64_t multicast_addr = multicast_addr_noc | (uint64_t)aggregated_tensor_addr;
+    uint64_t aggregated_tensor_addr_this_core =
+        (uint64_t)aggregated_tensor_addr + core_id * intermediate_tensor_shard_num_pages * tensor0_page_size;
+    const uint64_t multicast_addr = multicast_addr_noc | aggregated_tensor_addr_this_core;
     // noc_async_write_multicast(
     //     l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
 
