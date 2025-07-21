@@ -1,0 +1,2 @@
+rank 0=g10glx04 slots=1
+rank 1=g10glx03 slots=1
