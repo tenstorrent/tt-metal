@@ -14,6 +14,16 @@
 
 namespace ttml::core::distributed {
 
+ttnn::Tensor synchronize_tensor_fabric(const ttnn::Tensor& tensor, CCLResources& ccl_resources) {
+    auto* device = &autograd::ctx().get_device();
+    auto devices_count = device->get_devices().size();
+    assert(devices_count >= 1U);
+    // no need to synchronize if there is only one device
+    if (devices_count == 1U) {
+        return tensor;
+    }
+}
+
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
     auto* device = &autograd::ctx().get_device();
     auto devices_count = device->get_devices().size();

@@ -15,6 +15,9 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
+tt::tt_metal::Tensor all_reduce_fabric(const tt::tt_metal::Tensor& tensor, CCLResources& ccl_resources) {
+}
+
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
     auto* current_device = &ttml::autograd::ctx().get_device();
     auto num_devices = current_device->num_devices();
