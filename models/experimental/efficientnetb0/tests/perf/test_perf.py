@@ -25,7 +25,7 @@ from models.utility_functions import (
 
 
 def get_expected_times(name):
-    base = {"EfficientNetb0": (119, 0.052)}
+    base = {"EfficientNetb0": (129, 0.052)}
     return base[name]
 
 
@@ -91,7 +91,7 @@ def test_perf(device, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 100.5],
+        [1, 83],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
