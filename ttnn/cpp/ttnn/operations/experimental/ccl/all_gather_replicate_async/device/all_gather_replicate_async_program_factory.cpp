@@ -81,12 +81,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     // Cannot have CCL workers on the same cores as the worker_receiver (for now!)
     auto sub_device_core_range_set = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
-    auto bbox = sub_device_core_range_set.bounding_box();
-    CoreRangeSet bbox_crs(bbox);
+    // auto bbox = sub_device_core_range_set.bounding_box();
+    // CoreRangeSet bbox_crs(bbox);
+
     auto aggregated_tensor_cores = aggregated_tensor.memory_config().shard_spec()->grid;
+    auto bbox = aggregated_tensor_cores.bounding_box();
+    auto bbox_physical_start_core = mesh_device->worker_core_from_logical_core(bbox.start_coord);
+    auto bbox_physical_end_core = mesh_device->worker_core_from_logical_core(bbox.end_coord);
     log_info(tt::LogOp, "aggregated_tensor_cores: {}", aggregated_tensor_cores);
     log_info(tt::LogOp, "bbox: {}", bbox);
-    log_info(tt::LogOp, "bbox_crs: {}", bbox_crs);
     log_info(
         tt::LogOp, "sub_device_core_range_set: {}", corerange_to_cores(sub_device_core_range_set, std::nullopt, true));
     auto intermediate_tensor_cores = intermediate_tensor.memory_config().shard_spec()->grid;
@@ -220,10 +223,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
          0,           // core id, corresponds to the id of which device it expect data from, will be reset later
          ring_index,  // device id
          aggregated_tensor.buffer()->address(),
-         static_cast<uint32_t>(bbox.start_coord.x),
-         static_cast<uint32_t>(bbox.start_coord.y),
-         static_cast<uint32_t>(bbox.end_coord.x),
-         static_cast<uint32_t>(bbox.end_coord.y),
+         static_cast<uint32_t>(bbox_physical_start_core.x),
+         static_cast<uint32_t>(bbox_physical_start_core.y),
+         static_cast<uint32_t>(bbox_physical_end_core.x),
+         static_cast<uint32_t>(bbox_physical_end_core.y),
          static_cast<uint32_t>(bbox.size()),
          intermediate_tensor_shard_num_pages});
     // Kernel Runtime Args
@@ -242,10 +245,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
              i,
              ring_index,
              aggregated_tensor.buffer()->address(),
-             static_cast<uint32_t>(bbox.start_coord.x),
-             static_cast<uint32_t>(bbox.start_coord.y),
-             static_cast<uint32_t>(bbox.end_coord.x),
-             static_cast<uint32_t>(bbox.end_coord.y),
+             static_cast<uint32_t>(bbox_physical_start_core.x),
+             static_cast<uint32_t>(bbox_physical_start_core.y),
+             static_cast<uint32_t>(bbox_physical_end_core.x),
+             static_cast<uint32_t>(bbox_physical_end_core.y),
              static_cast<uint32_t>(bbox.size()),
              intermediate_tensor_shard_num_pages});
     }

@@ -34,12 +34,21 @@ void kernel_main() {
     DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
     DPRINT << "core_id: " << core_id << ENDL();
     DPRINT << "ring_index: " << ring_index << ENDL();
+    DPRINT << "aggregated_tensor_addr: " << aggregated_tensor_addr << ENDL();
+    DPRINT << "bbox_start_x: " << bbox_start_x << ENDL();
+    DPRINT << "bbox_start_y: " << bbox_start_y << ENDL();
+    DPRINT << "bbox_end_x: " << bbox_end_x << ENDL();
+    DPRINT << "bbox_end_y: " << bbox_end_y << ENDL();
+    DPRINT << "bbox_size: " << bbox_size << ENDL();
+    DPRINT << "intermediate_tensor_shard_num_pages: " << intermediate_tensor_shard_num_pages << ENDL();
+    DPRINT << "noc index: " << static_cast<uint32_t>(noc_index) << ENDL();
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
     if (core_id != ring_index) {
         return;
     }
+    DPRINT << "core that handles local noc multicast: " << core_id << ENDL();
 
     // 1. Wait for signal
     {
@@ -53,11 +62,11 @@ void kernel_main() {
 
     // 2. multicast data to mm cores
     size_t l1_read_addr = get_read_ptr(inter_cb_index);
-    const uint64_t multicast_addr =
-        get_noc_multicast_addr(bbox_start_x, bbox_start_y, bbox_start_x + 3, bbox_start_y + 5, aggregated_tensor_addr);
+    const uint64_t multicast_addr_noc = get_noc_multicast_addr(bbox_end_x, bbox_end_y, bbox_start_x, bbox_start_y, 0);
+    const uint64_t multicast_addr = multicast_addr_noc | (uint64_t)aggregated_tensor_addr;
     // noc_async_write_multicast(
     //     l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
     noc_async_write_multicast(
-        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, 15, false);
-    noc_async_write_barrier();
+        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, false);
+    // noc_async_write_barrier();
 }

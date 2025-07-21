@@ -23,6 +23,7 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
+    // return;
     DPRINT << "Kernel = worker_reader" << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
     DPRINT << "cb0_id: " << cb0_id << ENDL();
