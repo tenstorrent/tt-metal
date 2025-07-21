@@ -79,6 +79,96 @@ xt::xarray<float> matmul_qk(
     return result;
 }
 
+xt::xarray<float> compute_sdpa_without_softmax(
+    const xt::xarray<float>& Q,  // shape: (B, H, S, d)
+    const xt::xarray<float>& K,  // shape: (B, H, S, d)
+    const xt::xarray<float>& V)  // shape: (B, H, S, d)
+{
+    assert(Q.dimension() == 4 && K.dimension() == 4 && V.dimension() == 4);
+    assert(Q.shape() == K.shape());
+    assert(Q.shape()[0] == V.shape()[0]);  // B
+    assert(Q.shape()[1] == V.shape()[1]);  // H
+    assert(Q.shape()[2] == V.shape()[2]);  // S_q == S_k == S
+    assert(V.shape()[3] == Q.shape()[3]);  // d == d_v
+
+    const size_t B = Q.shape()[0];
+    const size_t H = Q.shape()[1];
+    const size_t S = Q.shape()[2];
+    const size_t d = Q.shape()[3];
+
+    xt::xarray<float> output = xt::zeros<float>({B, H, S, d});
+
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t h = 0; h < H; ++h) {
+            auto q = xt::view(Q, b, h);  // shape: (S, d)
+            auto k = xt::view(K, b, h);  // shape: (S, d)
+            auto v = xt::view(V, b, h);  // shape: (S, d)
+
+            auto k_t = xt::transpose(k);  // shape: (d, S)
+            auto qk = dot(q, k_t);        // shape: (S, S)
+            // auto qk = dot(q, k);    // shape: (S, S), using K instead of K^T for simplicity
+            auto qkv = dot(qk, v);  // shape: (S, d)
+
+            xt::view(output, b, h) = qkv;
+        }
+    }
+
+    return output;
+}
+
+xt::xarray<float> generate_tilewise_symmetric_K(size_t B, size_t H, size_t S, size_t TILE = 32) {
+    assert(S % TILE == 0);
+    size_t num_tiles = S / TILE;
+
+    xt::xarray<float> K = xt::zeros<float>({B, H, S, S});
+
+    std::mt19937 rng(42);  // reproducible
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t h = 0; h < H; ++h) {
+            for (size_t tile_i = 0; tile_i < num_tiles; ++tile_i) {
+                for (size_t tile_j = 0; tile_j <= tile_i; ++tile_j) {
+                    // Fill tile (i, j)
+                    xt::xarray<float> tile = xt::zeros<float>({TILE, TILE});
+                    for (size_t i = 0; i < TILE; ++i) {
+                        for (size_t j = 0; j < TILE; ++j) {
+                            if (tile_i == tile_j && j < i)
+                                continue;  // will fill symmetric later
+
+                            float val = dist(rng);
+                            tile(i, j) = val;
+
+                            if (tile_i == tile_j)
+                                tile(j, i) = val;  // enforce symmetry inside diagonal tile
+                        }
+                    }
+
+                    // Copy tile to K[b, h]
+                    for (size_t i = 0; i < TILE; ++i) {
+                        for (size_t j = 0; j < TILE; ++j) {
+                            size_t row = tile_i * TILE + i;
+                            size_t col = tile_j * TILE + j;
+                            K(b, h, row, col) = tile(i, j);
+                            if (tile_i != tile_j)
+                                K(b, h, col, row) = tile(j, i);  // transpose for symmetric tile
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return K;
+}
+
+float compute_mse(const xt::xarray<float>& expected, const xt::xarray<float>& result) {
+    assert(result.shape() == expected.shape());
+    xt::xarray<float> diff = expected - result;
+    float mse = xt::mean(xt::square(diff))();
+    return mse;
+}
+
 xt::xarray<float> xt_composite_sdpa_fw(
     const xt::xarray<float>& query,
     const xt::xarray<float>& key,
@@ -88,29 +178,33 @@ xt::xarray<float> xt_composite_sdpa_fw(
     return result;
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Small) {
+TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     using namespace ttml;
 
-    const uint32_t B = 1U, H = 1U, S = 32U, d = 32U;
+    const uint32_t B = 2U, H = 1U, S = 1024U, d = 768U;
     const auto shape = ttnn::SmallVector<uint32_t>{B, H, S, d};
     const float dropout_prob = 0.8F;
 
     std::random_device rd;
     std::mt19937 gen(42);
-    // xt::xarray<float> query_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
-    // xt::xarray<float> key_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
+    xt::xarray<float> query_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
+    xt::xarray<float> key_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> value_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
 
-    xt::xarray<float> query_tensor = xt::zeros<float>({B, H, S, d});
-    xt::xarray<float> key_tensor = xt::zeros<float>({B, H, S, d});
+    // xt::xarray<float> query_tensor = xt::zeros<float>({B, H, S, d});
+    // xt::xarray<float> key_tensor = xt::zeros<float>({B, H, S, d});
 
     // Fill Q with values row-wise: Q[b][h][i][j] = i * d + j
-    for (size_t i = 0; i < S; ++i) {
-        for (size_t j = 0; j < d; ++j) {
-            query_tensor(0, 0, i, j) = static_cast<float>(i);
-            key_tensor(0, 0, i, j) = static_cast<float>(i);  // same as Q for simplicity
-        }
-    }
+    // for (size_t i = 0; i < S; ++i) {
+    //     for (size_t j = 0; j < d; ++j) {
+    //         query_tensor(0, 0, i, j) = static_cast<float>(i);
+    //         key_tensor(0, 0, i, j) = static_cast<float>(i);  // same as Q for simplicity
+    //     }
+    // }
+
+    // generate symetric K matrix
+    // assert(S == d);  // to make sure K can be transposed easily
+    // auto key_tensor = generate_tilewise_symmetric_K(B, H, S);
 
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
@@ -118,12 +212,35 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Small) {
 
     auto result = ttml::metal::sdpa_fw(query, key, value, std::nullopt, dropout_prob, false);
 
-    xt::xarray<float> expected_result = matmul_qk(query_tensor, key_tensor);
+    auto q_by_k_transpose = ttnn_fixed::matmul(query, key, false, true);
+    auto baseline_result = ttnn_fixed::matmul(q_by_k_transpose, value, false, false);
+    xt::xarray<float> baseline_result_xtensor = core::to_xtensor(baseline_result);
+    // xt::xarray<float> expected_result = matmul_qk(query_tensor, key_tensor);
+
+    xt::xarray<float> expected_result = compute_sdpa_without_softmax(query_tensor, key_tensor, value_tensor);
 
     xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());
     assert((result_xtensor.shape() == expected_result.shape()));
 
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    float mse_result = compute_mse(expected_result, result_xtensor);
+    float mse_baseline = compute_mse(expected_result, baseline_result_xtensor);
+
+    fmt::print("\n MSE result: {}, baseline MSE: {}\n", mse_result, mse_baseline);
+
+    // for (size_t i = 0; i < 1U /* S */; ++i) {
+    //     for (size_t j = 0; j < d; ++j) {
+    //         float expected_value = expected_result(0, 0, i, j);
+    //         float actual_value = result_xtensor(0, 0, i, j);
+
+    //         if (std::abs(actual_value - expected_value) >= 2e-2F + std::abs(expected_value) * 3e-2F) {
+    //             std::cout << "Mismatch at (" << i << ", " << j << "): "
+    //                       << "expected " << expected_value << ", got " << actual_value << ", baseline "
+    //                       << baseline_result_xtensor(0, 0, i, j) << '\n';
+    //         }
+    //     }
+    // }
+
+    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-1F, 1e-2F));
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Batch) {

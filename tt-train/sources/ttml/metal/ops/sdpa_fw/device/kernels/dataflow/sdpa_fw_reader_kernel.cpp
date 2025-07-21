@@ -92,19 +92,25 @@ void kernel_main() {
             uint32_t k_idx =
                 key_page_offset + h * kv_chunks_size;  // add row offset in case I need to read second batch
             // read key row block_size tiles
+
             // we read key by rows to compute matmul Q by K^T
             cb_reserve_back(cb_key, kv_chunks_size);
-            cb_reserve_back(cb_value, kv_chunks_size);
             uint32_t key_l1_writer_addr = get_write_ptr(cb_key);
-            uint32_t value_l1_writer_addr = get_write_ptr(cb_value);
             for (uint32_t w = 0; w < kv_chunks_size; ++w) {  // reading row of K and V
                 noc_async_read_tile(k_idx + w, key_address_generator, key_l1_writer_addr);
-                noc_async_read_tile(k_idx + w, value_address_generator, value_l1_writer_addr);
                 key_l1_writer_addr += tile_bytes;
-                value_l1_writer_addr += tile_bytes;
             }
             noc_async_read_barrier();
             cb_push_back(cb_key, kv_chunks_size);
+
+            // we read value by rows to compute matmul (QK^T) by V
+            cb_reserve_back(cb_value, kv_chunks_size);
+            uint32_t value_l1_writer_addr = get_write_ptr(cb_value);
+            for (uint32_t w = 0; w < kv_chunks_size; ++w) {  // reading row of K and V
+                noc_async_read_tile(k_idx + w, value_address_generator, value_l1_writer_addr);
+                value_l1_writer_addr += tile_bytes;
+            }
+            noc_async_read_barrier();
             cb_push_back(cb_value, kv_chunks_size);
         }
     }

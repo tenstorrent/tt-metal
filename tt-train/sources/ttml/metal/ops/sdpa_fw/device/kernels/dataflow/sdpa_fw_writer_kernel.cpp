@@ -13,10 +13,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_output = tt::CBIndex::c_8;
 
-    //[DEBUG] TODO: remove this
-    constexpr uint32_t cb_transpose_key = tt::CBIndex::c_6;
-    constexpr uint32_t cb_temp_accum = tt::CBIndex::c_7;
-
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);  // number of tiles in inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(2);  // number of tiles in sequence dimension
@@ -31,15 +27,15 @@ void kernel_main() {
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; r++) {
-        uint32_t idx = r * Ht;
+        uint32_t idx = r * Wt;
 
-        cb_wait_front(cb_output, Ht);
+        cb_wait_front(cb_output, Wt);
         uint32_t l1_read_addr = get_read_ptr(cb_output);
-        for (uint32_t col = 0; col < Ht; ++col) {
+        for (uint32_t col = 0; col < Wt; ++col) {
             noc_async_write_tile(idx + col, output_addr_generator, l1_read_addr);
             l1_read_addr += tile_bytes;
         }
         noc_async_write_barrier();
-        cb_pop_front(cb_output, Ht);
+        cb_pop_front(cb_output, Wt);
     }
 }

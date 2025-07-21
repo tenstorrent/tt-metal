@@ -235,6 +235,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // We assume that all input tensors inner dim is the same and divisible by TILE_W == 32
     // TODO[check]: check max block size value based on how many registers we use in compute kernel
+    // TODO[improve]: maybe I need to change the naming from block_size to dts_reg_count
+    // because for now I use it to process data by blocks to use all available register, so I can reduce the number of
+    // syncs
     uint32_t block_size = get_block_size(Wt, 4U);
     uint32_t twice_block_size = 2 * block_size;
 
@@ -268,8 +271,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto cb_key =
         create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
-    auto cb_value = create_circular_buffer(
-        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    auto cb_value =
+        create_circular_buffer(program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
     auto cb_attn_mask = create_circular_buffer(
         program, all_cores, KAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
@@ -287,7 +290,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kTempAccumTiles);
 
     auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Ht_);
+        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

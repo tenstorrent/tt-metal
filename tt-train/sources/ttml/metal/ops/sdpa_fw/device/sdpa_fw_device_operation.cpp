@@ -42,8 +42,8 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
     if (tensor_args.preallocated_output.has_value()) {
         output_specs.push_back(tensor_args.preallocated_output->tensor_spec());
     } else {
-        auto shape = tensor_args.query.logical_shape();
-        shape[3] = shape[2];
+        auto shape = tensor_args.query.logical_shape();  // output shape is the same as query shape
+        // shape[3] = shape[2];
         output_specs.emplace_back(
             shape,
             tt::tt_metal::TensorLayout(
