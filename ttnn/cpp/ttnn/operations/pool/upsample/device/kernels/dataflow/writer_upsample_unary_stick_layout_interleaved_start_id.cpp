@@ -13,6 +13,7 @@ void kernel_main() {
     uint32_t scale_w = get_arg_val<uint32_t>(4);
     uint32_t height = get_arg_val<uint32_t>(5);
     uint32_t width = get_arg_val<uint32_t>(6);
+    uint32_t start_id = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
 
@@ -26,9 +27,10 @@ void kernel_main() {
     uint32_t scale = scale_h * scale_w;
     uint32_t in_width = width / scale_w;
     uint32_t in_height = height / scale_h;
+    uint32_t end_id = start_id + num_sticks;
     // reader copied the data from DRAM to CB buffer.
     // writer copy the data from CB buffer to DRAM.
-    for (uint32_t i = 0; i < num_sticks; ++i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_id_out0, 1);
         uint32_t curr_index = i % (in_width * in_height);
         uint32_t curr_batch = i / (in_width * in_height);
