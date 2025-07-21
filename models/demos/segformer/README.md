@@ -21,6 +21,7 @@ To obtain the perf reports through profiler, please build with following command
 SegFormer's architecture is adept for both classification and segmentation tasks, utilizing a hierarchical design that extracts rich, multi-scale visual features. Its robust Transformer encoder generates powerful representations, suitable for discerning object categories, while a lightweight MLP decode head precisely maps these features for accurate pixel-level segmentation.
 
 Image classification: [source](https://huggingface.co/nvidia/mit-b0)
+
 Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512)
 
 ### Details
@@ -48,12 +49,30 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
   pytest models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py
   ```
 
+### Performant Model with Trace+2CQ
+
+#### Single Device (BS=1):
+
+- end-2-end perf is 88 FPS <br>
+
+Use the following command to run Model performant running with Trace+2CQ
+
+```
+pytest --disable-warnings models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_e2e
+```
+
+#### Multi Device (DP=2, N300):
+
+- end-2-end perf is 171 FPS <br>
+
+Use the following command to run Model performant running with Trace+2CQ
+
+```
+pytest --disable-warnings models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_e2e_dp
+```
+
 ### Segformer Semantic Segmentation Performant Demo
 
-- Use the following command to run the demo script(Segmentation) which returns **mIoU** score for both reference, and ttnn models:
-  ```python
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py
-  ```
 - This script downloads 30 validation images and their annotations of [ADE20K](https://www.kaggle.com/datasets/awsaf49/ade20k-dataset) Dataset.
   ```python
   models/demos/segformer/demo/data_download.sh
@@ -66,18 +85,51 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
   models/demos/segformer/demo/validation_data_ade20k/annotations/annotation.png
   ```
 
-### Segformer Image Classification Demo
+#### Single Device (BS=1):
 
-- Use the following command to run the demo script(Classification) which returns **Accuracy** score for both reference, and ttnn models, validated with Imagenet Dataset samples:
-  ```python
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py
+- Use the following command to run the demo script(Segmentation) which returns **mIoU** score for both reference, and ttnn models:
+  ```
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation
   ```
 
-### Performant Model with Trace+2CQ
-- end-2-end perf is 84 FPS <br>
+#### Multi Device (DP=2, N300):
 
-Use the following command to run Model performant running with Trace+2CQ
+- Use the following command to run the demo script(Segmentation) which returns **mIoU** score for both reference, and ttnn models:
+  ```
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation_dp
+  ```
 
-```
-pytest models/demos/segformer/tests/perf/test_e2e_performant.py
-```
+
+### Segformer Image Classification Demo
+
+#### Single Device (BS=1):
+
+- Use the following command to run the demo script(Classification) which returns **Accuracy** score for both reference, and ttnn models, validated with Imagenet Dataset samples:
+
+  ```
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo
+  ```
+
+#### Multi Device (DP=2, N300):
+
+- Use the following command to run the demo script(Classification) which returns **Accuracy** score for both reference, and ttnn models, validated with Imagenet Dataset samples:
+
+  ```
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo_dp
+  ```
+
+### Performant Data Evaluation with Trace+2CQ
+
+#### Single Device (BS=1):
+
+- Use the following command to run the performant data evaluation with Trace+2CQs:
+
+  ```
+  pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval
+
+#### Multi Device (DP=2, N300):
+
+- Use the following command to run the performant data evaluation with Trace+2CQs:
+
+  ```
+  pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp

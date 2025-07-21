@@ -6,46 +6,54 @@ import math
 
 import pytest
 import torch
-from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_decode_head import SegformerDecodeHead
 from models.demos.segformer.tests.pcc.test_segformer_mlp import (
-    create_custom_preprocessor as create_custom_preprocessor_mlp,
+    create_custom_mesh_preprocessor as create_custom_preprocessor_mlp,
 )
+from models.demos.segformer.tt.common import fold_batch_norm2d_into_conv2d, get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         if isinstance(model, SegformerDecodeHead):
             parameters["linear_c"] = {}
             for i in range(4):
                 parameters["linear_c"][i] = {}
-                mlp_preprocess = create_custom_preprocessor_mlp(device)
-                parameters["linear_c"][i] = mlp_preprocess(model.linear_c[i], None, None)
+                mlp_preprocess = create_custom_preprocessor_mlp(mesh_mapper=mesh_mapper)
+                parameters["linear_c"][i] = mlp_preprocess(model.linear_c[i], None, None, None)
 
             conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.linear_fuse, model.batch_norm)
 
             parameters["linear_fuse"] = {}
-            parameters["linear_fuse"]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
+            parameters["linear_fuse"]["weight"] = ttnn.from_torch(
+                conv_weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
             parameters["linear_fuse"]["bias"] = ttnn.from_torch(
-                torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
+                torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             parameters["classifier"] = {}
-            parameters["classifier"]["weight"] = ttnn.from_torch(model.classifier.weight, dtype=ttnn.bfloat16)
+            parameters["classifier"]["weight"] = ttnn.from_torch(
+                model.classifier.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
             parameters["classifier"]["bias"] = ttnn.from_torch(
-                torch.reshape(model.classifier.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
+                torch.reshape(model.classifier.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -107,9 +115,11 @@ def test_segformer_decode_head(device, model_location_generator):
     )
 
     torch_output = reference_model(torch_input_tensor)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
     )
 
     for i in range(4):
