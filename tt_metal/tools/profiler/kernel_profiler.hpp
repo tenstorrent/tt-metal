@@ -440,23 +440,24 @@ struct profileScopeGuaranteed {
     static_assert(end_index < CUSTOM_MARKERS);
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
         if constexpr (TRACE_ON_TENSIX) {
+            uint32_t trace_controls = profiler_control_buffer[CURRENT_TRACE_ID];
             if constexpr (index == 0) {
 #if !defined(COMPILE_FOR_TRISC)
-                if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_ID_SET_BIT) {
+                if (trace_controls & TRACE_ID_SET_BIT) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
                     profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_ID_KERNEL_SET_BIT;
                     profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = CUSTOM_MARKERS;
-                } else if (profiler_control_buffer[CURRENT_TRACE_ID] == 0) {
+                } else if (trace_controls == 0) {
                     init_profiler();
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
                 }
 #endif
 
             } else {
-                if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_ID_KERNEL_SET_BIT) {
+                if (trace_controls & TRACE_ID_KERNEL_SET_BIT) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
                     profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_STARTED_BIT;
-                } else if (profiler_control_buffer[CURRENT_TRACE_ID] == 0) {
+                } else if (trace_controls == 0) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
                 }
             }
