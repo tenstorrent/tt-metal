@@ -305,10 +305,13 @@ void log_from_cpp(Args&&... message) {
     auto join_str = pybind11::str(" ");
     auto formatted_message = join_str.attr("join")(py_args);
 
+    py::print(formatted_message);
+
     logger.attr("debug")(formatted_message);
+    std::cout << formatted_message.cast<std::string>() << std::endl;
 }
 
-#define py_log(...)  // log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(,) __VA_ARGS__);
+#define py_log(...)  // `log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(,) __VA_ARGS__);
 
 PyTensorHostConversionStrategy prepare_conversion_strategy(
     const py::handle& py_tensor, std::optional<DataType> const& dtype, std::optional<Layout> layout, bool has_device) {
@@ -433,29 +436,42 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         }
     }
 
-    const auto py_dtype = tensor.attr("dtype");
+    py_log(tensor.attr("numel")().cast<int>());
+    py_log(tensor.attr("dim")().cast<int>());
+    py_log(!res.host_side_conversion);
 
-    if (dtype.has_value() && (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT8_B)) {
-        py_log();
-        res.construct_with_layout = Layout::TILE;
-    } else if (HANDLE_FLOAT32_BUG_23405 and py_dtype.equal(torch.attr("float32"))) {
-        if (dtype && dtype.value() != DataType::FLOAT32) {
+    if ((tensor.attr("numel")().cast<int>() == 0) || (tensor.attr("dim")().cast<int>() == 0)) {
+        // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
+        // the tensor must be constructed on host.
+        res.host_side_conversion = true;
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_data_type = dtype;
+    } else {
+        const auto py_dtype = tensor.attr("dtype");
+
+        if (dtype.has_value() && (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT8_B)) {
             py_log();
-            // Typecast is needed, can't tilize the data on device due to the bug
             res.construct_with_layout = Layout::TILE;
-        } else {
+        } else if (HANDLE_FLOAT32_BUG_23405 and py_dtype.equal(torch.attr("float32"))) {
+            if (dtype && dtype.value() != DataType::FLOAT32) {
+                py_log();
+                // Typecast is needed, can't tilize the data on device due to the bug
+                res.construct_with_layout = Layout::TILE;
+            } else {
+                py_log();
+                res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+            }
+        } else if (!(tensor.attr("dtype").equal(torch.attr("float32")) ||
+                     tensor.attr("dtype").equal(torch.attr("int32")) ||
+                     tensor.attr("dtype").equal(torch.attr("bfloat16")))) {
+            // can't convert the host data to tiles on device -- must perform tiling on host
+            res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        } else if (has_device) {
             py_log();
+            res.construct_with_layout = Layout::ROW_MAJOR;
+        } else {
             res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         }
-    } else if (!(tensor.attr("dtype").equal(torch.attr("float32")) || tensor.attr("dtype").equal(torch.attr("int32")) ||
-                 tensor.attr("dtype").equal(torch.attr("bfloat16")))) {
-        // can't convert the host data to tiles on device -- must perform tiling on host
-        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
-    } else if (has_device) {
-        py_log();
-        res.construct_with_layout = Layout::ROW_MAJOR;
-    } else {
-        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
     }
 
     res.tensor = tensor;
@@ -549,13 +565,9 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     if (strategy) {
         if (strategy->host_side_conversion) {
-            if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout) {
+            if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout.value()) {
                 py_log();
-                if (optional_layout.value() == Layout::TILE) {
-                    output = ttnn::tilize_with_zero_padding(output, memory_config);
-                } else {
-                    output = ttnn::untilize(output, memory_config);
-                }
+                output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
             }
         } else {
             if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
@@ -563,14 +575,14 @@ Tensor convert_python_tensor_to_tt_tensor(
                 if (output.layout() != Layout::TILE) {
                     py_log();
                     ZoneScopedN("pre-typecast layout conversion");
-                    output = ttnn::tilize_with_zero_padding(output, memory_config);
+                    output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, memory_config);
                 }
 
                 output = ttnn::typecast(output, optional_data_type.value());
 
                 if (optional_layout.has_value() && output.layout() != optional_layout.value()) {
                     ZoneScopedN("post-typecast layout conversion");
-                    output = ttnn::untilize(output, memory_config);
+                    output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
                 }
             }
         }
