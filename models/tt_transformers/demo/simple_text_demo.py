@@ -1066,28 +1066,28 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama3.2-1B": 26,
-                "N150_Llama3.2-3B": 57,
-                "N150_Llama3.1-8B": 112,
+                "N150_Llama-3.2-1B": 26,
+                "N150_Llama-3.2-3B": 57,
+                "N150_Llama-3.1-8B": 112,
                 # "N150_Mistral-7B": 106, # https://github.com/tenstorrent/tt-metal/issues/24963
                 # N300 targets
                 # "N300_Qwen2.5-7B": 150,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # T3K targets
-                "T3K_Llama3.1-70B": 181,
+                "T3K_Llama-3.1-70B": 181,
                 # "T3K_Qwen2.5-Coder-32B": 180,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
-                "N150_Llama3.2-1B": 58,
-                "N150_Llama3.2-3B": 35,
-                "N150_Llama3.1-8B": 21,
+                "N150_Llama-3.2-1B": 58,
+                "N150_Llama-3.2-3B": 35,
+                "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
                 "N300_Qwen2.5-7B": 20,
                 # T3K targets
-                "T3K_Llama3.1-70B": 14,
+                "T3K_Llama-3.1-70B": 14,
                 "T3K_Qwen2.5-72B": 13,
                 "T3K_Qwen2.5-Coder-32B": 19,
                 "T3K_Qwen3-32B": 20,
