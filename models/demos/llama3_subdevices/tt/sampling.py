@@ -116,7 +116,7 @@ class TTSampling(LightweightModule):
             k=self.max_top_k,
             dim=-1,
             sub_core_grids=self.args.sub_core_grid_topk,
-            # indices_tensor=self.tt_indices_tensor,
+            indices_tensor=self.tt_indices_tensor,
         )
         # Gather values
         # Note: Persistent output buffer used, do not deallocate output!
