@@ -178,7 +178,10 @@ class TtLlamaVisionEncoder(LightweightModule):
             gated=True,
         )
 
-    def forward(self, images, ar, max_actual_num_chunks):
+    def forward(self, images, ar, max_actual_num_chunks=None):
+        if max_actual_num_chunks is None:
+            max_actual_num_chunks = images.shape[2]
+
         assert isinstance(
             images, torch.Tensor
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
