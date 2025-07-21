@@ -105,29 +105,40 @@ jobs:
           git checkout main
           git pull origin main
           echo "✅ Parent repo updated to latest main: $(git rev-parse --short=7 HEAD)"
-          
+
       - name: Update submodule
         id: update-submodule
         run: |
+          # Get the current submodule commit that parent repo is pointing to
           cd ${{ env.SUBMODULE_PATH }}
-          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
           OLD_SHA=$(git rev-parse --short=7 HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
+          echo "🔍 Parent repo currently points to submodule commit: $OLD_SHA"
 
-          # Update to latest main
+          # Update submodule to latest main
+          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
           git fetch origin main
           git checkout main
           git pull origin main
 
           NEW_SHA=$(git rev-parse --short=7 HEAD)
           echo "new-sha=$NEW_SHA" >> $GITHUB_OUTPUT
+          echo "🔍 Latest submodule commit is: $NEW_SHA"
+
+          # Go back to parent repo
+          cd - > /dev/null
 
           if [ "$OLD_SHA" = "$NEW_SHA" ]; then
             echo "has-changes=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No changes detected (SHA unchanged)"
+            echo "⚠️ No changes detected - parent repo already points to latest submodule commit ($OLD_SHA)"
           else
             echo "has-changes=true" >> $GITHUB_OUTPUT
-            echo "✅ Changes detected: $OLD_SHA -> $NEW_SHA"
+            echo "✅ Changes detected: updating parent repo submodule reference from $OLD_SHA -> $NEW_SHA"
+            
+            # Update the parent repo's submodule reference
+            git submodule update --remote ${{ env.SUBMODULE_PATH }}
+            git add ${{ env.SUBMODULE_PATH }}
+            echo "📝 Updated and staged submodule reference change"
           fi
 
       - name: Analyze changes and generate PR body
