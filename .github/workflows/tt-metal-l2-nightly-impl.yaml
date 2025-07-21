@@ -51,10 +51,11 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
     defaults:
       run:
         shell: bash
