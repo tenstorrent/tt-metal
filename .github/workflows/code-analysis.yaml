@@ -104,6 +104,7 @@ jobs:
           echo "🔄 Ensuring parent repo is up to date with latest main..."
           git checkout main
           git pull origin main
+          git submodule update --init --recursive
           echo "✅ Parent repo updated to latest main: $(git rev-parse --short=7 HEAD)"
 
       - name: Update submodule
