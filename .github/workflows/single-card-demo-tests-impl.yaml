@@ -146,7 +146,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
-            ${{ matrix.test-group.civ2-compatible && '-e TT_METAL_CI_INFRA' || '' }}
+            ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA' || '' }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             --cap-add=ALL
             --security-opt seccomp=unconfined
