@@ -280,7 +280,6 @@ struct PyTensorHostConversionStrategy {
     Layout construct_with_layout = Layout::TILE;
     std::optional<DataType> construct_with_data_type = std::nullopt;
     py::object tensor;
-    MemoryConfig memory_config;
 };
 
 template <typename... Args>
@@ -312,7 +311,7 @@ void log_from_cpp(Args&&... message) {
     std::cout << formatted_message.cast<std::string>() << std::endl;
 }
 
-#define py_log(...) log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(, ) __VA_ARGS__);
+#define py_log(...)  // log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(, ) __VA_ARGS__);
 
 PyTensorHostConversionStrategy prepare_conversion_strategy(
     const py::handle& py_tensor,
@@ -364,6 +363,13 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         py_log();
         // Strategy: No Device Fallback
         // No device, conversion must be performed on the host
+        tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        res.host_side_conversion = true;
+        if (is_torch_missing_data_type(dtype)) {
+            res.construct_with_data_type = dtype;
+        }
+    } else if (memory_config.is_sharded()) {
+        py_log();
         tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
         res.host_side_conversion = true;
         if (is_torch_missing_data_type(dtype)) {
@@ -451,6 +457,10 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         res.host_side_conversion = true;
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         res.construct_with_data_type = dtype;
+    } else if (memory_config.is_sharded()) {
+        res.host_side_conversion = true;
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_data_type = dtype;
     } else {
         const auto py_dtype = tensor.attr("dtype");
 
@@ -477,14 +487,6 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         } else {
             res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         }
-    }
-
-    if (memory_config.is_sharded()) {
-        // Tiling for typecast requires height sharded memory layout
-        res.memory_config =
-            MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, memory_config.buffer_type(), memory_config.shard_spec());
-    } else {
-        res.memory_config = memory_config;
     }
 
     res.tensor = tensor;
@@ -568,7 +570,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             strategy && strategy->construct_with_data_type ? strategy->construct_with_data_type.value()
                                                            : preprocessed_py_tensor.data_type,
             PageConfig(strategy ? strategy->construct_with_layout : layout, optional_tile),
-            strategy ? strategy->memory_config : memory_config),
+            memory_config),
         device,
         pydata_pin,
         cq_id,
@@ -581,7 +583,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         if (strategy->host_side_conversion) {
             if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout.value()) {
                 py_log();
-                output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, output.memory_config());
+                output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
             }
         } else {
             if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
@@ -589,7 +591,7 @@ Tensor convert_python_tensor_to_tt_tensor(
                 if (output.layout() != Layout::TILE) {
                     py_log();
                     ZoneScopedN("pre-typecast layout conversion");
-                    output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output.memory_config());
+                    output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, memory_config);
                 }
 
                 output = ttnn::typecast(output, optional_data_type.value());
