@@ -10,11 +10,24 @@ attention patterns without explicitly passing an attention mask.
 
 import os
 import time
+from contextlib import contextmanager
+from functools import lru_cache
 
 import pytest
 import torch
 
 import ttnn
+from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+
+
+@contextmanager
+def timer(description="Operation"):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        end = time.perf_counter()
+        print(f"{description}: {(end - start) * 1000:.2f} ms")
 
 
 @pytest.mark.parametrize(
@@ -35,16 +48,57 @@ import ttnn
     "batch_size,num_heads,seq_len,head_dim,qk_chunk_size,cu_window_seqlens",
     [
         # basic cases
+        (1, 16, 32, 96, 32, [0, 32]),
         (1, 16, 32, 96, 32, [0, 4, 20, 32]),
         (1, 16, 32, 96, 32, [0, 4, 9, 24, 32]),
         (1, 16, 32, 96, 32, [0, 16, 20]),
         (1, 16, 32, 96, 32, [0, 16, 20, 24, 28, 32]),
         # medium cases
-        (1, 1, 64, 32, 32, [0, 16, 32, 48, 60]),
-        (1, 1, 64, 32, 32, [0, 16, 48, 64]),
-        (1, 1, 64, 32, 64, [0, 16, 32, 48, 60]),  # todo)) this case is failing
+        (1, 1, 64, 96, 32, [0, 16, 32, 48, 60]),
+        (1, 1, 64, 96, 32, [0, 16, 48, 64]),
+        (1, 1, 64, 96, 32, [0, 16, 64]),
+        (1, 1, 64, 96, 64, [0, 16, 64]),
+        (1, 1, 64, 96, 32, [0, 64]),
+        (1, 1, 64, 96, 64, [0, 64]),
+        # large cases
+        (1, 1, 128, 96, 64, [0, 128]),
+        (1, 1, 128, 96, 128, [0, 120]),
+        (1, 1, 128, 96, 64, [0, 16, 32, 48, 64, 80, 96]),
+        (1, 1, 128, 96, 128, [0, 16, 20, 24, 64, 68, 72, 76, 80, 128]),
+        (1, 1, 4096, 96, 256, [0, 1024, 2048, 3072, 4076, 4092, 4096]),
+        # real-world cases
+        # -------------- from Qwen2.5-VL-3B-Instruct --------------
+        (1, 16, 8192, 96, 64, lambda: get_cu_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),
+        (1, 16, 8192, 96, 64, lambda: get_cu_window_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),
+        (1, 16, 14336, 96, 64, lambda: get_cu_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14)),
+        (1, 16, 14336, 96, 64, lambda: get_cu_window_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14)),
+        (1, 16, 43008, 96, 64, lambda: get_cu_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14)),
+        (1, 16, 43008, 96, 64, lambda: get_cu_window_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14)),
     ],
-    ids=["basic-1", "basic-2", "basic-3", "basic-4", "medium-1", "medium-2", "medium-3"],
+    ids=[
+        "basic-1",
+        "basic-2",
+        "basic-3",
+        "basic-4",
+        "basic-5",
+        "medium-1",
+        "medium-2",
+        "medium-3",
+        "medium-4",
+        "medium-5",
+        "medium-6",
+        "large-1",
+        "large-2",
+        "large-3",
+        "large-4",
+        "large-5",
+        "real-world-1",
+        "real-world-2",
+        "real-world-3",
+        "real-world-4",
+        "real-world-5",
+        "real-world-6",
+    ],
 )
 def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_dim, qk_chunk_size, cu_window_seqlens):
     """Test windowed scaled dot product attention against standard SDPA with equivalent mask."""
@@ -54,7 +108,9 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
         pt_cu_window_seqlens = cu_window_seqlens()
     else:
         assert isinstance(cu_window_seqlens, list), "cu_window_seqlens must be a callable or a torch.Tensor"
-        pt_cu_window_seqlens = torch.tensor(cu_window_seqlens, dtype=torch.uint8)
+        pt_cu_window_seqlens = torch.tensor(cu_window_seqlens, dtype=torch.uint32)
+
+    print(f"pt_cu_window_seqlens:\n {pt_cu_window_seqlens}")
 
     cu_window_seqlens_tt = ttnn.from_torch(
         pt_cu_window_seqlens, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
@@ -72,72 +128,74 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
     v_tt = ttnn.from_torch(v, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     # Run standard SDPA with explicit mask for comparison
-    attention_mask = create_windowed_attention_mask(seq_len, cu_window_seqlens)
-    # # print each value in attention_mask using nested for loops with aligned spacing
-    # for i in range(attention_mask.shape[0]):
-    #     for j in range(attention_mask.shape[1]):
-    #         value = attention_mask[i, j].item()
-    #         if value == float("-inf"):
-    #             print("  -inf", end=" ")
-    #         else:
-    #             print(f"{value:6.1f}", end=" ")
-    #     print()
-    attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Add batch and head dims
-    attention_mask_tt = ttnn.from_torch(
-        attention_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b
-    )
+    with timer("Standard SDPA execution"):
+        print("-------------------- Running standard SDPA --------------------")
+        attention_mask = create_windowed_attention_mask(seq_len, pt_cu_window_seqlens)
+        # # print each value in attention_mask using nested for loops with aligned spacing
+        # for i in range(attention_mask.shape[0]):
+        #     for j in range(attention_mask.shape[1]):
+        #         value = attention_mask[i, j].item()
+        #         if value == float("-inf"):
+        #             print("  -inf", end=" ")
+        #         else:
+        #             print(f"{value:6.1f}", end=" ")
+        #     print()
+        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Add batch and head dims
+        attention_mask_tt = ttnn.from_torch(
+            attention_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b
+        )
 
-    print("-------------------- Running standard SDPA --------------------")
-    output_standard_tt = ttnn.transformer.scaled_dot_product_attention(
-        q_tt,
-        k_tt,
-        v_tt,
-        attn_mask=attention_mask_tt,
-        is_causal=False,
-        scale=0.1,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        ),
-        program_config=ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            exp_approx_mode=False,
-            q_chunk_size=qk_chunk_size,
-            k_chunk_size=qk_chunk_size,
-        ),
-    )
-    output_standard = ttnn.to_torch(output_standard_tt)
+        output_standard_tt = ttnn.transformer.scaled_dot_product_attention(
+            q_tt,
+            k_tt,
+            v_tt,
+            attn_mask=attention_mask_tt,
+            is_causal=False,
+            scale=0.1,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
+                q_chunk_size=qk_chunk_size,
+                k_chunk_size=qk_chunk_size,
+            ),
+        )
+        output_standard = ttnn.to_torch(output_standard_tt)
 
     # sleep for 1 seconds
     time.sleep(1)
 
     # Run windowed SDPA
-    print("-------------------- Running windowed SDPA --------------------")
-    output_tt = ttnn.transformer.windowed_scaled_dot_product_attention(
-        q_tt,
-        k_tt,
-        v_tt,
-        cu_window_seqlens_tt,
-        scale=0.1,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        ),
-        program_config=ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            exp_approx_mode=False,
-            q_chunk_size=qk_chunk_size,
-            k_chunk_size=qk_chunk_size,
-        ),
-    )
+    with timer("Windowed SDPA execution"):
+        print("-------------------- Running windowed SDPA --------------------")
+        output_tt = ttnn.transformer.windowed_scaled_dot_product_attention(
+            q_tt,
+            k_tt,
+            v_tt,
+            cu_window_seqlens_tt,
+            scale=0.1,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
+                q_chunk_size=qk_chunk_size,
+                k_chunk_size=qk_chunk_size,
+            ),
+        )
 
-    # Convert back to torch for verification
-    # NOTE: there is an implicit synchronization during the to_torch call, so the call getting here is not a guarantee that the computation above is complete.
-    output = ttnn.to_torch(output_tt)
+        # Convert back to torch for verification
+        # NOTE: there is an implicit synchronization during the to_torch call, so the call getting here is not a guarantee that the computation above is complete.
+        output = ttnn.to_torch(output_tt)
 
     # sleep for 1 seconds
     time.sleep(1)
@@ -193,3 +251,24 @@ def compare_outputs(output, output_standard, seq_start=0, seq_end=None, head_sta
             value_standard = output_standard[0, 0, i, j].item()
             print(f"{value:6.3f}/{value_standard:6.3f}", end=" ")
         print()
+
+
+def get_cu_window_seqlens(unpadded_seq_len, grid_thw, head_dim, spatial_merge_size, window_size, patch_size):
+    return get_both_seqlens(unpadded_seq_len, grid_thw, head_dim, spatial_merge_size, window_size, patch_size)[1]
+
+
+def get_cu_seqlens(unpadded_seq_len, grid_thw, head_dim, spatial_merge_size, window_size, patch_size):
+    return get_both_seqlens(unpadded_seq_len, grid_thw, head_dim, spatial_merge_size, window_size, patch_size)[0]
+
+
+@lru_cache(maxsize=10)
+def get_both_seqlens(unpadded_seq_len, grid_thw, head_dim, spatial_merge_size, window_size, patch_size):
+    cu_seqlens, cu_window_seqlens, _, _ = qwen2_5_vision_transformer_preprocess(
+        seq_len=unpadded_seq_len,
+        grid_thw=grid_thw,
+        head_dim=head_dim,
+        spatial_merge_size=spatial_merge_size,
+        window_size=window_size,
+        patch_size=patch_size,
+    )
+    return cu_seqlens, cu_window_seqlens

@@ -5,11 +5,11 @@
 #include "debug/assert.h"
 #include "debug/dprint_tile.h"
 
-enum class CBAccessType : uint8_t { CB_FRONT_RW, CB_BACK_RW, CB_FRONT_RO, CB_BACK_RO };
-
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 #define WATCHER_OVERHEAD_OK 1
 #endif
+
+enum class CBAccessType : uint8_t { CB_FRONT_RW, CB_BACK_RW, CB_FRONT_RO, CB_BACK_RO };
 
 /**
  * @brief ArrayView struct - Type-safe view into circular buffer L1 memory.
