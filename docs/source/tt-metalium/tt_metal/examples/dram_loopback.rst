@@ -143,7 +143,7 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
     void kernel_main() {
         std::uint32_t l1_buffer_addr        = get_arg_val<uint32_t>(0);
         std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
-        std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(3);
+        std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(2);
         std::uint32_t num_tiles             = get_arg_val<uint32_t>(3);
 
         const uint32_t tile_size_bytes = 32 * 32 * 2; // same tile size as in the host code

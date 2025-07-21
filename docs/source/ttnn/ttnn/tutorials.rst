@@ -14,11 +14,11 @@ To run these tutorials smoothly, we recommend using a Python virtual environment
 
 - **Lightweight Tutorial Environment:**
   Use the provided
-  `Python Environment Setup Script <https://github.com/tenstorrent/tt-metal/ttnn/tutorials/basic_python/tutorials_venv.sh>`_
+  `Python Environment Setup Script <https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/tutorials_venv.sh>`_
   to create a minimal virtual environment specifically for running the tutorials.
 
 Each tutorial also has an equivalent standalone Python script that you can run locally. These scripts are located in the
-`ttnn/tutorials/basic_python/ <https://github.com/tenstorrent/tt-metal/ttnn/tutorials/basic_python>`_
+`ttnn/tutorials/basic_python/ <https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python>`_
 directory of the **TT-Metal** repository.
 
 With your virtual environment activated, you can run the tutorials directly:

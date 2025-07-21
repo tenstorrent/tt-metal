@@ -93,7 +93,7 @@ KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, b
         if (pre_compile_kernel_to_hash_str.find(kernel_name) == pre_compile_kernel_to_hash_str.end()) {
             kernel_cache_status.kernel_name_to_cache_hit.insert({kernel_name, false});
         } else {
-            auto prev_hash_str = pre_compile_kernel_to_hash_str.at(kernel_name);
+            const auto& prev_hash_str = pre_compile_kernel_to_hash_str.at(kernel_name);
             bool cache_hit = hash_str == prev_hash_str;
             kernel_cache_status.kernel_name_to_cache_hit.insert({kernel_name, cache_hit});
         }

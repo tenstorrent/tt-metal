@@ -197,7 +197,7 @@ auto create_override_runtime_arguments_callback(
                     runtime_args[rt_idx++] = input_tensors.at(idx).buffer()->address();
                 }
                 for (uint32_t idx = 0; idx < optional_input_tensors.size(); idx++) {
-                    auto optional_input_tensor = optional_input_tensors.at(idx);
+                    const auto& optional_input_tensor = optional_input_tensors.at(idx);
                     runtime_args[rt_idx++] =
                         optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
                 }
@@ -239,7 +239,7 @@ auto create_override_runtime_arguments_callback(
                     runtime_args[pair.first] = input_tensors.at(pair.second).buffer()->address();
                 }
                 for (const auto& pair : arg_map.optional_input) {
-                    auto optional_input_tensor = optional_input_tensors.at(pair.second);
+                    const auto& optional_input_tensor = optional_input_tensors.at(pair.second);
                     runtime_args[pair.first] =
                         optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
                 }

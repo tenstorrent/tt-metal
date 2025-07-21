@@ -254,8 +254,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             std::move(writer_defines)));
 
     // COMPUTE KERNEL
-    bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
