@@ -637,18 +637,6 @@ class Generator:
         else:
             return tt_logits
 
-    def _get_mask_tensors(self, unpadded_batch, empty_slots=None):
-        max_batch_size_per_model = self.model_args[0].max_batch_size
-        padded_batch_size = max_batch_size_per_model * self.data_parallel
-
-        if empty_slots is None:
-            empty_slots = list(range(unpadded_batch, padded_batch_size))
-
-        empty_slots_set = set(empty_slots)
-        mask = torch.tensor([i not in empty_slots_set for i in range(padded_batch_size)], dtype=torch.bool)
-
-        return torch.chunk(mask, self.data_parallel, 0)
-
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
         """
