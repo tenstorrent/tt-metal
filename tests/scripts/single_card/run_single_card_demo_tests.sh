@@ -268,7 +268,8 @@ run_yolov8x_perf() {
 }
 run_yolov4_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
 }
 run_yolov10x_demo() {
 
