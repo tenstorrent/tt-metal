@@ -253,7 +253,7 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
                     if (kernelSizes["ncrisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
                         kernelSizes["ncrisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
                     }
-                } else if (kernel->processor() == RISCV::ERISC or kernel->processor() == RISCV::ERISC1) {
+                } else if (kernel->processor() == RISCV::ERISC0 || kernel->processor() == RISCV::ERISC1) {
                     if (kernelSizes["erisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
                         kernelSizes["erisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
                     }

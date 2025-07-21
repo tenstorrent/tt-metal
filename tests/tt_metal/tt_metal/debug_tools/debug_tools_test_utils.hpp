@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 
