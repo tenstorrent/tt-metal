@@ -59,7 +59,8 @@ class Generator:
     def prefill_forward_text(
         self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None
     ):
-        assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+        if page_table is not None:
+            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -493,8 +494,10 @@ class Generator:
         """
         Batched version of _prefill_forward_single_user for vision model.
         """
-        assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
-        assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
+        if page_table is not None:
+            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+        if cross_page_table is not None:
+            assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
