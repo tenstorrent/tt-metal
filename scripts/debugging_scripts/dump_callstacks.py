@@ -5,7 +5,7 @@
 
 """
 Usage:
-    dump_callstacks [--full_callstack] [--gdb_callstack]
+    dump_callstacks [--full_callstack] [--gdb_callstack --port=<port>]
 
 Options:
     --full_callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
@@ -25,16 +25,138 @@ from ttexalens.device import Device
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack, parse_elf
 from utils import BLUE, GREEN, ORANGE, RST
+from ttexalens.uistate import UIState
+
+import re
+import subprocess
 
 script_config = ScriptConfig(
     depends=["check_per_device", "dispatcher_data"],
 )
 
 
-def get_gdb_callstack(
-    location: OnChipCoordinate, risc_name: str, dispatcher_core_data: DispatcherCoreData, context: Context
+def get_process_ids(ui_state: UIState):
+    process_ids = {}
+    for pid, process in ui_state.gdb_server.available_processes.items():
+        loc = process.risc_debug.risc_location.location
+        risc_name = process.risc_debug.risc_location.risc_name
+
+        if loc in process_ids:
+            process_ids[loc][risc_name] = pid
+        else:
+            process_ids[loc] = {risc_name: pid}
+
+    return process_ids
+
+
+def make_add_symbol_file_command(paths: list[str], offsets: list[int]) -> str:
+    add_symbol_file_cmd = ""
+    for path, offset in zip(paths, offsets):
+        add_symbol_file_cmd += (
+            f"\tadd-symbol-file {path} {offset}\n" if offset is not None else f"\tadd-symbol-file {path}\n"
+        )
+
+    # Removing first tab symbol and last new line symbol for prettier look of gdb script
+    return add_symbol_file_cmd[1:-1]
+
+
+def make_gdb_script(
+    pid: int, elf_paths: list[str], offsets: list[int], port: int, start_callstack_label: str, end_callstack_label: str
+) -> str:
+    return f"""\
+        target extended-remote localhost:{port}
+        set prompt
+        attach {pid}
+        {make_add_symbol_file_command(elf_paths, offsets)}
+        printf "{start_callstack_label}\\n"
+        backtrace
+        printf "{end_callstack_label}\\n"
+        detach
+        quit
+    """
+
+
+def get_callstack_entry(line: str) -> CallstackEntry:
+    pattern = re.compile(
+        r"#\d+\s+"  # Skip the frame number
+        r"(?:(?P<pc>0x[0-9a-fA-F]+)\s+in\s+)?"  # Capture pc if available
+        r"(?P<function_name>\w+)"  # Capture function name
+        r"(?:\s*\(.*?\))?"  # Ignore parentheses
+        r"\s+at\s+"  # Skip at
+        r"(?P<file_path>.*?):(?P<line>\d+)"  # Capture file path and line
+    )
+
+    entry = CallstackEntry()
+    match = pattern.match(line)
+    if match:
+        entry.pc = int(match.groupdict()["pc"], 16) if match.groupdict()["pc"] is not None else None
+        entry.function_name = match.groupdict()["function_name"]
+        entry.file = match.groupdict()["file_path"]
+        entry.line = match.groupdict()["line"]
+
+    return entry
+
+
+def extract_callstack_from_gdb_output(
+    gdb_output: str, start_callstack_label: str, end_callstack_label
 ) -> list[CallstackEntry]:
-    raise NotImplementedError("Using GDB callstack is not implemented yet. Please use the built-in callstack methods.")
+    cs: list[CallstackEntry] = []
+    is_cs = False
+
+    current_line = ""
+    for line in gdb_output.splitlines():
+        if start_callstack_label in line:
+            is_cs = True
+        elif end_callstack_label in line:
+            is_cs = False
+        else:
+            if is_cs:
+                if "#" in line:
+                    if current_line != "":
+                        cs.append(get_callstack_entry(current_line))
+                        current_line = ""
+
+                    current_line += line.strip()
+                # Ensure every callstack entry is in one line
+                else:
+                    current_line += " "
+                    current_line += line.strip()
+
+    # We implicitly skip last line since it is message not callstack entry
+    return cs
+
+
+def get_gdb_callstack(
+    location: OnChipCoordinate, risc_name: str, dispatcher_core_data: DispatcherCoreData, port: int, process_ids: dict
+) -> list[CallstackEntry]:
+    # Start GDB client
+    gdb_client = subprocess.Popen(
+        ["tt-exalens", "--gdb"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    # Labels for determining where backtrace output is
+    start_callstack_label = "START CALLSTACK"
+    end_callstack_label = "END CALLSTACK"
+
+    elf_paths: list[str] = [dispatcher_core_data.firmware_path]
+    offsets: list[int | None] = [None]
+    if dispatcher_core_data.kernel_path is not None:
+        elf_paths.append(dispatcher_core_data.kernel_path)
+        offsets.append(dispatcher_core_data.kernel_offset)
+
+    gdb_script = make_gdb_script(
+        process_ids[location][risc_name], elf_paths, offsets, port, start_callstack_label, end_callstack_label
+    )
+
+    # Run gdb script
+    gdb_client.stdin.write(gdb_script)
+    gdb_client.stdin.flush()
+
+    return extract_callstack_from_gdb_output(gdb_client.communicate()[0], start_callstack_label, end_callstack_label)
 
 
 def get_callstack(
@@ -76,7 +198,11 @@ def format_callstack(callstack: list[CallstackEntry]) -> str:
         if frame.function_name is not None:
             line += f"{ORANGE}{frame.function_name}{RST} () "
         if frame.file is not None:
-            line += f"at {GREEN}{frame.file} {frame.line}:{frame.column}{RST}"
+            line += f"at {GREEN}{frame.file}{RST}"
+            if frame.line is not None:
+                line += f" {GREEN}{frame.line}{RST}"
+                if frame.column is not None:
+                    line += f"{GREEN}:{frame.column}{RST}"
         result.append(line)
     return "\n".join(result)
 
@@ -91,11 +217,27 @@ class DumpCallstacksData:
 
 
 def dump_callstacks(
-    device: Device, dispatcher_data: DispatcherData, context: Context, full_callstack: bool, gdb_callstack: bool
+    device: Device,
+    dispatcher_data: DispatcherData,
+    context: Context,
+    full_callstack: bool,
+    gdb_callstack: bool,
+    port: int,
 ) -> list[DumpCallstacksData]:
     blocks_to_test = ["functional_workers", "eth"]
     elfs_cache: dict[str, ParsedElfFile] = {}
     result: list[DumpCallstacksData] = []
+
+    if gdb_callstack:
+        # Start GDB server
+        ui_state = UIState(context)
+        try:
+            ui_state.start_gdb(port)
+        except Exception as e:
+            raise Exception(f"Failed to start GDB server on port {port}. Error: {e}")
+        # Get mapping form risc location and name to process id
+        process_ids = get_process_ids(ui_state)
+
     for block_to_test in blocks_to_test:
         for location in device.get_block_locations(block_to_test):
             noc_block = device.get_block(location)
@@ -107,7 +249,17 @@ def dump_callstacks(
             for risc_name in noc_block.risc_names:
                 dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
                 if gdb_callstack:
-                    callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, context)
+                    if risc_name == "ncrisc":
+                        # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
+                        callstack = [CallstackEntry()]
+                    else:
+                        callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
+                    # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
+                    if len(callstack) > 0 and callstack[0].pc is None:
+                        try:
+                            callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                        except:
+                            pass
                 else:
                     callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
                 result.append(
@@ -119,16 +271,21 @@ def dump_callstacks(
                         kernel_callstack=callstack,
                     )
                 )
+
+    if gdb_callstack:
+        ui_state.stop_gdb()
+
     return result
 
 
 def run(args, context: Context):
     full_callstack = args["--full_callstack"]
     gdb_callstack = args["--gdb_callstack"]
+    port = int(args["--port"]) if gdb_callstack else None
     check_per_device = get_check_per_device(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     return check_per_device.run_check(
-        lambda device: dump_callstacks(device, dispatcher_data, context, full_callstack, gdb_callstack)
+        lambda device: dump_callstacks(device, dispatcher_data, context, full_callstack, gdb_callstack, port)
     )
 
 
