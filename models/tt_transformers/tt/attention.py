@@ -555,9 +555,6 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
                 memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                 memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
             )
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
