@@ -106,23 +106,14 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_c = 1;
         uint32_t c_per_core = channels / num_cores_c;
-        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
-            return std::nullopt;
-        }
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto grid_x = pconfig.grid.ranges()[0].end_coord.x - pconfig.grid.ranges()[0].start_coord.x + 1;
         auto grid_y = pconfig.grid.ranges()[0].end_coord.y - pconfig.grid.ranges()[0].start_coord.y + 1;
         uint32_t num_cores_c = block_shard_orientation == ShardOrientation::COL_MAJOR ? grid_y : grid_x;
         uint32_t c_per_core = channels / num_cores_c;
-        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
-            return std::nullopt;
-        }
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t num_cores_c = pconfig.grid.num_cores();
         uint32_t c_per_core = channels / num_cores_c;
-        if (c_per_core != 16 && c_per_core % tt::constants::TILE_WIDTH != 0) {
-            return std::nullopt;
-        }
     }
 
     return pconfig;
@@ -130,6 +121,7 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
+    uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
     uint32_t ceil_pad_h,
@@ -165,11 +157,12 @@ uint32_t calculate_L1_usage(
 
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / 16);
 
     if (input_shape[3] % num_shards_c != 0) {
         return std::numeric_limits<uint32_t>::max();
     }
-    const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
+    const bool last_tile_is_partial = (in_channels / num_shards_c) % 32 != 0 && (in_channels / num_shards_c) % 32 < 17;
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const uint32_t max_rows_for_reduction =
@@ -177,6 +170,11 @@ uint32_t calculate_L1_usage(
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
+
+    // ToDo: enable 32 sticks per tile for reduction for all cases.
+    const uint32_t max_rows_for_reduction =
+        (!last_tile_is_partial && !is_large_kernel) ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+    const bool is_blackhole = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
@@ -220,9 +218,10 @@ uint32_t calculate_L1_usage(
     }
 
     // after reduction
-    uint32_t out_cb_pagesize =
-        std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * out_nbytes;
-    uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * in_ntiles_c;
+    uint32_t out_cb_pagesize = std::min((uint32_t)16, output_memory.shard_spec().value().shape[1]) *
+                               out_nbytes;  // there is just one row of channels after each reduction (or 1 block
+                                            // of c if its greater than 8 tiles)
+    uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * out_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
     uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
@@ -280,6 +279,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
         }
         uint32_t l1_usage = calculate_L1_usage(
             input_tensor,
+            sliding_window_config.channels,
             sliding_window_config.get_pad_h(),
             sliding_window_config.get_pad_w(),
             sliding_window_config.get_ceil_pad_h(),
