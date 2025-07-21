@@ -24,6 +24,7 @@
 #include "impl/context/metal_context.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
+#include "ttnn/graph/graph_query_op_runtime.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -859,6 +860,65 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
+
+class ReshapeOpIfTest : public ttnn::TTNNFixtureWithDevice {};
+TEST_F(ReshapeOpIfTest, Reshape) {
+    auto inputShape = ttnn::Shape{64, 1024};
+    auto outputShape = ttnn::Shape{256, 256};
+    const auto inputSpec_DRAM = ttnn::TensorSpec(
+        inputShape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+    const auto outputSpec_DRAM = ttnn::TensorSpec(
+        outputShape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+    const auto outputSpec_L1 = ttnn::TensorSpec(
+        outputShape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    {
+        // tt::tt_metal::IDevice* device = device_;
+        tt::tt_metal::distributed::MeshDevice* device = device_;
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::reshape, device, inputSpec_DRAM, outputShape, outputSpec_DRAM.tensor_layout().get_memory_config());
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+        EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, 5120);
+        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, 0);
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
+        EXPECT_EQ(query.output_tensor_spec.value(), outputSpec_DRAM);
+        std::cerr << "Constraint query 1 done.\n";
+
+        auto runtimeQuery = ttnn::graph::query_op_runtime(
+            ttnn::reshape, device, inputSpec_DRAM, outputShape, outputSpec_DRAM.tensor_layout().get_memory_config());
+        EXPECT_EQ(runtimeQuery.status, ttnn::graph::ExecutionStatus::Success);
+        EXPECT_GT(runtimeQuery.runtime, 0);
+        std::cerr << "Runtime query 1 done.\n";
+
+        query = ttnn::graph::query_op_constraints(
+            ttnn::reshape, device, inputSpec_DRAM, outputShape, outputSpec_L1.tensor_layout().get_memory_config());
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+        EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, 5120);
+        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, 2048);
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
+        EXPECT_EQ(query.output_tensor_spec.value(), outputSpec_L1);
+        std::cerr << "Constraint query 2 done.\n";
+
+        runtimeQuery = ttnn::graph::query_op_runtime(
+            ttnn::reshape, device, inputSpec_DRAM, outputShape, outputSpec_L1.tensor_layout().get_memory_config());
+        EXPECT_EQ(runtimeQuery.status, ttnn::graph::ExecutionStatus::Success);
+        EXPECT_GT(runtimeQuery.runtime, 0);
+        std::cerr << "Runtime query 2 done.\n";
+    }
+}  // Reshape
 
 }  // namespace test
 }  // namespace binary
