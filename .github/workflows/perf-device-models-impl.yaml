@@ -16,6 +16,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   device-perf:
