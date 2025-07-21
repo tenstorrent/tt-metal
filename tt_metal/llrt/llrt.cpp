@@ -412,16 +412,15 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
             if (elapsed > timeout_ms) {
                 auto core_type_idx =
                     hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-                std::uint32_t launch_erisc_addr = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
-                auto launch_erisc_val =
-                    read_hex_vec_from_core(device_id, virtual_core, launch_erisc_addr, sizeof(uint32_t))[0];
+                const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
+                auto run_flag_val = read_hex_vec_from_core(device_id, virtual_core, run_flag_addr, sizeof(uint32_t))[0];
                 TT_THROW(
                     "Device {}: Eth mailbox timeout waiting for active eth core {} to become active again. Is "
                     "the "
                     "firmware updated? Minimum tt-firmware version is 18.2.0. Launch erisc val: {}",
                     device_id,
                     virtual_core.str(),
-                    launch_erisc_val);
+                    run_flag_val);
             }
         }
     }
