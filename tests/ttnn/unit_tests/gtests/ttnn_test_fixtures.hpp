@@ -53,7 +53,7 @@ protected:
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
 
     void SetUp() override {
-        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, l1_small_size_, trace_region_size_);
+        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, l1_small_size_, /*trace_region_size_=*/102400);
         device_ = device_holder_.get();
     }
 
