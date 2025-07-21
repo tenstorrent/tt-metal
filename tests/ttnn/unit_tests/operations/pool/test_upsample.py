@@ -74,7 +74,7 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
 @pytest.mark.parametrize("mode", ["nearest"])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
-def test_upsample_single_core(device, input_shapes, mode, scale_h, scale_w, math_fidelity, math_approx_mode):
+def test_upsample_nearest_interleaved(device, input_shapes, mode, scale_h, scale_w, math_fidelity, math_approx_mode):
     batch_size, num_channels, height, width = input_shapes
     torch.manual_seed(0)
 
