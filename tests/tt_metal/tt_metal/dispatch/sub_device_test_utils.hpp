@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include "impl/context/metal_context.hpp"
+#include "sub_device.hpp"
 
 namespace tt::tt_metal {
 
@@ -75,7 +76,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_
 }
 
 inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_sync_program(
-    IDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
+    IDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2, DataMovementProcessor dm_processor) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::ACTIVE_ETH).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
     auto waiter_core_physical = device->ethernet_core_from_logical_core(waiter_coord);
@@ -94,7 +95,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
         waiter_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/persistent_remote_waiter.cpp",
         waiter_core,
-        EthernetConfig{.noc = NOC::RISCV_0_default, .processor = DataMovementProcessor::RISCV_0});
+        EthernetConfig{.noc = NOC::RISCV_0_default, .processor = dm_processor});
     std::array<uint32_t, 7> waiter_rt_args = {
         global_sem.address(),
         incrementer_cores.num_cores(),

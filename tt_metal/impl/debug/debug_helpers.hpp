@@ -96,12 +96,7 @@ inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_c
 inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
     if (core.type == CoreType::ETH) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
-            // TODO: Update this to be `DPRINT_NRISCVS_ETH + 1` when active erisc0 is running Metal FW
-            auto logical_active_eths =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
-            CoreCoord logical_eth(core.coord.x, core.coord.y);
-            return (logical_active_eths.find(logical_eth) != logical_active_eths.end()) ? DPRINT_NRISCVS_ETH
-                                                                                        : DPRINT_NRISCVS_ETH + 1;
+            return DPRINT_NRISCVS_ETH + 1;
         }
         return DPRINT_NRISCVS_ETH;
     } else {
