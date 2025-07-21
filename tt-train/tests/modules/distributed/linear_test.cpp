@@ -12,10 +12,8 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
-#include "ttnn/distributed/distributed_tensor.hpp"
 
 namespace {
 

@@ -10,7 +10,6 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"

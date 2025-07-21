@@ -9,7 +9,6 @@
 #include <ttnn/distributed/distributed_tensor.hpp>
 #include <vector>
 
-#include "core/distributed_mapping.hpp"
 #include "fmt/color.h"
 
 namespace ttml::core {

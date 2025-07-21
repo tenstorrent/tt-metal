@@ -11,7 +11,6 @@
 #include <core/xtensor_utils.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/cpu_initializers.hpp"
 
