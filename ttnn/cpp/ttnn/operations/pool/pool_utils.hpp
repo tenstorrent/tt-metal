@@ -75,6 +75,7 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
+    uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
     uint32_t ceil_pad_h,
