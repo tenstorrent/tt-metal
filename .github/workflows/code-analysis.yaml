@@ -102,9 +102,8 @@ jobs:
       - name: Update parent repo to latest main
         run: |
           echo "🔄 Ensuring parent repo is up to date with latest main..."
-          git fetch origin main
           git checkout main
-          git reset --hard origin/main
+          git pull origin main
           echo "✅ Parent repo updated to latest main: $(git rev-parse --short=7 HEAD)"
           
       - name: Update submodule
