@@ -16,6 +16,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   device-perf:
@@ -25,7 +29,7 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "N300 WH B0 not yet ported", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", civ2-compatible: false, timeout: 30},
+          {name: "N300 WH B0 not yet ported", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", civ2-compatible: false, timeout: 30},
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["tt-beta-ubuntu-2204-n300-large-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120},
         ]
     name: "${{ matrix.test-info.name }} device perf"
@@ -85,8 +89,7 @@ jobs:
             pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            #WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
@@ -94,11 +97,10 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            # issue 24652: https://github.com/tenstorrent/tt-metal/issues/24652
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/mobilenetv2/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8x/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vanilla_unet/test -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vanilla_unet/test -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8s_world/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov10x/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))

@@ -88,7 +88,7 @@ There are two extreme cases:
 2. `bsz*n_kv_heads` is 1 or a very small number. In this case, one work is assigned to many cores. This can lead to a new bottleneck from noc traffic, where the reduction step takes more time than compute. We show this phenomenon in the performance analysis section. To mitigate this, we limit the maximum number of cores assigned to one work to 16. `max_cores_per_head_batch` is the parameter that controls this in SDPAProgramConfig.
 
 ### 3.2 Step-by-step Visualization of an Average Case
-To give the reader a better intuition of how FlashDecode works on TT-Metallium, we visualize an average case with `bsz=16`, `n_kv_heads=1`, `n_q_heads=8` (padded to 32), and `n_cores=64`. The input is read from DRAM, and the output is left in L1.
+To give the reader a better intuition of how FlashDecode works on TT-Metalium, we visualize an average case with `bsz=16`, `n_kv_heads=1`, `n_q_heads=8` (padded to 32), and `n_cores=64`. The input is read from DRAM, and the output is left in L1.
 
 ![FlashDecodeStepByStep](images/FlashDecode/steps.png)
 

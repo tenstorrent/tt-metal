@@ -89,8 +89,9 @@ target_include_directories(
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core
-    PRIVATE
+    PUBLIC
         TT::Metalium
+    PRIVATE
         xtensor
         FlatBuffers::FlatBuffers
         Boost::algorithm
@@ -191,11 +192,13 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/nlp_concat_heads_boltz_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_${PY_BINDING}.cpp
@@ -368,6 +371,8 @@ TT_ENABLE_UNITY_BUILD(ttnncpp)
 set_target_properties(
     ttnncpp
     PROPERTIES
+        EXPORT_NAME
+            TTNN
         PREFIX
             "_"
         BUILD_RPATH
@@ -380,8 +385,14 @@ set_target_properties(
             "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
 )
 
+file(GLOB_RECURSE api api/*)
 target_sources(
     ttnncpp
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+        FILES ${api} cpp/ttnn/operations/creation.hpp cpp/ttnn/operations/functions.hpp
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
         cpp/ttnn/operations/compute_throttle_utils.cpp
@@ -414,15 +425,17 @@ target_sources(
 target_include_directories(
     ttnncpp
     PUBLIC
-        api
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
         # FIXME: decide what to do about this dir. Device includes complicate matters.
-        cpp
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp>"
 )
 
 target_link_libraries(
     ttnncpp
-    PRIVATE
+    PUBLIC
         TT::Metalium
+        xtensor
+    PRIVATE
         TTNN::Core
         TTNN::Ops::Bernoulli
         TTNN::Ops::CCL
@@ -477,15 +490,18 @@ target_link_libraries(
         TTNN::Ops::Normalization
         TTNN::Ops::Rand
 )
-install(TARGETS ttnncpp LIBRARY COMPONENT ttnn-runtime)
+if(TT_INSTALL)
+    install(TARGETS ttnncpp LIBRARY COMPONENT ttnn-runtime)
 
-install(
-    TARGETS
-        ttnncpp
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
-)
+    install(
+        TARGETS
+            ttnncpp
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
+    )
+    install(TARGETS ttnncpp EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime FILE_SET api COMPONENT ttnn-dev)
+endif()
 
 if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
@@ -497,6 +513,8 @@ if(WITH_PYTHON_BINDINGS)
     set_target_properties(
         ttnn
         PROPERTIES
+            EXPORT_NAME
+                Python
             PREFIX
                 "_"
             BUILD_RPATH
@@ -520,20 +538,22 @@ if(WITH_PYTHON_BINDINGS)
     target_include_directories(
         ttnn
         PUBLIC
-            ${PROJECT_SOURCE_DIR}/ttnn
-            ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>"
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp>"
     )
 
     target_link_libraries(
         ttnn
         PUBLIC
-            TTNN::CPP
+            "$<BUILD_INTERFACE:TTNN::CPP>"
         PRIVATE
             pybind11::module
             Boost::algorithm
             TT::Metalium
     )
-    install(TARGETS ttnn LIBRARY COMPONENT ttnn-runtime)
+    if(TT_INSTALL)
+        install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
+    endif()
 
     # Install .so into src files for pybinds implementation
     install(
@@ -555,11 +575,15 @@ if(WITH_PYTHON_BINDINGS)
             tt_pybinds
     )
 endif()
+if(TT_INSTALL)
+    install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
+endif()
 
 if(TTNN_BUILD_TESTS)
     add_subdirectory(test)
 endif()
 
+set(FixmeOpAPIDir ${CMAKE_CURRENT_SOURCE_DIR}/cpp)
 set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
@@ -617,3 +641,5 @@ add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/rand)
 add_subdirectory(cpp/ttnn/deprecated)
+
+add_subdirectory(examples)

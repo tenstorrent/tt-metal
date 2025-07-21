@@ -167,26 +167,6 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-DataType Tensor::get_dtype() const { return dtype(); }
-Layout Tensor::get_layout() const { return layout(); }
-
-const TensorSpec& Tensor::get_tensor_spec() const { return tensor_spec(); }
-
-const ttnn::Shape& Tensor::get_logical_shape() const { return logical_shape(); }
-
-const ttnn::Shape& Tensor::get_padded_shape() const { return padded_shape(); }
-
-uint64_t Tensor::get_logical_volume() const { return logical_shape().volume(); }
-uint32_t Tensor::volume() const { return padded_shape().volume(); }
-
-Storage& Tensor::get_storage() { return this->tensor_attributes->get_storage(); }
-
-const DistributedTensorConfig& Tensor::get_distributed_tensor_config() const {
-    return this->tensor_attributes->get_distributed_tensor_config();
-}
-
-const Storage& Tensor::get_storage() const { return this->tensor_attributes->get_storage(); }
-
 template <>
 Tensor Tensor::from_span<float>(
     tt::stl::Span<const float> buffer,
@@ -356,6 +336,20 @@ std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
     return tensor_impl::decode_tensor_data(data, cpu_tensor.tensor_spec());
 }
 
+template <typename T>
+T Tensor::item(ttnn::QueueId cq_id) const {
+    ZoneScoped;
+    TT_FATAL(
+        this->logical_shape().volume() == 1,
+        "tensor.item() requires tensor to have exactly one element, but got {} elements",
+        this->logical_shape().volume());
+
+    // Use existing infrastructure: to_vector() already handles multi-device and host tensors correctly
+    // by calling cpu() internally when needed
+    auto vector_data = this->to_vector<T>(cq_id);
+    return vector_data[0];
+}
+
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,
@@ -453,6 +447,13 @@ template std::vector<int32_t> Tensor::to_vector<int32_t>(ttnn::QueueId cq_id) co
 template std::vector<uint8_t> Tensor::to_vector<uint8_t>(ttnn::QueueId cq_id) const;
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(ttnn::QueueId cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(ttnn::QueueId cq_id) const;
+
+template float Tensor::item<float>(ttnn::QueueId cq_id) const;
+template bfloat16 Tensor::item<bfloat16>(ttnn::QueueId cq_id) const;
+template int32_t Tensor::item<int32_t>(ttnn::QueueId cq_id) const;
+template uint8_t Tensor::item<uint8_t>(ttnn::QueueId cq_id) const;
+template uint16_t Tensor::item<uint16_t>(ttnn::QueueId cq_id) const;
+template uint32_t Tensor::item<uint32_t>(ttnn::QueueId cq_id) const;
 
 Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device)) {

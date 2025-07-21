@@ -433,6 +433,14 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     ValidateKernelIDs(virtual_core, &(mbox_data->launch[launch_msg_read_ptr]));
 
     // Whether or not watcher data is available depends on a flag set on the device.
+    if (mbox_data->watcher.enable != WatcherEnabled and mbox_data->watcher.enable != WatcherDisabled) {
+        TT_THROW(
+            "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
+            core_str,
+            mbox_data->watcher.enable,
+            WatcherEnabled,
+            WatcherDisabled);
+    }
     bool enabled = (mbox_data->watcher.enable == WatcherEnabled);
 
     if (enabled) {

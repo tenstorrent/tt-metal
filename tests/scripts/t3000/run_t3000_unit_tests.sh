@@ -43,6 +43,10 @@ run_t3000_ttmetal_tests() {
   fi
 }
 
+run_t3000_dual_rank_big_mesh_tests() {
+  tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTestT3K*"
+}
+
 run_t3000_ttfabric_tests() {
   # Record the start time
   fail=0
@@ -98,6 +102,22 @@ run_t3000_ttnn_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_ttnn_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_tt_metal_multiprocess_tests() {
+   # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_tt_metal_multiprocess_tests"
+  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_tt_metal_multiprocess_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi

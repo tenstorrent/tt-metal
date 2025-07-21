@@ -42,7 +42,7 @@ tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @omilyutin-tt
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra
 tt_metal/graph/ @dmakoviichuk-tt @sminakov-tt
-tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @tt-dma # this should go away
+tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
@@ -54,10 +54,10 @@ tt_metal/hw/toolchain/ @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @pgkeller @nathan-TT
 tt_metal/impl/allocator/ @abhullar-tt @tt-aho
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @omilyutin-tt @sminakov-tt @TT-BrianLiu
-tt_metal/impl/context/ @tt-dma @jbaumanTT @aliuTT @cfjchu @omilyutin-tt
+tt_metal/impl/context/ @jbaumanTT @aliuTT @cfjchu @omilyutin-tt
 tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
-tt_metal/impl/debug/ @tt-dma @pgkeller
-tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @tt-dma @cfjchu @omilyutin-tt
+tt_metal/impl/debug/ @pgkeller
+tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @omilyutin-tt
 tt_metal/impl/dispatch/ @pgkeller @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
 tt_metal/impl/event @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
@@ -79,12 +79,11 @@ tt_metal/programming_examples/profiler/ @mo-tenstorrent @sagarwalTT
 tt_metal/programming_examples/profiler/test_noc_event_profiler/ @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
 tt_metal/test @tenstorrent/metalium-developers-infra
-tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @tt-dma @ihamer-tt
+tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @ihamer-tt
 tt_metal/tools/lightmetal_runner @kmabeeTT
 tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark?
 tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT
-tt_metal/tools/tt_gdb/ @tt-dma # I think this is dead code, can we delete it?
-tt_metal/tools/watcher_dump/ @tt-dma @pgkeller
+tt_metal/tools/watcher_dump/ @pgkeller
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT
 tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT
 tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT
@@ -214,6 +213,7 @@ models/common @yieldthought @mtairum @uaydonat
 models/utility_functions.py @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat @yieldthought @cglagovichTT
+models/demos/deepseek_v3 @uaydonat @yieldthought @avoraTT @kpaigwar @barci2
 models/**/bert*/ @TT-BrianLiu @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/*/convnet_mnist/ @sjameelTT @uaydonat

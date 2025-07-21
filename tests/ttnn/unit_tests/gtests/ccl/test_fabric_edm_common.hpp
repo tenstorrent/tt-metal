@@ -85,6 +85,8 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
+        } else if (num_devices_ == 4) {
+            return MeshShape{1, 4};
         } else {
             return MeshShape{2, 4};
         }
@@ -100,10 +102,22 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
-        if (!(num_devices_ >= 8 &&
-              (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
-            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
-        }
+        switch (arch_) {
+            case tt::ARCH::WORMHOLE_B0:
+                if (!(num_devices_ >= 8 && (tt::tt_metal::GetNumPCIeDevices() == 4 ||
+                                            tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
+                    TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+                }
+                break;
+
+            case tt::ARCH::BLACKHOLE:
+                if (num_devices_ != 4) {
+                    TT_THROW("This suite can only be run on LLMBox");
+                }
+                break;
+
+            default: TT_THROW("Only Wormhole or Blackhole devices are supported in this test suite");
+        };
     }
 
 public:
@@ -132,7 +146,8 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
+        const auto& physical_device_ids =
+            extract_locals(SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape).values());
         physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
 
         std::vector<IDevice*> devices = {};
@@ -201,7 +216,6 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
         device_open = true;
@@ -1238,6 +1252,7 @@ void setup_test_with_persistent_fabric(
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
+    bool credit_address_fixed = true,
     std::optional<size_t> num_links = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
@@ -1255,6 +1270,18 @@ void setup_test_with_persistent_fabric(
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
         devices, fabric_program_ptrs, num_links.value_or(1), false, topology, is_galaxy, edm_buffer_config);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
+    if (!credit_address_fixed) {
+        for (auto& edm_builder : line_fabric->edm_builders_forward_direction) {
+            for (auto& builder : edm_builder.second) {
+                builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+            }
+        }
+        for (auto& edm_builder : line_fabric->edm_builders_backward_direction) {
+            for (auto& builder : edm_builder.second) {
+                builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+            }
+        }
+    }
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
             log_trace(
@@ -1308,7 +1335,8 @@ int TestLineFabricEntrypoint(
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
-    setup_test_with_persistent_fabric(devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
+    setup_test_with_persistent_fabric(
+        devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric, false);
 
     auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
         bool success = false;
@@ -1410,9 +1438,11 @@ int TestLoopbackEntrypoint(
     auto chip_0_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         sender_device, fabric_sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
     chip_0_edm_builder.set_firmware_context_switch_interval(0);
+    chip_0_edm_builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
     auto chip_1_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         receiver_device, fabric_receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
     chip_1_edm_builder.set_firmware_context_switch_interval(0);
+    chip_1_edm_builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
@@ -1856,6 +1886,7 @@ bool RunPipelinedWorkersTest(
     // Initial setup like worker core assignment, chunk read order, etc.
 
     std::vector<CoreRangeSet> pipeline_stage_worker_cores = {};
+    pipeline_stage_worker_cores.reserve(num_stages);
     for (size_t i = 0; i < num_stages; ++i) {
         pipeline_stage_worker_cores.push_back(
             CoreRangeSet(CoreRange(CoreCoord(0, i), CoreCoord(num_workers_per_stage[i] - 1, i))));
@@ -2782,6 +2813,7 @@ void Run1DFabricPacketSendTest(
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
+            true,
             params.num_links,
             topology,
             fabric_context_switch_interval,
@@ -3937,6 +3969,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     }
 
     std::vector<IDevice*> worker_devices;
+    worker_devices.reserve(num_devices_with_workers);
     for (size_t i = 0; i < num_devices_with_workers; i++) {
         worker_devices.push_back(devices[i]);
     }
