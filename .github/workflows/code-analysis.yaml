@@ -104,7 +104,10 @@ jobs:
           echo "🔄 Ensuring parent repo is up to date with latest main..."
           git checkout main
           git pull origin main
-          git submodule update --init --recursive
+          # Force submodules to match parent repo expectations, discarding any local changes
+          git submodule foreach --recursive 'git clean -fdx'
+          git submodule foreach --recursive 'git reset --hard HEAD'
+          git submodule update --init --recursive --force
           echo "✅ Parent repo updated to latest main: $(git rev-parse --short=7 HEAD)"
 
       - name: Update submodule
