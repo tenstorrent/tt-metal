@@ -18,7 +18,6 @@
 #include <filesystem>
 #include <limits>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <ostream>
 #include <set>

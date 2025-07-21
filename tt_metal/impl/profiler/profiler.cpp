@@ -1400,7 +1400,7 @@ void DeviceProfiler::readResults(
 
     const chip_id_t device_id = device->id();
     const std::string zone_name = fmt::format(
-        "{}-{}-{}", "readResults", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
+        "{}-{}-{}-{}", "readResults", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
     ZoneName(zone_name.c_str(), zone_name.size());
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
