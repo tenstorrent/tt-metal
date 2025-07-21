@@ -75,6 +75,7 @@ jobs:
               - models/experimental/vovnet/tests/perf/
               - models/experimental/yolov12x/tests/perf/
               - models/demos/ufld_v2/tests/perf/
+              - models/experimental/efficientnetb0/tests/perf/
 
     name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:
