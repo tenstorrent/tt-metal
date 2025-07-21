@@ -30,6 +30,10 @@ public:
 
     bool hook_write_to_device(tt::tt_metal::Buffer* buffer) override;
 
+    bool hook_write_to_device(const tt::tt_metal::Buffer* buffer) override;
+
+    bool hook_read_from_device(tt::tt_metal::Buffer* buffer) override;
+
     ~ProcessorHooks() override = default;
 
     void set_block(bool block);

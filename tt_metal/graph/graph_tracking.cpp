@@ -123,6 +123,20 @@ bool GraphTracker::hook_write_to_device(tt::tt_metal::Buffer* buffer) {
     return hook->hook_write_to_device(buffer);
 }
 
+bool GraphTracker::hook_write_to_device(const tt::tt_metal::Buffer* buffer) {
+    if (hook == nullptr) {
+        return false;
+    }
+    return hook->hook_write_to_device(buffer);
+}
+
+bool GraphTracker::hook_read_from_device(tt::tt_metal::Buffer* buffer) {
+    if (hook == nullptr) {
+        return false;
+    }
+    return hook->hook_read_from_device(buffer);
+}
+
 bool GraphTracker::hook_program(tt::tt_metal::Program* program) {
     if (hook == nullptr) {
         return false;
