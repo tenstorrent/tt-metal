@@ -242,15 +242,13 @@ def dump_callstacks(
             if noc_block.block_type == "eth" and noc_block not in device.idle_eth_blocks:
                 continue
 
-            if location.to_user_str() != "4-6 (e0,15)":
-                continue
-
             for risc_name in noc_block.risc_names:
                 dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
                 if gdb_callstack:
                     if risc_name == "ncrisc":
-                        continue
-                    callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
+                        callstack = [CallstackEntry()]
+                    else:
+                        callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
                 else:
                     callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
                 result.append(
