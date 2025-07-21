@@ -91,34 +91,7 @@ public:
             *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
     }
 
-    uint32_t get_randomized_master_seed() {
-        uint32_t master_seed = std::random_device()();
-        log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed);
-
-        auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-        // only need to handshake if we need to generate seed, since each host will have the same commandline arguments.
-        if (*(distributed_context->size()) > 1) {
-            if (*(distributed_context->rank()) == 0) {
-                master_seed = std::random_device()();
-                for (int recv_host_rank = 1; recv_host_rank < *(distributed_context->size()); ++recv_host_rank) {
-                    distributed_context->send(
-                        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
-                        tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
-                        tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
-                    );
-                }
-                log_info(tt::LogTest, "Master seed generated: {}", master_seed);
-            } else {
-                distributed_context->recv(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
-                    tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
-                    tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
-                );
-                log_info(tt::LogTest, "Received master seed: {}", master_seed);
-            }
-        }
-        return master_seed;
-    }
+    uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
 
     void setup_devices() {
         const auto& available_coords = this->fixture_->get_available_device_coordinates();
@@ -187,8 +160,8 @@ public:
                         CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
                         uint32_t sync_address =
                             this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
-                        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(
-                            sync_sender.device, sync_core);  // populate the master coord
+                        uint32_t dst_noc_encoding =
+                            this->fixture_->get_worker_noc_encoding(sync_core);  // populate the master coord
 
                         // for 2d mcast case
                         auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
@@ -467,7 +440,7 @@ private:
             }
         }
 
-        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_node_ids[0], dst_logical_core);
+        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_logical_core);
         uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
         // Get payload buffer size from receiver memory map (cached during initialization)

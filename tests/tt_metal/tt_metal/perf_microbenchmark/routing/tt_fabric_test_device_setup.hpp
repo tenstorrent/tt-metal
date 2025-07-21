@@ -552,12 +552,12 @@ inline void TestDevice::create_sync_kernel() {
     local_args.push_back(local_sync_val);
 
     // Add sync core's own NOC encoding first
-    uint32_t sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(this->coord_, sync_core);
+    uint32_t sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sync_core);
     local_args.push_back(sync_core_noc_encoding);
 
     // Add other sender core coordinates for local sync
     for (const auto& [sender_core, _] : this->senders_) {
-        uint32_t sender_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(this->coord_, sender_core);
+        uint32_t sender_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sender_core);
         local_args.push_back(sender_noc_encoding);
     }
 
@@ -618,14 +618,12 @@ inline void TestDevice::create_sender_kernels() {
             local_args.push_back(local_sync_val);
 
             // Add sync core's NOC encoding (the master for local sync)
-            uint32_t sync_core_noc_encoding =
-                this->device_info_provider_->get_worker_noc_encoding(this->coord_, sync_core_coord_);
+            uint32_t sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sync_core_coord_);
             local_args.push_back(sync_core_noc_encoding);
 
             // Add other sender core coordinates for local sync
             for (const auto& [sender_core, _] : this->senders_) {
-                uint32_t sender_noc_encoding =
-                    this->device_info_provider_->get_worker_noc_encoding(this->coord_, sender_core);
+                uint32_t sender_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sender_core);
                 local_args.push_back(sender_noc_encoding);
             }
         }

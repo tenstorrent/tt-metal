@@ -83,7 +83,6 @@ int main(int argc, char** argv) {
     }
 
     std::optional<uint32_t> master_seed = cmdline_parser.get_master_seed();
-    log_info(tt::LogTest, "here7");
     if (!master_seed.has_value()) {
         master_seed = test_context.get_randomized_master_seed();
     }
