@@ -99,6 +99,14 @@ jobs:
           git branch -D "${{ env.BRANCH_NAME }}" 2>/dev/null || echo "Branch ${{ env.BRANCH_NAME }} doesn't exist locally, continuing..."
           echo "✅ Ensured fresh branch - any existing ${{ env.BRANCH_NAME }} branch has been deleted"
 
+      - name: Update parent repo to latest main
+        run: |
+          echo "🔄 Ensuring parent repo is up to date with latest main..."
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+          echo "✅ Parent repo updated to latest main: $(git rev-parse --short=7 HEAD)"
+          
       - name: Update submodule
         id: update-submodule
         run: |
