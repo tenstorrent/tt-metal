@@ -93,7 +93,8 @@ TilizeWithValPadding::create_op_performance_model(
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
     uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
-    int compute_cycles = num_tiles * 75;  // 75 cycles per tile
+    const int average_cycles_per_tile = 75;
+    int compute_cycles = num_tiles * average_cycles_per_tile;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
         input_tensors, output_tensors, ideal_dev_clock_cycles);

@@ -158,12 +158,13 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Untilize
     uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
     uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
     int compute_cycles = 0;
-    if (std::ceil((float)input_tensor.padded_shape()[-1] / (float)tile_width) <= 8) {
-        // If using pack_untilize_block
-        compute_cycles = num_tiles * 80;
+    const int max_tiles_per_row = 8;
+    const int latency_untilize = 390;      // measured latency for untilize_block
+    const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
+    if (std::ceil((float)input_tensor.padded_shape()[-1] / (float)tile_width) <= max_tiles_per_row) {
+        compute_cycles = num_tiles * latency_pack_untilize;
     } else {
-        // If using untilize_block
-        compute_cycles = num_tiles * 390;
+        compute_cycles = num_tiles * latency_untilize;
     }
 
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
