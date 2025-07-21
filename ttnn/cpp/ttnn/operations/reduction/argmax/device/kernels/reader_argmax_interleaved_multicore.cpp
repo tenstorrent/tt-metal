@@ -6,7 +6,9 @@
 #include <algorithm>
 
 #include "dataflow_api.h"
+
 #include "utils/bfloat16.h"
+#include "argmax_common.hpp"
 
 /**
  * @brief Process inner dimension units for argmax reduction
