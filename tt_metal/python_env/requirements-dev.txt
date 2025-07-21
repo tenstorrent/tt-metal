@@ -46,6 +46,7 @@ pytest-xdist==3.6.1
 pytest-benchmark==4.0.0
 jsbeautifier==1.14.7
 datasets==2.9.0
+pyarrow==20.0.0
 torch==2.7.1+cpu ; platform_machine == 'x86_64'
 torch==2.7.1 ; platform_machine == 'aarch64'
 networkx==3.1
@@ -100,4 +101,3 @@ plotly==5.18.0
 seaborn==0.13.2
 medpy==0.5.2 # Required for vanilla unet
 kagglehub==0.2.9
-pyarrow==20.0.0

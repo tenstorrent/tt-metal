@@ -76,6 +76,24 @@ run_t3000_resnet50_tests() {
   fi
 }
 
+run_t3000_sentence_bert_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
+
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_t3000" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_sentence_bert_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_ccl_all_gather_perf_tests() {
   # Record the start time
   fail=0
@@ -119,6 +137,11 @@ run_t3000_ccl_tests() {
   run_t3000_ccl_all_gather_perf_tests
   run_t3000_ccl_reduce_scatter_perf_tests
 
+}
+
+run_t3000_model_perf_tests() {
+  # Run model performance tests
+  run_t3000_sentence_bert_tests
 }
 
 fail=0
@@ -165,8 +188,10 @@ main() {
 
   if [[ "$pipeline_type" == "ccl_perf_t3000_device" ]]; then
     run_t3000_ccl_tests
+  elif [[ "$pipeline_type" == "model_perf_t3000" ]]; then
+    run_t3000_model_perf_tests
   else
-    echo "$pipeline_type is invalid (supported: [ccl_perf_t3000_device])" 2>&1
+    echo "$pipeline_type is invalid (supported: [ccl_perf_t3000_device, model_perf_t3000])" 2>&1
     exit 1
   fi
 

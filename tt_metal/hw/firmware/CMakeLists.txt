@@ -28,7 +28,7 @@ target_sources(
             src/idle_erisck.cc
             src/ncrisc.cc
             src/ncrisck.cc
-            src/subordinate_idle_erisc.cc
+            src/subordinate_erisc.cc
             src/tdma_xmov.c
             src/trisc.cc
             src/trisck.cc
