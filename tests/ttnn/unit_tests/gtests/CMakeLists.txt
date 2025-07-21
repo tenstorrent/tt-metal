@@ -54,7 +54,6 @@ target_sources(
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_matmul_benchmark.cpp
-        test_multiprod_queue.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
@@ -72,6 +71,7 @@ target_sources(
     PRIVATE
         test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
         test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
+        test_multiprod_queue.cpp
 )
 target_include_directories(unit_tests_ttnn_slow PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
