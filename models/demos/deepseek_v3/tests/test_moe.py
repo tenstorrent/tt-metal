@@ -44,11 +44,9 @@ def test_forward_pass(
     seq_len,
     reference_model,
     hf_config_single_layer,
-    temp_dir,
-    galaxy_or_t3k_mesh,
+    tmp_path,
+    mesh_device,
 ):
-    mesh_device = galaxy_or_t3k_mesh
-
     """Test forward pass against reference model."""
     batch_size = 1
 
@@ -62,7 +60,7 @@ def test_forward_pass(
     reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config_single_layer, hf_state_dict, temp_dir, mesh_device)
+    weight_config = MoE.convert_weights(hf_config_single_layer, hf_state_dict, tmp_path, mesh_device)
 
     # Generate appropriate config
     ccl = CCL1D(hf_config_single_layer, mesh_device)
@@ -72,7 +70,7 @@ def test_forward_pass(
         model_config = MoE.decode_model_config(hf_config_single_layer, mesh_device, ccl, batch_size=seq_len)
 
     # Create a new model state
-    model_state = MoE.create_state(hf_config_single_layer, mesh_device=mesh_device)
+    model_state = MoE.create_state(hf_config_single_layer, mesh_device)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)

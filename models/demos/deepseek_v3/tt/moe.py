@@ -8,7 +8,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
-from models.demos.deepseek_v3.tt.expert import Expert as MoEExperts
+from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
