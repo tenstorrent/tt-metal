@@ -337,9 +337,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     // Calculate total input work
-    uint32_t total_work =
-        (output.get_logical_shape()[0] * output.get_logical_shape()[1] * output.get_logical_shape()[2]) /
-        (stride_h * stride_w);
+    uint32_t total_work = (batch_size * input_height * input_width) / (stride_h * stride_w);
 
     // Get compute grid size and calculate work distribution
     auto compute_grid_size = device->compute_with_storage_grid_size();

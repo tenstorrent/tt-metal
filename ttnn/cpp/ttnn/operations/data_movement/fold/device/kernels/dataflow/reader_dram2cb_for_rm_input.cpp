@@ -59,7 +59,7 @@ void kernel_main() {
         // print_bf16_pages(get_write_ptr(cb_id_in0), aligned_stick_nbytes_dram / 2, stride_h * stride_w);
         cb_push_back(cb_id_in0, 1);
 
-        if (curr_src_row_index >= (input_width - 1)) {
+        if (curr_src_row_index >= (input_width)) {
             curr_src_offset += input_width * (stride_h - 1);
             // DPRINT << "Updating curr_src_offset to: " << curr_src_offset << ENDL();
             curr_src_row_index = 0;
