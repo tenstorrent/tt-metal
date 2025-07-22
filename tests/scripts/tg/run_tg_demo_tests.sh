@@ -69,6 +69,25 @@ run_tg_falcon7b_tests() {
   fi
 }
 
+run_tg_sentence_bert_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_sentence_bert_tests"
+
+  # Sentence BERT demo test
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/tg/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_sentence_bert_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
@@ -79,6 +98,8 @@ run_tg_demo_tests() {
     run_tg_llama3_8b_dp_tests
   elif [[ "$1" == "llama3_70b_dp" ]]; then
     run_tg_llama3_70b_dp_tests
+  elif [[ "$1" == "sentence_bert" ]]; then
+    run_tg_sentence_bert_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1

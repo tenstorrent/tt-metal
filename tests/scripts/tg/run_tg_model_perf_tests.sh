@@ -33,6 +33,24 @@ run_tg_llama_70b_model_perf_tests() {
   fi
 }
 
+run_tg_sentence_bert_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_sentence_bert_tests"
+
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_tg" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_sentence_bert_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 main() {
   # Parse the arguments
   while [[ $# -gt 0 ]]; do
@@ -72,6 +90,8 @@ main() {
     run_tg_cnn_tests
   elif [[ "$pipeline_type" == "tg_llama_model_perf_tg_device" ]]; then
     run_tg_llama_70b_model_perf_tests
+  elif [[ "$pipeline_type" == "run_tg_sentence_bert_tests" ]]; then
+    run_tg_sentence_bert_tests
   else
     echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, tg_llama_model_perf_tg_device])" 2>&1
     exit 1
