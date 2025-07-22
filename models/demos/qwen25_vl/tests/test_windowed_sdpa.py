@@ -128,7 +128,7 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
     v_tt = ttnn.from_torch(v, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     # Run standard SDPA with explicit mask for comparison
-    with timer("Standard SDPA execution"):
+    with timer("Standard SDPA: create attention mask"):
         print("-------------------- Running standard SDPA --------------------")
         attention_mask = create_windowed_attention_mask(seq_len, pt_cu_window_seqlens)
         # # print each value in attention_mask using nested for loops with aligned spacing
@@ -141,10 +141,13 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
         #             print(f"{value:6.1f}", end=" ")
         #     print()
         attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Add batch and head dims
+
+    with timer("Standard SDPA: transfer attention mask to device"):
         attention_mask_tt = ttnn.from_torch(
             attention_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b
         )
 
+    with timer("Standard SDPA: run standard SDPA"):
         output_standard_tt = ttnn.transformer.scaled_dot_product_attention(
             q_tt,
             k_tt,
@@ -171,7 +174,7 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
     time.sleep(1)
 
     # Run windowed SDPA
-    with timer("Windowed SDPA execution"):
+    with timer("Windowed SDPA: run windowed SDPA"):
         print("-------------------- Running windowed SDPA --------------------")
         output_tt = ttnn.transformer.windowed_scaled_dot_product_attention(
             q_tt,
@@ -209,9 +212,9 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
 
     # Print first few values for comparison (batch=0, head=0)
     compare_outputs(output, output_standard, seq_end=16, head_end=16)
-    compare_outputs(output, output_standard, seq_start=0, seq_end=16, head_start=16, head_end=32)
-    compare_outputs(output, output_standard, seq_start=16, seq_end=32, head_start=0, head_end=16)
-    compare_outputs(output, output_standard, seq_start=16, seq_end=32, head_start=16, head_end=32)
+    # compare_outputs(output, output_standard, seq_start=0, seq_end=16, head_start=16, head_end=32)
+    # compare_outputs(output, output_standard, seq_start=16, seq_end=32, head_start=0, head_end=16)
+    # compare_outputs(output, output_standard, seq_start=16, seq_end=32, head_start=16, head_end=32)
 
     # Assert that outputs are close
     max_diff = torch.max(torch.abs(output - output_standard)).item()
