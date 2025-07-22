@@ -14,6 +14,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -25,6 +26,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.n_heads = configuration.n_heads
         self.n_kv_heads = configuration.n_kv_heads
@@ -36,6 +38,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
 
         self.attention = TtLlamaCrossAttention(
             mesh_device,
+            tt_ccl,
             state_dict,
             state_dict_prefix=f"{state_dict_prefix}attention.",
             weight_cache_path=weight_cache_path,
@@ -51,6 +54,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 dim=self.hidden_size,
                 state_dict=state_dict,
                 state_dict_prefix=state_dict_prefix,
@@ -61,6 +65,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             ),
             configuration,
+            self.tt_ccl,
         )
 
         self.gate_attn = ttnn.as_tensor(
@@ -86,6 +91,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         self.ffn_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 dim=self.hidden_size,
                 state_dict=state_dict,
                 state_dict_prefix=state_dict_prefix,
@@ -96,6 +102,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
             ),
             configuration,
+            self.tt_ccl,
         )
 
         self.gate_ffwd = ttnn.as_tensor(
