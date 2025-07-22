@@ -107,7 +107,7 @@ void kernel_main() {
     uint64_t remote_noc0_dest_noc_addr = get_noc_addr(0, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
     if (num_targets_in_direction) {
-        for (volatile uint32_t x = 0; x < 1; ++x) {
+        for (volatile uint32_t x = 0; x < 5; ++x) {
             pkt_hdr->to_noc_unicast_write(
                 tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, intermediate_page_size);
             dir_fabric_connection->wait_for_empty_write_slot();

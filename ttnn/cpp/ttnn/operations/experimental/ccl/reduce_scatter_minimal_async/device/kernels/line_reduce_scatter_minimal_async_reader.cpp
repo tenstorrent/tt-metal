@@ -105,7 +105,7 @@ void kernel_main() {
     // DEBUGGING
     cb_reserve_back(cb_input_id, tile_granularity);
     uint32_t l1_write_addr = get_write_ptr(cb_input_id);
-    for (volatile uint32_t x = 0; x < 2; ++x) {
+    for (volatile uint32_t x = 0; x < 5; ++x) {
         noc_async_read_tile(0, input_tensor_addrgen, l1_write_addr);
     }
 
