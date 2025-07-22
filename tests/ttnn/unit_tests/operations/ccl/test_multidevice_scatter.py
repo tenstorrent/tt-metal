@@ -15,7 +15,6 @@ from tracy import signpost
 
 
 def gen_tensor(dim, per_device_output_shape, mesh_axes, mesh_shape, cluster_axis, scheme="random"):
-    torch.manual_seed(2005)
     factor = 0
     non_cluster_axes = [i for i in range(len(mesh_axes)) if i != cluster_axis]
 
@@ -54,8 +53,6 @@ def gen_tensor(dim, per_device_output_shape, mesh_axes, mesh_shape, cluster_axis
             torch_input_tensor = torch.cat([torch_input_tensor, per_axis_tensor], dim=axis)
             torch_output_tensor = torch.cat([torch_output_tensor, per_axis_output_tensor], dim=axis)
 
-    logger.info(f"torch_input_tensor shape: {torch_input_tensor.shape}")
-    logger.info(f"torch_output_tensor shape: {torch_output_tensor.shape}")
     return torch_input_tensor, torch_output_tensor
 
 
@@ -77,10 +74,11 @@ def run_multidevice_scatter_test(
     profiler=BenchmarkProfiler(),
 ):
     mesh_device.enable_program_cache()
+    torch.manual_seed(2005)
 
     output_tensor_goldens_list = []
     tt_input_tensors_list = []
-    for _ in range(num_iters):
+    for it in range(num_iters):
         input, output = gen_tensor(dim, per_device_output_shape, mesh_axes, mesh_shape, cluster_axis, scheme=scheme)
 
         output_tensor_goldens_list.append(output)
@@ -93,6 +91,9 @@ def run_multidevice_scatter_test(
             memory_config=input_memory_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=mesh_axes, mesh_shape=mesh_shape),
         )
+        if it == 0:
+            logger.info(f"input with shape {input.shape}: {input}")
+            logger.info(f"tt_input with per-device shape {tt_input.shape}: {tt_input}")
         tt_input_tensors_list.append(tt_input)
 
     tt_out_tensor_list = []
@@ -160,8 +161,6 @@ def run_multidevice_scatter_test(
         tt_out_tensor_list = run_op(num_iters, store_all_results=True)
         signpost("stop")
 
-    mesh_device.reset_sub_device_stall_group()
-
     passed = True
     first_failed_tensor_index = None
     failed_indices = []
@@ -171,6 +170,12 @@ def run_multidevice_scatter_test(
             tt_out_tensor_list[tensor_index],
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=mesh_axes),
         )
+        if tensor_index == 0:
+            logger.info(f"tt_output per-device shape {tt_out_tensor_list[tensor_index].shape}")
+            logger.info(
+                f"golden with shape {output_tensor_goldens_list[tensor_index].shape}: {output_tensor_goldens_list[tensor_index]}"
+            )
+            logger.info(f"tt_torch_tensor with shape {tt_torch_tensor.shape}: {tt_torch_tensor}")
         eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index], expected_pcc)
         logger.info(f"Output tensor {tensor_index} has result {output_results}")
         if not eq:
@@ -193,22 +198,21 @@ def run_multidevice_scatter_test(
     "device_params",
     [
         {
-            "trace_region_size": 100000,
+            "trace_region_size": 10000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True, False])
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((1, 2), (1, 2), id="1x2_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("per_device_output_shape", [(1, 1, 32, 32)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
@@ -242,5 +246,61 @@ def test_multidevice_scatter(
         mesh_shape,
         input_memory_config,
         output_memory_config,
-        scheme="sequential",
+        scheme="random",
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 16384,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [True, False])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("per_device_output_shape", [(16, 1, 1, 7168)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("dim", [0])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("mesh_axes", [[0, 1]])
+@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG])
+def test_multidevice_scatter_rm(
+    mesh_device,
+    mesh_shape,
+    trace_mode,
+    per_device_output_shape,
+    dtype,
+    layout,
+    dim,
+    cluster_axis,
+    mesh_axes,
+    input_memory_config,
+    output_memory_config,
+):
+    num_iters = 2
+    warmup_iters = 0
+
+    run_multidevice_scatter_test(
+        mesh_device,
+        per_device_output_shape,
+        dim,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        dtype,
+        layout,
+        cluster_axis,
+        mesh_axes,
+        mesh_shape,
+        input_memory_config,
+        output_memory_config,
+        scheme="random",
     )
