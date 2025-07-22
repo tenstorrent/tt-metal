@@ -69,6 +69,16 @@ void kernel_main() {
         .page_size = input_tensor_page_size,
         .data_format = get_dataformat(cb_input_id)};
 
+    // DEBUGGING
+    cb_reserve_back(cb_input_id, tile_granularity);
+    uint32_t l1_write_addr = get_write_ptr(cb_input_id);
+    for (volatile uint32_t x = 0; x < 5; ++x) {
+        noc_async_read_tile(0, input_tensor_addrgen, l1_write_addr);
+    }
+
+    return;
+    // DEBUGGING
+
     for (uint32_t b = 0; b < num_batches; b++) {
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
@@ -130,9 +140,7 @@ void kernel_main() {
                     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                 }
             }
-            // DOESN"T FIX
             uint32_t extra = tiles_to_read - tiles_read;
-            // uint32_t counter = 0;
             while (tiles_read < tiles_to_read) {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
@@ -143,23 +151,12 @@ void kernel_main() {
                     tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                 }
 
-                // FIXES
-
-                // Works for % 3 and below for [1, 1, 256, 4096]
-                // if (counter == 0) {
-                //     for (volatile uint32_t y = 0; y < 10000; ++y) { }
-                // }
-                // counter = (counter + 1) % 4;
-
                 cb_reserve_back(cb_in0, tile_granularity);
 
-                // FIXES
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                    // FIXES
                     noc_async_read_tile(tile_id, input_tensor_addrgen, l1_write_addr);
-                    // FIXES
                     l1_write_addr += input_tensor_page_size;
                     tiles_read++;
 
@@ -170,24 +167,17 @@ void kernel_main() {
                     }
                 }
 
-                // FIXES
-
                 if (do_reduce) {
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-                    // DOESN'T FIX
 
                     cb_reserve_back(cb_intermediate_id, tile_granularity);
-
-                    // DOESN'T FIX
 
                     uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t intermediate_tile_id =
                             intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                        // DOESN'T FIX
                         noc_async_read_tile(
                             intermediate_tile_id, intermediate_tensor_addrgen, intermediate_l1_write_addr);
-                        // DOESN'T FIX
                         intermediate_l1_write_addr += input_tensor_page_size;
 
                         intermediate_pages_read_in_row++;
@@ -197,21 +187,12 @@ void kernel_main() {
                         }
                     }
 
-                    // DOESN'T FIX
-
                     noc_async_read_barrier();
                     cb_push_back(cb_intermediate_id, tile_granularity);
                 }
 
-                // FIXES
-
                 noc_async_read_barrier();
-
-                // FIXES
-
                 cb_push_back(cb_in0, tile_granularity);
-
-                // FIXES
 
                 // Skip the tiles going the other direction
                 tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -235,12 +216,7 @@ void kernel_main() {
                     intermediate_pages_read_in_row = pages_read_in_row;
                     intermediate_row_offset = row_offset;
                 }
-                // FIXES
             }
-            // DOESN'T FIX
-            // for (volatile uint32_t y = 0; y < 10000; ++y) { }
-
-            // Aggregating the delays and doing them all here also DOESN'T WORK
 
             // Next slice idx
             if constexpr (direction) {

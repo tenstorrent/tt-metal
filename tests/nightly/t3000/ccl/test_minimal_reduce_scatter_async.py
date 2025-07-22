@@ -224,7 +224,7 @@ def run_reduce_scatter_impl(
         # (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         # (8, 1, [1, 1, 512, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # (8, 1, [1, 1, 512, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (4, 1, [1, 1, 256, 4096], 3, ttnn.TILE_LAYOUT, ttnn.ttnn.bfloat16),
+        (4, 1, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT, ttnn.ttnn.bfloat16),
     ],
     # ids=[
     #     "batch_8",

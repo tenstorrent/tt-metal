@@ -25,10 +25,16 @@ FORCE_INLINE void scatter_write_and_advance_local_read_address_for_fabric(
             {first_noc0_dest_noc_addr, second_noc0_dest_noc_addr}, (uint16_t)first_payload_size_bytes},
         first_payload_size_bytes + second_payload_size_bytes);
 
+    fabric_direction_connection->wait_for_empty_write_slot();
+    fabric_direction_connection->send_payload_without_header_non_blocking_from_address(
+        l1_read_addr, first_payload_size_bytes + second_payload_size_bytes);
+    fabric_direction_connection->send_payload_flush_non_blocking_from_address(
+        (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+    noc_async_writes_flushed();
+
     l1_read_addr += first_payload_size_bytes + second_payload_size_bytes;
 }
 #endif
-
 
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric(
     uint64_t noc0_dest_noc_addr,
@@ -45,5 +51,5 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric(
         (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
     noc_async_writes_flushed();
 
-    l1_read_addr += payload_size_bytes;
+    // l1_read_addr += payload_size_bytes;
 }

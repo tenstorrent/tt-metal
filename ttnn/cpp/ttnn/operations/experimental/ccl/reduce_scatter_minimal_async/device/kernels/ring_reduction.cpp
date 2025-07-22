@@ -21,6 +21,10 @@ void MAIN {
     uint32_t arg_idx = 0;
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
+    // DEBUGGING
+    return;
+    // DEBUGGING
+
     uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
     uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
 
