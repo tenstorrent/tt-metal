@@ -1683,7 +1683,8 @@ void ControlPlane::initialize_intermesh_eth_links() {
 // contains all the cross host links
 bool ControlPlane::is_intermesh_enabled() const {
     // Check if the architecture and system support intermesh routing
-    if (not tt_metal::MetalContext::instance().hal().intermesh_eth_links_enabled()) {
+    if (not tt_metal::MetalContext::instance().hal().get_device_feature_enabled(
+            tt::tt_metal::DeviceFeature::ETH_LINKS_INTERMESH_ROUTING)) {
         return false;
     }
 
@@ -1792,8 +1793,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
         for (const auto& eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
             const auto& routing_info = eth_routing_info.at(eth_core);
-            if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER) and
-                skip_reserved_cores) {
+            if (routing_info == EthRouterMode::FABRIC_ROUTER && skip_reserved_cores) {
                 continue;
             }
             if (freq_retrain_eth_cores.find(eth_core) != freq_retrain_eth_cores.end()) {

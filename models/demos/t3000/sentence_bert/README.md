@@ -1,10 +1,15 @@
-# SentenceBERT T3000
+# SentenceBERT
 
 ### Platforms:
 
-T3000
+LoudBox/QuietBox T3K
 
-**Note:** This demo is specifically designed for T3000 devices and uses optimized device parameters for maximum performance.
+**Note:** On T3K, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
+
+Or, make sure to set the following environment variable in the terminal:
+```
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
 
 To obtain the perf reports through profiler, please build with following command:
 ```
@@ -17,45 +22,59 @@ To obtain the perf reports through profiler, please build with following command
 
 Resource link - [source](https://huggingface.co/emrecan/bert-base-turkish-cased-mean-nli-stsb-tr)
 
-### Details
+###  Details
 
-- The entry point to the SentenceBERT model is located at: `models/demos/sentence_bert/ttnn/ttnn_sentence_bert.py`
-- Batch size: 8 (configurable via device_batch_size parameter)
+- The entry point to the SentenceBERT model is located at:`models/demos/sentence_bert/ttnn/ttnn_sentence_bert.py`
+-  Batch size: 8
 - Sequence Length: 384
-- Data Types: bfloat16 (activation), bfloat8_b (weights)
-- Device Parameters: Optimized for T3000 with L1 small size: 79104, trace region size: 23887872, num command queues: 2
 
 ### How to Run:
 
-Use the following command to run the end-to-end performant model with Trace+2CQs (without mean-pooling):
+Use the following command to run the model :
 
 ```
-pytest --disable-warnings models/demos/t3000/sentence_bert/tests/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert_data_parallel
+pytest --disable-warnings tests/ttnn/integration_tests/sentence_bert/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
 ```
 
-### Performant Model with Trace+2CQ
-
+###  Performant Model with Trace+2CQ
 > **Note:** SentenceBERT uses BERT-base as its backbone model.
-- End-to-end performance without mean-pooling post-processing is **3073 sentences per second**
-- Uses data parallel execution across multiple devices when available
-- Optimized for T3000 architecture with specific device parameters
+- End-to-end performance with mean-pooling post-processing is **3070 sentences per second**
 
-### Test Features
 
-- **Data Parallel Execution**: Automatically scales batch size based on number of available devices
-- **Trace Optimization**: Uses TTNN trace capture and execution for optimal performance
-- **Memory Optimization**: Configured with T3000-specific memory parameters for optimal resource utilization
+Use the following command to run the performant Model with Trace+2CQs (with mean-pooling and with random inputs):
 
-### Device Configuration
+```
+pytest --disable-warnings models/demos/t3000/sentence_bert/tests/test_sentence_bert_e2e_performant.py
+```
 
-The test uses the following optimized device parameters for T3000:
-- L1 small size: 79104
-- Trace region size: 23887872
-- Number of command queues: 2
+### Performant Demo with Trace+2CQ
 
-### Performance Metrics
+Use the following command to run the performant Demo with Trace+2CQs:
 
-The test outputs detailed performance information including:
-- Batch size (scaled by number of devices)
-- Average inference time per iteration
-- Sentences processed per second
+```
+pytest --disable-warnings models/demos/t3000/sentence_bert/demo/demo.py
+```
+
+### Performant Interactive Demo with Trace+2CQ
+- This script demonstrates a simple semantic search using a Turkish Sentence-BERT model. It loads a knowledge base from a text file (`knowledge_base.txt`), encodes all entries, and waits for user input. For each query, it returns the most semantically similar entry from the knowledge base using cosine similarity.
+- Run the interactive demo using the command below. For every user input, the top-matching knowledge base entry along with its similarity score will be displayed.
+- Type `exit` to quit the interactive demo.
+- Modify the `knowledge_base.txt` file to customize the knowledge base with your own turkish input sentences.
+
+Use the following command to run the performant interactive Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/t3000/sentence_bert/demo/interactive_demo.py
+```
+
+### Performant Dataset evaluation with Trace+2CQ
+
+- End-to-end performance with mean-pooling post-processing is **2961 sentences per second**
+- Dataset source: [STSb Turkish](https://github.com/emrecncelik/sts-benchmark-tr) (Semantic textual similarity dataset for the Turkish language)
+- Adjust the `num_samples` parameter to control the number of dataset samples used during evaluation.
+
+Use the following command to run the performant dataset evaluation with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/t3000/sentence_bert/demo/dataset_evaluation.py
+```

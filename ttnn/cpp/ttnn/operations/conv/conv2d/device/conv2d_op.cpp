@@ -178,45 +178,23 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
-        if (this->memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
-            uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntile;
-            std::array<uint32_t, 2> shard_shape = {
-                this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT, padded_output_shape[-1]};
-            CoreRangeSet shard_grid =
-                tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
-            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
-            return {TensorSpec(
-                output_shape,
-                TensorLayout::fromPaddedShape(
-                    dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
-        } else if (this->memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
-            std::array<uint32_t, 2> shard_shape = {
-                this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
-                this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
-            auto shard_grid = this->memory_config.shard_spec().value().grid;
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
-            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
-            return {TensorSpec(
-                output_shape,
-                TensorLayout::fromPaddedShape(
-                    dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
-        } else if (this->memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            auto shard_grid = this->memory_config.shard_spec().value().grid;
-            auto shard_spec = ShardSpec{
-                shard_grid,
-                this->memory_config.shard_spec().value().shape,
-                this->memory_config.shard_spec().value().orientation};
-            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
-            return {TensorSpec(
-                output_shape,
-                TensorLayout::fromPaddedShape(
-                    dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
-        } else {
-            TT_THROW("Unsupported shard scheme");
-        }
+        std::array<uint32_t, 2> shard_shape = {
+            this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
+            this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
+        auto shard_grid = this->memory_config.shard_spec().value().grid;
+        auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
+        auto mem_config = this->memory_config.with_shard_spec(shard_spec);
+        return {TensorSpec(
+            output_shape,
+            TensorLayout(
+                dtype,
+                PageConfig(output_layout),
+                mem_config,
+                Alignment(
+                    {tt::constants::TILE_HEIGHT,
+                     tt::constants::TILE_WIDTH})  // Conv2D always outputs in tile multiples, even if output layout is
+                                                  // Row Major.
+                ))};
     }
     return {TensorSpec(
         output_shape,
