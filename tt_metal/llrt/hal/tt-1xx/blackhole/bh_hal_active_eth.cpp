@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include "llrt_common/mailbox.hpp"
 #define COMPILE_FOR_ERISC
 
@@ -67,6 +68,7 @@ HalCoreInfoType create_active_eth_mem_map() {
                                                                          offsetof(boot_results_t, eth_live_status) +
                                                                          offsetof(eth_live_status_t, rx_link_up);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LITE_FABRIC_CONFIG)] = MEM_AERISC_LITE_FABRIC_CONFIG;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_METAL_RUN_FLAG)] = MEM_AERISC_RUN_FW_FLAG;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -95,6 +97,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LITE_FABRIC_CONFIG)] = MEM_AERISC_LITE_FABRIC_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_METAL_RUN_FLAG)] = MEM_AERISC_RUN_FW_FLAG_SIZE;
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_STATUS_MASK)] =
@@ -105,17 +108,44 @@ HalCoreInfoType create_active_eth_mem_map() {
         MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_RELEASE_CORE)] =
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
+    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = MEM_SYSENG_ETH_HEARTBEAT;
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);
-    for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
-        // BH active ethernet runs idle erisc FW on the second ethernet
+
+    for (int processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+        DeviceAddr fw_base{}, local_init{}, fw_launch{};
+        uint32_t fw_launch_value{};
+
+        switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
+            case EthProcessorTypes::DM0: {
+                fw_base = MEM_AERISC_FIRMWARE_BASE;
+                local_init = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+                // This is not used for launching DM0. The ETH FW API will be used instead.
+                // Dummy value to prevent writing to L1[0]
+                fw_launch = MEM_AERISC_VOID_LAUNCH_FLAG;
+                fw_launch_value = fw_base;
+                break;
+            }
+            case EthProcessorTypes::DM1: {
+                fw_base = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE;
+                local_init = MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+                fw_launch = SUBORDINATE_AERISC_RESET_PC;
+                fw_launch_value = fw_base;
+                break;
+            }
+            default: {
+                TT_THROW("Unexpected processor type {} for Blackhole Active Ethernet", processor_class_idx);
+            }
+        }
+
+        constexpr ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
         processor_types[0] = HalJitBuildConfig{
-            .fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
-            .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-            .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC,
-            .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
-            .memory_load = ll_api::memory::Loading::CONTIGUOUS,
+            .fw_base_addr = fw_base,
+            .local_init_addr = local_init,
+            .fw_launch_addr = fw_launch,
+            .fw_launch_addr_value = fw_launch_value,
+            .memory_load = memory_load,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

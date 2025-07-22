@@ -18,6 +18,7 @@ target_sources(
             blackhole/noc.c
             wormhole/noc.c
             active_erisc.cc
+            active_erisc-crt0.cc
             active_erisck.cc
             brisc.cc
             brisck.cc
@@ -28,7 +29,7 @@ target_sources(
             idle_erisck.cc
             ncrisc.cc
             ncrisck.cc
-            subordinate_idle_erisc.cc
+            subordinate_erisc.cc
             tdma_xmov.c
             trisc.cc
             trisck.cc

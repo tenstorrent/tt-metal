@@ -6,6 +6,9 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <chrono>
+#include <thread>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -20,6 +23,8 @@
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include "get_platform_architecture.hpp"
+#include "hal.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -32,8 +37,13 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "llrt.hpp"
+#include "rtoptions.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/utils.hpp>
+#include <fmt/ranges.h>
+#include <umd/device/types/arch.h>
 
 namespace tt::tt_metal {
 

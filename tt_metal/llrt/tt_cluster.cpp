@@ -815,7 +815,7 @@ void Cluster::read_sysmem(
 }
 
 void Cluster::verify_sw_fw_versions(
-    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
+    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const {
     tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
     log_info(
         tt::LogDevice,
@@ -823,7 +823,7 @@ void Cluster::verify_sw_fw_versions(
         sw.str(),
         fw_first_eth_core.str(),
         device_id);
-    for (std::uint32_t &fw_version : fw_versions) {
+    for (std::uint32_t& fw_version : fw_versions) {
         tt_version fw(fw_version);
 
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
@@ -1409,8 +1409,3 @@ bool Cluster::is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) 
 }
 
 }  // namespace tt
-
-std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
-    os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram);
-    return os;
-}
