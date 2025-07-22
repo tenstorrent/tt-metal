@@ -79,7 +79,7 @@ private:
     std::shared_ptr<DistributedContext> m_distributed_context;
     std::unique_ptr<core::TTProfiler> m_profiler;
 
-    core::distributed::CCLResources m_ccl_resources{};
+    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources{};
 
     friend class ttsl::Indestructible<AutoContext>;
 };
