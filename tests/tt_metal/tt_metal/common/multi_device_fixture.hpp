@@ -13,6 +13,7 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 
 #include "dispatch_fixture.hpp"
 #include "umd/device/types/arch.h"
@@ -123,7 +124,7 @@ protected:
 
         const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        const auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        const auto num_devices = tt::tt_metal::distributed::SystemMesh::instance().shape().mesh_size();
         const auto mesh_device_type = derive_mesh_device_type(num_devices, arch);
         if (!mesh_device_type) {
             GTEST_SKIP() << fmt::format(

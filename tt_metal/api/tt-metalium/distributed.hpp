@@ -64,6 +64,12 @@ void ReadShard(
     const std::shared_ptr<MeshBuffer>& mesh_buffer,
     const MeshCoordinate& coord,
     bool blocking = true) {
+
+    auto mesh_device = mesh_cq.device();
+    if (!mesh_device->is_local(coord)) {
+        return;
+    }
+
     auto shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
     std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
