@@ -30,9 +30,6 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "fabric_host_interface.h"
-#include "kernel_config/demux.hpp"
-#include "kernel_config/eth_router.hpp"
-#include "kernel_config/eth_tunneler.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
@@ -123,21 +120,6 @@ constexpr noc_selection_t k_dispatcher_s_noc = {
 static_assert(k_dispatcher_noc.non_dispatch_noc != k_dispatcher_s_noc.non_dispatch_noc);
 
 //
-// Packet Queue NOC selections
-//
-// Non Dispatch NOC: Sync semaphore and relaying data between upstream and downstream components
-//
-// Upstream: UNUSED
-//
-// Downstream: UNUSED
-//
-constexpr noc_selection_t k_packet_queue_noc = {
-    .non_dispatch_noc = tt::tt_metal::NOC::NOC_0,
-    .upstream_noc = tt::tt_metal::NOC::NOC_0,
-    .downstream_noc = tt::tt_metal::NOC::NOC_0,
-};
-
-//
 // Fabric MUX NOC selections
 //
 // Must be NoC0
@@ -169,53 +151,6 @@ static const std::vector<DispatchKernelNode> single_chip_arch_2cq_dispatch_s = {
     {3, 0, 0, 1, DISPATCH_HD, {2, x, x, x}, {5, x, x, x}, k_dispatcher_noc},
     {4, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_dispatcher_s_noc},
     {5, 0, 0, 1, DISPATCH_S, {2, x, x, x}, {3, x, x, x}, k_dispatcher_s_noc},
-};
-
-static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_dispatcher_noc},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_dispatcher_s_noc},
-
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {5, x, x, x}, k_prefetcher_noc},
-    {4, 0, 1, 0, DISPATCH_H, {6, x, x, x}, {3, x, x, x}, k_dispatcher_noc},
-
-    {5, 0, 1, 0, PACKET_ROUTER_MUX, {3, x, x, x}, {7, x, x, x}, k_packet_queue_noc},
-    {6, 0, 1, 0, DEMUX, {7, x, x, x}, {4, x, x, x}, k_packet_queue_noc},
-    {7, 0, 1, 0, US_TUNNELER_REMOTE, {11, 5, x, x}, {11, 6, x, x}, k_packet_queue_noc},
-
-    {8, 1, x, 0, PREFETCH_D, {13, x, x, x}, {9, 10, x, x}, k_prefetcher_noc},
-    {9, 1, x, 0, DISPATCH_D, {8, x, x, x}, {10, 12, x, x}, k_dispatcher_noc},
-    {10, 1, x, 0, DISPATCH_S, {8, x, x, x}, {9, x, x, x}, k_dispatcher_s_noc},
-
-    {11, 1, x, 0, US_TUNNELER_LOCAL, {7, 12, x, x}, {7, 13, x, x}, k_packet_queue_noc},
-    {12, 1, x, 0, MUX_D, {9, x, x, x}, {11, x, x, x}, k_packet_queue_noc},
-    {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {8, x, x, x}, k_packet_queue_noc},
-};
-
-static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, k_prefetcher_noc},
-    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, k_prefetcher_noc},
-    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, k_dispatcher_noc},
-    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, k_dispatcher_noc},
-
-    {4, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {8, x, x, x}, k_prefetcher_noc},
-    {5, 0, 1, 1, PREFETCH_H, {x, x, x, x}, {8, x, x, x}, k_prefetcher_noc},
-    {6, 0, 1, 0, DISPATCH_H, {9, x, x, x}, {4, x, x, x}, k_dispatcher_noc},
-    {7, 0, 1, 1, DISPATCH_H, {9, x, x, x}, {5, x, x, x}, k_dispatcher_noc},
-
-    {8, 0, 1, 0, PACKET_ROUTER_MUX, {4, 5, x, x}, {10, x, x, x}, k_packet_queue_noc},
-    {9, 0, 1, 0, DEMUX, {10, x, x, x}, {6, 7, x, x}, k_packet_queue_noc},
-    {10, 0, 1, 0, US_TUNNELER_REMOTE, {15, 8, x, x}, {15, 9, x, x}, k_packet_queue_noc},
-
-    {11, 1, x, 0, PREFETCH_D, {17, x, x, x}, {13, x, x, x}, k_prefetcher_noc},
-    {12, 1, x, 1, PREFETCH_D, {17, x, x, x}, {14, x, x, x}, k_prefetcher_noc},
-    {13, 1, x, 0, DISPATCH_D, {11, x, x, x}, {16, x, x, x}, k_dispatcher_noc},
-    {14, 1, x, 1, DISPATCH_D, {12, x, x, x}, {16, x, x, x}, k_dispatcher_noc},
-
-    {15, 1, x, 0, US_TUNNELER_LOCAL, {10, 16, x, x}, {10, 17, x, x}, k_packet_queue_noc},
-    {16, 1, x, 0, MUX_D, {13, 14, x, x}, {15, x, x, x}, k_packet_queue_noc},
-    {17, 1, x, 0, PACKET_ROUTER_DEMUX, {15, x, x, x}, {11, 12, x, x}, k_packet_queue_noc},
-
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
@@ -469,281 +404,6 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
     {88, 8, x, 1, DISPATCH_S, {84, x, x, x}, {86, x, x, x}, k_dispatcher_s_noc},
     {89, 8, x, 0, RETURN_FABRIC_MUX, /*full size*/ {85, 86}, /*header only*/ {83, 84}, k_fabric_mux_noc, 1},
 };
-
-static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq = {
-    // For MMIO chip, TODO: investigate removing these, they aren't needed
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_dispatcher_noc},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_dispatcher_s_noc},
-
-    // Sevicing remote chips 1-4
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {11, x, x, x}, k_prefetcher_noc},
-    {4, 0, 1, 0, DISPATCH_H, {13, x, x, x}, {3, x, x, x}, k_dispatcher_noc},
-    {5, 0, 2, 0, PREFETCH_H, {x, x, x, x}, {11, x, x, x}, k_prefetcher_noc},
-    {6, 0, 2, 0, DISPATCH_H, {13, x, x, x}, {5, x, x, x}, k_dispatcher_noc},
-    {7, 0, 3, 0, PREFETCH_H, {x, x, x, x}, {11, x, x, x}, k_prefetcher_noc},
-    {8, 0, 3, 0, DISPATCH_H, {14, x, x, x}, {7, x, x, x}, k_dispatcher_noc},
-    {9, 0, 4, 0, PREFETCH_H, {x, x, x, x}, {11, x, x, x}, k_prefetcher_noc},
-    {10, 0, 4, 0, DISPATCH_H, {14, x, x, x}, {9, x, x, x}, k_dispatcher_noc},
-    {11, 0, 1, 0, PACKET_ROUTER_MUX, {3, 5, 7, 9}, {15, x, x, x}, k_packet_queue_noc},
-    {12, 0, 1, 0, DEMUX, {15, x, x, x}, {13, 14, x, x}, k_packet_queue_noc},
-    {13, 0, 1, 0, DEMUX, {12, x, x, x}, {4, 6, x, x}, k_packet_queue_noc},
-    {14, 0, 1, 0, DEMUX, {12, x, x, x}, {8, 10, x, x}, k_packet_queue_noc},
-    {15, 0, 1, 0, US_TUNNELER_REMOTE, {29, 11, x, x}, {29, 12, x, x}, k_packet_queue_noc},
-
-    // Servicing remote chips 5-8
-    {16, 0, 5, 0, PREFETCH_H, {x, x, x, x}, {24, x, x, x}, k_prefetcher_noc},
-    {17, 0, 5, 0, DISPATCH_H, {26, x, x, x}, {16, x, x, x}, k_dispatcher_noc},
-    {18, 0, 6, 0, PREFETCH_H, {x, x, x, x}, {24, x, x, x}, k_prefetcher_noc},
-    {19, 0, 6, 0, DISPATCH_H, {26, x, x, x}, {18, x, x, x}, k_dispatcher_noc},
-    {20, 0, 7, 0, PREFETCH_H, {x, x, x, x}, {24, x, x, x}, k_prefetcher_noc},
-    {21, 0, 7, 0, DISPATCH_H, {27, x, x, x}, {20, x, x, x}, k_dispatcher_noc},
-    {22, 0, 8, 0, PREFETCH_H, {x, x, x, x}, {24, x, x, x}, k_prefetcher_noc},
-    {23, 0, 8, 0, DISPATCH_H, {27, x, x, x}, {22, x, x, x}, k_dispatcher_noc},
-    {24, 0, 5, 0, PACKET_ROUTER_MUX, {16, 18, 20, 22}, {28, x, x, x}, k_packet_queue_noc},
-    {25, 0, 5, 0, DEMUX, {28, x, x, x}, {26, 27, x, x}, k_packet_queue_noc},
-    {26, 0, 5, 0, DEMUX, {25, x, x, x}, {17, 19, x, x}, k_packet_queue_noc},
-    {27, 0, 5, 0, DEMUX, {25, x, x, x}, {21, 23, x, x}, k_packet_queue_noc},
-    {28, 0, 5, 0, US_TUNNELER_REMOTE, {59, 24, x, x}, {59, 25, x, x}, k_packet_queue_noc},
-
-    // Remote chip 1
-    {29, 1, x, 0, US_TUNNELER_LOCAL, {15, 30, x, x}, {15, 31, 32, x}, k_packet_queue_noc},
-    {30, 1, x, 0, MUX_D, {34, 36, x, x}, {29, x, x, x}, k_packet_queue_noc},
-    {31, 1, x, 0, PACKET_ROUTER_DEMUX, {29, x, x, x}, {33, 36, x, x}, k_packet_queue_noc},
-    {32, 1, x, 0, PACKET_ROUTER_DEMUX, {29, x, x, x}, {36, x, x, x}, k_packet_queue_noc},
-    {33, 1, x, 0, PREFETCH_D, {31, x, x, x}, {34, 35, x, x}, k_prefetcher_noc},
-    {34, 1, x, 0, DISPATCH_D, {33, x, x, x}, {35, 30, x, x}, k_dispatcher_noc},
-    {35, 1, x, 0, DISPATCH_S, {33, x, x, x}, {34, x, x, x}, k_dispatcher_s_noc},
-    {36, 1, x, 0, US_TUNNELER_REMOTE, {37, 31, 32, x}, {37, 30, x, x}, k_packet_queue_noc},
-
-    // Remote chip 2
-    {37, 2, x, 0, US_TUNNELER_LOCAL, {36, 38, x, x}, {36, 39, 40, x}, k_packet_queue_noc},
-    {38, 2, x, 0, MUX_D, {42, 44, x, x}, {37, x, x, x}, k_packet_queue_noc},
-    {39, 2, x, 0, PACKET_ROUTER_DEMUX, {37, x, x, x}, {41, 44, x, x}, k_packet_queue_noc},
-    {40, 2, x, 0, PACKET_ROUTER_DEMUX, {37, x, x, x}, {44, x, x, x}, k_packet_queue_noc},
-    {41, 2, x, 0, PREFETCH_D, {39, x, x, x}, {42, 43, x, x}, k_prefetcher_noc},
-    {42, 2, x, 0, DISPATCH_D, {41, x, x, x}, {43, 38, x, x}, k_dispatcher_noc},
-    {43, 2, x, 0, DISPATCH_S, {41, x, x, x}, {42, x, x, x}, k_dispatcher_s_noc},
-    {44, 2, x, 0, US_TUNNELER_REMOTE, {45, 39, 40, x}, {45, 38, x, x}, k_packet_queue_noc},
-
-    // Remote chip 3
-    {45, 3, x, 0, US_TUNNELER_LOCAL, {44, 46, x, x}, {44, 47, 48, x}, k_packet_queue_noc},
-    {46, 3, x, 0, MUX_D, {50, 52, x, x}, {45, x, x, x}, k_packet_queue_noc},
-    {47, 3, x, 0, PACKET_ROUTER_DEMUX, {45, x, x, x}, {49, 52, x, x}, k_packet_queue_noc},
-    {48, 3, x, 0, PACKET_ROUTER_DEMUX, {45, x, x, x}, {52, x, x, x}, k_packet_queue_noc},
-    {49, 3, x, 0, PREFETCH_D, {47, x, x, x}, {50, 51, x, x}, k_prefetcher_noc},
-    {50, 3, x, 0, DISPATCH_D, {49, x, x, x}, {51, 46, x, x}, k_dispatcher_noc},
-    {51, 3, x, 0, DISPATCH_S, {49, x, x, x}, {50, x, x, x}, k_dispatcher_s_noc},
-    {52, 3, x, 0, US_TUNNELER_REMOTE, {53, 47, 48, x}, {53, 46, x, x}, k_packet_queue_noc},
-
-    // Remote chip 4
-    {53, 4, x, 0, US_TUNNELER_LOCAL, {52, 54, x, x}, {52, 55, x, x}, k_packet_queue_noc},
-    {54, 4, x, 0, MUX_D, {57, x, x, x}, {53, x, x, x}, k_packet_queue_noc},
-    {55, 4, x, 0, PACKET_ROUTER_DEMUX, {53, x, x, x}, {56, x, x, x}, k_packet_queue_noc},
-    {56, 4, x, 0, PREFETCH_D, {55, x, x, x}, {57, 58, x, x}, k_prefetcher_noc},
-    {57, 4, x, 0, DISPATCH_D, {56, x, x, x}, {58, 54, x, x}, k_dispatcher_noc},
-    {58, 4, x, 0, DISPATCH_S, {56, x, x, x}, {57, x, x, x}, k_dispatcher_s_noc},
-
-    // Remote chip 5
-    {59, 5, x, 0, US_TUNNELER_LOCAL, {28, 60, x, x}, {28, 61, 62, x}, k_packet_queue_noc},
-    {60, 5, x, 0, MUX_D, {64, 66, x, x}, {59, x, x, x}, k_packet_queue_noc},
-    {61, 5, x, 0, PACKET_ROUTER_DEMUX, {59, x, x, x}, {63, 66, x, x}, k_packet_queue_noc},
-    {62, 5, x, 0, PACKET_ROUTER_DEMUX, {59, x, x, x}, {66, x, x, x}, k_packet_queue_noc},
-    {63, 5, x, 0, PREFETCH_D, {61, x, x, x}, {64, 65, x, x}, k_prefetcher_noc},
-    {64, 5, x, 0, DISPATCH_D, {63, x, x, x}, {65, 60, x, x}, k_dispatcher_noc},
-    {65, 5, x, 0, DISPATCH_S, {63, x, x, x}, {64, x, x, x}, k_dispatcher_s_noc},
-    {66, 5, x, 0, US_TUNNELER_REMOTE, {67, 61, 62, x}, {67, 60, x, x}, k_packet_queue_noc},
-
-    // Remote chip 6
-    {67, 6, x, 0, US_TUNNELER_LOCAL, {66, 68, x, x}, {66, 69, 70, x}, k_packet_queue_noc},
-    {68, 6, x, 0, MUX_D, {72, 74, x, x}, {67, x, x, x}, k_packet_queue_noc},
-    {69, 6, x, 0, PACKET_ROUTER_DEMUX, {67, x, x, x}, {71, 74, x, x}, k_packet_queue_noc},
-    {70, 6, x, 0, PACKET_ROUTER_DEMUX, {67, x, x, x}, {74, x, x, x}, k_packet_queue_noc},
-    {71, 6, x, 0, PREFETCH_D, {69, x, x, x}, {72, 73, x, x}, k_prefetcher_noc},
-    {72, 6, x, 0, DISPATCH_D, {71, x, x, x}, {73, 68, x, x}, k_dispatcher_noc},
-    {73, 6, x, 0, DISPATCH_S, {71, x, x, x}, {72, x, x, x}, k_dispatcher_s_noc},
-    {74, 6, x, 0, US_TUNNELER_REMOTE, {75, 69, 70, x}, {75, 68, x, x}, k_packet_queue_noc},
-
-    // Remote chip 7
-    {75, 7, x, 0, US_TUNNELER_LOCAL, {74, 76, x, x}, {74, 77, 78, x}, k_packet_queue_noc},
-    {76, 7, x, 0, MUX_D, {80, 82, x, x}, {75, x, x, x}, k_packet_queue_noc},
-    {77, 7, x, 0, PACKET_ROUTER_DEMUX, {75, x, x, x}, {79, 82, x, x}, k_packet_queue_noc},
-    {78, 7, x, 0, PACKET_ROUTER_DEMUX, {75, x, x, x}, {82, x, x, x}, k_packet_queue_noc},
-    {79, 7, x, 0, PREFETCH_D, {77, x, x, x}, {80, 81, x, x}, k_prefetcher_noc},
-    {80, 7, x, 0, DISPATCH_D, {79, x, x, x}, {81, 76, x, x}, k_dispatcher_noc},
-    {81, 7, x, 0, DISPATCH_S, {79, x, x, x}, {80, x, x, x}, k_dispatcher_s_noc},
-    {82, 7, x, 0, US_TUNNELER_REMOTE, {83, 77, 78, x}, {83, 76, x, x}, k_packet_queue_noc},
-
-    // Remote chip 8
-    {83, 8, x, 0, US_TUNNELER_LOCAL, {82, 84, x, x}, {82, 85, x, x}, k_packet_queue_noc},
-    {84, 8, x, 0, MUX_D, {87, x, x, x}, {83, x, x, x}, k_packet_queue_noc},
-    {85, 8, x, 0, PACKET_ROUTER_DEMUX, {83, x, x, x}, {86, x, x, x}, k_packet_queue_noc},
-    {86, 8, x, 0, PREFETCH_D, {85, x, x, x}, {87, 88, x, x}, k_prefetcher_noc},
-    {87, 8, x, 0, DISPATCH_D, {86, x, x, x}, {88, 84, x, x}, k_dispatcher_noc},
-    {88, 8, x, 0, DISPATCH_S, {86, x, x, x}, {87, x, x, x}, k_dispatcher_s_noc},
-};
-
-static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
-    // For MMIO chip
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, 4, x, x}, k_prefetcher_noc},
-    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, 5, x, x}, k_prefetcher_noc},
-    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {4, x, x, x}, k_dispatcher_noc},
-    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {5, x, x, x}, k_dispatcher_noc},
-    {4, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {2, x, x, x}, k_dispatcher_s_noc},
-    {5, 0, 0, 1, DISPATCH_S, {1, x, x, x}, {3, x, x, x}, k_dispatcher_s_noc},
-
-    // Servicing remote chips 1-4
-    {6, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {22, x, x, x}, k_prefetcher_noc},
-    {7, 0, 1, 1, PREFETCH_H, {x, x, x, x}, {23, x, x, x}, k_prefetcher_noc},
-    {8, 0, 1, 0, DISPATCH_H, {25, x, x, x}, {6, x, x, x}, k_dispatcher_noc},
-    {9, 0, 1, 1, DISPATCH_H, {25, x, x, x}, {7, x, x, x}, k_dispatcher_noc},
-    {10, 0, 2, 0, PREFETCH_H, {x, x, x, x}, {22, x, x, x}, k_prefetcher_noc},
-    {11, 0, 2, 1, PREFETCH_H, {x, x, x, x}, {23, x, x, x}, k_prefetcher_noc},
-    {12, 0, 2, 0, DISPATCH_H, {25, x, x, x}, {10, x, x, x}, k_dispatcher_noc},
-    {13, 0, 2, 1, DISPATCH_H, {25, x, x, x}, {11, x, x, x}, k_dispatcher_noc},
-    {14, 0, 3, 0, PREFETCH_H, {x, x, x, x}, {22, x, x, x}, k_prefetcher_noc},
-    {15, 0, 3, 1, PREFETCH_H, {x, x, x, x}, {23, x, x, x}, k_prefetcher_noc},
-    {16, 0, 3, 0, DISPATCH_H, {26, x, x, x}, {14, x, x, x}, k_dispatcher_noc},
-    {17, 0, 3, 1, DISPATCH_H, {26, x, x, x}, {15, x, x, x}, k_dispatcher_noc},
-    {18, 0, 4, 0, PREFETCH_H, {x, x, x, x}, {22, x, x, x}, k_prefetcher_noc},
-    {19, 0, 4, 1, PREFETCH_H, {x, x, x, x}, {23, x, x, x}, k_prefetcher_noc},
-    {20, 0, 4, 0, DISPATCH_H, {26, x, x, x}, {18, x, x, x}, k_dispatcher_noc},
-    {21, 0, 4, 1, DISPATCH_H, {26, x, x, x}, {19, x, x, x}, k_dispatcher_noc},
-    {22, 0, 1, 0, PACKET_ROUTER_MUX, {6, 10, 14, 18}, {27, x, x, x}, k_packet_queue_noc},
-    {23, 0, 1, 0, PACKET_ROUTER_MUX, {7, 11, 15, 19}, {27, x, x, x}, k_packet_queue_noc},
-    {24, 0, 1, 0, DEMUX, {27, x, x, x}, {25, 26, x, x}, k_packet_queue_noc},
-    {25, 0, 1, 0, DEMUX, {24, x, x, x}, {8, 9, 12, 13}, k_packet_queue_noc},
-    {26, 0, 1, 0, DEMUX, {24, x, x, x}, {16, 17, 20, 21}, k_packet_queue_noc},
-    {27, 0, 1, 0, US_TUNNELER_REMOTE, {50, 22, 23, x}, {50, 24, x, x}, k_packet_queue_noc},
-
-    // Servicing remote chips 5-8
-    {28, 0, 5, 0, PREFETCH_H, {x, x, x, x}, {44, x, x, x}, k_prefetcher_noc},
-    {29, 0, 5, 1, PREFETCH_H, {x, x, x, x}, {45, x, x, x}, k_prefetcher_noc},
-    {30, 0, 5, 0, DISPATCH_H, {47, x, x, x}, {28, x, x, x}, k_dispatcher_noc},
-    {31, 0, 5, 1, DISPATCH_H, {47, x, x, x}, {29, x, x, x}, k_dispatcher_noc},
-    {32, 0, 6, 0, PREFETCH_H, {x, x, x, x}, {44, x, x, x}, k_prefetcher_noc},
-    {33, 0, 6, 1, PREFETCH_H, {x, x, x, x}, {45, x, x, x}, k_prefetcher_noc},
-    {34, 0, 6, 0, DISPATCH_H, {47, x, x, x}, {32, x, x, x}, k_dispatcher_noc},
-    {35, 0, 6, 1, DISPATCH_H, {47, x, x, x}, {33, x, x, x}, k_dispatcher_noc},
-    {36, 0, 7, 0, PREFETCH_H, {x, x, x, x}, {44, x, x, x}, k_prefetcher_noc},
-    {37, 0, 7, 1, PREFETCH_H, {x, x, x, x}, {45, x, x, x}, k_prefetcher_noc},
-    {38, 0, 7, 0, DISPATCH_H, {48, x, x, x}, {36, x, x, x}, k_dispatcher_noc},
-    {39, 0, 7, 1, DISPATCH_H, {48, x, x, x}, {37, x, x, x}, k_dispatcher_noc},
-    {40, 0, 8, 0, PREFETCH_H, {x, x, x, x}, {44, x, x, x}, k_prefetcher_noc},
-    {41, 0, 8, 1, PREFETCH_H, {x, x, x, x}, {45, x, x, x}, k_prefetcher_noc},
-    {42, 0, 8, 0, DISPATCH_H, {48, x, x, x}, {40, x, x, x}, k_dispatcher_noc},
-    {43, 0, 8, 1, DISPATCH_H, {48, x, x, x}, {41, x, x, x}, k_dispatcher_noc},
-    {44, 0, 5, 0, PACKET_ROUTER_MUX, {28, 32, 36, 40}, {49, x, x, x}, k_packet_queue_noc},
-    {45, 0, 5, 0, PACKET_ROUTER_MUX, {29, 33, 37, 41}, {49, x, x, x}, k_packet_queue_noc},
-    {46, 0, 5, 0, DEMUX, {49, x, x, x}, {47, 48, x, x}, k_packet_queue_noc},
-    {47, 0, 5, 0, DEMUX, {46, x, x, x}, {30, 31, 34, 35}, k_packet_queue_noc},
-    {48, 0, 5, 0, DEMUX, {46, x, x, x}, {38, 39, 42, 43}, k_packet_queue_noc},
-    {49, 0, 5, 0, US_TUNNELER_REMOTE, {93, 44, 45, x}, {93, 46, x, x}, k_packet_queue_noc},
-
-    // Remote chip 1
-    {50, 1, x, 0, US_TUNNELER_LOCAL, {27, 51, x, x}, {27, 52, 53, x}, k_packet_queue_noc},
-    {51, 1, x, 0, MUX_D, {56, 57, 60, x}, {50, x, x, x}, k_packet_queue_noc},
-    {52, 1, x, 0, PACKET_ROUTER_DEMUX, {50, x, x, x}, {54, 60, x, x}, k_packet_queue_noc},
-    {53, 1, x, 0, PACKET_ROUTER_DEMUX, {50, x, x, x}, {55, 60, x, x}, k_packet_queue_noc},
-    {54, 1, x, 0, PREFETCH_D, {52, x, x, x}, {56, 58, x, x}, k_prefetcher_noc},
-    {55, 1, x, 1, PREFETCH_D, {53, x, x, x}, {57, 59, x, x}, k_prefetcher_noc},
-    {56, 1, x, 0, DISPATCH_D, {54, x, x, x}, {58, 51, x, x}, k_dispatcher_noc},
-    {57, 1, x, 1, DISPATCH_D, {55, x, x, x}, {59, 51, x, x}, k_dispatcher_noc},
-    {58, 1, x, 0, DISPATCH_S, {54, x, x, x}, {56, x, x, x}, k_dispatcher_s_noc},
-    // TODO: Why does the second dispatch S connect to the first dispatch D? Keep same as previous implementation for
-    // now
-    {59, 1, x, 1, DISPATCH_S, {54, x, x, x}, {56, x, x, x}, k_dispatcher_s_noc},
-    {60, 1, x, 0, US_TUNNELER_REMOTE, {61, 52, 53, x}, {61, 51, x, x}, k_packet_queue_noc},
-
-    // Remote chip 2
-    {61, 2, x, 0, US_TUNNELER_LOCAL, {60, 62, x, x}, {60, 63, 64, x}, k_packet_queue_noc},
-    {62, 2, x, 0, MUX_D, {67, 68, 71, x}, {61, x, x, x}, k_packet_queue_noc},
-    {63, 2, x, 0, PACKET_ROUTER_DEMUX, {61, x, x, x}, {65, 71, x, x}, k_packet_queue_noc},
-    {64, 2, x, 0, PACKET_ROUTER_DEMUX, {61, x, x, x}, {66, 71, x, x}, k_packet_queue_noc},
-    {65, 2, x, 0, PREFETCH_D, {63, x, x, x}, {67, 69, x, x}, k_prefetcher_noc},
-    {66, 2, x, 1, PREFETCH_D, {64, x, x, x}, {68, 70, x, x}, k_prefetcher_noc},
-    {67, 2, x, 0, DISPATCH_D, {65, x, x, x}, {69, 62, x, x}, k_dispatcher_noc},
-    {68, 2, x, 1, DISPATCH_D, {66, x, x, x}, {70, 62, x, x}, k_dispatcher_noc},
-    {69, 2, x, 0, DISPATCH_S, {65, x, x, x}, {67, x, x, x}, k_dispatcher_s_noc},
-    {70, 2, x, 1, DISPATCH_S, {65, x, x, x}, {67, x, x, x}, k_dispatcher_s_noc},
-    {71, 2, x, 0, US_TUNNELER_REMOTE, {72, 63, 64, x}, {72, 62, x, x}, k_packet_queue_noc},
-
-    // Remote chip 3
-    {72, 3, x, 0, US_TUNNELER_LOCAL, {71, 73, x, x}, {71, 74, 75, x}, k_packet_queue_noc},
-    {73, 3, x, 0, MUX_D, {78, 79, 82, x}, {72, x, x, x}, k_packet_queue_noc},
-    {74, 3, x, 0, PACKET_ROUTER_DEMUX, {72, x, x, x}, {76, 82, x, x}, k_packet_queue_noc},
-    {75, 3, x, 0, PACKET_ROUTER_DEMUX, {72, x, x, x}, {77, 82, x, x}, k_packet_queue_noc},
-    {76, 3, x, 0, PREFETCH_D, {74, x, x, x}, {78, 80, x, x}, k_prefetcher_noc},
-    {77, 3, x, 1, PREFETCH_D, {75, x, x, x}, {79, 81, x, x}, k_prefetcher_noc},
-    {78, 3, x, 0, DISPATCH_D, {76, x, x, x}, {80, 73, x, x}, k_dispatcher_noc},
-    {79, 3, x, 1, DISPATCH_D, {77, x, x, x}, {81, 73, x, x}, k_dispatcher_noc},
-    {80, 3, x, 0, DISPATCH_S, {76, x, x, x}, {78, x, x, x}, k_dispatcher_s_noc},
-    {81, 3, x, 1, DISPATCH_S, {76, x, x, x}, {78, x, x, x}, k_dispatcher_s_noc},
-    {82, 3, x, 0, US_TUNNELER_REMOTE, {83, 74, 75, x}, {83, 73, x, x}, k_packet_queue_noc},
-
-    // Remote chip 4
-    {83, 4, x, 0, US_TUNNELER_LOCAL, {82, 84, x, x}, {82, 85, 86, x}, k_packet_queue_noc},
-    {84, 4, x, 0, MUX_D, {89, 90, x, x}, {83, x, x, x}, k_packet_queue_noc},
-    {85, 4, x, 0, PACKET_ROUTER_DEMUX, {83, x, x, x}, {87, x, x, x}, k_packet_queue_noc},
-    {86, 4, x, 0, PACKET_ROUTER_DEMUX, {83, x, x, x}, {88, x, x, x}, k_packet_queue_noc},
-    {87, 4, x, 0, PREFETCH_D, {85, x, x, x}, {89, 91, x, x}, k_prefetcher_noc},
-    {88, 4, x, 1, PREFETCH_D, {86, x, x, x}, {90, 92, x, x}, k_prefetcher_noc},
-    {89, 4, x, 0, DISPATCH_D, {87, x, x, x}, {91, 84, x, x}, k_dispatcher_noc},
-    {90, 4, x, 1, DISPATCH_D, {88, x, x, x}, {92, 84, x, x}, k_dispatcher_noc},
-    {91, 4, x, 0, DISPATCH_S, {87, x, x, x}, {89, x, x, x}, k_dispatcher_s_noc},
-    {92, 4, x, 1, DISPATCH_S, {87, x, x, x}, {89, x, x, x}, k_dispatcher_s_noc},
-
-    // Remote chip 5
-    {93, 5, x, 0, US_TUNNELER_LOCAL, {49, 94, x, x}, {49, 95, 96, x}, k_packet_queue_noc},
-    {94, 5, x, 0, MUX_D, {99, 100, 103, x}, {93, x, x, x}, k_packet_queue_noc},
-    {95, 5, x, 0, PACKET_ROUTER_DEMUX, {93, x, x, x}, {97, 103, x, x}, k_packet_queue_noc},
-    {96, 5, x, 0, PACKET_ROUTER_DEMUX, {93, x, x, x}, {98, 103, x, x}, k_packet_queue_noc},
-    {97, 5, x, 0, PREFETCH_D, {95, x, x, x}, {99, 101, x, x}, k_prefetcher_noc},
-    {98, 5, x, 1, PREFETCH_D, {96, x, x, x}, {100, 102, x, x}, k_prefetcher_noc},
-    {99, 5, x, 0, DISPATCH_D, {97, x, x, x}, {101, 94, x, x}, k_dispatcher_noc},
-    {100, 5, x, 1, DISPATCH_D, {98, x, x, x}, {102, 94, x, x}, k_dispatcher_noc},
-    {101, 5, x, 0, DISPATCH_S, {97, x, x, x}, {99, x, x, x}, k_dispatcher_s_noc},
-    {102, 5, x, 1, DISPATCH_S, {97, x, x, x}, {99, x, x, x}, k_dispatcher_s_noc},
-    {103, 5, x, 0, US_TUNNELER_REMOTE, {104, 95, 96, x}, {104, 94, x, x}, k_packet_queue_noc},
-
-    // Remote chip 6
-    {104, 6, x, 0, US_TUNNELER_LOCAL, {103, 105, x, x}, {103, 106, 107, x}, k_packet_queue_noc},
-    {105, 6, x, 0, MUX_D, {110, 111, 114, x}, {104, x, x, x}, k_packet_queue_noc},
-    {106, 6, x, 0, PACKET_ROUTER_DEMUX, {104, x, x, x}, {108, 114, x, x}, k_packet_queue_noc},
-    {107, 6, x, 0, PACKET_ROUTER_DEMUX, {104, x, x, x}, {109, 114, x, x}, k_packet_queue_noc},
-    {108, 6, x, 0, PREFETCH_D, {106, x, x, x}, {110, 112, x, x}, k_prefetcher_noc},
-    {109, 6, x, 1, PREFETCH_D, {107, x, x, x}, {111, 113, x, x}, k_prefetcher_noc},
-    {110, 6, x, 0, DISPATCH_D, {108, x, x, x}, {112, 105, x, x}, k_dispatcher_noc},
-    {111, 6, x, 1, DISPATCH_D, {109, x, x, x}, {113, 105, x, x}, k_dispatcher_noc},
-    {112, 6, x, 0, DISPATCH_S, {108, x, x, x}, {110, x, x, x}, k_dispatcher_s_noc},
-    {113, 6, x, 1, DISPATCH_S, {108, x, x, x}, {110, x, x, x}, k_dispatcher_s_noc},
-    {114, 6, x, 0, US_TUNNELER_REMOTE, {115, 106, 107, x}, {115, 105, x, x}, k_packet_queue_noc},
-
-    // Remote chip 7
-    {115, 7, x, 0, US_TUNNELER_LOCAL, {114, 116, x, x}, {114, 117, 118, x}, k_packet_queue_noc},
-    {116, 7, x, 0, MUX_D, {121, 122, 125, x}, {115, x, x, x}, k_packet_queue_noc},
-    {117, 7, x, 0, PACKET_ROUTER_DEMUX, {115, x, x, x}, {119, 125, x, x}, k_packet_queue_noc},
-    {118, 7, x, 0, PACKET_ROUTER_DEMUX, {115, x, x, x}, {120, 125, x, x}, k_packet_queue_noc},
-    {119, 7, x, 0, PREFETCH_D, {117, x, x, x}, {121, 123, x, x}, k_prefetcher_noc},
-    {120, 7, x, 1, PREFETCH_D, {118, x, x, x}, {122, 124, x, x}, k_prefetcher_noc},
-    {121, 7, x, 0, DISPATCH_D, {119, x, x, x}, {123, 116, x, x}, k_dispatcher_noc},
-    {122, 7, x, 1, DISPATCH_D, {120, x, x, x}, {124, 116, x, x}, k_dispatcher_noc},
-    {123, 7, x, 0, DISPATCH_S, {119, x, x, x}, {121, x, x, x}, k_dispatcher_s_noc},
-    {124, 7, x, 1, DISPATCH_S, {119, x, x, x}, {121, x, x, x}, k_dispatcher_s_noc},
-    {125, 7, x, 0, US_TUNNELER_REMOTE, {126, 117, 118, x}, {126, 116, x, x}, k_packet_queue_noc},
-
-    // Remote chip 8
-    {126, 8, x, 0, US_TUNNELER_LOCAL, {125, 127, x, x}, {125, 128, 129, x}, k_packet_queue_noc},
-    {127, 8, x, 0, MUX_D, {132, 133, x, x}, {126, x, x, x}, k_packet_queue_noc},
-    {128, 8, x, 0, PACKET_ROUTER_DEMUX, {126, x, x, x}, {130, x, x, x}, k_packet_queue_noc},
-    {129, 8, x, 0, PACKET_ROUTER_DEMUX, {126, x, x, x}, {131, x, x, x}, k_packet_queue_noc},
-    {130, 8, x, 0, PREFETCH_D, {128, x, x, x}, {132, 134, x, x}, k_prefetcher_noc},
-    {131, 8, x, 1, PREFETCH_D, {129, x, x, x}, {133, 135, x, x}, k_prefetcher_noc},
-    {132, 8, x, 0, DISPATCH_D, {130, x, x, x}, {134, 127, x, x}, k_dispatcher_noc},
-    {133, 8, x, 1, DISPATCH_D, {131, x, x, x}, {135, 127, x, x}, k_dispatcher_noc},
-    {134, 8, x, 0, DISPATCH_S, {130, x, x, x}, {132, x, x, x}, k_dispatcher_s_noc},
-    {135, 8, x, 1, DISPATCH_S, {130, x, x, x}, {132, x, x, x}, k_dispatcher_s_noc},
-};
 // clang-format on
 
 std::vector<FDKernel*> node_id_to_kernel;
@@ -811,13 +471,8 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             // For Galaxy, we always init all remote devices associated with an mmio device.
-            std::vector<DispatchKernelNode> nodes_for_one_mmio;
-            if (rtoptions.get_fd_fabric()) {
-                nodes_for_one_mmio =
-                    (num_hw_cqs == 1) ? galaxy_nine_chip_arch_1cq_fabric : galaxy_nine_chip_arch_2cq_fabric;
-            } else {
-                nodes_for_one_mmio = (num_hw_cqs == 1) ? galaxy_nine_chip_arch_1cq : galaxy_nine_chip_arch_2cq;
-            }
+            std::vector<DispatchKernelNode> nodes_for_one_mmio =
+                (num_hw_cqs == 1) ? galaxy_nine_chip_arch_1cq_fabric : galaxy_nine_chip_arch_2cq_fabric;
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
                 // Need a mapping from templated device id (1-8) to actual device id (from the tunnel)
@@ -859,12 +514,8 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
             TT_ASSERT(
                 mmio_devices.size() == remote_devices.size() or remote_devices.empty(),
                 "N300/T3K expects devices in mmio/remote pairs.");
-            std::vector<DispatchKernelNode> nodes_for_one_mmio;
-            if (rtoptions.get_fd_fabric()) {
-                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq_fabric : two_chip_arch_2cq_fabric;
-            } else {
-                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
-            }
+            std::vector<DispatchKernelNode> nodes_for_one_mmio =
+                (num_hw_cqs == 1) ? two_chip_arch_1cq_fabric : two_chip_arch_2cq_fabric;
 
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
@@ -1014,84 +665,6 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
 
         mmio_device_id_to_serviced_devices[mmio_device_id].insert(
             mmio_device_id_to_serviced_devices[mmio_device_id].end(), remote_devices.begin(), remote_devices.end());
-    }
-
-    // Go through each mmio device, and set placement cq_ids to ensure that we stamp out the correct # of demux/routers
-    // per tunnel. TODO: We can fix dispatch_core_manager so we don't hard-code separate channels for this.
-    std::map<chip_id_t, std::vector<FDKernel*>> mmio_device_id_to_kernels;
-    for (auto fd_kernel : node_id_to_kernel) {
-        chip_id_t mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(fd_kernel->GetDeviceId());
-        if (fd_kernel->GetDeviceId() == mmio_device_id) {
-            mmio_device_id_to_kernels[mmio_device_id].push_back(fd_kernel);
-        }
-    }
-    for (auto& mmio_device_id_and_kernels : mmio_device_id_to_kernels) {
-        int demux_id = 0, router_id = 0;
-        for (auto fd_kernel : mmio_device_id_and_kernels.second) {
-            if (auto demux_kernel = dynamic_cast<DemuxKernel*>(fd_kernel)) {
-                demux_kernel->SetPlacementCQID((demux_id++) % 3);
-            } else if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
-                router_kernel->SetPlacementCQID((router_id++) % num_hw_cqs);
-            }
-        }
-    }
-
-    // Write VC count to all tunnelers
-    std::map<chip_id_t, uint32_t> device_id_to_num_routers;  // Need to build this first. TODO: in the future walk the
-                                                             // graph to populate VC counts
-    std::map<chip_id_t, uint32_t> device_id_to_remaining_routers;
-    for (auto fd_kernel : node_id_to_kernel) {
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
-            chip_id_t router_device_id = router_kernel->GetDeviceId();
-            chip_id_t mmio_device_id =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(router_device_id);
-
-            // Router placement CQID already set for mmio device above, just need to do this for remotes
-            if (router_device_id != mmio_device_id) {
-                router_kernel->SetPlacementCQID(device_id_to_num_routers[router_device_id]);
-            }
-            device_id_to_remaining_routers[router_device_id]++;
-            device_id_to_num_routers[router_device_id]++;
-        }
-    }
-    for (auto fd_kernel : node_id_to_kernel) {
-        uint32_t tunnel_stop = device_id_to_tunnel_stop[fd_kernel->GetDeviceId()];
-        if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(fd_kernel)) {
-            // Local tunneler needs to match remote tunneler on previous chip in the tunnel
-            if (!tunneler_kernel->IsRemote()) {
-                TT_ASSERT(tunnel_stop != 0);
-                tunnel_stop--;
-            }
-            // # of VCs is return VC + total VCs for tunnel (num_hw_cqs per remote) - num_hw_cqs VCs per remote stop
-            tunneler_kernel->SetVCCount(1 + (tunnel_depth - 1) * num_hw_cqs - tunnel_stop * num_hw_cqs);
-        } else if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
-            // Router has the same VCs as the remote tunneler for MMIO, same as local tunneler for remote
-            if (tunnel_stop != 0) {
-                tunnel_stop--;
-            }
-            uint32_t router_vcs_for_device = (tunnel_depth - 1) * num_hw_cqs - tunnel_stop * num_hw_cqs;
-            // Divide the VCs between routers on one device
-            uint32_t remaining_routers = device_id_to_remaining_routers[router_kernel->GetDeviceId()];
-            uint32_t num_routers = device_id_to_num_routers[router_kernel->GetDeviceId()];
-
-            // Special case for MMIO chips, can have routers servicing different tunnels
-            chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
-                router_kernel->GetDeviceId());
-            if (router_kernel->GetDeviceId() == mmio_device_id) {
-                uint32_t num_tunnels = tt::tt_metal::MetalContext::instance()
-                                           .get_cluster()
-                                           .get_tunnels_from_mmio_device(mmio_device_id)
-                                           .size();
-                num_routers /= num_tunnels;
-                uint32_t router_vcs = (router_vcs_for_device + num_routers - 1) / num_routers;
-                router_kernel->SetVCCount(router_vcs);
-            } else {
-                uint32_t router_vcs = (router_vcs_for_device + remaining_routers - 1) / num_routers;
-                router_kernel->SetVCCount(router_vcs);
-            }
-            device_id_to_remaining_routers[router_kernel->GetDeviceId()]--;
-        }
     }
 }
 
@@ -1376,9 +949,6 @@ void build_tt_fabric_program(
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
     const auto configure_edm_builder_for_dispatch = [&](tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder) {
-        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-            return;
-        }
         constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
         // Dispatch requires a higher context switching freq to service slow dispatch / UMD / debug tools
         edm_builder.set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);

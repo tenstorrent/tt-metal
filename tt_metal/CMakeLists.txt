@@ -100,8 +100,6 @@ target_sources(
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_relay.hpp
             impl/dispatch/kernels/cq_helpers.hpp
-            impl/dispatch/kernels/packet_queue.hpp
-            impl/dispatch/kernels/packet_queue_ctrl.hpp
             ${COMPUTE_KERNEL_API}
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
@@ -110,10 +108,6 @@ target_sources(
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp
             impl/dispatch/kernels/cq_prefetch.cpp
-            impl/dispatch/kernels/packet_demux.cpp
-            impl/dispatch/kernels/packet_mux.cpp
-            impl/dispatch/kernels/vc_eth_tunneler.cpp
-            impl/dispatch/kernels/vc_packet_router.cpp
             fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp
             fabric/impl/kernels/tt_fabric_mux.cpp
             kernels/compute/blank.cpp
