@@ -28,10 +28,9 @@ from tracy import signpost
 )
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["mesh_device"]
-)
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((8, 8), (8, 8), id="8x8_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device",
+    [pytest.param((8, 4), (8, 4), id="8x4_grid"), pytest.param((8, 8), (8, 8), id="8x8_grid")],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [16])

@@ -102,6 +102,7 @@ int main(int argc, char** argv) {
         YamlTestConfigSerializer::dump(allocation_policies, output_stream);
     }
 
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
     for (auto& test_config : raw_test_configs) {
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
@@ -109,7 +110,9 @@ int main(int argc, char** argv) {
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         log_info(tt::LogTest, "Opening devices with topology: {} and routing type: {}", topology, routing_type);
 
+        distributed_context.barrier();
         test_context.open_devices(topology, routing_type);
+        distributed_context.barrier();
 
         log_info(tt::LogTest, "Building tests");
         auto built_tests = builder.build_tests({test_config});
@@ -151,9 +154,12 @@ int main(int argc, char** argv) {
 
             test_context.reset_devices();
         }
+
+        std::cout << " waiting for all ranks to finish..." << std::endl;
+        distributed_context.barrier();
+        std::cout << " all ranks finished." << std::endl;
+
+        test_context.close_devices();
     }
-
-    test_context.close_devices();
-
     return 0;
 }

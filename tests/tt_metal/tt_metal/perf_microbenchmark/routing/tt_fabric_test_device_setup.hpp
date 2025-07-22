@@ -795,8 +795,12 @@ inline void TestDevice::validate_receiver_results() const {
 }
 
 inline void TestDevice::validate_results() const {
-    this->validate_sender_results();
-    this->validate_receiver_results();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    if (*distributed_context.rank() == 0) {
+        this->validate_sender_results();
+    } else {
+        this->validate_receiver_results();
+    }
 }
 
 }  // namespace fabric_tests

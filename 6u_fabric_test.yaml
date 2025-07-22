@@ -11,4 +11,4 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 1]
+              device: [0, 4]

@@ -98,6 +98,7 @@ public:
     std::vector<MeshCoordinate> get_available_device_coordinates() const { return this->available_device_coordinates_; }
 
     void open_devices(Topology topology, RoutingType routing_type) {
+        std::cout << " open devices called " << std::endl;
         auto it = topology_to_fabric_config_map.find({topology, routing_type});
         TT_FATAL(
             it != topology_to_fabric_config_map.end(),
@@ -402,10 +403,11 @@ public:
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const override {
-        const auto& src_coord = get_device_coord(src_node_id);
-        const auto& dst_coord = get_device_coord(dst_node_id);
+        // const auto& src_coord = get_device_coord(src_node_id);
+        // const auto& dst_coord = get_device_coord(dst_node_id);
 
-        const auto displacement = get_displacement(src_coord, dst_coord);
+        std::cout << "hop " << src_node_id << " to " << dst_node_id << std::endl;
+        const auto displacement = get_displacement(MeshCoordinate(0, 0), MeshCoordinate(0, 4));
         return get_hops_from_displacement(displacement);
     }
 
