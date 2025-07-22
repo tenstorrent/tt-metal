@@ -162,7 +162,6 @@ ALWI void asin_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_asin<true
  */
 ALWI void asin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_asin_init<true>())); }
 
-// TODO: move to trigonometry.h
 // clang-format off
 /**
  * Performs element-wise computation of arctan on each element of a tile
@@ -179,7 +178,6 @@ ALWI void asin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_asin_init<true>()
 // clang-format on
 ALWI void atan_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_atan<true>(idst))); }
 
-// TODO: move to trigonometry.h
 /**
  * Please refer to documentation for any_init.
  */
@@ -187,7 +185,7 @@ ALWI void atan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_atan_init<true>()
 
 // clang-format off
 /**
- * Performs element-wise computation of arccossine on each element of a tile
+ * Performs element-wise computation of arcossine on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
