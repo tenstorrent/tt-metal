@@ -366,7 +366,6 @@ class PrefillModelConfig:
         self.configs["QNORM_SHAPE"] = lambda seq_len: (1, 1, seq_len, self.args.q_lora_rank)
         self.configs["QNORM_DTYPE"] = ttnn.bfloat16
         self.configs["QNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
-        self.configs["QNORM_CATEGORY"] = "q_norm"
 
         # k_norm
         self.configs["KNORM_SHAPE"] = lambda seq_len: (
@@ -377,7 +376,6 @@ class PrefillModelConfig:
         )
         self.configs["KNORM_DTYPE"] = ttnn.bfloat16
         self.configs["KNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
-        self.configs["KNORM_CATEGORY"] = "k_norm"
 
 
 hugging_face_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
@@ -720,7 +718,6 @@ def run_rmsnorm_impl(
     shape,
     dtype,
     mem_config,
-    norm_category,
     temp_dir,
     seq_len=None,
 ):
@@ -1126,19 +1123,17 @@ def test_fill_caches(
 
 
 @pytest.mark.parametrize(
-    "shape, dtype, mem_config, norm_category",
+    "shape, dtype, mem_config",
     [
         (
             decode_cfg.configs["QNORM_SHAPE"],
             decode_cfg.configs["QNORM_DTYPE"],
             decode_cfg.configs["QNORM_MEM_CFG"],
-            decode_cfg.configs["QNORM_CATEGORY"],
         ),
         (
             decode_cfg.configs["KNORM_SHAPE"],
             decode_cfg.configs["KNORM_DTYPE"],
             decode_cfg.configs["KNORM_MEM_CFG"],
-            decode_cfg.configs["KNORM_CATEGORY"],
         ),
     ],
     ids=["q_norm", "k_norm"],
@@ -1148,7 +1143,6 @@ def test_decode_rmsnorms(
     shape,
     dtype,
     mem_config,
-    norm_category,
     temp_dir,
     function_level_defaults,
     reset_seeds,
@@ -1158,7 +1152,6 @@ def test_decode_rmsnorms(
         shape=shape,
         dtype=dtype,
         mem_config=mem_config,
-        norm_category=norm_category,
         temp_dir=temp_dir,
     )
 
@@ -1168,19 +1161,17 @@ def test_decode_rmsnorms(
     [128, 1024, 8096],
 )
 @pytest.mark.parametrize(
-    "shape, dtype, mem_config, norm_category",
+    "shape, dtype, mem_config",
     [
         (
             prefill_cfg.configs["QNORM_SHAPE"],
             prefill_cfg.configs["QNORM_DTYPE"],
             prefill_cfg.configs["QNORM_MEM_CFG"],
-            prefill_cfg.configs["QNORM_CATEGORY"],
         ),
         (
             prefill_cfg.configs["KNORM_SHAPE"],
             prefill_cfg.configs["KNORM_DTYPE"],
             prefill_cfg.configs["KNORM_MEM_CFG"],
-            prefill_cfg.configs["KNORM_CATEGORY"],
         ),
     ],
     ids=["q_norm", "k_norm"],
@@ -1190,7 +1181,6 @@ def test_prefill_rmsnorms(
     shape,
     dtype,
     mem_config,
-    norm_category,
     temp_dir,
     seq_len,
     function_level_defaults,
@@ -1201,7 +1191,6 @@ def test_prefill_rmsnorms(
         shape=shape,
         dtype=dtype,
         mem_config=mem_config,
-        norm_category=norm_category,
         temp_dir=temp_dir,
         seq_len=seq_len,
     )
