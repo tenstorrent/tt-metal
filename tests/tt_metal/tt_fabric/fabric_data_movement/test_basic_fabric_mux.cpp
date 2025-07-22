@@ -120,7 +120,7 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     uint32_t chip_id_offset = 0;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         chip_id_offset = 4;
     }
     std::vector<chip_id_t> physical_chip_ids(num_devices);
