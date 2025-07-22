@@ -77,16 +77,6 @@ jobs:
           ref: main
           clean: true
 
-      - name: Cache git objects
-        uses: actions/cache@v4
-        with:
-          path: |
-            .git
-            ${{ env.SUBMODULE_PATH }}/.git
-          key: git-cache-${{ github.sha }}
-          restore-keys: |
-            git-cache-
-
       - name: Configure git
         run: |
           git config --global user.name "github-actions[bot]"
@@ -107,7 +97,7 @@ jobs:
           git fetch origin main
           git clean -fd
           git reset --hard origin/main
-          
+
           # Force submodules to match parent repo expectations, discarding any local changes
           git submodule foreach --recursive 'git clean -fdx'
           git submodule foreach --recursive 'git reset --hard HEAD'
@@ -142,7 +132,7 @@ jobs:
           else
             echo "has-changes=true" >> $GITHUB_OUTPUT
             echo "✅ Changes detected: updating parent repo submodule reference from $OLD_SHA -> $NEW_SHA"
-            
+
             # Update the parent repo's submodule reference
             git submodule update --remote ${{ env.SUBMODULE_PATH }}
             git add ${{ env.SUBMODULE_PATH }}
@@ -189,8 +179,12 @@ jobs:
           COMMITS_TABLE_CONTENT+="|--------|---------|---------|-----|"$'\n'
 
           if [ "$COMMIT_COUNT" -gt 0 ]; then
-            # Use process substitution to avoid subshell issues with piped while loop
-            while IFS='|' read -r short_hash message author full_hash; do
+            while IFS='|' read -r short_hash message author full_hash || [ -n "$short_hash" ]; do
+              # Skip empty lines
+              if [ -z "$short_hash" ]; then
+                continue
+              fi
+
               pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
               clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
 
