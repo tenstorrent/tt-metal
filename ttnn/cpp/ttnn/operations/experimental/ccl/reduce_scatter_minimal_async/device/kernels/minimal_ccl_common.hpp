@@ -51,5 +51,5 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric(
         (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
     noc_async_writes_flushed();
 
-    // l1_read_addr += payload_size_bytes;
+    l1_read_addr += payload_size_bytes;
 }

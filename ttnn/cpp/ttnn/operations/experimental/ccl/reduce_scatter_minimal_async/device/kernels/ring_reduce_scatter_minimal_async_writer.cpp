@@ -101,8 +101,15 @@ void kernel_main() {
     uint64_t remote_noc0_dest_noc_addr = get_noc_addr(0, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
     for (volatile uint32_t x = 0; x < 5; ++x) {
-        write_and_advance_local_read_address_for_fabric(
-            remote_noc0_dest_noc_addr, pkt_hdr, fabric_direction_connection, l1_read_addr, intermediate_page_size);
+        pkt_hdr->to_noc_unicast_write(
+            tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, intermediate_page_size);
+
+        fabric_direction_connection->wait_for_empty_write_slot();
+        fabric_direction_connection->send_payload_without_header_non_blocking_from_address(
+            l1_read_addr, intermediate_page_size);
+        fabric_direction_connection->send_payload_flush_non_blocking_from_address(
+            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        noc_async_writes_flushed();
     }
 
     if (fabric_connection.is_logically_connected()) {
