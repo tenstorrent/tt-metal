@@ -218,7 +218,7 @@ def prepare_generator_args(
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, cache_hf",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -251,6 +251,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -267,6 +268,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -283,6 +285,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -299,6 +302,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # reasoning-1 - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
@@ -318,6 +322,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -334,6 +339,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -350,6 +356,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # DP-4-b1 - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -366,6 +373,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # DP-8-b1 - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -382,6 +390,7 @@ def prepare_generator_args(
             8,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -398,6 +407,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -414,6 +424,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -430,6 +441,7 @@ def prepare_generator_args(
             8,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -446,6 +458,7 @@ def prepare_generator_args(
             16,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -462,6 +475,7 @@ def prepare_generator_args(
             32,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            False,  # cache_hf
         ),
         (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 50000 times
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -478,6 +492,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             True,  # stress_test
+            False,  # cache_hf
         ),
     ],
     ids=[
@@ -537,6 +552,7 @@ def test_demo_text(
     request,
     token_accuracy,
     stress_test,
+    cache_hf,
 ):
     """
     Simple demo with limited dependence on reference code.
