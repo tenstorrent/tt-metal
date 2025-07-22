@@ -263,11 +263,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input_shape[3],
         num_shards_c);
     const uint32_t in_aligned_nbytes_c =
-        is_wide_reduction ? tt::round_up(
-                                (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
-                                tt::constants::TILE_WIDTH) *
-                                in_nbytes
-                          : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
+        is_wide_reduction &&
+                (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH) != 0
+            ? tt::round_up(
+                  (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
+                  tt::constants::TILE_WIDTH) *
+                  in_nbytes
+            : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
 
     TT_FATAL(dilation_h == 1 && dilation_w == 1, "Dilation is not yet supported by the maxpool reader");
 
