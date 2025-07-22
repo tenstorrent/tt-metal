@@ -130,7 +130,7 @@ def test_forward_pass(
         model_config = MLA1D.decode_model_config(hf_config, mesh_row, ccl)
 
     # Create a new model state
-    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row, mode=mode)
+    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row, use_dp_cache=(mode == "decode"))
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)

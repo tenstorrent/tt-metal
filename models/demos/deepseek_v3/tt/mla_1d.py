@@ -22,7 +22,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncConfig,
     ReshardConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import save_and_get_path
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div, save_and_get_path
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -437,7 +437,7 @@ class MLA1D(AbstractModule):
         max_seq_len = hf_config.max_seq_len
 
         mesh_shape = list(mesh_device.shape)
-        num_heads_local = num_heads // mesh_shape[1]
+        num_heads_local = even_int_div(num_heads, mesh_shape[1])
 
         config: ModelDecodeConfig = {}
         config["hf_config"] = hf_config
@@ -521,7 +521,7 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for kvpe
-        kvpe_shape = (1, MLA1D.MAX_BATCH_SIZE // mesh_shape[1], 1, kv_lora_rank + qk_rope_head_dim)
+        kvpe_shape = (1, even_int_div(MLA1D.MAX_BATCH_SIZE, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
         kvpe_shard_height = nearest_y(kvpe_shape[2], ttnn.TILE_SIZE)
         kvpe_shard_width = kvpe_shape[3]
         kvpe_num_cores = kvpe_shape[1]
@@ -555,8 +555,10 @@ class MLA1D(AbstractModule):
         )
 
         q_num_cores = num_cores
-        q_num_cores = min(MLA1D.MAX_BATCH_SIZE // mesh_shape[1] * num_heads, q_num_cores)
-        block_height = nearest_y((MLA1D.MAX_BATCH_SIZE // mesh_shape[1] * num_heads) // q_num_cores, ttnn.TILE_SIZE)
+        q_num_cores = min(even_int_div(MLA1D.MAX_BATCH_SIZE, mesh_shape[1]) * num_heads, q_num_cores)
+        block_height = nearest_y(
+            (even_int_div(MLA1D.MAX_BATCH_SIZE, mesh_shape[1]) * num_heads) // q_num_cores, ttnn.TILE_SIZE
+        )
         block_width = kv_lora_rank + qk_rope_head_dim
 
         q_core_grid = ttnn.num_cores_to_corerangeset(q_num_cores, grid_size, row_wise=True)
@@ -715,7 +717,7 @@ class MLA1D(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        mode: str,
+        use_dp_cache: bool,
     ) -> Any:
         kv_lora_rank = hf_config.kv_lora_rank
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -730,7 +732,9 @@ class MLA1D(AbstractModule):
 
         cache = torch.zeros(
             (
-                MLA1D.MAX_BATCH_SIZE // (mesh_shape[1] if mode == "decode" else 1),  # Prefill does not support DP yet
+                even_int_div(
+                    MLA1D.MAX_BATCH_SIZE, (mesh_shape[1] if use_dp_cache else 1)
+                ),  # Prefill does not support DP yet
                 1,  # 1 latent kv heads
                 max_seq_len,
                 kvpe_dim,
@@ -767,7 +771,7 @@ class MLA1D(AbstractModule):
 
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
-        num_heads_local = num_heads // cfg["mesh_shape"][1]
+        num_heads_local = even_int_div(num_heads, cfg["mesh_shape"][1])
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -931,7 +935,7 @@ class MLA1D(AbstractModule):
 
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
-        num_heads_local = num_heads // cfg["mesh_shape"][1]
+        num_heads_local = even_int_div(num_heads, cfg["mesh_shape"][1])
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
