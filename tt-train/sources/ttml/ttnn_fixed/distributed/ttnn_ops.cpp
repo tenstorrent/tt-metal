@@ -5,8 +5,6 @@
 #include "ttnn_ops.hpp"
 
 #include <core/ttnn_all_includes.hpp>
-#include <ttnn/distributed/api.hpp>
-#include <ttnn/tensor/tensor.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
@@ -14,9 +12,6 @@
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
-
-tt::tt_metal::Tensor all_reduce_fabric(const tt::tt_metal::Tensor& tensor, CCLResources& ccl_resources) {
-}
 
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
     auto* current_device = &ttml::autograd::ctx().get_device();
@@ -30,8 +25,12 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
         throw std::logic_error("All reduce supports only 4D tensors");
     }
 
+    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+
     auto reshaped_tensor = ttnn::reshape(tensor, ttnn::Shape({1, shape[0] * shape[1], shape[2], shape[3]}));
-    auto gathered_tensor = ttnn::all_gather(reshaped_tensor, 0);
+    // auto gathered_tensor = ttnn::all_gather(reshaped_tensor, 0);
+    std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores{ccl_resources.get_all_gather_semaphore()};
+    auto gathered_tensor = ttnn::experimental::all_gather_async(reshaped_tensor, 0, global_semaphores);
 
     auto reduced_tensor = ttnn::moreh_sum(
         gathered_tensor,

@@ -49,6 +49,7 @@
 #include <ttnn/operations/eltwise/unary_backward/unary_backward.hpp>                               // NOLINT
 #include <ttnn/operations/embedding/embedding.hpp>                                                 // NOLINT
 #include <ttnn/operations/embedding_backward/embedding_backward.hpp>                               // NOLINT
+#include <ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp>                  // NOLINT
 #include <ttnn/operations/experimental/ccl/all_reduce/all_reduce.hpp>                              // NOLINT
 #include <ttnn/operations/experimental/dropout/dropout.hpp>                                        // NOLINT
 #include <ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp>          // NOLINT

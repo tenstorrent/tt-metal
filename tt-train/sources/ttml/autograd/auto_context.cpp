@@ -102,4 +102,8 @@ core::TTProfiler& AutoContext::get_profiler() {
     return *m_profiler;
 }
 
+[[nodiscard]] core::distributed::CCLResources& AutoContext::get_ccl_resources() {
+    return m_ccl_resources;
+}
+
 }  // namespace ttml::autograd
