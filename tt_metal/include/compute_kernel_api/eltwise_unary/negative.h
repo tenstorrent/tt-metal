@@ -18,7 +18,7 @@
 
 namespace ckernel {
 
-ALWI void negative_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(negative, APPROX))); }
+ALWI void negative_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(negative, APPROX)); }
 // clang-format off
 /**
  * Performs element-wise computation of the negative on each element of a tile
@@ -34,11 +34,11 @@ ALWI void negative_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(negative, APPROX))
  */
 // clang-format on
 ALWI void negative_tile(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(_calculate_negative_, APPROX, 8, idst, (int)VectorMode::RC)));
+    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_negative_, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
 ALWI void negative_tile_int32(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(_calculate_negative_int_, APPROX, 8, idst, (int)VectorMode::RC)));
+    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_negative_int_, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
 }  // namespace ckernel

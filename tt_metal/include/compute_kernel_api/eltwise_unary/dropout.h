@@ -27,20 +27,20 @@ namespace ckernel {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
- * | probability     | A non-negative integer value representing dropout probability              | uint32_t | 0 to INT_MAX (float_probability * (double) INT_MAX)   | True     | 
+ * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | probability     | A non-negative integer value representing dropout probability              | uint32_t | 0 to INT_MAX (float_probability * (double) INT_MAX)   | True     |
  * | scale_factor    | uint bitwise representation of 32 bit floating point scale factor          | uint32_t |                                                       | True     |
  */
 // clang-format on
 ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor) {
-    MATH((SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(dropout, RC, APPROX, idst, probability, scale_factor)));
+    MATH(SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(dropout, RC, APPROX, idst, probability, scale_factor));
 }
 
 /**
  * This init should be called once in kernel
  */
 ALWI void dropout_kernel_init(uint32_t seed = 0) {
-    MATH((SFPU_ONE_PARAM_KERNEL_INIT(dropout, sfpu::dropout_init, APPROX, seed)));
+    MATH(SFPU_ONE_PARAM_KERNEL_INIT(dropout, sfpu::dropout_init, APPROX, seed));
 }
 
 }  // namespace ckernel

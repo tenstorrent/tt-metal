@@ -18,7 +18,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rounding_op_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unused, APPROX))); }
+ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unused, APPROX)); }
 
 // clang-format off
 /**
@@ -35,7 +35,7 @@ ALWI void rounding_op_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unused, APPROX)
  */
 // clang-format on
 ALWI void ceil_tile(uint32_t idst) {
-    MATH((SFPU_THREE_PARAM_KERNEL_ITER_FIRST(_calculate_ceil_, APPROX, 8, false, idst, (int)VectorMode::RC)));
+    MATH(SFPU_THREE_PARAM_KERNEL_ITER_FIRST(_calculate_ceil_, APPROX, 8, false, idst, (int)VectorMode::RC));
 }
 
 // clang-format off
@@ -53,7 +53,7 @@ ALWI void ceil_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void ceil_tile_float32(uint32_t idst) {
-    MATH((SFPU_THREE_PARAM_KERNEL_ITER_FIRST(_calculate_ceil_, APPROX, 8, true, idst, (int)VectorMode::RC)));
+    MATH(SFPU_THREE_PARAM_KERNEL_ITER_FIRST(_calculate_ceil_, APPROX, 8, true, idst, (int)VectorMode::RC));
 }
 
 // clang-format off
@@ -71,7 +71,7 @@ ALWI void ceil_tile_float32(uint32_t idst) {
  */
 // clang-format on
 ALWI void floor_tile(uint32_t idst) {
-    MATH((SFPU_THREE_PARAM_KERNEL_ITER_FIRST(_calculate_floor_, APPROX, 8, false, idst, (int)VectorMode::RC)));
+    MATH(SFPU_THREE_PARAM_KERNEL_ITER_FIRST(_calculate_floor_, APPROX, 8, false, idst, (int)VectorMode::RC));
 }
 
 // clang-format off
@@ -89,7 +89,7 @@ ALWI void floor_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void floor_tile_float32(uint32_t idst) {
-    MATH((SFPU_THREE_PARAM_KERNEL_ITER_FIRST(_calculate_floor_, APPROX, 8, true, idst, (int)VectorMode::RC)));
+    MATH(SFPU_THREE_PARAM_KERNEL_ITER_FIRST(_calculate_floor_, APPROX, 8, true, idst, (int)VectorMode::RC));
 }
 
 // clang-format off
@@ -107,7 +107,7 @@ ALWI void floor_tile_float32(uint32_t idst) {
  */
 // clang-format on
 ALWI void trunc_tile(uint32_t idst) {
-    MATH((SFPU_ONE_PARAM_KERNEL(_calculate_trunc_, APPROX, idst, (int)VectorMode::RC)));
+    MATH(SFPU_ONE_PARAM_KERNEL(_calculate_trunc_, APPROX, idst, (int)VectorMode::RC));
 }
 
 // clang-format off
@@ -125,7 +125,7 @@ ALWI void trunc_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void trunc_tile_float32(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(_calculate_trunc_, APPROX, true, idst, (int)VectorMode::RC)));
+    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_trunc_, APPROX, true, idst, (int)VectorMode::RC));
 }
 
 // clang-format off
@@ -144,7 +144,7 @@ ALWI void trunc_tile_float32(uint32_t idst) {
  */
 // clang-format on
 ALWI void round_tile(uint32_t idst, int32_t decimals) {
-    MATH((SFPU_UNARY_ONE_PARAM_KERNEL_FN(_calculate_round_, RC, APPROX, idst, decimals)));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN(_calculate_round_, RC, APPROX, idst, decimals));
 }
 
 // clang-format off
@@ -161,9 +161,7 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
  * | idst            | The index of the tile in DST register buffer to perform frac operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void frac_tile(uint32_t idst) {
-    MATH((SFPU_ONE_PARAM_KERNEL(_calculate_frac_, APPROX, idst, (int)VectorMode::RC)));
-}
+ALWI void frac_tile(uint32_t idst) { MATH(SFPU_ONE_PARAM_KERNEL(_calculate_frac_, APPROX, idst, (int)VectorMode::RC)); }
 
 // clang-format off
 /**
@@ -180,7 +178,7 @@ ALWI void frac_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void frac_tile_float32(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(_calculate_frac_, APPROX, true, idst, (int)VectorMode::RC)));
+    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_frac_, APPROX, true, idst, (int)VectorMode::RC));
 }
 
 }  // namespace ckernel

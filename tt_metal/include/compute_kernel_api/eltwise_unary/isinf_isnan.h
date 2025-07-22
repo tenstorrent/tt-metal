@@ -30,13 +30,13 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void isinf_tile(uint32_t idst) {
-    MATH((SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isinf, RC, APPROX, idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isinf, RC, APPROX, idst));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isinf_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isinf, APPROX))); }
+ALWI void isinf_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(isinf, APPROX)); }
 
 // clang-format off
 /**
@@ -53,13 +53,13 @@ ALWI void isinf_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isinf, APPROX))); }
  */
 // clang-format on
 ALWI void isposinf_tile(uint32_t idst) {
-    MATH((SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isposinf, RC, APPROX, idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isposinf, RC, APPROX, idst));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isposinf_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isposinf, APPROX))); }
+ALWI void isposinf_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(isposinf, APPROX)); }
 
 // clang-format off
 /**
@@ -76,13 +76,13 @@ ALWI void isposinf_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isposinf, APPROX))
  */
 // clang-format on
 ALWI void isneginf_tile(uint32_t idst) {
-    MATH((SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isneginf, RC, APPROX, idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isneginf, RC, APPROX, idst));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isneginf_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isneginf, APPROX))); }
+ALWI void isneginf_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(isneginf, APPROX)); }
 
 // clang-format off
 /**
@@ -99,13 +99,13 @@ ALWI void isneginf_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isneginf, APPROX))
  */
 // clang-format on
 ALWI void isnan_tile(uint32_t idst) {
-    MATH((SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isnan, RC, APPROX, idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isnan, RC, APPROX, idst));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isnan_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isnan, APPROX))); }
+ALWI void isnan_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(isnan, APPROX)); }
 
 // clang-format off
 /**
@@ -122,11 +122,11 @@ ALWI void isnan_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isnan, APPROX))); }
  */
 // clang-format on
 ALWI void isfinite_tile(uint32_t idst) {
-    MATH((SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isfinite, RC, APPROX, idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_isinf_isnan, isfinite, RC, APPROX, idst));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isfinite_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(isfinite, APPROX))); }
+ALWI void isfinite_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(isfinite, APPROX)); }
 }  // namespace ckernel

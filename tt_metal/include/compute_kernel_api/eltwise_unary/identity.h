@@ -28,13 +28,13 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void identity_tile(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(calculate_identity, APPROX, 8, idst, (int)VectorMode::RC)));
+    MATH(SFPU_TWO_PARAM_KERNEL(calculate_identity, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void identity_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unused, APPROX))); }
+ALWI void identity_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unused, APPROX)); }
 
 // clang-format off
 /**
@@ -49,7 +49,7 @@ ALWI void identity_tile_init() { MATH((SFPU_UNARY_KERNEL_INIT(unused, APPROX)));
  */
 // clang-format on
 ALWI void identity_tile_uint32(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(calculate_identity_uint, APPROX, 8, idst, (int)VectorMode::RC)));
+    MATH(SFPU_TWO_PARAM_KERNEL(calculate_identity_uint, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
 }  // namespace ckernel
