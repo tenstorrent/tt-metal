@@ -34,7 +34,7 @@ def test_conv2d_inference(
     pcc_required = 0.9999
     dtype = ttnn.bfloat16
 
-    model_args = ModelArgs(mesh_device, cache_hf=True)
+    model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

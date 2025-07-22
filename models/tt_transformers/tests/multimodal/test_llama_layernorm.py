@@ -28,7 +28,7 @@ from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_f
 def test_layernorm_inference(mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
-    model_args = ModelArgs(mesh_device, cache_hf=True)
+    model_args = ModelArgs(mesh_device)
     width = model_args.vision_dim
     num_chunks = 4
     seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks

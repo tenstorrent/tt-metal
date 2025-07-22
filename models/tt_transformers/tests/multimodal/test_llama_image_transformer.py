@@ -37,7 +37,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     pcc_required = 0.75
 
-    model_args = ModelArgs(mesh_device, cache_hf=True)
+    model_args = ModelArgs(mesh_device)
     dtype = ttnn.bfloat16
 
     state_dict = model_args.load_state_dict()

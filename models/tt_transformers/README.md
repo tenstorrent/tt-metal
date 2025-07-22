@@ -278,7 +278,7 @@ To help manage memory usage, you can control whether the HuggingFace model is ca
 # For memory-constrained environments - disable caching
 model_args = ModelArgs(
     mesh_device,
-    cache_hf=False,  # Reduces memory usage by not keeping HF model in memory
+    cache_hf=False,  # Default: Reduces memory usage by not keeping HF model in memory
     max_batch_size=1,
     max_seq_len=2048
 )
@@ -286,7 +286,7 @@ model_args = ModelArgs(
 # Default behavior - enables caching for faster repeated access
 model_args = ModelArgs(
     mesh_device,
-    cache_hf=True,  # Default: cache HF model for better performance
+    cache_hf=True,  # Cache HF model for better performance running reference tests
     max_batch_size=4,
     max_seq_len=4096
 )

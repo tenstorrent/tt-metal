@@ -84,7 +84,7 @@ def test_positional_embedding_inference(
     layout = ttnn.TILE_LAYOUT
     pcc_required = 0.9999
 
-    model_args = ModelArgs(mesh_device, cache_hf=True)
+    model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
     first_layer_prefix = "vision_model.vision_encoder."
     partial_state_dict = {
