@@ -3,7 +3,7 @@ name: "Galaxy demo tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *'  # Every day at 3:00 UTC
+    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
