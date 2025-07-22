@@ -231,22 +231,23 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
+Cluster& MetalContext::cluster_instance(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) {
+    // Cluster instance is not Indestructible, because cluster actually needs to be closed before the process exits
+    static Cluster inst(rtoptions, hal);
+    return inst;
+}
+
 MetalContext::MetalContext() {
     bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
-    cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+    cluster_ = &MetalContext::cluster_instance(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
 }
 
 distributed::multihost::DistributedContext& MetalContext::get_distributed_context() {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return *distributed_context_;
-}
-
-MetalContext::~MetalContext() {
-    cluster_.reset();
-    hal_.reset();
 }
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }

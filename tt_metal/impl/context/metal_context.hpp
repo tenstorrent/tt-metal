@@ -90,7 +90,8 @@ public:
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
-    ~MetalContext();
+
+    static Cluster& cluster_instance(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
 
     void clear_l1_state(chip_id_t device_id);
     void clear_dram_state(chip_id_t device_id);
@@ -135,7 +136,7 @@ private:
     std::unordered_map<chip_id_t, std::vector<uint16_t>> l1_bank_to_noc_xy_;
 
     llrt::RunTimeOptions rtoptions_;
-    std::unique_ptr<Cluster> cluster_;
+    Cluster* cluster_ = nullptr;
     std::unique_ptr<Hal> hal_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
