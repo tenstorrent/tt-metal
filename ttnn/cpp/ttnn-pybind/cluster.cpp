@@ -37,41 +37,6 @@ void ttnn_cluster(py::module& module) {
         )doc");
 
     module.def(
-        "is_galaxy_cluster",
-        &ttnn::cluster::is_galaxy_cluster,
-        R"doc(
-            Check if the current cluster is a Galaxy cluster.
-
-            Returns:
-                bool: True if the cluster is a Galaxy cluster, False otherwise.
-
-            Example:
-                >>> import ttnn
-                >>> if ttnn.cluster.is_galaxy_cluster():
-                ...     print("Running on Galaxy cluster")
-                ... else:
-                ...     print("Running on non-Galaxy cluster")
-        )doc");
-
-    module.def(
-        "number_of_user_devices",
-        &ttnn::cluster::number_of_user_devices,
-        R"doc(
-            Get the number of user-accessible devices in the cluster.
-
-            Returns:
-                int: The number of user devices in the cluster.
-
-            Note:
-                For Galaxy systems, this excludes MMIO gateway chips that are only used for dispatch.
-
-            Example:
-                >>> import ttnn
-                >>> num_devices = ttnn.cluster.number_of_user_devices()
-                >>> print(f"Cluster has {num_devices} user devices")
-        )doc");
-
-    module.def(
         "serialize_cluster_descriptor",
         &ttnn::cluster::serialize_cluster_descriptor,
         R"doc(

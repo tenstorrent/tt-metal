@@ -11,10 +11,6 @@ namespace cluster {
 
 tt::tt_metal::ClusterType get_cluster_type() { return tt::tt_metal::GetClusterType(); }
 
-bool is_galaxy_cluster() { return tt::tt_metal::IsGalaxyCluster(); }
-
-std::size_t number_of_user_devices() { return tt::tt_metal::GetNumAvailableDevices(); }
-
 std::string serialize_cluster_descriptor() { return tt::tt_metal::SerializeClusterDescriptor(); }
 
 }  // namespace cluster
