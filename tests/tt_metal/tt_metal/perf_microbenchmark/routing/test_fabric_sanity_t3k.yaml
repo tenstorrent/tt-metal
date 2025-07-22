@@ -79,6 +79,22 @@ Tests:
     patterns:
       - type: full_ring
 
+  - name: "FullRingUnicast"
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: full_ring
+
   - name: "HalfRingMulticast"
     fabric_setup:
       topology: Ring

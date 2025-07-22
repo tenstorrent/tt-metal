@@ -86,6 +86,24 @@ Tests:
     patterns:
       - type: full_ring
 
+  - name: "FullRingUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    defaults:
+      ftype: unicast
+      size: 4096
+      num_packets: 200000
+
+    patterns:
+      - type: full_ring
+
   - name: "HalfRingMulticast"
     benchmark_mode: true
     sync: true
