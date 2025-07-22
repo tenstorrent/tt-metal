@@ -836,7 +836,6 @@ void DumpDeviceProfileResults(
             not tt::tt_metal::MetalContext::instance().dprint_server(),
             "Debug print server is running, cannot dump device profiler data");
 
-        profiler.setDeviceArchitecture(device->arch());
         profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {

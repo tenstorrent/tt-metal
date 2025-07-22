@@ -12,7 +12,6 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -35,6 +34,8 @@ class IDevice;
 class Program;
 }  // namespace tt_metal
 }  // namespace tt
+
+using RuntimeID = uint32_t;
 
 namespace tt {
 
@@ -116,10 +117,27 @@ struct SyncInfo {
     SyncInfo() : SyncInfo(0.0, 0.0, 0.0) {}
 };
 
+struct DeviceProfilerDataPoint {
+    chip_id_t device_id;
+    int core_x;
+    int core_y;
+    std::string risc_name;
+    uint32_t timer_id;
+    uint64_t timestamp;
+    uint64_t data;
+    uint32_t run_host_id;
+    std::string zone_name;
+    std::string op_name;
+    kernel_profiler::PacketTypes packet_type;
+    uint64_t source_line;
+    std::string source_file;
+    nlohmann::json meta_data;
+};
+
 class DeviceProfiler {
 private:
-    // Device architecture
-    tt::ARCH device_architecture;
+    // Device corresponding to this profiler object
+    const IDevice* device = nullptr;
 
     // Device frequency
     int device_core_frequency;
@@ -130,7 +148,7 @@ private:
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
 
-    // Output Dir for device Profile Logs
+    // Output dir for device Profile Logs
     std::filesystem::path output_dir;
 
     // Device-Core tracy context
@@ -158,18 +176,8 @@ private:
     // Storage for all core's L1 data buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
 
-    // serialize all noc trace data into per-op json trace files
-    void serializeJsonNocTraces(
-        const nlohmann::ordered_json& noc_trace_json_log,
-        const std::filesystem::path& output_dir,
-        chip_id_t device_id,
-        const FabricRoutingLookup& routing_lookup);
-
-    void emitCSVHeader(
-        std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const;
-
-    // translates potentially-virtual coordinates recorded on Device into physical coordinates
-    CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
+    // Storage for all noc trace data
+    std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
 
     // Read all control buffers
     void readControlBuffers(
@@ -181,9 +189,6 @@ private:
     // Reset all control buffers
     void resetControlBuffers(
         IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
-
-    // Reset control buffer for a single core
-    void resetControlBufferForCore(IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state);
 
     // Read all L1 data buffers
     void readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
@@ -212,65 +217,33 @@ private:
     void issueSlowDispatchReadFromL1DataBuffer(
         IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
-    // Dumping profile result to file
-    void logPacketData(
-        std::ofstream& log_file_ofs,
-        nlohmann::ordered_json& noc_trace_json_log,
-        uint32_t runHostID,
-        const std::string& opname,
-        chip_id_t device_id,
-        CoreCoord core,
-        int risc_num,
-        uint64_t stat_value,
-        uint32_t timer_id,
-        uint64_t timestamp);
-
-    // logs packet data to CSV file
-    void logPacketDataToCSV(
-        std::ofstream& log_file_ofs,
-        chip_id_t device_id,
-        int core_x,
-        int core_y,
-        std::string_view risc_name,
-        uint32_t timer_id,
-        uint64_t timestamp,
-        uint64_t data,
-        uint32_t run_host_id,
-        std::string_view zone_name,
-        kernel_profiler::PacketTypes packet_type,
-        uint64_t source_line,
-        std::string_view source_file,
-        const nlohmann::json& metaData);
-
-    // dump noc trace related profile data to json file
-    void logNocTracePacketDataToJson(
-        nlohmann::ordered_json& noc_trace_json_log,
-        chip_id_t device_id,
-        int core_x,
-        int core_y,
-        std::string_view risc_name,
-        uint64_t timestamp,
-        uint64_t data,
-        uint32_t run_host_id,
-        std::string_view opname,
-        std::string_view zone_name,
-        kernel_profiler::PacketTypes packet_type);
-
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
         IDevice* device,
         const CoreCoord& worker_core,
         ProfilerDumpState state,
         ProfilerDataBufferSource data_source,
-        const std::optional<ProfilerOptionalMetadata>& metadata,
-        std::ofstream& log_file_ofs,
-        nlohmann::ordered_json& noc_trace_json_log);
+        const std::optional<ProfilerOptionalMetadata>& metadata);
+
+    // Read packet data to be displayed
+    void readPacketData(
+        uint32_t run_host_id,
+        const std::string& opname,
+        chip_id_t device_id,
+        CoreCoord core,
+        int risc_num,
+        uint64_t data,
+        uint32_t timer_id,
+        uint64_t timestamp);
 
     // Track the smallest timestamp dumped to file
     void firstTimestamp(uint64_t timestamp);
 
     // Get tracy context for the core
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
+
+    // Dump device results to files
+    void dumpDeviceResults();
 
 public:
     DeviceProfiler(const IDevice* device, bool new_logs);
@@ -298,6 +271,9 @@ public:
 
     std::set<tracy::TTDeviceEvent> device_sync_new_events;
 
+    // Device data points
+    std::vector<DeviceProfilerDataPoint> device_data_points;
+
     // shift
     int64_t shift = 0;
 
@@ -306,9 +282,6 @@ public:
 
     // Freshen device logs
     void freshDeviceLog();
-
-    // Set the device architecture
-    void setDeviceArchitecture(tt::ARCH device_arch);
 
     // Change the output dir of device profile logs
     void setOutputDir(const std::string& new_output_dir);
