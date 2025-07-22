@@ -51,16 +51,9 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     const auto& input_tensor = tensor_args.input_tensor;
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
-    const uint32_t ring_devices =
+    const uint32_t cluster_axis_size =
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    auto target_device = mesh_device->get_device(mesh_coordinate);
-
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                        : mesh_view.get_devices_on_row(mesh_coordinate[0]);
-    uint32_t cluster_axis_size = devices.size();
     uint32_t cluster_index = operation_attributes.cluster_axis == 0 ? mesh_coordinate[0] : mesh_coordinate[1];
     auto input_shape = input_tensor.logical_shape();
     uint32_t dim = operation_attributes.dim;
@@ -68,36 +61,39 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
 
     auto scattered_dim_size = input_shape[dim] / cluster_axis_size;
 
-    std::vector<uint32_t> begins(rank, 0);
+    auto begins = ttnn::Shape(std::vector<uint32_t>(rank, 0));
     auto ends = input_shape;
-    std::vector<uint32_t> strides(rank, 1);
+    auto strides = ttnn::Shape(std::vector<uint32_t>(rank, 1));
 
     begins[dim] = cluster_index * scattered_dim_size;
     ends[dim] = begins[dim] + scattered_dim_size;
-
-    auto slice_start = ttnn::Shape(begins);
-    auto slice_step = ttnn::Shape(strides);
 
     log_info(
         tt::LogAlways,
         "Slice at ({}, {}) will have begins {}, ends {}, step {}",
         mesh_coordinate[0],
         mesh_coordinate[1],
-        slice_start,
+        begins,
         ends,
-        slice_step);
+        strides);
 
     auto slice_op = ttnn::operations::data_movement::SliceDeviceOperation{
-        .slice_start = slice_start,
+        .slice_start = begins,
         .slice_end = ends,
-        .step = slice_step,
+        .step = strides,
         .output_mem_config = operation_attributes.output_mem_config};
+
     auto input_tensors = std::vector<ttnn::Tensor>{tensor_args.input_tensor};
     auto output_tensors = std::vector<ttnn::Tensor>{tensor_return_value};
+    auto optional_output_tensors = std::vector<std::optional<ttnn::Tensor>>{std::nullopt};
+    slice_op.validate_with_output_tensors(input_tensors, optional_output_tensors);
+
     auto cached_program = slice_op.create_program(input_tensors, output_tensors);
     TT_FATAL(
         cached_program.override_runtime_arguments_callback.has_value(),
-        "override_runtime_arguments_callback is not set");
+        "override_runtime_arguments_callback is not set for program at mesh coordinate ({}, {})",
+        mesh_coordinate[0],
+        mesh_coordinate[1]);
 
     // -- building the return value -----------------------------------
     shared_variables_t vars{

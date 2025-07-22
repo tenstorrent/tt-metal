@@ -23,8 +23,25 @@ void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
     uint32_t rank = input_tensor.logical_shape().rank();
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     auto output_shape = output_spec.logical_shape();
+    auto input_shape = input_tensor.logical_shape();
 
     TT_FATAL(operation_attributes.dim < rank, "dim must be less than the rank of the input tensor");
+
+    auto mesh_device = input_tensor.mesh_device();
+    const auto& mesh_view = mesh_device->get_view();
+    const uint32_t cluster_axis_size =
+        (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+
+    TT_FATAL(
+        cluster_axis_size > 1,
+        "Scatter has only been tested with mesh axis size > 1, but has {} devices",
+        cluster_axis_size);
+    TT_FATAL(
+        input_shape[operation_attributes.dim] % cluster_axis_size == 0,
+        "input shape {} must be divisible by cluster axis size {}",
+        input_tensor.logical_shape(),
+        cluster_axis_size);
+
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
         TT_FATAL(
             output_shape == output_spec.padded_shape(),
