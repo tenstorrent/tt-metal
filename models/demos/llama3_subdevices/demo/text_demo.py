@@ -819,17 +819,18 @@ def test_demo_text(
                 logger.info(
                     f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
                 )
-                if apc_test and demo_targets["token_pos"] == iteration:
+                if apc_test and (demo_targets["token_pos"] - len(input_tokens_prefill_pt)) == iteration:
+                    # Check if the throughput is within the expected range
+                    print(f"len of input tokens prefill: {len(input_tokens_prefill_pt)}")
                     lower_bound = demo_targets["throughput"] - demo_targets["absolute_margin"]
                     upper_bound = demo_targets["throughput"] + demo_targets["absolute_margin"]
                     # TODO: Enable once experimentaly established avg and absolute margin
                     assert_message = (
-                        f"Throughput for APC test is not within the expected range. Current throughput: {tokens_per_second_per_user:.1f} tok/s/user, Update text_demo_targets.json file with the expected throughput.\n"
+                        f"Current throughput: {tokens_per_second_per_user:.1f} tok/s/user for APC test is not within the expected range: ({lower_bound}, {upper_bound}).\n"
+                        f"Update text_demo_targets.json file with the expected throughput.\n"
                         f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
                     )
-                    # assert (
-                    #     lower_bound <= tokens_per_second_per_user <= upper_bound
-                    # ), assert_message
+                    assert lower_bound <= tokens_per_second_per_user <= upper_bound, assert_message
 
             current_pos += 1
             iteration += 1

@@ -111,13 +111,16 @@ std::string generate_multihost_socket_test_name(const testing::TestParamInfo<Par
 
 using MultiHostSocketTestSplitT3K = MultiHostSocketTest<MeshDeviceSplit2x2Fixture>;
 using MultiHostSocketTestDualT3K = MultiHostSocketTest<MeshDeviceDual2x4Fixture>;
-using MultiHostSocketTestNanoExabox = MultiHostSocketTest<MeshDeviceNanoExaboxFixture>;
+using MeshDeviceNanoExabox2x4Fixture = MultiHostSocketTest<MeshDeviceNanoExabox2x4Fixture>;
+using MeshDeviceNanoExabox1x8Fixture = MultiHostSocketTest<MeshDeviceNanoExabox1x8Fixture>;
 
 TEST_P(MultiHostSocketTestSplitT3K, SocketTests) { RunTest(); }
 
 TEST_P(MultiHostSocketTestDualT3K, SocketTests) { RunTest(); }
 
-TEST_P(MultiHostSocketTestNanoExabox, SocketTests) { RunTest(); }
+TEST_P(MeshDeviceNanoExabox2x4Fixture, SocketTests) { RunTest(); }
+
+TEST_P(MeshDeviceNanoExabox1x8Fixture, SocketTests) { RunTest(); }
 
 INSTANTIATE_TEST_SUITE_P(
     MultiHostSocketTestsSplitT3K,
@@ -132,12 +135,18 @@ INSTANTIATE_TEST_SUITE_P(
     generate_multihost_socket_test_name<MultiHostSocketTestDualT3K::ParamType>);
 
 INSTANTIATE_TEST_SUITE_P(
-    MultiHostSocketTestsNanoExabox,
-    MultiHostSocketTestNanoExabox,
+    MeshDeviceNanoExabox2x4Fixture,
+    MeshDeviceNanoExabox2x4Fixture,
     ::testing::ValuesIn(generate_socket_test_configs(SystemConfig::NANO_EXABOX)),
     generate_multihost_socket_test_name<MultiHostSocketTestDualT3K::ParamType>);
 
-TEST_F(MultiHostSocketTestNanoExabox, MultiContextSocketHandshake) {
+INSTANTIATE_TEST_SUITE_P(
+    MeshDeviceNanoExabox1x8Fixture,
+    MeshDeviceNanoExabox1x8Fixture,
+    ::testing::ValuesIn(generate_socket_test_configs(SystemConfig::NANO_EXABOX)),
+    generate_multihost_socket_test_name<MultiHostSocketTestDualT3K::ParamType>);
+
+TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     std::vector<int> sender_node_ranks_ctx0 = {0, 2, 3, 4};
     uint32_t recv_rank_ctx0 = 1;
 

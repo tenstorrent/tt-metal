@@ -16,7 +16,7 @@ static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, subordinate_sync.dm1) == 
 static_assert(
     MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
 #endif
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 #include "eth_l1_address_map.h"
 static_assert(
     eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) <=

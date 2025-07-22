@@ -60,10 +60,6 @@ public:
 
     uint32_t prefetch_d_buffer_pages() const;
 
-    uint32_t mux_buffer_size(uint8_t num_hw_cqs = 1) const;
-
-    uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const;
-
     uint32_t dispatch_s_buffer_size() const;
 
     uint32_t dispatch_s_buffer_pages() const;
