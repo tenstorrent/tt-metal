@@ -50,10 +50,6 @@ class Hal;
 }
 }  // namespace tt
 
-static constexpr std::uint32_t SW_VERSION = 0x00020000;
-
-using tt_target_dram = std::tuple<int, int, int>;
-
 namespace tt {
 
 enum class EthRouterMode : uint32_t {
@@ -443,5 +439,3 @@ private:
 };
 
 }  // namespace tt
-
-std::ostream& operator<<(std::ostream& os, const tt_target_dram& dram);

@@ -114,6 +114,7 @@ int main() {
 
     noc_bank_table_init(MEM_IERISC_BANK_TO_NOC_SCRATCH);
 
+    noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 

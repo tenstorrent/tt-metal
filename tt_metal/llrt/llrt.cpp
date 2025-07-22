@@ -346,7 +346,7 @@ void send_msg_to_eth_mailbox(
                     virtual_core.str(),
                     mailbox_val);
 
-                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.8.0", device_id);
+                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.10.0", device_id);
             }
             std::this_thread::sleep_for(k_sleep_time);
         }
@@ -374,11 +374,12 @@ void send_msg_to_eth_mailbox(
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     // Wait for ack
+    tt_cxy_pair target{device_id, virtual_core};
     if (wait_for_ack) {
         const auto start_time = std::chrono::steady_clock::now();
         do {
-            uint32_t mailbox_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
+            uint32_t mailbox_val = 0;
+            tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&mailbox_val, target, mailbox_addr);
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
@@ -391,44 +392,65 @@ void send_msg_to_eth_mailbox(
                     virtual_core.str(),
                     mailbox_val);
 
-                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.8.0", device_id);
+                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.10.0", device_id);
             }
             std::this_thread::sleep_for(k_sleep_time);
         } while (msg_status != done_message);
     }
 }
 
-void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
+void return_to_base_firmware_and_wait_for_heartbeat(
+    chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
 
+    tt_cxy_pair target{device_id, virtual_core};
     const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::HEARTBEAT);
 
-    uint32_t heartbeat_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
-    uint32_t previous_heartbeat_val = heartbeat_val;
+    uint32_t heartbeat_val = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&heartbeat_val, target, heartbeat_addr);
+
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
+    std::this_thread::sleep_for(k_sleep_time);
+
+    uint32_t previous_heartbeat_val = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&previous_heartbeat_val, target, heartbeat_addr);
+
     const auto start = std::chrono::steady_clock::now();
     constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
 
     while (heartbeat_val == previous_heartbeat_val) {
         std::this_thread::sleep_for(k_sleep_time);
         previous_heartbeat_val = heartbeat_val;
-        heartbeat_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+        tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&heartbeat_val, target, heartbeat_addr);
         if (timeout_ms > 0) {
             const auto now = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
                 TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again. "
-                    "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.8.0",
+                    "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.10.0",
                     device_id,
                     virtual_core.str());
             }
         }
     }
+}
+
+void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_core, bool enable) {
+    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
+    const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
+    std::vector<uint32_t> en = {enable};
+    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+        en.data(), tt_cxy_pair(device_id, virtual_core), run_flag_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 }
 
 }  // namespace internal_

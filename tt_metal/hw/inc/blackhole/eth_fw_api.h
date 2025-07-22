@@ -15,6 +15,9 @@
 #define MEM_SYSENG_ETH_MSG_RELEASE_CORE 0x0002
 #define MEM_SYSENG_ETH_MAILBOX_ADDR 0x7D000
 #define MEM_SYSENG_ETH_MAILBOX_NUM_ARGS 3
+#define MEM_SYSENG_ETH_STATUS 0x7CC00
+#define MEM_SYSENG_ETH_HEARTBEAT 0x7CC70
+#define MEM_SYSENG_ETH_API_TABLE 0x7CF00
 #define MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00
 #define NUM_SERDES_LANES 8
 
@@ -238,4 +241,21 @@ FORCE_INLINE bool is_link_up() {
         (volatile eth_live_status_t*)(MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status));
     return link_status->rx_link_up == 1;
 }
+
+FORCE_INLINE bool is_port_up() {
+    invalidate_l1_cache();
+    return ((eth_status_t*)(MEM_SYSENG_ETH_STATUS))->port_status == port_status_e::PORT_UP;
+}
+
+FORCE_INLINE void service_eth_msg() {
+    invalidate_l1_cache();
+    reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+}
+
+FORCE_INLINE void update_boot_results_eth_link_status_check() {
+    invalidate_l1_cache();
+    reinterpret_cast<void (*)(uint32_t)>(
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+}
+
 #endif
