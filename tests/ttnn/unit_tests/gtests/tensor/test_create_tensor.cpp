@@ -64,7 +64,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::distributed::MeshCoordinate{0, 0}}};
 
-    Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
+    Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 
