@@ -29,7 +29,7 @@ def load_torch_model(model_location_generator=None, use_pretrained_weight=False)
     else:
         weights_path = (
             model_location_generator("vision-models/ufldv2", model_subdir="", download_if_ci_v2=True)
-            + "/tusimple_res34.pth"
+            / "tusimple_res34.pth"
         )
 
     state_dict = torch.load(weights_path)
