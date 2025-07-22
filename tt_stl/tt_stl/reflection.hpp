@@ -34,6 +34,7 @@ namespace ttsl {
 
 template <typename T>
 constexpr std::string_view get_type_name() {
+    // TODO: use enchantum::type_name
     return short_type_name<std::decay_t<T>>;
 }
 

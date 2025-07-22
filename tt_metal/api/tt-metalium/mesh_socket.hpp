@@ -102,6 +102,7 @@ private:
     std::shared_ptr<MeshBuffer> config_buffer_;
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
+    // TODO: replace with enchantum::array
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>,enchantum::count<SocketEndpoint>>
             fabric_node_id_map_;
 };
