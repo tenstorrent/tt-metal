@@ -77,7 +77,7 @@ run_tg_sentence_bert_tests() {
   echo "LOG_METAL: Running run_tg_sentence_bert_tests"
 
   # Sentence BERT demo test
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/tg/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
+  pytest -n auto models/demos/tg/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

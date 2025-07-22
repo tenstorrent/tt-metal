@@ -34,19 +34,13 @@ run_tg_llama_70b_model_perf_tests() {
 }
 
 run_tg_sentence_bert_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_tg_sentence_bert_tests"
 
   env pytest -n auto models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_tg" ; fail+=$?
 
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_tg_sentence_bert_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_sentence_bert_tests failed"
     exit 1
   fi
 }
