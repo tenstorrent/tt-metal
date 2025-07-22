@@ -4,6 +4,7 @@
 import pytest
 
 import ttnn
+from models.utility_functions import is_blackhole
 
 
 @pytest.fixture
@@ -11,9 +12,12 @@ def device_params(request, galaxy_type):
     # Get param dict passed in from test parametrize (or default to empty dict)
     params = getattr(request, "param", {}).copy()
 
-    if "fabric_config" in params and params["fabric_config"] == True:
-        params["fabric_config"] = (
-            ttnn.FabricConfig.FABRIC_1D_RING if galaxy_type == "6U" else ttnn.FabricConfig.FABRIC_1D
-        )
+    if "fabric_config" in params:
+        if is_blackhole():
+            params["fabric_config"] = None
+        elif params["fabric_config"] == True:
+            params["fabric_config"] = (
+                ttnn.FabricConfig.FABRIC_1D_RING if galaxy_type == "6U" else ttnn.FabricConfig.FABRIC_1D
+            )
 
     return params
