@@ -11,6 +11,11 @@ on:
         required: false
         default: "22.04"
         type: string
+      tests-to-run:
+        description: "Comma-separated list of test job names to run (e.g., 'sd-unit-tests,ttnn-unit-tests') or 'all'"
+        required: false
+        type: string
+        default: "all"
   workflow_dispatch:
     inputs:
       build-type:
@@ -34,6 +39,11 @@ on:
         default: false
         type: boolean
         description: "Re-run failed jobs (max 3)"
+      tests-to-run:
+        description: "Comma-separated list of test job names to run (e.g., 'sd-unit-tests,ttnn-unit-tests') or 'all'"
+        required: false
+        type: string
+        default: "all"
   push:
     branches: ["main"]
 
@@ -71,6 +81,7 @@ jobs:
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'sd-unit-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -89,6 +100,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'fast-dispatch-unit-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -106,6 +118,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fabric Unit Tests
   fabric-unit-tests:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'fabric-unit-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -123,6 +136,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'ttnn-unit-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -142,6 +156,7 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'models-unit-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -159,6 +174,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'cpp-unit-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -176,6 +192,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'tt-train-cpp-unit-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -192,6 +209,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   run-profiler-regression:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'run-profiler-regression') }}
     needs: [build-artifact-profiler]
     strategy:
       fail-fast: false
@@ -209,7 +227,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   t3000-fast-tests:
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
+    if: ${{ (inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 't3000-fast-tests')) && github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
@@ -218,6 +236,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   build-docs:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'build-docs') }}
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
@@ -226,6 +245,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   build:
+    if: ${{ inputs.tests-to-run == 'all' || contains(inputs.tests-to-run, 'build') }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
