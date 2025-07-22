@@ -67,7 +67,6 @@ jobs:
       fetch-depth: 0
   test-wheels:
     needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
     uses: ./.github/workflows/_test-wheels-impl.yaml
     with:
       from-precompiled: true
