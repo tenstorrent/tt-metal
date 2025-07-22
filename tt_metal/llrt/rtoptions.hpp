@@ -233,6 +233,8 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled; }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    // Return a hash of which watcher features are enabled
+    uint32_t get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms; }
     void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
     int get_watcher_dump_all() const { return watcher_settings.dump_all; }
@@ -376,7 +378,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str =
-            fmt::format("{}_{}_{}", get_watcher_enabled(), get_kernels_early_return(), get_erisc_iram_enabled());
+            fmt::format("{}_{}_{}", get_watcher_hash(), get_kernels_early_return(), get_erisc_iram_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);

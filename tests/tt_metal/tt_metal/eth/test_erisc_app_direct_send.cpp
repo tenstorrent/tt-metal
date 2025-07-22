@@ -34,6 +34,7 @@
 #include "jit_build/build.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
+#include "mesh_device.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -85,7 +86,7 @@ bool eth_direct_sender_receiver_kernels(
     const auto sender_device = sender_mesh_device->get_devices()[0];
     const auto receiver_device = receiver_mesh_device->get_devices()[0];
     bool pass = true;
-    log_debug(
+    log_info(
         tt::LogTest,
         "Sending {} bytes from device {} eth core {} addr {} to device {} eth core {} addr {}",
         byte_size,
@@ -861,6 +862,8 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
         const auto& send_chip = devices_.at(std::get<0>(it->first));
         CoreCoord sender_core = std::get<1>(it->first);
 
+        // gotcha: devices_ are mesh devices. Mesh device IDs are not the same as actual device IDs needed in the
+        // cluster
         auto send_device = send_chip->get_devices()[0];
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                 send_device->id(), sender_core)) {
