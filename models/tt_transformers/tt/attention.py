@@ -11,6 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.utility_functions import is_blackhole
 
 
 class Attention(LightweightModule):
@@ -542,20 +543,34 @@ class Attention(LightweightModule):
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
-            _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
-                attn_output_cat,
-                self.wo,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                all_gather_core_grid_offset=(0, 4),
-                num_links=1,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
-                compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            )
+
+            if is_blackhole():
+                _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
+                    attn_output_cat,
+                    self.wo,
+                    dim=3,
+                    all_gather_core_grid_offset=(0, 4),
+                    num_links=1,
+                    program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
+                    compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+                    memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                    memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                )
+            else:
+                _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
+                    attn_output_cat,
+                    self.wo,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    all_gather_core_grid_offset=(0, 4),
+                    num_links=1,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
+                    compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+                    memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                    memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                )
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
@@ -826,19 +841,28 @@ class Attention(LightweightModule):
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            attn_output_11SH = ttnn.experimental.all_gather_async(
-                attn_output_11SH,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
+            if is_blackhole():
+                attn_output_11SH = ttnn.all_gather(
+                    attn_output_11SH,
+                    dim=3,
+                    num_links=1,
+                    topology=self.ccl_topology,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                attn_output_11SH = ttnn.experimental.all_gather_async(
+                    attn_output_11SH,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=self.ccl_topology,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
