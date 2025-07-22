@@ -186,6 +186,9 @@ struct fabric_router_l1_config_t {
 
 struct tensix_routing_l1_info_t {
     uint32_t mesh_id;           // Current mesh ID
+    // NOTE: Compressed version has additional overhead (2x slower) to read values,
+    //       but raw data is too huge (2048 bytes) to fit in L1 memory.
+    //       Need to evaluate once actual workloads are available
     compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table;   // 384 bytes
     compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table;  // 384 bytes
     uint8_t padding[12];                                  // pad to 16-byte alignment
