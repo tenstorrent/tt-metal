@@ -14,6 +14,7 @@
 #include "compute_kernel_api/sub_int_sfpu.h"
 #include "compute_kernel_api/mul_int_sfpu.h"
 #include "compute_kernel_api/quantization.h"
+#include "compute_kernel_api/relational_int32_sfpu.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"

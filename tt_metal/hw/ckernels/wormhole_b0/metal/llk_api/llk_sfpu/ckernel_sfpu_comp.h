@@ -166,5 +166,27 @@ inline void calculate_comp_unary_int(int scalar) {
     }
 }
 
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_binary_int(int scalar) {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        vInt u = dst_reg[0];
+        vInt v = dst_reg[32];
+        vInt zero = 0;
+        vInt res;
+        if constexpr (COMP_MODE == SfpuType::lt) {
+            v_if(u < zero && v > zero) { res = 1; }
+            v_elseif(u > zero && v < zero) { res = zero; }
+            v_else {
+                res = u - v;
+                v_if(res < zero) { res = 1; }
+                v_else { res = zero; }
+                v_endif;
+            }
+            v_endif;
+        }
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

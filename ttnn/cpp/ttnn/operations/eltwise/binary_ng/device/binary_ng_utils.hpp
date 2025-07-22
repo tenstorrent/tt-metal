@@ -68,7 +68,8 @@ struct OpConfig {
         REQUANT,
         DEQUANT,
         MAXIMUM,
-        MINIMUM
+        MINIMUM,
+        LT,
     };
 
     template <class EnumT>
