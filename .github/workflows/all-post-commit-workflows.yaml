@@ -35,15 +35,15 @@ on:
         options:
           - "22.04"
           - "24.04"
-      with-retries:
-        default: false
-        type: boolean
-        description: "Re-run failed jobs (max 3)"
       tests-to-run:
         description: "Comma-separated list of test job names to run (e.g., 'sd-unit-tests,ttnn-unit-tests') or 'all'"
         required: false
         type: string
         default: "all"
+      with-retries:
+        default: false
+        type: boolean
+        description: "Re-run failed jobs (max 3)"
   push:
     branches: ["main"]
 
