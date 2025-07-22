@@ -259,12 +259,12 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] =
         create_basic_sync_program(mesh_device_.get(), sub_device_1, sub_device_2);
 
-    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
-    // Top row - first MeshWorkload set
-    MeshCoordinateRange top_row({0, 0}, {num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
-    // Bottom row - second MeshWorkload set
-    MeshCoordinateRange bottom_row(
-        {num_rows_in_workload, 0}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
+    // Left column - first MeshWorkload set
+    MeshCoordinateRange left_col({0, 0}, {mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
+    // Right column - second MeshWorkload set
+    MeshCoordinateRange right_col(
+        {0, num_cols_in_workload}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
     // All devices: third MeshWorkload set
     MeshCoordinateRange all_devices(mesh_device_->shape());
 
@@ -281,13 +281,13 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     auto syncer_2 = CreateMeshWorkload();
     auto incrementer_2 = CreateMeshWorkload();
 
-    AddProgramToMeshWorkload(waiter_0, std::move(waiter_program_0), top_row);
-    AddProgramToMeshWorkload(syncer_0, std::move(syncer_program_0), top_row);
-    AddProgramToMeshWorkload(incrementer_0, std::move(incrementer_program_0), top_row);
+    AddProgramToMeshWorkload(waiter_0, std::move(waiter_program_0), left_col);
+    AddProgramToMeshWorkload(syncer_0, std::move(syncer_program_0), left_col);
+    AddProgramToMeshWorkload(incrementer_0, std::move(incrementer_program_0), left_col);
 
-    AddProgramToMeshWorkload(waiter_1, std::move(waiter_program_1), bottom_row);
-    AddProgramToMeshWorkload(syncer_1, std::move(syncer_program_1), bottom_row);
-    AddProgramToMeshWorkload(incrementer_1, std::move(incrementer_program_1), bottom_row);
+    AddProgramToMeshWorkload(waiter_1, std::move(waiter_program_1), right_col);
+    AddProgramToMeshWorkload(syncer_1, std::move(syncer_program_1), right_col);
+    AddProgramToMeshWorkload(incrementer_1, std::move(incrementer_program_1), right_col);
 
     AddProgramToMeshWorkload(waiter_2, std::move(waiter_program_2), all_devices);
     AddProgramToMeshWorkload(syncer_2, std::move(syncer_program_2), all_devices);
@@ -435,11 +435,11 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     SetRuntimeArgs(add_program_2, add_kernel_2, add_core, add_rt_args_2);
     CBHandle add_cb_2 = CreateCircularBuffer(add_program_2, add_core, cb_src0_config);
 
-    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
+    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
     MeshCoordinateRange devices(mesh_device_->shape());
-    MeshCoordinateRange top_row({0, 0}, {num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
-    MeshCoordinateRange bottom_row(
-        {num_rows_in_workload, 0}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange left_col({0, 0}, {mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
+    MeshCoordinateRange right_col(
+        {0, num_cols_in_workload}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
     // Create and initialize MeshWorkloads
     auto syncer_mesh_workload = CreateMeshWorkload();
@@ -448,11 +448,11 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     // Sync program goes to entire Mesh
     AddProgramToMeshWorkload(syncer_mesh_workload, std::move(sync_and_incr_program), devices);
     // Datacopy goes to top row
-    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(datacopy_program), top_row);
+    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(datacopy_program), left_col);
     // First addition goes to bottom row
-    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(add_program), bottom_row);
+    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(add_program), right_col);
     // Second addition goes to bottom row
-    AddProgramToMeshWorkload(add_mesh_workload, std::move(add_program_2), bottom_row);
+    AddProgramToMeshWorkload(add_mesh_workload, std::move(add_program_2), right_col);
 
     // Compile and load workloads
     mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
@@ -487,13 +487,13 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
-        for (const auto& device_coord : top_row) {
+        for (const auto& device_coord : left_col) {
             std::vector<uint32_t> dst_vec;
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, device_coord);
             EXPECT_EQ(dst_vec, src_vec);
         }
 
-        for (const auto& device_coord : bottom_row) {
+        for (const auto& device_coord : right_col) {
             std::vector<uint32_t> dst_vec;
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, device_coord);
             for (int j = 0; j < dst_vec.size(); j++) {
