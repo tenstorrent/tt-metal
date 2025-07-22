@@ -433,7 +433,7 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
             node_id,
             worker_grid_size_.value(),
             device_info_provider_.get_l1_alignment(),  // Get directly from device info provider
-            policies_.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES),
+            policies_.default_payload_chunk_size,
             policies_.sender_config,
             policies_.receiver_config,
             receiver_memory_map_.payload_chunks,
@@ -492,8 +492,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     dst_node_ids.push_back(dest.device.value());
                 }
 
-                uint32_t chunk_size =
-                    policies_.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
+                uint32_t chunk_size = policies_.default_payload_chunk_size;
                 TT_FATAL(
                     pattern.size.value() <= chunk_size,
                     "Requested payload size {} exceeds the per-worker buffer chunk size of {}",
@@ -526,21 +525,17 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     }
                 }
 
-                std::optional<CoreCoord> best_core = std::nullopt;
-                uint32_t max_count = 0;
-                for (const auto& [core, count] : core_counts) {
-                    if (count > max_count) {
-                        max_count = count;
-                        best_core = core;
-                    }
-                }
-
                 std::optional<std::pair<CoreCoord, uint32_t>> uniform_receiver = std::nullopt;
-                if (best_core.has_value()) {
-                    const auto& address_histogram = memory_histograms[best_core.value()];
-                    for (const auto& [addr, count] : address_histogram) {
-                        if (count == dst_node_ids.size()) {
-                            uniform_receiver = std::make_pair(best_core.value(), addr);
+                for (const auto& [core, device_count] : core_counts) {
+                    // skip the core if it doesnt match the expected device count
+                    if (device_count != dst_node_ids.size()) {
+                        continue;
+                    }
+
+                    const auto& address_histogram = memory_histograms[core];
+                    for (const auto& [addr, device_count] : address_histogram) {
+                        if (device_count == dst_node_ids.size()) {
+                            uniform_receiver = std::make_pair(core, addr);
                             break;
                         }
                     }
