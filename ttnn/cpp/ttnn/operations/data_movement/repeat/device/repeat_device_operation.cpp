@@ -16,11 +16,11 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE,
         "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
+    TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
     TT_FATAL(
-        input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 or
-            input_tensor_a.get_dtype() == tt::tt_metal::DataType::UINT32 or
-            input_tensor_a.get_dtype() == tt::tt_metal::DataType::FLOAT32,
+        input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::UINT32 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::FLOAT32,
         "Can only work with bfloat16/float32 or uint32 tensors");
     // is this relevant?
     TT_FATAL(
@@ -30,7 +30,7 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
 
 std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    auto output_shape = input_tensor_a.get_logical_shape();
+    auto output_shape = input_tensor_a.logical_shape();
     output_shape[m_is_last_dim ? -1 : 1] *= m_num_repeats;
 
     auto mem_config = this->m_output_mem_config;
@@ -42,7 +42,7 @@ std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::v
     return {TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            input_tensor_a.get_dtype(), tt::tt_metal::PageConfig(input_tensor_a.get_layout()), mem_config))};
+            input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks RepeatDeviceOperation::create_program(

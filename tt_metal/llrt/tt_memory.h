@@ -37,7 +37,6 @@ public:
     memory();
     memory(std::string_view path, Loading loading);
 
-public:
     // These can be large objects, so ban copying ...
     memory(const memory&) = delete;
     memory& operator=(const memory&) = delete;
@@ -45,7 +44,6 @@ public:
     memory(memory&&) = default;
     memory& operator=(memory&&) = default;
 
-public:
     const std::vector<word_t>& data() const { return this->data_; }
 
     bool operator==(const memory& other) const;
@@ -60,7 +58,6 @@ public:
 
     size_t num_spans() const { return link_spans_.size(); }
 
-public:
     // Process spans in arg mem to fill data in *this (eg, from device)
     void fill_from_mem_template(
         const memory& mem_template,

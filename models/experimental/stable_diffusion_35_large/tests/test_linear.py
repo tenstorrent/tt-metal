@@ -16,7 +16,6 @@ from ..tt.utils import assert_quality
         (32, 1536, 2048),
     ],
 )
-@pytest.mark.usefixtures("use_program_cache")
 def test_linear(
     *,
     mesh_device: ttnn.MeshDevice,

@@ -194,7 +194,7 @@ void MAIN {
                     for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                         // Tilize row-major patches
                         uint32_t patch_rows_left = num_patches;
-                        tilize_init_short(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
+                        tilize_init(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
                         for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
                             // Reader produces row pages, which may not be tile aligned. Wait on the correct number of
                             // rows.
@@ -265,7 +265,7 @@ void MAIN {
 
                             // After reduction (if any), untilize result
                             cb_wait_front(cb_matmul_interm_tiled, output_tiles);
-                            untilize_init_short(cb_matmul_interm_tiled);
+                            untilize_init(cb_matmul_interm_tiled);
                             for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
                                 cb_reserve_back(cb_matmul_result_rm, matmul_N_t);
                                 untilize_block(cb_matmul_interm_tiled, matmul_N_t, cb_matmul_result_rm);

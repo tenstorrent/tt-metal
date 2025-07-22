@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
@@ -15,7 +16,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto input = tensor_args.input;
-    auto output = output_tensor;
+    const auto& output = output_tensor;
 
     auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -23,18 +24,18 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     tt::tt_metal::IDevice* device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
 
-    const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
-    const auto shape{input.get_padded_shape()};
+    const auto cb_data_format{datatype_to_dataformat_converter(output.dtype())};
+    const auto& shape{input.padded_shape()};
 
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
     uint32_t Wt{W / tt::constants::TILE_WIDTH};
     uint32_t Ht{H / tt::constants::TILE_HEIGHT};
     uint32_t HtWt{Ht * Wt};
-    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     auto num_cols{other_dims_product * Wt};
 
     // check mask for h-dim
-    const auto input_shape_without_padding{input.get_logical_shape()};
+    const auto& input_shape_without_padding{input.logical_shape()};
     const auto origin_H{input_shape_without_padding[-2]};
     const bool do_mask_h{(origin_H % tt::constants::TILE_HEIGHT) != 0};
     const auto mask_h{do_mask_h ? origin_H % tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT};
@@ -94,7 +95,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input)), Ht, Wt};
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
     }
@@ -115,7 +116,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
         Ht,                         // Ht
         origin_H};
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }

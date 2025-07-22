@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -65,6 +67,7 @@ Tensor reduce(
 
 namespace reduce_op_utils {
 
-std::map<string, string> get_defines(tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim);
+std::map<std::string, std::string> get_defines(
+    tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim);
 
 }  // namespace reduce_op_utils

@@ -130,7 +130,6 @@ def test_ff1(
     # model_location_generator,
     device,
     n_devices,
-    use_program_cache,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
 

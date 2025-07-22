@@ -95,8 +95,8 @@ struct MorehSoftmaxBackwardOperation {
         const Tensor& output_grad_tensor,
         uint32_t dim,
         const std::optional<Tensor>& input_grad_tensor,
-        const MorehSoftmaxBackwardOp op,
-        const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
+        MorehSoftmaxBackwardOp op,
+        MorehSoftmaxBackwardOpParallelizationStrategy strategy,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };

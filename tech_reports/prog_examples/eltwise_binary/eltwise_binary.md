@@ -9,7 +9,7 @@ To build and execute, you may use the following commands:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/eltwise_binary
+    ./build/programming_examples/metal_example_eltwise_binary
 ```
 ## New buffers
 

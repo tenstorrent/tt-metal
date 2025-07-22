@@ -35,7 +35,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
@@ -48,7 +48,6 @@ namespace tt_metal {
 class IDevice;
 }  // namespace tt_metal
 }  // namespace tt
-// #include "tt_gdb/tt_gdb.hpp"
 
 using std::vector;
 

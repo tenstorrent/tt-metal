@@ -57,10 +57,9 @@ class VaeDecoder(torch.nn.Module):
         upscale_dtype = next(iter(self.up_blocks.parameters())).dtype
 
         x = self.mid_block(x)
-
         x = x.to(upscale_dtype)
 
-        for up_block in self.up_blocks[0:4]:
+        for up_block in self.up_blocks:
             x = up_block(x)
 
         x = self.conv_norm_out(x)
@@ -225,6 +224,7 @@ class Attention(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         assert x.ndim == 4  # noqa: PLR2004
+
         residual = x
 
         batch_size, features, height, width = x.shape
@@ -235,8 +235,6 @@ class Attention(torch.nn.Module):
         q = self.to_q(x)
         k = self.to_k(x)
         v = self.to_v(x)
-
-        # return v.transpose(1,2).reshape(batch_size, features, height, width)
 
         inner_dim = k.shape[-1]
         head_dim = inner_dim // self.heads

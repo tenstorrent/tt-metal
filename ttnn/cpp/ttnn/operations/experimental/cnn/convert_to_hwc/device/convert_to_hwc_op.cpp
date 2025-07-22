@@ -15,7 +15,7 @@ void ConvertToHWC::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Expected 1 input tensor");
 
     const auto& input = input_tensors.at(0);
-    const auto& shape = input.get_logical_shape();
+    const auto& shape = input.logical_shape();
     const auto& HW = shape[-1];
     const auto& C = shape[-2];
 
@@ -37,7 +37,7 @@ void ConvertToHWC::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<ttnn::TensorSpec> ConvertToHWC::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    const auto& shape = input_tensors.at(0).get_logical_shape();
+    const auto& shape = input_tensors.at(0).logical_shape();
     const auto B = shape[0];
     const auto C = shape[2];
     const auto HW = shape[3];

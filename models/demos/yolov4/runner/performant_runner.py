@@ -19,9 +19,13 @@ class YOLOv4PerformantRunner:
         weight_dtype=ttnn.bfloat16,
         model_location_generator=None,
         resolution=(320, 320),
+        mesh_mapper=None,
+        mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
+        self.mesh_mapper = mesh_mapper
+        self.mesh_composer = mesh_composer
         self.runner_infra = YOLOv4PerformanceRunnerInfra(
             device,
             device_batch_size,
@@ -29,6 +33,8 @@ class YOLOv4PerformantRunner:
             weight_dtype,
             model_location_generator,
             resolution=resolution,
+            mesh_mapper=self.mesh_mapper,
+            mesh_composer=self.mesh_composer,
         )
 
         (
@@ -92,10 +98,8 @@ class YOLOv4PerformantRunner:
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.device)
-
         ttnn_output_tensor = self.runner_infra.output_tensor
-
-        return get_model_result(ttnn_output_tensor, self.resolution)
+        return get_model_result(ttnn_output_tensor, self.resolution, mesh_composer=self.mesh_composer)
 
     def _validate(self, input_tensor, result_output_tensor):
         result_boxes, result_confs = result_output_tensor
@@ -108,15 +112,11 @@ class YOLOv4PerformantRunner:
         assert_with_pcc(ref_confs, result_confs, YOLOV4_CONFS_PCC)
 
     def run(self, torch_input_tensor, check_pcc=False):
-        n, h, w, c = torch_input_tensor.shape
-        torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+        n, c, h, w = torch_input_tensor.shape
+        tt_inputs_host, input_mem_config = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_yolov4_trace_2cqs_inference(tt_inputs_host)
 
         if check_pcc:
-            torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
-            torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
             self._validate(torch_input_tensor, output)
 
         return output

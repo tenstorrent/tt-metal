@@ -1,0 +1,68 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+Board: [
+  { name: 2x4,
+    type: Mesh,
+    topology: [2, 4]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
+{
+  id: 1,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+
+  host_ranks: [[0]]},
+{
+  id: 2,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
+{
+  id: 3,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
+{
+  id: 4,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+  host_ranks: [[0]]}
+]
+
+Graph: [
+  [[0, S2], [1, S4]],
+  [[0, S3], [1, S5]],
+  [[1, S4], [0, S2]],
+  [[1, S5], [0, S3]],
+  [[0, S4], [2, S4]],
+  [[0, S5], [2, S5]],
+  [[2, S4], [0, S4]],
+  [[2, S5], [0, S5]],
+  [[0, N4], [3, S4]],
+  [[0, N5], [3, S5]],
+  [[3, S4], [0, N4]],
+  [[3, S5], [0, N5]],
+  [[0, N2], [4, S4]],
+  [[0, N3], [4, S5]],
+  [[4, S4], [0, N2]],
+  [[4, S5], [0, N3]],
+]

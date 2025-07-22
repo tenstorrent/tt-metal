@@ -16,13 +16,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @contextlib.contextmanager
 def logging_context():
-    old_types = os.environ.get("TT_METAL_LOGGER_TYPES", "")
-    old_level = os.environ.get("TT_METAL_LOGGER_LEVEL", "")
-    os.environ["TT_METAL_LOGGER_TYPES"] = "Op"
-    os.environ["TT_METAL_LOGGER_LEVEL"] = "Debug"
+    old_types = os.environ.get("TT_LOGGER_TYPES", "")
+    old_level = os.environ.get("TT_LOGGER_LEVEL", "")
+    os.environ["TT_LOGGER_TYPES"] = "Op"
+    os.environ["TT_LOGGER_LEVEL"] = "Debug"
     yield
-    os.environ["TT_METAL_LOGGER_TYPES"] = old_types
-    os.environ["TT_METAL_LOGGER_LEVEL"] = old_level
+    os.environ["TT_LOGGER_TYPES"] = old_types
+    os.environ["TT_LOGGER_LEVEL"] = old_level
 
 
 @pytest.mark.parametrize("scalar", [3])

@@ -6,7 +6,7 @@
 #include <string>
 
 #include "gtest/gtest.h"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/api/tt-metalium/core_coord.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 class SlidingWindowTestFixture : public testing::TestWithParam<SlidingWindowConfig> {};
 
 TEST_P(SlidingWindowTestFixture, SlidingWindowHash) {
-    auto sliding_window_a = GetParam();
+    const auto& sliding_window_a = GetParam();
 
     // start of same input
     auto sliding_window_b = sliding_window_a;

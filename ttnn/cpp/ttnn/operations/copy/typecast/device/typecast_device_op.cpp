@@ -54,10 +54,10 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
-            input_tensor.get_layout() == Layout::TILE,
+            input_tensor.layout() == Layout::TILE,
             "Typecast operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
             "tensor layout: {}",
-            static_cast<int>(input_tensor.get_layout()));
+            static_cast<int>(input_tensor.layout()));
 
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -72,7 +72,7 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
 
     if (preallocated_output_tensor.has_value()) {
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_output_tensor.value().get_logical_shape();
+        const auto preallocated_output_shape = preallocated_output_tensor.value().logical_shape();
         TT_FATAL(
             preallocated_output_shape == computed_output_shape,
             "When preallocted output tensor is used, Typecast operation requires its shape to match the computed "
@@ -82,7 +82,7 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
 
         if (!input_tensor.is_sharded()) {
             TT_FATAL(
-                (preallocated_output_tensor.value().get_layout() == Layout::TILE),
+                (preallocated_output_tensor.value().layout() == Layout::TILE),
                 "Typecast operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
         }
     }
@@ -91,12 +91,12 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t TypecastDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->get_tensor_spec();
+        return tensor_args.preallocated_output->tensor_spec();
     }
 
     auto output_layout = Layout::TILE;
     if (args.output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input.get_layout();
+        output_layout = tensor_args.input.layout();
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
@@ -114,15 +114,11 @@ tensor_return_value_t TypecastDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<TypecastDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        input_shape.volume());
+        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }
@@ -146,7 +142,7 @@ TypecastDeviceOperation::invoke(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return {
         operation_attributes_t{
-            .input_dtype = input.get_dtype(),
+            .input_dtype = input.dtype(),
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
             .fp32_dest_acc_en = fp32_dest_acc_en,

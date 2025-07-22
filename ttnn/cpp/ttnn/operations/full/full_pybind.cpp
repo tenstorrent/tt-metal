@@ -39,7 +39,6 @@ void bind_full_operation(py::module& module) {
         )doc",
         ttnn::moreh_full.base_name());
 
-    using FullType = decltype(ttnn::moreh_full);
     bind_registered_operation(
         module,
         ttnn::moreh_full,

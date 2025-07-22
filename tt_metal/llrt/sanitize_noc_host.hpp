@@ -48,14 +48,14 @@ static bool coord_found_p(std::unordered_set<CoreCoord> coords, CoreCoord core) 
     return coords.find(core) != coords.end();
 }
 
-static string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
+static std::string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
     std::stringstream ss;
     ss << "noc{" << core.str() << ", 0x" << std::setfill('0') << std::setw(8) << std::hex << a << ", " << std::dec << l
        << "}";
     return ss.str();
 }
 
-static void print_stack_trace(void) {
+static void print_stack_trace() {
     void* array[15];
 
     int size = backtrace(array, 15);

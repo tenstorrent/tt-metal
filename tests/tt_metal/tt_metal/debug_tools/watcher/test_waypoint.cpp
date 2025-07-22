@@ -7,9 +7,6 @@
 #include <stdint.h>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
-#include <initializer_list>
-#include <map>
-#include <memory>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -28,7 +25,6 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -165,18 +161,18 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
                           const CoreCoord& virtual_core,
                           bool is_eth_core,
                           bool is_active) {
-        vector<string> expected_waypoints;
-        string expected;
+        vector<std::string> expected_waypoints;
+        std::string expected;
         // Need to update the expected strings based on each core.
         // for (string waypoint : {"AAAA", "BBBB", "CCCC"}) { // Stripped this down since the wait function is flaky
-        for (string waypoint : {"AAAA"}) {
+        for (std::string waypoint : {"AAAA"}) {
             if (is_eth_core) {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
-                string k_id_s;
+                std::string k_id_s;
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch | tensix kernels
                     int k_id = 1 + 2 + 3;
-                    string k_id_s = fmt::format("{:3}", k_id);
+                    std::string k_id_s = fmt::format("{:3}", k_id);
                     if (device->arch() == ARCH::BLACKHOLE)
                         k_id_s += fmt::format("|{:3}", k_id + 1);
                 } else {
@@ -201,11 +197,11 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
                 }
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
-                string k_id_s;
+                std::string k_id_s;
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch
                     int k_id = 1 + 2;
-                    string k_id_s = fmt::format("{:3}|{:3}|{:3}", k_id, k_id + 1, k_id + 2);
+                    std::string k_id_s = fmt::format("{:3}|{:3}|{:3}", k_id, k_id + 1, k_id + 2);
                 } else {
                     k_id_s = "";
                 }

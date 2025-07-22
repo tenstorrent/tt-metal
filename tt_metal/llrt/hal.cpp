@@ -39,13 +39,10 @@ uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programma
     }
 }
 
-uint32_t Hal::get_num_risc_processors() const {
+uint32_t Hal::get_total_num_risc_processors() const {
     uint32_t num_riscs = 0;
     for (uint32_t core_idx = 0; core_idx < core_info_.size(); core_idx++) {
-        uint32_t num_processor_classes = core_info_[core_idx].get_processor_classes_count();
-        for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
-            num_riscs += core_info_[core_idx].get_processor_types_count(processor_class_idx);
-        }
+        num_riscs += this->get_num_risc_processors(this->core_info_[core_idx].programmable_core_type_);
     }
     return num_riscs;
 }

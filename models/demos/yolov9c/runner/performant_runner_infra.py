@@ -1,10 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -22,8 +21,10 @@ class YOLOv9PerformanceRunnerInfra:
         batch_size,
         act_dtype,
         weight_dtype,
+        model_task="segment",
         model_location_generator=None,
         resolution=(640, 640),
+        torch_input_tensor=None,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
@@ -34,14 +35,25 @@ class YOLOv9PerformanceRunnerInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
+        self.model_task = model_task
+        self.enable_segment = self.model_task == "segment"
+        self.torch_input_tensor = torch_input_tensor
 
-        self.torch_model = load_torch_model()
-        self.torch_input_tensor = torch.randn((1, 3, 640, 640), dtype=torch.float32)
-        self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
+        self.torch_model = load_torch_model(model_task=self.model_task)
+
+        self.torch_input_tensor = (
+            torch.randn((1, 3, 640, 640), dtype=torch.float32)
+            if self.torch_input_tensor is None
+            else self.torch_input_tensor
+        )
 
         self.parameters = create_yolov9c_model_parameters(self.torch_model, self.torch_input_tensor, device=self.device)
 
-        self.ttnn_yolov9c_model = YoloV9(self.device, self.parameters)
+        self.ttnn_yolov9c_model = YoloV9(
+            self.device, self.parameters, enable_segment=self.enable_segment
+        )  # Set enable_segment to False for detection
+
+        self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if is_wormhole_b0():
@@ -51,17 +63,14 @@ class YOLOv9PerformanceRunnerInfra:
 
         num_devices = device.get_num_devices()
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-
         n, c, h, w = torch_input_tensor.shape
-
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 29))
+        ## Converting from image based channels (3) to min channels (16)
+        if c == 3:
+            c = 16
         input_mem_config = ttnn.create_sharded_memory_config(
-            [6400, 32],
-            core_grid=device.core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+            [n, c, h, w],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
         )
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -92,13 +101,18 @@ class YOLOv9PerformanceRunnerInfra:
     def validate(self, output_tensor=None, torch_output_tensor=None):
         ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
-        output_tensor = ttnn.to_torch(ttnn_output_tensor)
-
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.99)
+        output_tensor = ttnn.to_torch(ttnn_output_tensor[0])
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=0.99)
 
         logger.info(
             f"Yolov9c - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
         )
 
     def dealloc_output(self):
-        ttnn.deallocate(self.output_tensor)
+        ttnn.deallocate(self.output_tensor[0])
+        for t in self.output_tensor[1]:
+            if isinstance(t, list):
+                for sub_t in t:
+                    ttnn.deallocate(sub_t)
+            else:
+                ttnn.deallocate(t)

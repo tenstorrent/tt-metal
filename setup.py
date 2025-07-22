@@ -15,6 +15,12 @@ from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 
+readme = None
+
+# Read README.md file from project root
+readme_path = Path(__file__).absolute().parent / "README.md"
+readme = readme_path.read_text(encoding="utf-8")
+
 
 # Get the platform-specific lib directory name
 def get_lib_dir():
@@ -128,11 +134,11 @@ def get_from_precompiled_dir():
 
 
 @dataclass(frozen=True)
-class MetalliumBuildConfig:
+class MetaliumBuildConfig:
     from_precompiled_dir = get_from_precompiled_dir()
 
 
-metal_build_config = MetalliumBuildConfig()
+metal_build_config = MetaliumBuildConfig()
 
 
 class CMakeBuild(build_ext):
@@ -185,8 +191,8 @@ class CMakeBuild(build_ext):
                     "Ninja",
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DCMAKE_INSTALL_PREFIX=build_Release",
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    "-DTT_INSTALL=OFF",
+                    "-DBUILD_SHARED_LIBS=ON",
+                    "-DTT_INSTALL=ON",
                     "-DTT_UNITY_BUILDS=ON",
                     "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
                     "-DWITH_PYTHON_BINDINGS=ON",
@@ -199,6 +205,12 @@ class CMakeBuild(build_ext):
                     cmake_args.extend(
                         [
                             "-DENABLE_TRACY=ON",
+                        ]
+                    )
+                else:
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=OFF",
                         ]
                     )
 
@@ -230,6 +242,7 @@ class CMakeBuild(build_ext):
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
         lib_patterns = [
             "_ttnn.so",
+            "_ttnncpp.so",
             "libtt_metal.so",
             "libdevice.so",
         ]
@@ -267,9 +280,12 @@ class CMakeBuild(build_ext):
         ttnn_cpp_patterns = [
             "ttnn/deprecated/**/kernels/**/*",
             "ttnn/operations/**/kernels/**/*",
+            "ttnn/operations/**/kernels_ng/**/*",
+            "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
+            "ttnn/kernel/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
@@ -284,6 +300,8 @@ class CMakeBuild(build_ext):
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",
+            "fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+            "fabric/impl/kernels/tt_fabric_mux.cpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
             "impl/dispatch/kernels/**/*",
@@ -347,8 +365,9 @@ setup(
     package_dir={
         "": "ttnn",
     },
-    long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
+    long_description=readme,
+    long_description_content_type="text/markdown",
 )

@@ -23,7 +23,8 @@ void kernel_main() {
     constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t local_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(6);
-    constexpr bool skip_ptr_update = get_compile_time_arg_val(7);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(7);
+    constexpr bool skip_ptr_update = get_compile_time_arg_val(8);
 
     // Runtime args
     // Note: Coalesced sizes -> wrt to receiver cores, sizes -> wrt to dram reader cores
@@ -47,11 +48,11 @@ void kernel_main() {
             uint32_t curr_block_size_per_receiver = curr_block_size / num_receivers;
 
             experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
-            experimental::remote_cb_reserve_back(remote_cb_id, num_blocks);
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 {
                     cb_wait_front(local_cb_id, max_block_num_tiles);
+                    experimental::remote_cb_reserve_back(remote_cb_id, 1);
 
                     uint32_t local_cb_addr = get_read_ptr(local_cb_id);
                     experimental::remote_cb_push_back_and_write_pages<skip_ptr_update>(
@@ -63,22 +64,24 @@ void kernel_main() {
                         curr_coalesced_page_size,
                         noc);
 
+                    noc_async_posted_writes_flushed();
+
                     cb_pop_front(local_cb_id, max_block_num_tiles);
                 }
             }
         }
     }
 
-    experimental::remote_cb_sender_barrier(remote_cb_id);
-
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
 
     // reset noc counters here because we didn't properly update ptrs for better perf.
-    if constexpr (skip_ptr_update) {
-        if (noc_mode == DM_DEDICATED_NOC) {
-            ncrisc_noc_counters_init();
-        } else {
-            dynamic_noc_local_state_init();
-        }
+    if (noc_mode == DM_DEDICATED_NOC) {
+        ncrisc_noc_counters_init();
+    } else {
+        dynamic_noc_local_state_init();
     }
+
+    // signal reader can exit, since reader cannot exit early due to the ongoing traffic on the same noc.
+    cb_reserve_back(sync_cb_id, 1);
+    cb_push_back(sync_cb_id, 1);
 }

@@ -205,9 +205,6 @@ def mesh_device_fixture():
     # TEARDOWN (called after test suite is finished executing)
     print("ADD: Closing device mesh")
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
-
     ttnn.close_mesh_device(mesh_device)
     del mesh_device
 ```

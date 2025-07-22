@@ -193,7 +193,6 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
 def test_perf_bare_metal(
     device,
-    use_program_cache,
     model_version,
     llm_mode,
     batch,

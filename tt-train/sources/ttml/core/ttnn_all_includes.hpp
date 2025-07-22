@@ -24,6 +24,7 @@
 #include <ttnn/core.hpp>                                                                           // NOLINT
 #include <ttnn/device.hpp>                                                                         // NOLINT
 #include <ttnn/distributed/api.hpp>                                                                // NOLINT
+#include <ttnn/distributed/distributed_tensor.hpp>                                                 // NOLINT
 #include <ttnn/distributed/types.hpp>                                                              // NOLINT
 #include <ttnn/operations/ccl/all_gather/all_gather.hpp>                                           // NOLINT
 #include <ttnn/operations/copy/typecast/typecast.hpp>                                              // NOLINT

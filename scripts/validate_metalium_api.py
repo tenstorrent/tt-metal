@@ -20,11 +20,10 @@ ALLOWED_PREFIXES = {
     "tt-metalium",
     "tt_stl",
     "umd",
-    "boost",
     "fmt",
     "magic_enum",
     "nlohmann",
-    "pybind11",
+    "tt-logger",
 }
 
 STD_HEADERS = {

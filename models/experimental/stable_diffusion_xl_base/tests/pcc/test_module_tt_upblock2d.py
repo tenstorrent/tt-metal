@@ -11,6 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -24,17 +25,14 @@ from models.utility_functions import torch_random
         ),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 3 * 16384}], indirect=True)
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_upblock(
     device,
     input_shape,
     temb_shape,
     residuals,
     block_id,
-    use_program_cache,
     reset_seeds,
-    conv_weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -44,7 +42,7 @@ def test_upblock(
 
     torch_crosattn = unet.up_blocks[block_id]
 
-    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
+    model_config = ModelOptimisations()
     tt_crosattn = TtUpBlock2D(device, state_dict, f"up_blocks.{block_id}", model_config=model_config)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -77,7 +75,6 @@ def test_upblock(
         input_shape=[B, C, H, W],
         temb=ttnn_temb_tensor,
     )
-    model_config.clear_weight_preprocess()
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
@@ -86,5 +83,5 @@ def test_upblock(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.965)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.995)
     logger.info(f"PCC is: {pcc_message}")

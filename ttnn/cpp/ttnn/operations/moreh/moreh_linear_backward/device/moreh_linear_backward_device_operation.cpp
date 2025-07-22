@@ -45,12 +45,12 @@ void MorehBiasAddBackwardOperation::validate_on_program_cache_hit(
 MorehBiasAddBackwardOperation::spec_return_value_t MorehBiasAddBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.bias_grad.has_value()) {
-        return tensor_args.bias_grad->get_tensor_spec();
+        return tensor_args.bias_grad->tensor_spec();
     }
     TT_FATAL(tensor_args.bias.has_value(), "bias tensor should not be std::nullopt");
-    auto dtype = tensor_args.bias.value().get_dtype();
+    auto dtype = tensor_args.bias.value().dtype();
     return TensorSpec(
-        tensor_args.bias->get_logical_shape(),
+        tensor_args.bias->logical_shape(),
         TensorLayout(dtype, PageConfig(Layout::TILE), operation_attributes.bias_grad_memory_config));
 };
 

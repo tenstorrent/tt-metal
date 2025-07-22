@@ -52,7 +52,7 @@ def test_add_and_apply_activations(device, shape, activations, torch_dtype):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, activations=activations, use_legacy=False)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, activations=activations, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
     assert output_tensor.shape == shape

@@ -8,27 +8,22 @@
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(1);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(3);
     // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on
     // them
-    constexpr uint32_t window_outer = get_compile_time_arg_val(3);
-    constexpr uint32_t window_inner = get_compile_time_arg_val(4);
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(5);
+    constexpr uint32_t window_outer = get_compile_time_arg_val(4);
+    constexpr uint32_t window_inner = get_compile_time_arg_val(5);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
     constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
-    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(20);
 
-    constexpr uint32_t act_block_h_datums_read_last_block =
-        act_block_h_datums_last_block > act_block_h_datums ? act_block_h_datums / 2 : act_block_h_datums_last_block / 2;
-    constexpr uint32_t act_block_h_datums_second_reader = get_compile_time_arg_val(21);
-    constexpr uint32_t act_block_h_datums_second_reader_read = act_block_h_datums_second_reader / 2;
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(22) == 1;
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(23);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(24);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(25);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
@@ -43,8 +38,6 @@ void kernel_main() {
     }
 
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
-
-    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2;  // Extra /2 because of packed uint16 reads
 
     // LOOP TO FILL READER INDICES
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
@@ -76,14 +69,10 @@ void kernel_main() {
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
-            // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
 
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-
-            uint32_t act_block_h_datums_read_curr =
-                bh == act_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
 
             read_sticks<
                 dilation_w,
@@ -91,8 +80,8 @@ void kernel_main() {
                 conv_act_c_read_bytes,
                 act_block_w_extra_align_bytes,
                 stride_w_bytes,
-                weight_size_w>(
-                act_block_h_datums_read_curr, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                weight_size_w,
+                stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
 
             noc_async_read_barrier();
 
@@ -103,7 +92,8 @@ void kernel_main() {
 
         start_reader_idx = reader_idx;
 #ifdef SPLIT_READER
-        start_reader_idx += act_block_h_datums_second_reader_read;
+        // Increment reader index for the next number of segments (number of segments for other reader)
+        start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
 #endif
     }
     noc_async_write_barrier();

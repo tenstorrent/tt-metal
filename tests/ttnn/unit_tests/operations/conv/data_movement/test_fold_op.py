@@ -280,9 +280,7 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
 @pytest.mark.parametrize("pad_w", [3])
 @pytest.mark.parametrize("stride_h", [2])
 @pytest.mark.parametrize("stride_w", [2])
-def test_fold_with_permute_reshape_on_device_sharded(
-    device, n, c, h, w, pad_h, pad_w, stride_h, stride_w, use_program_cache
-):
+def test_fold_with_permute_reshape_on_device_sharded(device, n, c, h, w, pad_h, pad_w, stride_h, stride_w):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
@@ -389,7 +387,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_allclose(actual, expected)
 
 
-def test_fold_sharded(device, use_program_cache):
+def test_fold_sharded(device):
     torch.manual_seed(0)
 
     for run in range(2):

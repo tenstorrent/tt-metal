@@ -46,7 +46,7 @@ In a tiled tensor, pages are represented as 2D tiles, with the default tile size
 
 
 #### 3.2.1 Tile Shapes
-The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metallium only supports `32x32`, and other tile shapes will be supported in Q4'2024**
+The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metalium only supports `32x32`, and other tile shapes will be supported in Q4'2024**
 
 
 ## 4. Memory Layout
@@ -62,7 +62,7 @@ An individual tensor is represented across several pages, with the distribution 
 
 In an interleaved tensor layout, pages are allocated in a round-robin fashion across multiple banks. Allocation of a new tensor always begins with the first bank, which can lead to some fragmentation between tensors.
 
-For example in *Figure 3*, consider a tensor requiring four pages (P0 to P3) across three banks (0 through 2). The first three pages are allocated to banks 0 through 2, and the fourth page wraps around and is allocated to bank 0. The next tensor will also start allocation at bank 0. 
+For example in *Figure 3*, consider a tensor requiring four pages (P0 to P3) across three banks (0 through 2). The first three pages are allocated to banks 0 through 2, and the fourth page wraps around and is allocated to bank 0. The next tensor will also start allocation at bank 0.
 
 <img src="images/interleaved_2.svg" style="width:500px;"/>
 
@@ -122,5 +122,3 @@ Other sharding parameters include:
 - **Shard Orientation**: Describes the order in which shards are distributed to the cores in the core grid. This can be either `ROW-MAJOR` or `COLUMN-MAJOR`.
 
 - For tensors with a `Row-Major` layout, each page typically represents a single row of the tensor. However, for sharded tensors, the width of each page matches the width of the shard. For tiled tensors, the page shape remains the same as the tile shape (e.g., 32x32).
-
- 

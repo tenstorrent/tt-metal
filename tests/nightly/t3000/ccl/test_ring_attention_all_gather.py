@@ -4,27 +4,21 @@
 
 import torch
 import pytest
-import math
-import os
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 
 
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+def create_global_semaphores(mesh_device, cores, initial_value):
     # create global semaphore handles
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
     return ccl_semaphore_handles
 
 
-def create_persistent_buffers(
-    ag_output_shape, num_inputs, mesh_device, ag_input_dtype, mem_config_ag, rp_dim, rp_axis, rp_factor, up_factor
-):
+def create_persistent_buffers(ag_output_shape, num_inputs, mesh_device, ag_input_dtype, mem_config_ag, rp_axis):
     dims = [None, None]
-    # up_axis = 1 - rp_axis
-    # dims[up_axis] = up_factor
+    up_axis = 1 - rp_axis
+    dims[up_axis] = 1
     persistent_buffers = [
         ttnn.from_torch(
             torch.zeros(ag_output_shape),
@@ -40,12 +34,18 @@ def create_persistent_buffers(
     return persistent_buffers
 
 
+def create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor):
+    submesh_shape = [0, 0]
+    submesh_shape[rp_axis] = rp_factor
+    submesh_shape[1 - rp_axis] = up_factor
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    return submesh_device
+
+
 def run_ring_attention_all_gather_impl(
     mesh_device,
-    num_devices,
     ag_output_shape,
     ag_num_inputs,
-    rp_dim,
     rp_axis,
     rp_factor,
     up_factor,
@@ -55,13 +55,13 @@ def run_ring_attention_all_gather_impl(
     mem_config_input,
     mem_config_ag,
     all_gather_topology,
-    use_program_cache,
     num_iters=1,
     enable_trace=True,
 ):
     torch.manual_seed(0)
 
-    tile = (32, 32)
+    sequence_index = 2
+    head_index = 1
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -83,9 +83,7 @@ def run_ring_attention_all_gather_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
@@ -96,10 +94,7 @@ def run_ring_attention_all_gather_impl(
             mesh_device,
             ag_input_dtype,
             mem_config_ag,
-            rp_dim,
             rp_axis,
-            rp_factor,
-            up_factor,
         )
         for _ in range(num_iters)
     ]
@@ -107,15 +102,14 @@ def run_ring_attention_all_gather_impl(
 
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
-    logger.info(f"All gather dim: {rp_dim}")
 
     ag_input_tensor_mesh_list = []
     ag_output_tensor_list = []
     _, _, _, hidden_dim = ag_output_shape
 
     input_dims = [None, None]
-    input_dims[rp_axis] = rp_dim if rp_factor > 1 else None
-    input_dims[1 - rp_axis] = (3 - rp_dim) + 2 + 2 if up_factor > 1 else None
+    input_dims[rp_axis] = 2 if rp_factor > 1 else None
+    input_dims[1 - rp_axis] = 1 if up_factor > 1 else None
     for i in range(num_iters):
         ag_output_tensor_list_per_iteration = []
         ag_input_tensor_mesh_list_per_iteration = []
@@ -141,7 +135,7 @@ def run_ring_attention_all_gather_impl(
         tt_all_gather_out_tensors = ttnn.experimental.ring_attention_all_gather_async(
             ag_input_tensor_mesh_list[i],
             persistent_output_buffer=persistent_output_buffers[i],
-            dim=rp_dim,
+            dim=sequence_index,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             cluster_axis=rp_axis,
             mesh_device=mesh_device,
@@ -184,8 +178,8 @@ def run_ring_attention_all_gather_impl(
             logger.info(f"Done iteration {i}")
 
     output_dims = [None, None]
-    output_dims[rp_axis] = rp_dim
-    output_dims[1 - rp_axis] = (3 - rp_dim) + 2
+    output_dims[rp_axis] = sequence_index
+    output_dims[1 - rp_axis] = head_index
     for i in range(num_iters):
         tt_ag_out_tensors = tt_all_gather_out_tensor_list[i]
         torch_ag_out_tensors = ag_output_tensor_list[i if not enable_trace else 0]
@@ -199,8 +193,11 @@ def run_ring_attention_all_gather_impl(
                     dims=output_dims,
                 ),
             )
-            tt_ag_out = torch.narrow(tt_ag_out, rp_dim, 0, torch_ag_out_tensors[j].shape[rp_dim])
-            eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensors[j])
+            tt_ag_out = torch.narrow(tt_ag_out, sequence_index, 0, torch_ag_out_tensors[j].shape[sequence_index])
+            if ag_input_dtype == ttnn.bfloat16:
+                eq, output = comp_equal(tt_ag_out, torch_ag_out_tensors[j])
+            else:
+                eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensors[j])
             logger.info(f"{output}, iteration {i}, tensor {j}")
             assert eq, f"{i}{j} FAILED ag: {output}"
 
@@ -209,25 +206,23 @@ def run_ring_attention_all_gather_impl(
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
 @pytest.mark.parametrize(
-    "num_devices, num_links, ag_output_shape, ag_num_inputs, rp_dim, rp_axis, rp_factor, up_factor, layout, ag_input_dtype",
+    "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor",
     [
-        (8, 1, [1, 1, 4096, 2560], 1, 3, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 1, 4096, 2560], 2, 3, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 1, 4096, 2560], 1, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 5, 4096, 2560], 1, 3, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 5, 4096, 64], 1, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 5, 4096, 64], 2, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 5, 4096, 64], 2, 2, 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 4096, 2560], 1, 1, 4, 1),
+        ([1, 5, 4096, 64], 1, 1, 4, 1),
+        ([1, 5, 4096, 64], 2, 0, 2, 1),
+        ([1, 10, 4096, 64], 2, 1, 4, 1),
+        ([1, 40, 4096, 64], 2, 1, 4, 2),
     ],
     ids=[
-        "dim3_1input",
-        "dim3_2input",
-        "dim2_1input",
-        "dim31input_batches",
-        "dim21input_batches",
-        "dim2_2input_batches_rp2",
-        "dim2_2input_batches_rp4_yaxis",
+        "shape1_1input_rp4",
+        "shape2_1input_rp4",
+        "shape2_2input_rp2",
+        "shape3_2input_rp4",
+        "shape4_2input_rp4_up2",
     ],
 )
 @pytest.mark.parametrize(
@@ -258,10 +253,8 @@ def run_ring_attention_all_gather_impl(
 )
 def test_ring_attention_all_gather(
     mesh_device,
-    num_devices,
     ag_output_shape,
     ag_num_inputs,
-    rp_dim,
     rp_axis,
     rp_factor,
     up_factor,
@@ -272,23 +265,17 @@ def test_ring_attention_all_gather(
     mem_config_ag,
     enable_trace,
     num_iters,
-    use_program_cache,
     all_gather_topology,
 ):
     if all_gather_topology == ttnn.Topology.Ring:
         pytest.skip("Ring topology not supported on T3K - requires 2D torus")
 
-    submesh_shape = [0, 0]
-    submesh_shape[rp_axis] = rp_factor
-    submesh_shape[1 - rp_axis] = up_factor
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
 
     run_ring_attention_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         ag_num_inputs,
-        rp_dim,
         rp_axis,
         rp_factor,
         up_factor,
@@ -297,25 +284,24 @@ def test_ring_attention_all_gather(
         layout,
         mem_config_input,
         mem_config_ag,
-        use_program_cache=use_program_cache,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
 
-    ttnn.close_mesh_device(submesh_device)
-
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
 @pytest.mark.parametrize(
-    "num_devices, num_links, ag_output_shape, ag_num_inputs, rp_dim, rp_axis, rp_factor, up_factor, layout, ag_input_dtype",
+    "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor",
     [
-        (8, 1, [1, 5, 4096, 64], 2, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 5, 4096, 64], 2, 2, 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 5, 4096, 64], 2, 1, 4, 1),
+        ([1, 5, 4096, 64], 2, 0, 2, 1),
     ],
     ids=[
-        "dim2_2input_batches",
-        "dim2_2input_batches_yaxis",
+        "shape2_2input_rp4",
+        "shape2_2input_rp2",
     ],
 )
 @pytest.mark.parametrize(
@@ -337,21 +323,17 @@ def test_ring_attention_all_gather(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     ids=[
-        # "ring ",
         "line",
     ],
     indirect=["device_params"],
 )
 def test_ring_attention_all_gather_program_cache(
     mesh_device,
-    num_devices,
     ag_output_shape,
     ag_num_inputs,
-    rp_dim,
     rp_axis,
     rp_factor,
     up_factor,
@@ -362,13 +344,9 @@ def test_ring_attention_all_gather_program_cache(
     mem_config_ag,
     enable_trace,
     num_iters,
-    use_program_cache,
     all_gather_topology,
 ):
-    submesh_shape = [0, 0]
-    submesh_shape[rp_axis] = rp_factor
-    submesh_shape[1 - rp_axis] = up_factor
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
 
     dummy_tensors = []
     for i in range(3):
@@ -385,10 +363,8 @@ def test_ring_attention_all_gather_program_cache(
         )
         run_ring_attention_all_gather_impl(
             submesh_device,
-            num_devices,
             ag_output_shape,
             ag_num_inputs,
-            rp_dim,
             rp_axis,
             rp_factor,
             up_factor,
@@ -397,7 +373,6 @@ def test_ring_attention_all_gather_program_cache(
             layout,
             mem_config_input,
             mem_config_ag,
-            use_program_cache=use_program_cache,
             all_gather_topology=all_gather_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,
@@ -405,4 +380,3 @@ def test_ring_attention_all_gather_program_cache(
         ttnn.synchronize_device(submesh_device)
 
     assert submesh_device.num_program_cache_entries() == 1
-    ttnn.close_mesh_device(submesh_device)

@@ -86,7 +86,6 @@ def test_all_gather_sharded_post_commit(
     n_worker,
     n_buffer,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
     num_iter,
 ):
@@ -104,7 +103,6 @@ def test_all_gather_sharded_post_commit(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         n_worker=n_worker,

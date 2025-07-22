@@ -18,7 +18,7 @@ struct SamplingOperation {
         const Tensor& input_indices_tensor,
         const std::vector<uint16_t>& k,
         const std::vector<float>& p,
-        const uint32_t seed,
+        const std::optional<uint32_t>& seed = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
@@ -27,7 +27,7 @@ struct SamplingOperation {
         const Tensor& input_indices_tensor,
         const std::vector<uint16_t>& k,
         const std::vector<float>& p,
-        const uint32_t seed,
+        const std::optional<uint32_t>& seed = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };

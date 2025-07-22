@@ -1,11 +1,24 @@
 add_library(ttnn_op_conv ${LIB_TYPE})
-add_library(TT::NN::Ops::Conv ALIAS ttnn_op_conv)
+add_library(TTNN::Ops::Conv ALIAS ttnn_op_conv)
 
 target_precompile_headers(ttnn_op_conv REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_conv)
+set_target_properties(
+    ttnn_op_conv
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels conv2d/device/kernels/*)
 target_sources(
     ttnn_op_conv
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         conv2d/conv2d.cpp
         conv2d/conv2d_utils.cpp
@@ -24,7 +37,15 @@ target_link_libraries(
     ttnn_op_conv
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
+install(
+    TARGETS
+        ttnn_op_conv
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/conv
+        COMPONENT ttnn-runtime
+)
 install(TARGETS ttnn_op_conv LIBRARY COMPONENT tar)

@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include <algorithm>
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -105,7 +106,7 @@ void kernel_main() {
         auto tmp_input_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_input);
         auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
 
-        uint32_t idx_max = min(w + FACE_WIDTH, W);
+        uint32_t idx_max = std::min(w + FACE_WIDTH, W);
         for (uint32_t idx = 0; idx < idx_max; idx++) {
             int32_t target_val = target_l1_ptr[idx];
 

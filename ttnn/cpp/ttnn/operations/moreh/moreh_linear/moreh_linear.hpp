@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear {
@@ -15,7 +15,7 @@ struct MorehLinear {
         const std::optional<Tensor>& bias,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_linear
 

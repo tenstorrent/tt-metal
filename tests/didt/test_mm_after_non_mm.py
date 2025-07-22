@@ -123,7 +123,6 @@ def test_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    use_program_cache,
     loop_counts,
     grid_size=(8, 8),
 ):

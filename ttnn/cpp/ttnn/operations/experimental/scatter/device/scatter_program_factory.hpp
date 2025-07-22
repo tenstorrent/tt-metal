@@ -30,7 +30,7 @@ struct ScatterProgramFactory {
     struct shared_variables_t {
         KernelHandle reader_kernel_id;
         KernelHandle writer_kernel_id;
-        CoreCoord storage_grid_size;
+        std::vector<CoreCoord> cores;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

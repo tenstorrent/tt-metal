@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_blackhole
         ((32, 32, 32, 32), 0),
     ),  # single tile
 )
-def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
+def test_sum_for_dim_hw(device, shape_dim):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -49,7 +49,7 @@ def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
         (32, 32, 32, 32),
     ),  # single tile
 )
-def test_sum_global(device, use_program_cache, shape):
+def test_sum_global(device, shape):
     torch.manual_seed(0)
 
     N = shape[0]

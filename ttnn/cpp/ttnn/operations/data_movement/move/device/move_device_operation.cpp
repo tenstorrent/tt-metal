@@ -16,7 +16,7 @@ void MoveDeviceOperation::validate(const std::vector<Tensor>& input_tensors) con
 
 std::vector<ttnn::TensorSpec> MoveDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(1).get_tensor_spec()};
+    return {input_tensors.at(1).tensor_spec()};
 }
 
 std::vector<Tensor> MoveDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

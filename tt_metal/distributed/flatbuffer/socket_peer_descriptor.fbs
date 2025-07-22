@@ -1,0 +1,44 @@
+include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
+
+namespace tt.tt_metal.distributed.flatbuffer;
+
+table CoreCoord {
+    x: uint32;
+    y: uint32;
+}
+
+table MeshCoreCoord {
+    device_coord: MeshCoordinate;
+    core_coord: CoreCoord;
+}
+
+table SocketConnection {
+    sender_core: MeshCoreCoord;
+    receiver_core: MeshCoreCoord;
+}
+
+table SocketMemoryConfig {
+    socket_storage_type: uint32;  // enum as uint32
+    fifo_size: uint32;
+    sender_sub_device: uint32 = null;
+    receiver_sub_device: uint32 = null;
+}
+
+table SocketConfig {
+    socket_connections: [SocketConnection];
+    socket_mem_config: SocketMemoryConfig;
+    sender_rank: uint32;
+    receiver_rank: uint32;
+    socket_id: uint32;
+}
+
+table SocketPeerDescriptor {
+    config: SocketConfig;
+    config_buffer_address: uint64;
+    data_buffer_address: uint64;
+    mesh_ids: [uint32];
+    chip_ids: [uint32];
+    exchange_tag: uint32;
+}
+
+root_type SocketPeerDescriptor;

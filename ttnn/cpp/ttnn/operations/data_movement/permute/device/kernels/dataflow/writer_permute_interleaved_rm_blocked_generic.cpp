@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <algorithm>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     // Compile-time constants
@@ -98,10 +99,10 @@ void kernel_main() {
 
         // Compute start/end boundaries for the current X and W blocks
         const uint32_t x_start = x_block * x_block_size;
-        const uint32_t x_end = min(x_start + x_block_size, X);
+        const uint32_t x_end = std::min(x_start + x_block_size, X);
 
         const uint32_t w_start = w_block * w_block_size;
-        const uint32_t w_end = min(w_start + w_block_size, W);
+        const uint32_t w_end = std::min(w_start + w_block_size, W);
 
         // Compute the read size for the X dimension
         const uint32_t x_read_size_bytes = (x_end - x_start) * element_size;

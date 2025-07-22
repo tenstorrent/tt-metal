@@ -8,7 +8,7 @@
 #include <ctype.h>
 #include "dev_msgs.h"
 #include <fmt/base.h>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include <algorithm>
@@ -65,15 +65,6 @@ const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
         default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
     }
     return nullptr;
-}
-
-// Helper function to get stack size by riscv core type
-uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
-    auto stack_size = MetalContext::instance().hal().get_stack_size(type);
-    if (stack_size == 0xdeadbeef) {
-        TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
-    }
-    return stack_size;
 }
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
@@ -184,23 +175,16 @@ const launch_msg_t* get_valid_launch_message(const mailboxes_t* mbox_data) {
 }
 }  // anonymous namespace
 
-namespace tt::watcher {
+namespace tt::tt_metal {
 
-WatcherDeviceReader::WatcherDeviceReader(
-    FILE* f,
-    chip_id_t device_id,
-    std::vector<string>& kernel_names,
-    void (*set_watcher_exception_message)(const string&)) :
-    f(f),
-    device_id(device_id),
-    kernel_names(kernel_names),
-    set_watcher_exception_message(set_watcher_exception_message) {
+WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std::vector<string>& kernel_names) :
+    f(f), device_id(device_id), kernel_names(kernel_names) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
@@ -221,7 +205,7 @@ WatcherDeviceReader::~WatcherDeviceReader() {
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
@@ -234,16 +218,20 @@ WatcherDeviceReader::~WatcherDeviceReader() {
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
             if (num_events > 0) {
                 log_warning(
+                    tt::LogMetal,
                     "Device {} virtual ethernet core {}: Watcher detected {} link retraining events.",
                     device_id,
                     virtual_core,
                     num_events);
             }
-            fprintf(
-                f,
-                "%s\n",
-                fmt::format("\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
-                    .c_str());
+            if (f) {
+                fprintf(
+                    f,
+                    "%s\n",
+                    fmt::format(
+                        "\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
+                        .c_str());
+            }
         }
     }
 }
@@ -258,7 +246,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     TT_ASSERT(this->f != nullptr);
 
     if (f != stdout && f != stderr) {
-        log_info(LogLLRuntime, "Watcher checking device {}", device_id);
+        log_info(tt::LogMetal, "Watcher checking device {}", device_id);
     }
 
     // Clear per-dump info
@@ -289,12 +277,12 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
     // Dump eth cores
     for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, true);
     }
     for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, false);
     }
@@ -323,6 +311,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                 // overflowed, but it could be a remarkable coincidence.
                 fprintf(f, " (OVERFLOW)");
                 log_fatal(
+                    tt::LogMetal,
                     "Watcher detected stack overflow on Device {} Core {}: "
                     "{}! Kernel {} uses (at least) all of the stack.",
                     device_id,
@@ -332,6 +321,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             } else if (info.stack_free < min_threshold) {
                 fprintf(f, " (Close to overflow)");
                 log_warning(
+                    tt::LogMetal,
                     "Watcher detected stack had fewer than {} bytes free on Device {} Core {}: "
                     "{}! Kernel {} leaves {} bytes unused.",
                     min_threshold,
@@ -354,7 +344,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
-        log_info(LogLLRuntime, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
+        log_info(tt::LogMetal, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause()) {
             while (std::cin.get() != '\n') {
                 ;
@@ -443,6 +433,14 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     ValidateKernelIDs(virtual_core, &(mbox_data->launch[launch_msg_read_ptr]));
 
     // Whether or not watcher data is available depends on a flag set on the device.
+    if (mbox_data->watcher.enable != WatcherEnabled and mbox_data->watcher.enable != WatcherDisabled) {
+        TT_THROW(
+            "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
+            core_str,
+            mbox_data->watcher.enable,
+            WatcherEnabled,
+            WatcherDisabled);
+    }
     bool enabled = (mbox_data->watcher.enable == WatcherEnabled);
 
     if (enabled) {
@@ -606,6 +604,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
+        case DebugSanitizeNocLinkedTransactionViolation:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -616,13 +618,13 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
 
     // If we logged an error, print to stdout and throw.
     if (!error_msg.empty()) {
-        log_warning("Watcher detected NOC error and stopped device:");
-        log_warning("{}: {}", core_str, error_msg);
+        log_warning(tt::LogMetal, "Watcher detected NOC error and stopped device:");
+        log_warning(tt::LogMetal, "{}: {}", core_str, error_msg);
         DumpWaypoints(core, mbox_data, true);
         DumpRingBuffer(core, mbox_data, true);
         LogRunningKernels(core, launch_msg);
         // Save the error string for checking later in unit tests.
-        set_watcher_exception_message(fmt::format("{}: {}", core_str, error_msg));
+        MetalContext::instance().watcher_server()->set_exception_message(fmt::format("{}: {}", core_str, error_msg));
         TT_THROW("{}: {}", core_str, error_msg);
     }
 }
@@ -708,13 +710,13 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
 
 void WatcherDeviceReader::DumpAssertTrippedDetails(
     CoreDescriptor& core, const string& error_msg, const mailboxes_t* mbox_data) {
-    log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
-    log_warning(error_msg.c_str());
+    log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
+    log_warning(tt::LogMetal, "{}", error_msg);
     DumpWaypoints(core, mbox_data, true);
     DumpRingBuffer(core, mbox_data, true);
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
     LogRunningKernels(core, launch_msg);
-    set_watcher_exception_message(error_msg);
+    MetalContext::instance().watcher_server()->set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
@@ -728,13 +730,13 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
         } else if (pause > 1) {
             string error_reason = fmt::format(
                 "Watcher data corruption, pause state on core {} unknown code: {}.\n", core.coord.str(), pause);
-            log_warning(error_reason.c_str());
-            log_warning("{}: {}", core_str, error_reason);
+            log_warning(tt::LogMetal, "{}: {}", core_str, error_reason);
             DumpWaypoints(core, mbox_data, true);
             DumpRingBuffer(core, mbox_data, true);
             LogRunningKernels(core, get_valid_launch_message(mbox_data));
             // Save the error string for checking later in unit tests.
-            set_watcher_exception_message(fmt::format("{}: {}", core_str, error_reason));
+            MetalContext::instance().watcher_server()->set_exception_message(
+                fmt::format("{}: {}", core_str, error_reason));
             TT_THROW("{}", error_reason);
         }
     }
@@ -771,7 +773,7 @@ void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& /*core*/, const mailbox
     if (to_stdout) {
         if (!out.empty()) {
             out = string("Last ring buffer status: ") + out;
-            log_info(out.c_str());
+            log_info(tt::LogMetal, "{}", out);
         }
     } else {
         fprintf(f, "%s", out.c_str());
@@ -937,7 +939,7 @@ void WatcherDeviceReader::DumpWaypoints(CoreDescriptor& core, const mailboxes_t*
     // This function can either log the waypoint to the log or stdout.
     if (to_stdout) {
         out = string("Last waypoint: ") + out;
-        log_info(out.c_str());
+        log_info(tt::LogMetal, "{}", out);
     } else {
         fprintf(f, "%s ", out.c_str());
     }
@@ -1038,14 +1040,25 @@ void WatcherDeviceReader::ValidateKernelIDs(CoreDescriptor& core, const launch_m
 }
 
 void WatcherDeviceReader::LogRunningKernels(CoreDescriptor& core, const launch_msg_t* launch_msg) {
-    log_info("While running kernels:");
+    log_info(tt::LogMetal, "While running kernels:");
     if (core.type == CoreType::ETH) {
-        log_info(" erisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
-    } else {
-        log_info(" brisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
-        log_info(" ncrisc: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
         log_info(
-            " triscs: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
+            tt::LogMetal,
+            " erisc : {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+    } else {
+        log_info(
+            tt::LogMetal,
+            " brisc : {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
+        log_info(
+            tt::LogMetal,
+            " ncrisc: {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
+        log_info(
+            tt::LogMetal,
+            " triscs: {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
     }
 }
 
@@ -1068,4 +1081,4 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
     return "";
 }
 
-}  // namespace tt::watcher
+}  // namespace tt::tt_metal

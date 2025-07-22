@@ -16,7 +16,7 @@ Then run the following:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/matmul_multi_core
+    ./build/programming_examples/metal_example_matmul_multi_core
 ```
 ## Accessing all the cores
 

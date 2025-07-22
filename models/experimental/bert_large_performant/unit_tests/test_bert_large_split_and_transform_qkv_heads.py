@@ -109,7 +109,7 @@ def test_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_me
 
 
 @skip_for_grayskull("watcher error, see issue #6487")
-def test_split_query_key_value_and_split_heads_with_program_cache(device, use_program_cache):
+def test_split_query_key_value_and_split_heads_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):

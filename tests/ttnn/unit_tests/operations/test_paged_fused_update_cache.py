@@ -208,7 +208,6 @@ def test_paged_fused_update_cache_decode(
     input_dtype,
     cache_dtype,
     device,
-    use_program_cache,
     pcc,
 ):
     run_test_paged_fused_update_cache_decode(
@@ -249,7 +248,6 @@ def test_paged_fused_update_cache_decode_program_caching(
     input_dtype,
     cache_dtype,
     device,
-    use_program_cache,
     pcc,
 ):
     dummy_tensors = []

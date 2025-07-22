@@ -38,10 +38,12 @@ target_link_libraries(
         umd::Firmware
         umd::device
         simde::simde
+        Taskflow::Taskflow
     PRIVATE
         Metalium::Metal::Hardware
         Tracy::TracyClient
         TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp
         Boost::asio
+        tt-logger::tt-logger
 )

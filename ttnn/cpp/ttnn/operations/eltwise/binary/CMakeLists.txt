@@ -1,11 +1,28 @@
 add_library(ttnn_op_eltwise_binary ${LIB_TYPE})
-add_library(TT::NN::Ops::Eltwise::Binary ALIAS ttnn_op_eltwise_binary)
+add_library(TTNN::Ops::Eltwise::Binary ALIAS ttnn_op_eltwise_binary)
 
 target_precompile_headers(ttnn_op_eltwise_binary REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary)
+set_target_properties(
+    ttnn_op_eltwise_binary
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_binary
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES binary.hpp common/binary_op_types.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         binary.cpp
         common/binary_op_utils.cpp
@@ -25,7 +42,19 @@ target_link_libraries(
     ttnn_op_eltwise_binary
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_eltwise_binary
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/binary
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_eltwise_binary LIBRARY COMPONENT tar)

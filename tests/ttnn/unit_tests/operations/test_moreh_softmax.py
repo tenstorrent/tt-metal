@@ -431,7 +431,7 @@ def test_softmax_backward_for_dim_nc(shape_dim, dtype, compute_kernel_options, d
         ttnn.bfloat16,
     ],
 )
-def test_softmax_callback(shape_dim_strategy, dtype, device, use_program_cache):
+def test_softmax_callback(shape_dim_strategy, dtype, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
     rtol = atol = 0.05
@@ -463,7 +463,7 @@ def test_softmax_callback(shape_dim_strategy, dtype, device, use_program_cache):
         ttnn.bfloat16,
     ],
 )
-def test_softmax_backward_callback(shape_dim_strategy, dtype, device, use_program_cache):
+def test_softmax_backward_callback(shape_dim_strategy, dtype, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
     rtol = atol = 0.05

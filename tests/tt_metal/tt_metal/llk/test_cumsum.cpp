@@ -10,7 +10,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -23,7 +22,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
@@ -114,8 +113,8 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
         .set_page_size(16, single_tile_size);
     auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
-    string reader_kernel_name, writer_kernel_name;
-    std::map<string, string> defines = {};
+    std::string reader_kernel_name, writer_kernel_name;
+    std::map<std::string, std::string> defines = {};
     std::vector<uint32_t> compile_args = {};
 
     if (test_config.rowwise) {

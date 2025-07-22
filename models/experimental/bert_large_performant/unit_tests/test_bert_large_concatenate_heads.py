@@ -86,7 +86,7 @@ def test_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config,
     run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, out_mem_config)
 
 
-def test_bert_large_concatenate_heads_with_program_cache(device, use_program_cache):
+def test_bert_large_concatenate_heads_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):

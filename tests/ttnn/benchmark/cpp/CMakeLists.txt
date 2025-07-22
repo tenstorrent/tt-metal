@@ -1,6 +1,8 @@
 set(BENCHMARK_SRCS
     "host_tilizer_untilizer/tilizer_untilizer.cpp"
     "padding/pad_rm.cpp"
+    "operations/ternary/benchmark_where.cpp"
+    "host_alloc_on_tensor_readback.cpp"
 )
 
 foreach(TEST_SRC ${BENCHMARK_SRCS})

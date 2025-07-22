@@ -11,7 +11,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-// //#include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
 #include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <cstring>
@@ -30,7 +29,7 @@
 #include <tt-metalium/data_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>

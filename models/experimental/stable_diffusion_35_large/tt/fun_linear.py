@@ -77,7 +77,15 @@ class TtLinearParameters:
             bias = bias.unsqueeze(0)
 
         if shard_dim in [0, -2]:
-            bias_mm = _ShardBias(device, parallel_config)
+            # Shard the bias of a linear operation on the first dimension.
+            # A single device receive the bias as is, while the other ones receive zero tensors of the same
+            # shape so that the bias is not added multiple times after gathering.
+            tp_factor = parallel_config.tensor_parallel.factor
+            zeros = torch.zeros_like(bias)
+            bias = torch.cat([bias] + [zeros] * (tp_factor - 1), dim=0)
+            bias_dims = [None, None]
+            bias_dims[parallel_config.tensor_parallel.mesh_axis] = 0
+            bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=bias_dims)
         elif shard_dim in [1, -1]:
             bias_dims = [None, None]
             bias_dims[parallel_config.tensor_parallel.mesh_axis] = shard_dim
@@ -338,32 +346,3 @@ def sd_linear(
         output = output.reshape([output.shape[0], 1, 1, output.shape[-1]])
 
     return output
-
-
-class _ShardBias(ttnn.TensorToMesh):
-    """A mesh mapper for sharding the bias of a linear operation.
-
-    This mesh mapper is intended for sharding the bias of a linear operation on the first dimension.
-    A single device receive the bias as is, while the other ones receive zero tensors of the same
-    shape so that the bias is not added multiple times after gathering.
-    """
-
-    def __init__(self, mesh_device: ttnn.MeshDevice, parallel_config: DiTParallelConfig) -> None:
-        super().__init__(mesh_device)
-        self.parallel_config = parallel_config
-        self.tp_factor = self.parallel_config.tensor_parallel.factor
-        self.sp_factor = self.parallel_config.sequence_parallel.factor
-
-    def map(self, tensor: torch.Tensor) -> dict[int, ttnn.Tensor]:
-        zeros = torch.zeros_like(tensor)
-        return ([tensor] + [zeros] * (self.tp_factor - 1)) * self.sp_factor
-
-    def config(self) -> dict[str, str]:
-        dims = [None, None]
-        dims[self.parallel_config.tensor_parallel.mesh_axis] = self.tp_factor
-        dims[self.parallel_config.sequence_parallel.mesh_axis] = self.sp_factor
-        return {
-            "strategy": "shard_2d",
-            "mesh_shape_y": str(dims[0]),
-            "mesh_shape_x": str(dims[1]),
-        }

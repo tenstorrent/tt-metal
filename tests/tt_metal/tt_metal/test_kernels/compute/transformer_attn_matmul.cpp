@@ -55,7 +55,7 @@ void MAIN {
 
                     // untilize tile and write to CBIndex::c_25
                     cb_wait_front(cb_intermed0, onetile);
-                    untilize_init_short(cb_intermed0);
+                    untilize_init(cb_intermed0);
                     cb_reserve_back(cb_intermed1, 1);
                     untilize_block(cb_intermed0, 1, cb_intermed1);
                     cb_push_back(cb_intermed1, 1);
@@ -72,7 +72,7 @@ void MAIN {
                 cb_reserve_back(tt::CBIndex::c_16, onetile);
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
-                tilize_init_short(cb_intermed2, 1, out_cb_id);
+                tilize_init(cb_intermed2, 1, out_cb_id);
                 tilize_block(cb_intermed2, 1, out_cb_id);
                 cb_push_back(out_cb_id, 1);
 

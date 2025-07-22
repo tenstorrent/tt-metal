@@ -20,13 +20,13 @@ class TtCrossAttnUpBlock2D(nn.Module):
         num_attn_heads,
         out_dim,
         has_upsample=False,
-        transformer_weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
         num_layers = 3
         self.attentions = []
         self.resnets = []
+        self.device = device
 
         for i in range(num_layers):
             self.attentions.append(
@@ -34,10 +34,10 @@ class TtCrossAttnUpBlock2D(nn.Module):
                     device,
                     state_dict,
                     f"{module_path}.attentions.{i}",
+                    model_config,
                     query_dim,
                     num_attn_heads,
                     out_dim,
-                    weights_dtype=transformer_weights_dtype,
                 )
             )
 
@@ -85,9 +85,10 @@ class TtCrossAttnUpBlock2D(nn.Module):
                 hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
             )
 
+        ttnn.DumpDeviceProfiler(self.device)
+
         if self.upsamplers is not None:
             hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
         return hidden_states, [C, H, W]

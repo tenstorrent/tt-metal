@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 
@@ -10,7 +10,7 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 uint32_t num_pages(const ttnn::Tensor& input_tensor) {
-    const auto& shape = input_tensor.get_logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     return shape.volume() / shape[-1];
 }
 
@@ -18,7 +18,7 @@ uint32_t page_size(const ttnn::Tensor& input_tensor) {
     auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                 ? tt::tt_metal::hal::get_dram_alignment()
                                 : tt::tt_metal::hal::get_l1_alignment();
-    const auto& shape = input_tensor.get_logical_shape();  // in anticipation of RM padding
+    const auto& shape = input_tensor.logical_shape();  // in anticipation of RM padding
     return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
 }
 
@@ -49,10 +49,10 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_rm_page_size = detail::page_size(input_tensor);
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t output_rm_page_size = detail::page_size(tensor_return_value);
 
     uint32_t num_input_pages = detail::num_pages(input_tensor);
@@ -62,7 +62,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
 
-    uint32_t num_rows = input_tensor.volume() / input_tensor.get_logical_shape()[-1];
+    uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -97,8 +97,8 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
 
-    auto input_shape_view = input_tensor.get_logical_shape().view();
-    auto output_strides = detail::get_row_strides(output_tensor.get_logical_shape());  // in anticipation of RM padding
+    auto input_shape_view = input_tensor.logical_shape().view();
+    auto output_strides = detail::get_row_strides(output_tensor.logical_shape());  // in anticipation of RM padding
 
     std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
     writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
@@ -177,11 +177,11 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t w_block_size = constants::TILE_WIDTH;
     uint32_t input_cb_page_size = w_block_size * input_tensor.element_size();
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t x_block_size = constants::TILE_HEIGHT;
     uint32_t output_cb_page_size = x_block_size * input_tensor.element_size();
 
@@ -198,18 +198,18 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     // output rows of size X find the new row dimension (X)
 
     uint32_t x_dim = operation_attributes.dims.back();
-    uint32_t X = input_tensor.get_logical_shape()[x_dim];
+    uint32_t X = input_tensor.logical_shape()[x_dim];
     // stride from one row to the next for each dim in the input tensor
-    auto input_strides = detail::get_row_strides(input_tensor.get_logical_shape());
+    auto input_strides = detail::get_row_strides(input_tensor.logical_shape());
     uint32_t X_stride = input_strides[x_dim];
 
-    auto output_strides = detail::get_row_strides(output_tensor.get_logical_shape());
+    auto output_strides = detail::get_row_strides(output_tensor.logical_shape());
     // after we transpose X and W, we need to stride from one row to the next for each dim in the output tensor
-    uint32_t W = input_tensor.get_logical_shape()[-1];
+    uint32_t W = input_tensor.logical_shape()[-1];
     uint32_t W_stride = output_strides[x_dim];
 
     uint32_t N = operation_attributes.dims.size();
-    uint32_t num_rows = input_tensor.volume() / input_tensor.get_logical_shape()[-1];
+    uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
     // treat the input tensor as 3D with rows * x_blocks * w_blocks
     uint32_t x_blocks = tt::div_up(X, x_block_size);
@@ -252,7 +252,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         x_block_size,
         w_block_size,
         input_tensor.element_size(),
-        input_tensor.get_logical_shape()[-1] * input_tensor.element_size()};
+        input_tensor.logical_shape()[-1] * input_tensor.element_size()};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -283,7 +283,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         w_block_size,
 
         W,
-        output_tensor.get_logical_shape()[-1] * output_tensor.element_size()};
+        output_tensor.logical_shape()[-1] * output_tensor.element_size()};
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
@@ -302,7 +302,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
             .compile_args = compute_kernel_args,
         });
 
-    auto input_shape_view = input_tensor.get_logical_shape().view();
+    auto input_shape_view = input_tensor.logical_shape().view();
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
     reader_runtime_args.insert(reader_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());

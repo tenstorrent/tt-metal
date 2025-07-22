@@ -22,7 +22,6 @@ def run_rms_trace(
     num_devices,
     elements_per_batch,
     num_links,
-    use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
@@ -35,6 +34,7 @@ def run_rms_trace(
     epsilon=1e-05,
     warmup_iters=0,
     trace_mode=False,
+    use_noc1_only=False,
     use_new_version=True,
     profiler=BenchmarkProfiler(),
 ):
@@ -172,6 +172,7 @@ def run_rms_trace(
             weight=gamma_tensor,
             residual_input_tensor=residual_tensor,
             stats=tt_stats,
+            use_noc1_only=use_noc1_only,
         )
         ttnn.synchronize_device(mesh_device)
 
@@ -191,6 +192,7 @@ def run_rms_trace(
                     weight=gamma_tensor,
                     residual_input_tensor=residual_tensor,
                     stats=tt_stats,
+                    use_noc1_only=use_noc1_only,
                 )
                 tt_out.deallocate(True)
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
@@ -209,6 +211,7 @@ def run_rms_trace(
                 weight=gamma_tensor,
                 residual_input_tensor=residual_tensor,
                 stats=tt_stats,
+                use_noc1_only=use_noc1_only,
             )
             tt_out.deallocate(True)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -311,7 +314,6 @@ def run_rms_fuse_impl(
     num_devices,
     elements_per_batch,
     num_links,
-    use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
@@ -319,6 +321,7 @@ def run_rms_fuse_impl(
     fused_add,
     output_dtype=None,
     num_iters=1,
+    use_noc1_only=False,
     input_dtype=ttnn.bfloat8_b,
     residual_dtype=ttnn.bfloat16,
     layout=ttnn.TILE_LAYOUT,
@@ -469,6 +472,7 @@ def run_rms_fuse_impl(
             weight=gamma_tensor[i],
             residual_input_tensor=residual_tensor[i],
             stats=tt_stats,
+            use_noc1_only=use_noc1_only,
         )
         tt_out_array.append(tt_out)
     for i in range(num_iters):

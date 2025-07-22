@@ -63,7 +63,7 @@ def test_attention(
     num_devices = mesh_device.get_num_devices()
     ## heads padding for T3K TP
     pad_embedding_dim = False
-    if os.environ["MESH_DEVICE"] == "T3K" and embedding_dim == 2432:
+    if os.environ.get("MESH_DEVICE") == "T3K" and embedding_dim == 2432:
         pad_embedding_dim = True
         hidden_dim_padding = (
             ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE

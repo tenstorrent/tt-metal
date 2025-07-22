@@ -39,14 +39,12 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 
-    auto operation0 = operations[0];
+    const auto& operation0 = operations[0];
     EXPECT_EQ(operation0.operation_name, "ttnn::moreh_dot");
     EXPECT_EQ(operation0.arguments.size(), 6);
     EXPECT_EQ(
         operation0.arguments[0],
-        "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
-        "spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
+        "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
         "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
@@ -54,9 +52,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "Alignment([32, 32]))))");
     EXPECT_EQ(
         operation0.arguments[1],
-        "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
-        "spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
+        "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
         "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
@@ -67,14 +63,12 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation0.arguments[4], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
     EXPECT_EQ(operation0.arguments[5], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
 
-    auto operation1 = operations[1];
+    const auto& operation1 = operations[1];
     EXPECT_EQ(operation1.operation_name, "ttnn::prim::moreh_dot");
     EXPECT_EQ(operation1.arguments.size(), 6);
     EXPECT_EQ(
         operation1.arguments[0],
-        "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
-        "spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
+        "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
         "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
@@ -82,9 +76,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "Alignment([32, 32]))))");
     EXPECT_EQ(
         operation1.arguments[1],
-        "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
-        "spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
+        "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
         "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
@@ -95,7 +87,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation1.arguments[4], "nullopt");
     EXPECT_EQ(operation1.arguments[5], "nullopt");
 
-    auto operation2 = operations[2];
+    const auto& operation2 = operations[2];
     EXPECT_EQ(operation2.operation_name, "MorehDotOperation");
     EXPECT_EQ(operation2.arguments.size(), 2);
     EXPECT_EQ(
@@ -108,7 +100,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "[ unsupported type , "
         "std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]");
 
-    auto operation3 = operations[3];
+    const auto& operation3 = operations[3];
     EXPECT_EQ(operation3.operation_name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(operation3.arguments.size(), 5);
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 1, 1, 1])");

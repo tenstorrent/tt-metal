@@ -3,24 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
 #include <taskflow/taskflow.hpp>
 #include <thread>
 #include <stdexcept>
 
 namespace tt::tt_metal::detail {
-static const size_t EXECUTOR_NTHREADS = std::getenv("TT_METAL_THREADCOUNT")
-                                            ? std::stoi(std::getenv("TT_METAL_THREADCOUNT"))
-                                            : std::thread::hardware_concurrency();
+inline static const size_t EXECUTOR_NTHREADS = std::getenv("TT_METAL_THREADCOUNT")
+                                                   ? std::stoi(std::getenv("TT_METAL_THREADCOUNT"))
+                                                   : std::thread::hardware_concurrency();
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;
 
-static Executor& GetExecutor() {
+inline Executor& GetExecutor() {
     static Executor exec(EXECUTOR_NTHREADS);
     return exec;
 }
 
-static std::mutex& GetExecutorMutex() {
+inline std::mutex& GetExecutorMutex() {
     static std::mutex exec_mutex;
     return exec_mutex;
 }

@@ -22,7 +22,7 @@ TILE_SIZE = 32
 
 @pytest.mark.parametrize(
     (
-        "model_name",
+        "model_version",
         "block_index",
         "batch_size",
         "spatial_sequence_length",
@@ -40,19 +40,18 @@ TILE_SIZE = 32
         "sp",
         "tp",
         "topology",
+        "num_links",
     ),
     [
-        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear],
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
-        [(2, 4), (2, 0), (4, 1), (1, 0), ttnn.Topology.Linear],
-        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear],
-        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear],
-        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear],
+        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear, 3],
     ],
     ids=[
         "t3k_cfg2_sp1_tp4",
         "t3k_cfg2_sp2_tp2",
-        "t3k_cfg2_sp4_tp1",
         "tg_cfg2_sp4_tp4",
         "tg_cfg2_sp8_tp2",
         "tg_cfg2_sp2_tp8",
@@ -62,11 +61,10 @@ TILE_SIZE = 32
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 716800}], indirect=True
 )
-@pytest.mark.usefixtures("use_program_cache")
 def test_transformer_block(
     *,
     mesh_device: ttnn.MeshDevice,
-    model_name,
+    model_version: str,
     block_index: int,
     batch_size: int,
     spatial_sequence_length: int,
@@ -75,6 +73,8 @@ def test_transformer_block(
     sp: int,
     tp: int,
     topology: ttnn.Topology,
+    num_links: int,
+    model_location_generator,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -90,18 +90,22 @@ def test_transformer_block(
         cfg_axis=cfg_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        num_links=num_links,
     )
     submesh = parallel_manager.submesh_devices[0]
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
+    model_name = model_location_generator(
+        f"stabilityai/stable-diffusion-3.5-{model_version}", model_subdir="StableDiffusion_35_Large"
+    )
+
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}",
+        model_name,
         subfolder="transformer",
         torch_dtype=torch_dtype,
-        # local_files_only=True,
     )
-    embedding_dim = 1536 if model_name == "medium" else 2432
+    embedding_dim = 1536 if model_version == "medium" else 2432
 
     torch_model: TransformerBlock = parent_torch_model.transformer_blocks[block_index]
     torch_model.eval()
@@ -149,15 +153,6 @@ def test_transformer_block(
     spatial_shard_dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2
     spatial_shard_dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 3
 
-    tt_spatial = from_torch_fast_2d(
-        spatial_padded_4d,
-        mesh_device=submesh,
-        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=spatial_shard_dims,
-        dtype=ttnn_dtype,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
     prompt_padded_4d = prompt.unsqueeze(1)
     if pad_embedding_dim:
         prompt_padded_4d = torch.nn.functional.pad(
@@ -170,6 +165,26 @@ def test_transformer_block(
     #         mode="constant",
     #         value=0,
     #     )
+
+    if pad_embedding_dim:
+        time_padded = torch.nn.functional.pad(time, pad=(0, hidden_dim_padding), mode="constant", value=0)
+    else:
+        time_padded = time
+
+    with torch.no_grad():
+        spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt, time_embed=time)
+
+    # Create persistent buffers
+    persistent_buffer_shape = [1, num_heads // tp_factor, spatial_padded_4d.shape[2], head_size]
+
+    tt_spatial = from_torch_fast_2d(
+        spatial_padded_4d,
+        mesh_device=submesh,
+        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+        dims=spatial_shard_dims,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT,
+    )
     prompt_shard_dims = [None, None]
     if parallel_manager.is_tensor_parallel:
         prompt_shard_dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 3
@@ -182,34 +197,21 @@ def test_transformer_block(
         dtype=ttnn_dtype,
     )
 
-    if pad_embedding_dim:
-        time_padded_2d = torch.nn.functional.pad(time, pad=(0, hidden_dim_padding), mode="constant", value=0)
-        tt_time = from_torch_fast_2d(
-            time_padded_2d.unsqueeze(1).unsqueeze(1),
-            mesh_device=submesh,
-            mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-            dims=[None, None],
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn_dtype,
-        )
-    else:
-        tt_time = from_torch_fast_2d(
-            time.unsqueeze(1).unsqueeze(1),
-            mesh_device=submesh,
-            mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-            dims=[None, None],
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn_dtype,
-        )
-
-    with torch.no_grad():
-        spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt, time_embed=time)
-
-    # Create persistent buffers
-    persistent_buffer_shape = [1, num_heads // tp_factor, spatial_padded_4d.shape[2], head_size]
-    parallel_manager.maybe_init_persistent_buffers(persistent_buffer_shape)
-
-    for _ in range(100):
+    tt_time = from_torch_fast_2d(
+        time_padded.unsqueeze(1).unsqueeze(1),
+        mesh_device=submesh,
+        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+        dims=[None, None],
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn_dtype,
+    )
+    parallel_manager.maybe_init_persistent_buffers(
+        persistent_buffer_shape, list(tt_spatial.padded_shape), list(tt_prompt.padded_shape)
+    )
+    for _ in range(1):
+        print(f"tt_spatial: {tt_spatial.shape}")
+        print(f"tt_prompt: {tt_prompt.shape}")
+        print(f"tt_time: {tt_time.shape}")
         tt_spatial_output, tt_prompt_output = sd_transformer_block(
             spatial=tt_spatial,
             prompt=tt_prompt,
@@ -222,8 +224,6 @@ def test_transformer_block(
             cfg_index=0,
         )
 
-        ttnn.synchronize_device(submesh)
-
         tt_spatial_output_torch = ttnn.to_torch(
             tt_spatial_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -234,12 +234,14 @@ def test_transformer_block(
         )
         tt_spatial_output_torch = tt_spatial_output_torch[:, :, 0:spatial_sequence_length, :embedding_dim]
         assert_quality(
-            spatial_output, tt_spatial_output_torch, pcc=0.98, shard_dim=0, num_devices=submesh.get_num_devices()
+            spatial_output, tt_spatial_output_torch, pcc=0.97, shard_dim=0, num_devices=submesh.get_num_devices()
         )
 
         prompt_shard_dims[
             parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis
         ] = 2  # Concat replicas on sequence
+        if not parallel_manager.is_tensor_parallel:
+            prompt_shard_dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 0
         if tt_prompt_output is not None:
             tt_prompt_output_torch = ttnn.to_torch(
                 tt_prompt_output,

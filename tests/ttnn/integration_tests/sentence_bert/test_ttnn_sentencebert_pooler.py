@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,9 @@ import transformers
 import pytest
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
-from models.experimental.sentence_bert.reference.sentence_bert import BertPooler
-from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
+from models.demos.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
+from models.demos.sentence_bert.reference.sentence_bert import BertPooler
+from models.demos.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
 
 
 @pytest.mark.parametrize(
@@ -33,7 +33,9 @@ def test_ttnn_sentence_bert_pooler(device, inputs):
         device=device,
     )
     ttnn_module = TtnnSentenceBertPooler(parameters=parameters)
-    ttnn_hidden_states = ttnn.from_torch(hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_hidden_states = ttnn.from_torch(
+        hidden_states.unsqueeze(dim=1), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
     ttnn_out = ttnn_module(ttnn_hidden_states)
     ttnn_out = ttnn.to_torch(ttnn_out)
-    assert_with_pcc(reference_out, ttnn_out, 0.998)
+    assert_with_pcc(reference_out, ttnn_out, 0.99)

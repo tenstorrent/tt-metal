@@ -4,7 +4,7 @@
 
 #!/bin/bash
 
-export TT_METAL_LOGGER_LEVEL=FATAL
+export TT_LOGGER_LEVEL=FATAL
 SCRIPT="/home/ubuntu/ML-Framework-CPP/build/sources/examples/nano_gpt/nano_gpt"
 RESET_BOARD="tt-smi -r 0"
 SEED=5489

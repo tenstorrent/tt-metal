@@ -46,6 +46,7 @@ class TtUpsample2D(nn.Module):
         )
         self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
         self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
@@ -55,9 +56,9 @@ class TtUpsample2D(nn.Module):
     def forward(self, input_tensor):
         hidden_state_l1, input_shape = self.interpolate(input_tensor)
         B, C, H, W = input_shape
-        if input_tensor.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
-            ttnn.deallocate(input_tensor)
 
+        ttnn.deallocate(input_tensor)
+        if hidden_state_l1.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             hidden_states = ttnn.to_memory_config(hidden_state_l1, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(hidden_state_l1)
         else:
@@ -83,6 +84,7 @@ class TtUpsample2D(nn.Module):
             slice_config=self.conv_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
 

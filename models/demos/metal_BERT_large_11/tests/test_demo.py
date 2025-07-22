@@ -18,7 +18,7 @@ from models.utility_functions import is_blackhole, is_e75, is_wormhole_b0, skip_
     ids=["default_input"],
 )
 @pytest.mark.skipif(is_blackhole(), reason="Not functional on BH yet")
-def test_demo_batch_7(batch, input_path, model_location_generator, device, use_program_cache):
+def test_demo_batch_7(batch, input_path, model_location_generator, device):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
 
@@ -37,7 +37,7 @@ def test_demo_batch_7(batch, input_path, model_location_generator, device, use_p
         11: "large head and neck",
     }
     NUM_RUNS = 10
-    measurements, answers = demo_json(batch, input_path, NUM_RUNS, model_location_generator, device, use_program_cache)
+    measurements, answers = demo_json(batch, input_path, NUM_RUNS, model_location_generator, device)
     logger.info(measurements)
 
     logger.info(answers)
@@ -53,7 +53,7 @@ def test_demo_batch_7(batch, input_path, model_location_generator, device, use_p
     ids=["default_input"],
 )
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: only runs GS")
-def test_demo_batch_12(batch, input_path, model_location_generator, device, use_program_cache):
+def test_demo_batch_12(batch, input_path, model_location_generator, device):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
 
@@ -72,7 +72,7 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device, use_
         11: "large head and neck",
     }
     NUM_RUNS = 10
-    measurements, answers = demo_json(batch, input_path, NUM_RUNS, model_location_generator, device, use_program_cache)
+    measurements, answers = demo_json(batch, input_path, NUM_RUNS, model_location_generator, device)
     logger.info(measurements)
 
     logger.info(answers)
@@ -94,9 +94,9 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device, use_
     ),
     ids=["batch_7"],
 )
-def test_demo_squadv2_batch_7(batch, exact, f1, model_location_generator, device, use_program_cache):
+def test_demo_squadv2_batch_7(batch, exact, f1, model_location_generator, device):
     loop_count = 10
-    evals = demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count)
+    evals = demo_squadv2(model_location_generator, device, batch, loop_count)
 
     assert evals["exact"] >= exact
     assert evals["f1"] >= f1
@@ -114,9 +114,9 @@ def test_demo_squadv2_batch_7(batch, exact, f1, model_location_generator, device
     ids=["batch_12"],
 )
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: only runs GS")
-def test_demo_squadv2_batch_12(batch, exact, f1, model_location_generator, device, use_program_cache):
+def test_demo_squadv2_batch_12(batch, exact, f1, model_location_generator, device):
     loop_count = 10
-    evals = demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count)
+    evals = demo_squadv2(model_location_generator, device, batch, loop_count)
 
     assert evals["exact"] >= exact
     assert evals["f1"] >= f1

@@ -175,4 +175,6 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     return ss.str();
 }
 
-void initialize_device(bool ddp, bool tp);
+void initialize_device(
+    const tt::tt_metal::distributed::MeshShape &mesh_shape,
+    const std::vector<int> &device_ids);

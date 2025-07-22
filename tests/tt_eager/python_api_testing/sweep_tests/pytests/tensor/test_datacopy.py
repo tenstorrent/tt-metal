@@ -19,8 +19,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
     (
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK, ttnn.BufferType.L1),
     ),
 )
 def test_run_datacopy_test(input_shapes, device, dtype, memory_config, function_level_defaults):

@@ -13,6 +13,7 @@ target_link_libraries(
         span
         small_vector
         Boost::algorithm
+        Taskflow::Taskflow
         TT::Metalium
 )
 

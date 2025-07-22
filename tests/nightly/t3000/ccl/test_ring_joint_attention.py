@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import math
 import torch
 import torch.nn.functional as F
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -52,6 +50,14 @@ def create_global_semaphores(mesh_device, cores, initial_value):
     # create global semaphore handles
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
     return ccl_semaphore_handles
+
+
+def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor):
+    submesh_shape = [0, 0]
+    submesh_shape[rp_axis] = rp_factor
+    submesh_shape[up_axis] = up_factor
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    return submesh_device
 
 
 def run_ring_joint_sdpa(
@@ -194,8 +200,8 @@ def run_ring_joint_sdpa(
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
 
-    print(f"tt_Q: {tt_Q.shape}")
-    print(f"tt_joint_Q: {tt_joint_Q.shape}")
+    logger.debug(f"tt_Q: {tt_Q.shape}")
+    logger.debug(f"tt_joint_Q: {tt_joint_Q.shape}")
 
     tt_out_list = []
     tt_joint_out_list = []
@@ -228,20 +234,20 @@ def run_ring_joint_sdpa(
             tt_joint_out_list.append(tt_joint_out)
 
     if trace_enabled:
-        print("Compile run")
+        logger.info("Compile run")
         run_iters([], [])
-        print("Capture trace")
+        logger.info("Capture trace")
         trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
         run_iters(tt_out_list, tt_joint_out_list)
         ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
         ttnn.synchronize_device(submesh)
-        print("Execute trace")
+        logger.info("Execute trace")
         ttnn.execute_trace(submesh, trace_id, blocking=False)
         ttnn.release_trace(submesh, trace_id)
         ttnn.synchronize_device(submesh)
 
     else:
-        print("Run without trace")
+        logger.info("Run without trace")
         run_iters(tt_out_list, tt_joint_out_list)
 
     pt_Q = torch.cat([Q, joint_Q], dim=2)
@@ -285,10 +291,10 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [
-        (1, 40, 4096, 333, 64, 64, 128),  # SD3.5
-        (1, 24, 44 * 1024, 118, 128, 256, 256),  # Mochi
+        (1, 40, 4096, 333, 64, 128, 512),  # SD3.5
+        (1, 10, 4096, 333, 64, 128, 512),  # SD3.5 shape as it is on TG with 4x4 SPxTP
     ],
-    ids=["sd35", "mochi"],
+    ids=["sd35_full", "sd35_tg"],
 )
 @pytest.mark.parametrize("n_iters, trace_enabled", [(1, False), (10, True)], ids=["no_trace", "yes_trace"])
 @pytest.mark.parametrize("num_links", [1])
@@ -333,7 +339,6 @@ def run_ring_joint_sdpa(
 )
 def test_ring_joint_sdpa(
     mesh_device,
-    use_program_cache,
     b,
     nh,
     seq_len,
@@ -351,18 +356,18 @@ def test_ring_joint_sdpa(
     up_factor,
     all_gather_topology,
 ):
+    if nh % up_factor != 0:
+        pytest.skip("nh must be divisible by up_factor")
     if rp_factor == 8 and rp_axis == 1:
         mesh_device.reshape(ttnn.MeshShape(1, 8))
 
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
-    submesh_shape = [0, 0]
-    submesh_shape[rp_axis] = rp_factor
-    submesh_shape[up_axis] = up_factor
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
 
-    print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
-    print(f"submesh: {submesh.shape}")
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
 
     run_ring_joint_sdpa(
         submesh,
@@ -381,7 +386,6 @@ def test_ring_joint_sdpa(
         up_axis,
         all_gather_topology,
     )
-    ttnn.close_mesh_device(submesh)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
@@ -423,7 +427,6 @@ def test_ring_joint_sdpa(
 )
 def test_ring_joint_sdpa_program_cache(
     mesh_device,
-    use_program_cache,
     b,
     nh,
     seq_len,
@@ -446,13 +449,10 @@ def test_ring_joint_sdpa_program_cache(
 
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
-    submesh_shape = [0, 0]
-    submesh_shape[rp_axis] = rp_factor
-    submesh_shape[up_axis] = up_factor
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
-    print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
-    print(f"submesh: {submesh.shape}")
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
 
     dummy_tensors = []
     for i in range(3):
@@ -485,4 +485,3 @@ def test_ring_joint_sdpa_program_cache(
         )
 
     assert submesh.num_program_cache_entries() == 1
-    ttnn.close_mesh_device(submesh)

@@ -13,10 +13,10 @@ namespace ttnn::operations::experimental::transformer {
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_create_qkv_heads_sharded(
     const Tensor& input_tensor_qkv,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    const bool transpose_k_heads,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool transpose_k_heads,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size);
 

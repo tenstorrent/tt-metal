@@ -79,7 +79,6 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
     }
 
     auto *device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
 
     auto sequence_length = config.transformer_config.max_sequence_length;
 
@@ -106,7 +105,7 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
         }
     }
     cached_data.masks_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-        mask, ttml::core::create_shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
+        mask, ttnn::Shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, device, &cached_data](std::vector<DatasetSample> &&samples) {
@@ -128,7 +127,7 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
             auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
+                data, ttnn::Shape({batch_size, 1, 1, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
             auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
                 targets, ttnn::Shape({batch_size * sequence_length}), device));
             end_timer = std::chrono::high_resolution_clock::now();

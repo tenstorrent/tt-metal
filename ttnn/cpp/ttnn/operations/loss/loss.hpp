@@ -20,7 +20,7 @@ struct MseLossOperation {
         QueueId queue_id,
         const Tensor& ref,
         const Tensor& prediction,
-        const LossReductionMode mode = LossReductionMode::NONE,
+        LossReductionMode mode = LossReductionMode::NONE,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
@@ -39,7 +39,7 @@ struct MaeLossOperation {
         QueueId queue_id,
         const Tensor& ref,
         const Tensor& prediction,
-        const LossReductionMode mode = LossReductionMode::NONE,
+        LossReductionMode mode = LossReductionMode::NONE,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 

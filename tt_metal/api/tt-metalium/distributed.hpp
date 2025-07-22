@@ -96,19 +96,32 @@ void EnqueueReadMeshBuffer(
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 
+// Make the specified MeshCommandQueue record an event.
+// Host is not notified when this event completes.
+// Can be used for CQ to CQ synchronization.
 MeshEvent EnqueueRecordEvent(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
     const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
+// Make the specified MeshCommandQueue record an event and notify the host when it completes.
+// Can be used for CQ to CQ and host to CQ synchronization.
 MeshEvent EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
     const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
+// Make the specified MeshCommandQueue wait for the completion of an event.
+// This operation is non-blocking on host, however the specified command queue
+// will stall until the event is recorded.
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event);
 
+// Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);
+
+// Query the status of an event tied to a MeshCommandQueue.
+// Returns true if the CQ has completed recording the event, false otherwise.
+bool EventQuery(const MeshEvent& event);
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 

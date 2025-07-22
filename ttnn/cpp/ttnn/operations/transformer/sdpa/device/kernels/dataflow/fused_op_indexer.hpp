@@ -6,7 +6,6 @@
 
 #include "compute_kernel_api/common.h"
 #include "debug/assert.h"
-#include "debug/dprint.h"
 #include <array>
 
 struct RingSDPAOpIndexer {

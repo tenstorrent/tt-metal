@@ -20,6 +20,7 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     const GlobalSemaphore& global_semaphore,
     const uint32_t num_heads,
     const ttnn::MemoryConfig& memory_config,
+    bool use_noc1_only,
     const std::optional<uint32_t> num_links,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
@@ -31,6 +32,7 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
         mesh_device,
         global_semaphore,
         num_heads,
+        use_noc1_only,
         memory_config,
         num_links,
         topology,

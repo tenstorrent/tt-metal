@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include <tt-metalium/program.hpp>
@@ -11,12 +12,8 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "device/device_impl.hpp"
-#include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
-#include "utils.hpp"
 
 enum class CoreType;
 
@@ -49,9 +46,14 @@ struct TerminationInfo {
     CoreType core_type;      // Core Type
     uint32_t address;        // Termination signal address in L1
     uint32_t val;            // Termination signal value
+
+    bool operator==(const TerminationInfo& other) const {
+        return logical_core == other.logical_core && core_type == other.core_type && address == other.address &&
+               val == other.val;
+    }
 };
 
-static std::vector<string> dispatch_kernel_file_names = {
+static std::vector<std::string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_HD
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_H
@@ -102,16 +104,6 @@ public:
     // after above functions and before FD kernels are launched.
     virtual void ConfigureCore() {}
 
-    // Override for specific kernels that can be configured for fabric. Will be called by the FABRIC_ROUTER_VC, which is
-    // an intermediary FDKernel for indicating a fabric router path needs to be found.
-    virtual void UpdateArgsForFabric(
-        const CoreCoord& fabric_router_virtual,
-        uint32_t outbound_eth_chan,
-        tt::tt_fabric::MeshId upstream_mesh_id,
-        chip_id_t upstream_chip_id,
-        tt::tt_fabric::MeshId downstream_mesh_id,
-        chip_id_t downstream_chip_id) {}
-
     // Generator function to create a kernel of a given type. New kernels need to be added here.
     static FDKernel* Generate(
         int node_id,
@@ -155,10 +147,17 @@ public:
     void AddProgram(tt::tt_metal::Program* program) { program_ = program; }
 
 protected:
+    // Attributes for an EDM client to connect to the router
+    struct FDKernelEdmConnectionAttributes {
+        size_t worker_flow_control_sem{0};
+        size_t worker_teardown_sem{0};
+        size_t worker_buffer_index_sem{0};
+    };
+
     [[maybe_unused]] KernelHandle configure_kernel_variant(
-        const string& path,
+        const std::string& path,
         const std::vector<uint32_t>& compile_args,
-        std::map<string, string> defines_in,
+        std::map<std::string, std::string> defines_in,
         bool is_active_eth_core,
         bool send_to_brisc,
         bool force_watcher_no_inline,
@@ -179,7 +178,8 @@ protected:
     static chip_id_t GetDownstreamDeviceId(chip_id_t device_id, int tunnel = -1);
     // Helper function to get the tunnel stop index of current device
     static uint32_t GetTunnelStop(chip_id_t device_id);
-
+    // Create and populate semaphores for the EDM connection
+    void create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes);
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
@@ -196,3 +196,17 @@ protected:
 
 }  // namespace tt_metal
 }  // namespace tt
+
+namespace std {
+template <>
+struct hash<tt::tt_metal::TerminationInfo> {
+    std::size_t operator()(const tt::tt_metal::TerminationInfo& info) const {
+        size_t hash = 0;
+        tt::utils::hash_combine(hash, info.logical_core);
+        tt::utils::hash_combine(hash, info.core_type);
+        tt::utils::hash_combine(hash, info.address);
+        tt::utils::hash_combine(hash, info.val);
+        return hash;
+    }
+};
+}  // namespace std

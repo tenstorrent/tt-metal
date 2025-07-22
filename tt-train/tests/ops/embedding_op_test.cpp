@@ -30,7 +30,7 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
     auto* device = &autograd::ctx().get_device();
     uint32_t num_embeddings = 32;
     uint32_t embedding_dim = 32;
-    auto weight_tensor = ttml::core::zeros(ttml::core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
+    auto weight_tensor = ttml::core::zeros(ttnn::Shape({1, 1, num_embeddings, embedding_dim}), device);
     autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
 
     uint32_t batch_size = 1;
@@ -38,7 +38,7 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
     auto input_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        input_data, ttml::core::create_shape({batch_size, 1, 1, sentence_size}), device, ttnn::Layout::ROW_MAJOR);
+        input_data, ttnn::Shape({batch_size, 1, 1, sentence_size}), device, ttnn::Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     autograd::TensorPtr embeddings = ops::embedding_op(input, weight);
@@ -49,8 +49,8 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
             target_vector[embedding_dim * i + j] = static_cast<float>(i);
         }
     }
-    auto target_tensor = autograd::create_tensor(ttml::core::from_vector(
-        target_vector, ttml::core::create_shape({batch_size, 1, sentence_size, embedding_dim}), device));
+    auto target_tensor = autograd::create_tensor(
+        ttml::core::from_vector(target_vector, ttnn::Shape({batch_size, 1, sentence_size, embedding_dim}), device));
     auto result = ttml::ops::mse_loss(embeddings, target_tensor);
     result->backward();
 
@@ -73,7 +73,7 @@ TEST_F(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
     auto* device = &autograd::ctx().get_device();
     uint32_t num_embeddings = 13;
     uint32_t embedding_dim = 26;
-    auto weight_tensor = ttml::core::zeros(ttml::core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
+    auto weight_tensor = ttml::core::zeros(ttnn::Shape({1, 1, num_embeddings, embedding_dim}), device);
     autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
 
     uint32_t batch_size = 1;
@@ -81,7 +81,7 @@ TEST_F(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
     auto input_tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(
-        input_data, ttml::core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
+        input_data, ttnn::Shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     EXPECT_NO_THROW(ops::embedding_op(input, weight));
@@ -94,7 +94,7 @@ TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
     auto* device = &autograd::ctx().get_device();
     uint32_t num_embeddings = 32;
     uint32_t embedding_dim = 32;
-    auto weight_tensor = ttml::core::zeros(ttml::core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
+    auto weight_tensor = ttml::core::zeros(ttnn::Shape({1, 1, num_embeddings, embedding_dim}), device);
     autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
 
     uint32_t batch_size = 1;
@@ -102,7 +102,7 @@ TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
     auto input_tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(
-        input_data, ttml::core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
+        input_data, ttnn::Shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     EXPECT_NO_THROW(ops::embedding_op(input, weight));
@@ -117,7 +117,7 @@ TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
 //     auto* device = &autograd::ctx().get_device();
 //     uint32_t num_embeddings = 32;
 //     uint32_t embedding_dim = 32;
-//     auto weight_tensor = core::zeros(core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
+//     auto weight_tensor = core::zeros(ttnn::Shape({1, 1, num_embeddings, embedding_dim}), device);
 //     autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
 
 //     uint32_t batch_size = 1;
@@ -125,7 +125,7 @@ TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
 //     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
 //     std::iota(input_data.begin(), input_data.end(), 0U);
 //     auto input_tensor =
-//         core::from_vector<uint32_t>(input_data, core::create_shape({batch_size, 1, 1, sentence_size}), device);
+//         core::from_vector<uint32_t>(input_data, ttnn::Shape({batch_size, 1, 1, sentence_size}), device);
 //     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
 //     EXPECT_ANY_THROW(ops::embedding_op(input, weight));

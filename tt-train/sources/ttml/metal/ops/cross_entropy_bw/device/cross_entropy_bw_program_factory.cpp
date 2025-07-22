@@ -199,7 +199,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
-    auto padded_tensor_volume = input.padded_volume();
+    auto padded_tensor_volume = input.physical_volume();
 
     TT_FATAL(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");

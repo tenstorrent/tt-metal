@@ -1,17 +1,21 @@
 add_library(ttnn_op_experimental_auto_format ${LIB_TYPE})
-add_library(TT::NN::Ops::Experimental::AutoFormat ALIAS ttnn_op_experimental_auto_format)
+add_library(TTNN::Ops::Experimental::AutoFormat ALIAS ttnn_op_experimental_auto_format)
 
 target_precompile_headers(ttnn_op_experimental_auto_format REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_auto_format)
 
-target_sources(ttnn_op_experimental_auto_format PRIVATE auto_format.cpp)
-
-target_include_directories(ttnn_op_experimental_auto_format PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
+target_sources(
     ttnn_op_experimental_auto_format
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES auto_format.hpp
     PRIVATE
-        TT::Metalium
-        TT::NN::Core
+        auto_format.cpp
 )
 
-install(TARGETS ttnn_op_experimental_auto_format LIBRARY COMPONENT tar)
+target_include_directories(ttnn_op_experimental_auto_format PRIVATE ${FixmeOpIncDirs})
+target_link_libraries(ttnn_op_experimental_auto_format PUBLIC TTNN::Core PRIVATE TT::Metalium)
+
+install(TARGETS ttnn_op_experimental_auto_format FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

@@ -10,12 +10,13 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <variant>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace ttnn::graph {
 
@@ -71,7 +72,7 @@ struct ConstraintQueryResponse {
  *         - On failure: ExecutionStatus::Error, zeroed resource usage, and an error message.
  */
 template <typename Op, typename... Args>
-auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
+auto query_op_constraints(Op op, tt::tt_metal::IDevice* device, Args&&... args) {
     nlohmann::json op_trace;
     Tensor output;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
@@ -82,6 +83,8 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
         auto transform_arg = [device](auto&& arg) {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
                 return create_device_tensor(arg, device);
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
+                return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
                 std::vector<Tensor> result(arg.size());
                 std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
@@ -101,7 +104,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
             op_trace = capture_inner.end_graph_capture();
         }  // end of inner graph capture
         catch (const std::exception& e) {
-            tt::log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
+            log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
             return ConstraintQueryResponse{
                 ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
         }
@@ -120,7 +123,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
         {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core},
-        output.get_tensor_spec()};
+        output.tensor_spec()};
 }
 
 }  // namespace ttnn::graph

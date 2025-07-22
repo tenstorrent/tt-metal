@@ -8,6 +8,7 @@ import torch
 import pytest
 import ttnn
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.tests.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_input_tensors,
     create_mobilenetv2_model_parameters,
@@ -16,7 +17,7 @@ from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
@@ -29,7 +30,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "batch_size",
     [
-        1,
+        MOBILENETV2_BATCH_SIZE,
     ],
 )
 def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds):
@@ -66,4 +67,4 @@ def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.93 if use_pretrained_weight else 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.944 if use_pretrained_weight else 0.999)

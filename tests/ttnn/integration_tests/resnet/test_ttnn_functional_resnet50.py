@@ -12,7 +12,6 @@ from models.utility_functions import is_blackhole
 
 def run_resnet_50(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
@@ -70,7 +69,6 @@ def run_resnet_50(
 )
 def test_resnet_50(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
@@ -80,7 +78,6 @@ def test_resnet_50(
 ):
     run_resnet_50(
         device,
-        use_program_cache,
         batch_size,
         act_dtype,
         weight_dtype,

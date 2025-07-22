@@ -14,13 +14,13 @@ using namespace tt::tt_metal;
 
 void FillPad::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_FATAL(input_tensor_a.get_layout() == TILE_LAYOUT, "FillPad should only be used for tile layout");
-    TT_FATAL(detail::data_type_to_size.count(input_tensor_a.get_dtype()), "Unsupported datatype");
+    TT_FATAL(input_tensor_a.layout() == TILE_LAYOUT, "FillPad should only be used for tile layout");
+    TT_FATAL(detail::data_type_to_size.count(input_tensor_a.dtype()), "Unsupported datatype");
 }
 
 std::vector<TensorSpec> FillPad::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_tensor_spec()};
+    return {input_tensor.tensor_spec()};
 }
 
 std::vector<Tensor> FillPad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

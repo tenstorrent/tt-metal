@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 )
 @pytest.mark.parametrize("joint_attention", [False, True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 517120}], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
 def test_attention(
     *,
     device: ttnn.Device,

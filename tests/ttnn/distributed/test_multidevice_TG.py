@@ -710,9 +710,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
 @pytest.mark.parametrize("input_dtype", [ttnn.DataType.BFLOAT16])
 class TestUpdateCache:
     @pytest.mark.parametrize("seq_len", [128, 2048])
-    def test_fill_cache(
-        self, seq_len, head_dim, max_seq_len, num_users, num_heads, input_dtype, mesh_device, use_program_cache
-    ):
+    def test_fill_cache(self, seq_len, head_dim, max_seq_len, num_users, num_heads, input_dtype, mesh_device):
         torch.manual_seed(1234)
 
         cache_dtype = input_dtype
@@ -778,7 +776,6 @@ class TestUpdateCache:
         input_dtype,
         cache_dtype,
         mesh_device,
-        use_program_cache,
     ):
         torch.manual_seed(1234)
 

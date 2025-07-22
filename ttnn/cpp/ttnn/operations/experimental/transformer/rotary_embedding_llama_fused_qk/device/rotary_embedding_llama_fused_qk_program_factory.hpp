@@ -22,7 +22,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_mu
     Tensor& q_output,
     Tensor& k_output,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    const bool row_major_QK);
+    bool row_major_QK);
 
 }  // namespace tt_metal
 }  // namespace tt

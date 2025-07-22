@@ -39,7 +39,7 @@ def eltwise_input_shapes(test_case: str):
         (eltwise_input_shapes("dram"), ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
-def test_stress_binary(mesh_device, use_program_cache, shape_memory_config):
+def test_stress_binary(mesh_device, shape_memory_config):
     input_shape, memory_config = shape_memory_config
     for _ in range(NUM_REPEATS):
         torch_input_tensor1 = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -70,7 +70,7 @@ def test_stress_binary(mesh_device, use_program_cache, shape_memory_config):
         (eltwise_input_shapes("dram"), ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
-def test_stress_unary(mesh_device, use_program_cache, shape_memory_config):
+def test_stress_unary(mesh_device, shape_memory_config):
     input_shape, memory_config = shape_memory_config
     for _ in range(NUM_REPEATS):
         torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)

@@ -43,7 +43,6 @@ def test_cross_attention_downblock_512x512(
     shard_shape,
     out_channels,
     temb,
-    use_program_cache,
 ):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)

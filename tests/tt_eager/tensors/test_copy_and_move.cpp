@@ -16,7 +16,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
@@ -51,6 +51,7 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
 
     // dev tensor to dev tensor copy constructor
     Tensor dev_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE).to_device(device);
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     Tensor dev_a_copy = dev_a;
     auto dev_a_on_host = dev_a.cpu();
     auto dev_a_copy_on_host = dev_a_copy.cpu();

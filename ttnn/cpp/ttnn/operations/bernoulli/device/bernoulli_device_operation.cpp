@@ -18,21 +18,21 @@ void BernoulliDeviceOperation::validate_inputs(
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Bernoulli: Input tensor need to be on device");
     TT_FATAL(input.buffer() != nullptr, "Bernoulli: Input tensor need to be allocated in buffers on device");
-    TT_FATAL((input.get_layout() == Layout::TILE), "Bernoulli: Input tensor must be tilized");
+    TT_FATAL((input.layout() == Layout::TILE), "Bernoulli: Input tensor must be tilized");
     TT_FATAL(
-        input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::FLOAT32,
+        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32,
         "Bernoulli: Input tensor must be Float32 or Bfloat16");
 
     if (output.has_value()) {
         TT_FATAL(output.value().storage_type() == StorageType::DEVICE, "Bernoulli: Output tensor need to be on device");
         TT_FATAL(
             output.value().buffer() != nullptr, "Bernoulli: Output tensor need to be allocated in buffers on device");
-        TT_FATAL((output.value().get_layout() == Layout::TILE), "Bernoulli: Output tensor must be tilized");
+        TT_FATAL((output.value().layout() == Layout::TILE), "Bernoulli: Output tensor must be tilized");
         TT_FATAL(
-            output.value().get_dtype() == DataType::BFLOAT16 || output.value().get_dtype() == DataType::FLOAT32,
+            output.value().dtype() == DataType::BFLOAT16 || output.value().dtype() == DataType::FLOAT32,
             "Bernoulli: Output tensor must be Float32 or Bfloat16");
         TT_FATAL(
-            input.get_logical_volume() == output.value().get_logical_volume(),
+            input.logical_volume() == output.value().logical_volume(),
             "Bernoulli: Output and input tensor shape must be equal");
     }
 }
@@ -50,10 +50,10 @@ void BernoulliDeviceOperation::validate_on_program_cache_hit(
 BernoulliDeviceOperation::spec_return_value_t BernoulliDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
 
-    auto output_shape = tensor_args.input.get_logical_shape();
+    auto output_shape = tensor_args.input.logical_shape();
     return TensorSpec(output_shape, tt::tt_metal::TensorLayout(operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 

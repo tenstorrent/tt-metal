@@ -141,7 +141,6 @@ def test_bert_encoder_inference(
     model_location_generator,
     request,
     device,
-    use_program_cache,
 ):
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)

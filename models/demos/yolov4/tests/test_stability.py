@@ -33,7 +33,6 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize("pcc_check_interval", [5])
 def test_yolov4_stability(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
@@ -69,7 +68,7 @@ def test_yolov4_stability(
                 check_pcc = True
                 pcc_iter += 1
 
-            torch_input_tensor = torch.randn((1, *resolution, 3), dtype=torch.float32)
+            torch_input_tensor = torch.randn((1, 3, *resolution), dtype=torch.float32)
             _ = performant_runner.run(torch_input_tensor, check_pcc=check_pcc)
             check_pcc = False
 

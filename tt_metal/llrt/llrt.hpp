@@ -58,9 +58,11 @@ using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
 // Return a reference to a potentially shared binary image.
-// The images are cached by path name.
+// The images are cached by path name only.
 const ll_api::memory& get_risc_binary(
-    std::string_view path, ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
+    std::string_view path,
+    ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
+    std::function<void(ll_api::memory&)> update_callback = nullptr);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
@@ -97,9 +99,6 @@ bool test_load_write_read_risc_binary(
     uint32_t processor_class_idx,
     uint32_t processor_type_idx);
 void write_binary_to_address(const ll_api::memory& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address);
-
-// subchannel hard-coded to 0 for now
-CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
 
 namespace internal_ {
 

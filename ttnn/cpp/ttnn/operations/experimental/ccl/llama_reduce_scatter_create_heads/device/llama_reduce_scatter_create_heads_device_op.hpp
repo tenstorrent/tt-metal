@@ -33,6 +33,8 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const uint32_t head_dim;
         const uint32_t slice_size;
         const std::optional<MemoryConfig> qkv_memory_config;
+        bool use_noc1_only;
+        bool use_optimal_ccl_for_llama;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -97,19 +99,21 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
-        const int32_t dim,
+        int32_t dim,
         const GlobalSemaphore& semaphore,
-        const tt::tt_metal::SubDeviceId subdevice_id,
-        const uint32_t cluster_axis,
-        const uint32_t ring_devices,
-        const ttnn::ccl::Topology topology,
-        const uint32_t num_links,
-        const uint32_t num_heads,
-        const uint32_t num_kv_heads,
-        const uint32_t head_dim,
-        const uint32_t slice_size,
+        tt::tt_metal::SubDeviceId subdevice_id,
+        uint32_t cluster_axis,
+        uint32_t ring_devices,
+        ttnn::ccl::Topology topology,
+        uint32_t num_links,
+        uint32_t num_heads,
+        uint32_t num_kv_heads,
+        uint32_t head_dim,
+        uint32_t slice_size,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt);
+        const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt,
+        bool use_noc1_only = false,
+        bool use_optimal_ccl_for_llama = false);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

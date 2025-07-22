@@ -252,5 +252,5 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
     "batch_size, input_loc",
     ((16, "models/demos/ttnn_resnet/demo/images/"),),
 )
-def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator):
+def test_demo_sample(device, batch_size, input_loc, imagenet_label_dict, model_location_generator):
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)

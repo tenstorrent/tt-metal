@@ -579,7 +579,6 @@ def test_demo(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
 ):
     # disable_persistent_kernel_cache()
 

@@ -55,7 +55,6 @@ PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 @pytest.mark.parametrize("num_loops", [20])
 def test_falcon_causal_lm(
     mesh_device,
-    use_program_cache,
     model_version,
     llm_mode,
     device_batch_size,
@@ -265,7 +264,6 @@ def test_falcon_causal_lm(
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4829184}], indirect=True)
 def test_t3k_falcon_causal_lm_with_trace(
     t3k_mesh_device,
-    use_program_cache,
     model_version,
     llm_mode,
     device_batch_size,
@@ -276,8 +274,6 @@ def test_t3k_falcon_causal_lm_with_trace(
     model_config_str,
     num_loops,
 ):
-    t3k_mesh_device.enable_program_cache()
-
     torch.manual_seed(0)
     batch = device_batch_size * t3k_mesh_device.get_num_devices()
     if llm_mode == "decode":

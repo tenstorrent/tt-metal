@@ -6,42 +6,36 @@ RUN FILES=(/etc/yum.repos.d/*.repo) && \
 
 RUN dnf remove -y epel-release || true
 
-# Install system dependencies
-# This should be changed to use install_dependencies.sh so that our
-# dependency lists come from as few sources as possible, after
-# https://github.com/tenstorrent/tt-metal/issues/23060 is resolved
-RUN dnf update -y && \
-    dnf install -y \
+# Copy install dependencies script and required files
+COPY install_dependencies.sh /tmp/install_dependencies.sh
+COPY tt_metal/sfpi-version.sh /tmp/tt_metal/sfpi-version.sh
+
+# Install system dependencies using the install_dependencies.sh script
+# Use --docker flag for Docker-specific optimizations and --no-distributed
+# since we build OpenMPI from source with ULFM support
+RUN chmod +x /tmp/install_dependencies.sh && \
+    /tmp/install_dependencies.sh --docker --no-distributed && \
+    rm -rf /tmp/install_dependencies.sh /tmp/tt_metal
+
+# Install additional packages needed for manylinux builds and OpenMPI compilation
+# that are not covered by the install_dependencies.sh script
+RUN dnf install -y \
     autoconf \
     automake \
     bison \
     ca-certificates \
-    capstone \
-    capstone-devel \
-    clang \
-    cmake3 \
     expat-devel \
     flex \
-    gcc \
-    gcc-c++ \
     gfortran \
-    git \
     gmp-devel \
     gawk \
-    hwloc-devel \
     libevent-devel \
     libibverbs-devel \
     libmpc-devel \
     libzstd-devel \
-    make \
     mpfr-devel \
-    ninja-build \
-    numactl-devel \
     patchutils \
-    pkgconf-pkg-config \
     pmix-devel \
-    python3 \
-    tbb-devel \
     texinfo \
     wget \
     zlib-devel \
@@ -87,19 +81,6 @@ RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.gi
     cd .. && \
     rm -rf ompi-src
 
-COPY tt_metal/sfpi-version.sh /tmp/sfpi-version.sh
-
-# Clone SFPI repo recursively from the specified branch
-WORKDIR /tmp
-RUN source /tmp/sfpi-version.sh && \
-    git clone --recurse-submodules -b ${sfpi_version} https://github.com/tenstorrent/sfpi.git && \
-    cd sfpi && \
-    ./scripts/build.sh && \
-    tar cf - include | tar xf - -C build/sfpi && \
-    mkdir -p /opt/tenstorrent/sfpi && \
-    cp -a build/sfpi/* /opt/tenstorrent/sfpi/ && \
-    cd .. && \
-    rm -rf sfpi
 
 # ENV needed
 ENV PATH=${OMPI_PREFIX}/bin:$PATH

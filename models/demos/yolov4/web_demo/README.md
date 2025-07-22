@@ -33,7 +33,7 @@
 - you may create a python virtual env and pip install the client side requirements.
 
   ```
-  pip install -r models/demos/yolov4/web_demo/client/requirements.txt
+  pip install -r requirements.txt
   ```
 - on the client side run:
   ```

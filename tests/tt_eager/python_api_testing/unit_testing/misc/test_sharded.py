@@ -584,9 +584,7 @@ def test_sharded_partial_op(
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
-def test_block_sharded_partial_op(
-    device, H, W, num_cores, activations_dtype, output_dtype, function_level_defaults, use_program_cache
-):
+def test_block_sharded_partial_op(device, H, W, num_cores, activations_dtype, output_dtype, function_level_defaults):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -960,7 +958,7 @@ def test_sharded_binary(
     assert passing
 
 
-def test_sharded_program_cache(device, use_program_cache, function_level_defaults):
+def test_sharded_program_cache(device, function_level_defaults):
     grid_size = device.compute_with_storage_grid_size()
     num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -2371,7 +2369,7 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     "seq_len",
     (32,),
 )
-def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_program_cache):
+def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len):
     dim_in = 4096
     dim_hidden = int(3.5 * dim_in / 4)  # 3584
     dim_out = dim_in

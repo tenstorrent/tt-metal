@@ -1,5 +1,5 @@
 add_library(ttnn_op_experimental_transformer ${LIB_TYPE})
-add_library(TT::NN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_transformer)
+add_library(TTNN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_transformer)
 
 target_precompile_headers(ttnn_op_experimental_transformer REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
@@ -23,6 +23,9 @@ target_sources(
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_program_factory.cpp
         nlp_concat_heads_decode/nlp_concat_heads_decode.cpp
+        nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_device_operation.cpp
+        nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_program_factory.cpp
+        nlp_concat_heads_boltz/nlp_concat_heads_boltz.cpp
         nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.cpp
         nlp_create_qkv_heads/device/nlp_create_qkv_heads_program_factory.cpp
         nlp_create_qkv_heads/nlp_create_qkv_heads.cpp
@@ -38,6 +41,9 @@ target_sources(
         nlp_create_qkv_heads_vit/device/nlp_create_qkv_heads_vit_device_operation.cpp
         nlp_create_qkv_heads_vit/device/nlp_create_qkv_heads_vit_program_factory.cpp
         nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit.cpp
+        nlp_create_qkv_heads_boltz/device/nlp_create_qkv_heads_boltz_device_operation.cpp
+        nlp_create_qkv_heads_boltz/device/nlp_create_qkv_heads_boltz_program_factory.cpp
+        nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz.cpp
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_device_operation.cpp
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_program_factory.cpp
         nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.cpp
@@ -61,7 +67,7 @@ target_link_libraries(
     ttnn_op_experimental_transformer
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_experimental_transformer LIBRARY COMPONENT tar)

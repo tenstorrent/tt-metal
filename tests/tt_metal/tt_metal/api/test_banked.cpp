@@ -8,12 +8,11 @@
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -64,8 +63,8 @@ bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banke
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
 
-    string reader_kernel_name = "";
-    string writer_kernel_name = "";
+    std::string reader_kernel_name = "";
+    std::string writer_kernel_name = "";
     size_t input_page_size_bytes = 0;
     size_t output_page_size_bytes = 0;
     std::vector<uint32_t> reader_runtime_args = {};
@@ -102,9 +101,8 @@ bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banke
 
     auto output_buffer = CreateBuffer(out_config);
 
-    tt::log_debug(
-        tt::LogTest, "Input buffer: [address: {} B, size: {} B]", input_buffer->address(), input_buffer->size());
-    tt::log_debug(
+    log_debug(tt::LogTest, "Input buffer: [address: {} B, size: {} B]", input_buffer->address(), input_buffer->size());
+    log_debug(
         tt::LogTest, "Output buffer: [address: {} B, size: {} B]", output_buffer->address(), output_buffer->size());
 
     TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes, "Error");

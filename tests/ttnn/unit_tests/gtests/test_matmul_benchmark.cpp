@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -31,9 +31,9 @@
 #include <tt-metalium/tile.hpp>
 #include "impl/context/metal_context.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/cpp/ttnn/operations/functions.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/trace.hpp"
@@ -196,7 +196,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs 8x8 "
             "full grid)\n";
 
-    tt::log_info("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
+    log_info(
+        tt::LogTest, "Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
 
     const int in0_block_w = k / grid_size.height() / 32 / in0_block_w_div;
     const int per_core_M = m / grid_size.width() / tile_h;
@@ -205,7 +206,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const int out_block_w = per_core_N / num_out_blocks_w;
     const Shape2D out_subblock = get_subblock_sizes(out_block_h, out_block_w, out_sharded);
 
-    tt::log_info(
+    log_info(
+        tt::LogTest,
         "M*K*N = {}*{}*{} out_subblock_h: {}, out_subblock_w: {}",
         m,
         k,
@@ -266,7 +268,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         per_core_M,
         per_core_N,
         /*transpose_mcast=*/false,
-        /*fused_activation=*/std::nullopt};
+        /*fused_activation=*/std::nullopt,
+        /*fuse_batch=*/true};
 
     const ttnn::DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),
@@ -275,7 +278,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/true,
-        /*default_dst_full_sync_en=*/false);
+        /*default_dst_full_sync_en=*/false,
+        /*default_throttle_level=*/ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
     const ttnn::MemoryConfig out_mem_config =
         out_sharded ? ttnn::MemoryConfig{ttnn::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}
@@ -373,7 +377,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
     std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100);
     std::string utilization_user_grid_percentage = std::to_string(utilization_user_grid * 100);
-    tt::log_info(
+    log_info(
+        tt::LogTest,
         "M*K*N = {}*{}*{} == inference time (avg): {}, tflops (avg): {}, utilization (vs user grid): {}%, "
         "utilization (vs 8x8 grid): {}%",
         m,

@@ -70,4 +70,5 @@ void kernel_main() {
         // set the receiver ready semaphore to invalid until the receiver is ready to receive data
         noc_semaphore_set(receiver_semaphore_addr, INVALID);
     }
+    noc_async_atomic_barrier();
 }

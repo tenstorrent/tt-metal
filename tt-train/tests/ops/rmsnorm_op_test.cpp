@@ -25,12 +25,18 @@ protected:
     }
 };
 
-// Forward and backward tests are given by comparing with results from PyTorch:
-// For test tensor `x` of shape [N,C,H,W] we set x.requires_grad = True
-// and compute the RMSNorm as `x_norm_sum = torch.nn.functional.rms_norm(x).sum()`
-// and compute its gradient with respect to `x` as `x_grad = torch.autograd.grad(x_norm_sum, x)[0]`
-// We then compare the results of the RMSNorm and its gradient with the results of the RMSNorm and its gradient
-// computed by the RMSNorm op in TTML.
+// ============================================================================
+// Section 1: RMSNorm Kernel vs PyTorch Reference Implementation
+// ============================================================================
+// These tests validate the optimized RMSNorm kernel implementation against
+// PyTorch's reference implementation to ensure numerical correctness.
+//
+// Test methodology:
+// 1. Create test tensor `x` of shape [N,C,H,W] with x.requires_grad = True
+// 2. Compute PyTorch RMSNorm: `x_norm_sum = torch.nn.functional.rms_norm(x).sum()`
+// 3. Compute PyTorch gradient: `x_grad = torch.autograd.grad(x_norm_sum, x)[0]`
+// 4. Compare TTML kernel results with PyTorch reference results
+// ============================================================================
 TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
     using namespace ttml;
     float eps = 0.0078125F;  // default in PyTorch for bf16
@@ -39,46 +45,12 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()));
 
     auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
     xt::xarray<float> expected_result = {{0.3652F, 0.7305F, 1.0938F, 1.4609F, 0.3652F, 0.7305F, 1.0938F, 1.4609F}};
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-2F));
-}
-
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Kernel_Composite) {
-    std::vector<std::vector<uint32_t>> shapes = {
-        {1U, 1U, 1U, 1024U},
-        {1U, 1U, 1U, 1U << 20U},
-        {32U, 1U, 1024U, 4096U},
-        {32U, 1U, 1024U, 4091U},
-        {32U, 1U, 1024U, 4079U},
-        {1U, 1U, 1U, (1U << 20U) - 1U},
-        {1U, 1U, 1U, (1U << 20U) - 18U}};
-
-    auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
-
-    constexpr uint32_t iterations = 2U;
-    for (const auto& shape : shapes) {
-        for (uint32_t iter = 0; iter < iterations; ++iter) {
-            xt::xarray<float> x_data = xt::random::rand(shape, 0.F, 1.F);
-            auto x = ttml::autograd::create_tensor(ttml::core::from_xtensor(x_data, device));
-            auto gamma =
-                ttml::autograd::create_tensor(ttml::core::ones(ttml::core::create_shape({1, 1, 1, shape[3]}), device));
-
-            auto result = ttml::ops::rmsnorm(x, gamma, 0.0078125F);
-            auto result_xtensor = ttml::core::to_xtensor(result->get_value());
-
-            auto expected_result = ttml::ops::rmsnorm_composite(x, gamma, 0.0078125F);
-            auto expected_result_xtensor = ttml::core::to_xtensor(expected_result->get_value());
-
-            EXPECT_TRUE(xt::allclose(result_xtensor, expected_result_xtensor, 1.0e-3F, 3e-2F));
-
-            ttml::autograd::ctx().reset_graph();
-        }
-    }
 }
 
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
@@ -89,13 +61,13 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()));
 
     auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
 
     auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
-    auto mse_result = ttml::ops::mse_loss(result, target);
+    auto mse_result = ops::mse_loss(result, target);
     mse_result->backward();
     auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
     auto expected_example_tensor_grad = xt::xarray<float>(
@@ -125,7 +97,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
     std::generate(a_xarray.begin(), a_xarray.end(), [cur = 0.0F]() mutable { return (cur++); });
 
     auto example_tensor = autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
 
     auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -164,13 +136,13 @@ TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
     std::generate(a_xarray.begin(), a_xarray.end(), [cur = 0.0F]() mutable { return (cur++); });
 
     auto example_tensor = autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
 
     auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
 
     auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
-    auto mse_result = ttml::ops::mse_loss(result, target);
+    auto mse_result = ops::mse_loss(result, target);
     mse_result->backward();
 
     auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
@@ -182,6 +154,16 @@ TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 5e-2F));
 }
 
+// ============================================================================
+// Section 2: RMSNorm Composite vs PyTorch Reference Implementation
+// ============================================================================
+// These tests validate the composite RMSNorm implementation (built from basic ops)
+// against PyTorch's reference implementation to ensure numerical correctness.
+//
+// The composite implementation serves as a reference for the optimized kernel
+// and uses standard operations like power, mean, sqrt, and multiply.
+// Same test methodology as Section 1, but using rmsnorm_composite() instead.
+// ============================================================================
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
     using namespace ttml;
     float eps = 0.0078125F;  // default in PyTorch for bf16
@@ -190,7 +172,7 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()));
 
     auto result = ops::rmsnorm_composite(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -206,13 +188,13 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()));
 
     auto result = ops::rmsnorm_composite(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
 
     auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
-    auto mse_result = ttml::ops::mse_loss(result, target);
+    auto mse_result = ops::mse_loss(result, target);
     mse_result->backward();
     auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
     auto expected_example_tensor_grad = xt::xarray<float>(
@@ -242,7 +224,7 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
     std::generate(a_xarray.begin(), a_xarray.end(), [cur = 0.0F]() mutable { return (cur++); });
 
     auto example_tensor = autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
 
     auto result = ops::rmsnorm_composite(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -281,13 +263,13 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Backward_Batch) {
     std::generate(a_xarray.begin(), a_xarray.end(), [cur = 0.0F]() mutable { return (cur++); });
 
     auto example_tensor = autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
 
     auto result = ops::rmsnorm_composite(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
 
     auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
-    auto mse_result = ttml::ops::mse_loss(result, target);
+    auto mse_result = ops::mse_loss(result, target);
     mse_result->backward();
 
     auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
@@ -297,4 +279,196 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Backward_Batch) {
     auto gamma_grad = core::to_xtensor(gamma->get_grad());
     xt::xarray<float> expected_gamma_grad = {{{{0.36111F, 0.37644F, 0.39589F, 0.41945F, 0.44712F}}}};
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 5e-2F));
+}
+
+// ============================================================================
+// Section 3: RMSNorm Kernel vs Composite Implementation Comparison
+// ============================================================================
+// These tests compare the optimized RMSNorm kernel implementation against the
+// composite implementation to ensure they produce identical results across
+// different tensor shapes, sizes, and edge cases.
+//
+// This validation ensures that the kernel optimization maintains correctness
+// while providing performance benefits. Both implementations should produce
+// identical forward and backward pass results.
+// ============================================================================
+
+/**
+ * Helper function to compare kernel vs composite implementations of RMSNorm
+ *
+ * This function tests both forward and backward passes to ensure:
+ * 1. Forward pass: kernel and composite produce identical results
+ * 2. Backward pass: gradients computed by both implementations match
+ * 3. All outputs and gradients are finite (no NaN/Inf values)
+ *
+ * @param shape Input tensor shape [N, C, H, W] where:
+ *   - N: batch size
+ *   - C: number of channels (normalized dimension)
+ *   - H: height
+ *   - W: width
+ *
+ * Test cases cover various scenarios:
+ * - Alignment: C % 32 == 0 (aligned) vs C % 32 != 0 (unaligned/masking)
+ * - Memory: fits in L1 cache vs exceeds L1 cache capacity
+ * - Block size: odd C (block_size=1) vs even C (block_size=2)
+ * - Scale: small to very large C dimensions
+ */
+static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    float eps = 0.0078125F;
+
+    // Generate random input data
+    xt::random::seed(42);
+    std::array<uint32_t, 4> gamma_shape = {1, 1, 1, shape[3]};
+    xt::xarray<float> x_data = xt::random::rand<float>(shape, -1.0F, 1.0F);
+
+    xt::xarray<float> gamma_data = xt::random::rand<float>(gamma_shape, 0.0F, 1.0F);
+
+    // Test forward pass - kernel vs composite
+    auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device));
+    auto gamma_kernel = autograd::create_tensor(core::from_xtensor(gamma_data, device));
+    auto result_kernel = ops::rmsnorm(x_kernel, gamma_kernel, eps);
+    auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
+
+    auto x_composite = autograd::create_tensor(core::from_xtensor(x_data, device));
+    auto gamma_composite = autograd::create_tensor(core::from_xtensor(gamma_data, device));
+    auto result_composite = ops::rmsnorm_composite(x_composite, gamma_composite, eps);
+    auto result_composite_xtensor = core::to_xtensor(result_composite->get_value());
+
+    // Verify output shape matches input shape
+    EXPECT_EQ(result_kernel_xtensor.shape(), x_data.shape());
+    EXPECT_EQ(result_composite_xtensor.shape(), x_data.shape());
+
+    // Compare forward results
+    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_composite_xtensor, 1.0e-3F, 3e-2F));
+    EXPECT_TRUE(xt::all(xt::isfinite(result_kernel_xtensor)));
+    EXPECT_TRUE(xt::all(xt::isfinite(result_composite_xtensor)));
+
+    // Test backward pass - kernel vs composite
+    auto target_composite = autograd::create_tensor(core::zeros_like(result_composite->get_value()));
+    auto mse_composite = ops::mse_loss(result_composite, target_composite);
+    mse_composite->backward();
+    auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
+    auto mse_kernel = ops::mse_loss(result_kernel, target_kernel);
+    mse_kernel->backward();
+
+    // Since composite is finite, the kernel should also be finite
+    auto x_grad_composite = core::to_xtensor(x_composite->get_grad());
+    auto gamma_grad_composite = core::to_xtensor(gamma_composite->get_grad());
+    auto x_grad_kernel = core::to_xtensor(x_kernel->get_grad());
+    auto gamma_grad_kernel = core::to_xtensor(gamma_kernel->get_grad());
+    // Should be composite here
+
+    // Verify gradients have correct shapes and are finite
+    EXPECT_EQ(x_grad_kernel.shape(), x_data.shape());
+    EXPECT_EQ(gamma_grad_kernel.shape()[3], shape[3]);
+    EXPECT_TRUE(xt::all(xt::isfinite(x_grad_kernel)));
+    EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_kernel)));
+
+    EXPECT_EQ(x_grad_composite.shape(), x_data.shape());
+    EXPECT_EQ(gamma_grad_composite.shape()[3], shape[3]);
+    EXPECT_TRUE(xt::all(xt::isfinite(x_grad_composite)));
+    EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_composite)));
+
+    // Compare backward results
+    EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 3e-2F));
+    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 3e-2F));
+
+    autograd::ctx().reset_graph();
+}
+
+// ============================================================================
+// Section 3: Test Cases - RMSNorm Kernel vs Composite Comparison
+// ============================================================================
+// These tests systematically compare the optimized kernel implementation
+// against the composite implementation across different scenarios:
+//
+// - Memory usage patterns: L1 cache fit vs overflow
+// - Tensor alignment: 32-byte aligned vs unaligned (masking required)
+// - Block sizes: odd vs even C dimensions
+// - Scale testing: small to very large tensor dimensions
+// - Training scenarios: realistic model shapes (NanoLlama, etc.)
+// ============================================================================
+
+// Test aligned dimensions (C % 32 == 0) that fit in L1 cache
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
+    // C = 1024 (32 * 32), fits in L1 cache
+    CompareKernelVsComposite({1U, 1U, 1U, 1024U});
+
+    // C = 4096 (32 * 128), largest size that fits in L1 cache (1 << 12)
+    CompareKernelVsComposite({1U, 1U, 1U, 4096U});
+}
+
+// Test aligned dimensions (C % 32 == 0) that fit in L1 except for gamma
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_L1ExceptGamma) {
+    // C = 8192 (1 << 13), fits in L1 except gamma parameter
+    CompareKernelVsComposite({1U, 1U, 1U, 8192U});
+}
+
+// Test aligned dimensions (C % 32 == 0) that don't fit in L1 cache
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_DoesNotFitInL1) {
+    // C = 16384 (1 << 14), does not fit in L1 cache
+    CompareKernelVsComposite({1U, 1U, 1U, 16384U});
+}
+
+// Test aligned dimensions (C % 32 == 0) with very large C
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_VeryLargeC) {
+    // C = 1048576 (1 << 20), very large C dimension (1M elements)
+    CompareKernelVsComposite({1U, 1U, 1U, 1048576U});
+}
+
+// Test unaligned dimensions (C % 32 != 0) that fit in L1 cache
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
+    // C = 1023 (32 * 31 + 31), requires masking, fits in L1
+    CompareKernelVsComposite({1U, 1U, 1U, 1023U});
+
+    // C = 4095 (32 * 127 + 31), requires masking, fits in L1
+    CompareKernelVsComposite({1U, 1U, 1U, 4095U});
+}
+
+// Test unaligned dimensions (C % 32 != 0) that don't fit in L1 cache
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_DoesNotFitInL1) {
+    // C = 16383 (1 << 14 - 1), requires masking, does not fit in L1
+    CompareKernelVsComposite({1U, 1U, 1U, 16383U});
+}
+
+// Test unaligned dimensions (C % 32 != 0) with very large C
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_VeryLargeC) {
+    // C = 1048575 (1 << 20 - 1), very large C with masking
+    CompareKernelVsComposite({1U, 1U, 1U, 1048575U});
+
+    // C = 1048558 (1 << 20 - 18), very large C with different masking pattern
+    CompareKernelVsComposite({1U, 1U, 1U, 1048558U});
+}
+
+// Test block_size = 1 (C is odd)
+TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize1_OddC) {
+    CompareKernelVsComposite({1U, 1U, 1U, 33U});   // C = 33 (odd)
+    CompareKernelVsComposite({1U, 1U, 1U, 127U});  // C = 127 (odd)
+}
+
+// Test block_size = 2 (C is even)
+TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
+    CompareKernelVsComposite({1U, 1U, 1U, 34U});   // C = 34 (even)
+    CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
+}
+
+// Test training-like shapes with realistic model dimensions
+TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
+    // NanoLlama training shape: batch=64, seq_len=256, hidden_dim=384
+    CompareKernelVsComposite({64U, 1U, 256U, 384U});
+}
+
+// Test small batch and sequence dimensions (non-1 values)
+TEST_F(RMSNormOpTest, RMSNorm_Compare_SmallBatch_NonUnit) {
+    CompareKernelVsComposite({2U, 1U, 4U, 64U});
+    CompareKernelVsComposite({32U, 1U, 64U, 128U});
+}
+
+// Test different masking patterns with larger batches
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Masking_Patterns) {
+    CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 11
+    CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 31
+    CompareKernelVsComposite({32U, 1U, 1024U, 4097U});  // C % 32 = 1
 }

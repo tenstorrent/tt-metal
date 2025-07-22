@@ -43,7 +43,7 @@ def get_expected_times(functional_vit):
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  ## padded from 197 to 224
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit])
-def test_performance_vit_encoder(device, use_program_cache, model_name, batch_size, sequence_size, functional_vit):
+def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, functional_vit):
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(
@@ -97,9 +97,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("sequence_size", [224])
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit])
-def test_performance_vit_e2e(
-    device, use_program_cache, model_name, batch_size, image_size, sequence_size, functional_vit
-):
+def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequence_size, functional_vit):
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)

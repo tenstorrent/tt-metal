@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -33,11 +34,11 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    const auto& input_shape = input.get_padded_shape();
-    const auto& input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape = input.padded_shape();
+    const auto& input_shape_without_padding = input.logical_shape();
 
     const auto Ht = input_shape[-2] / constants::TILE_HEIGHT;
     const auto Wt = input_shape[-1] / constants::TILE_WIDTH;
@@ -55,7 +56,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         inner_size *= input_shape[i];
     }
 
-    const auto units_to_divide = output.volume() / constants::TILE_HW;
+    const auto units_to_divide = output.physical_volume() / constants::TILE_HW;
 
     auto program = CreateProgram();
 
@@ -74,7 +75,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     CreateCircularBuffer(
@@ -103,7 +104,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_nc.cpp";
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     const std::vector<uint32_t> compute_args_group_1{units_per_core_group_1};
     const std::vector<uint32_t> compute_args_group_2{units_per_core_group_2};
 

@@ -40,9 +40,7 @@ def get_expected_times_causal_lm(functional_bloom):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("functional_bloom", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
-def test_performance_of_bloom_for_question_answering(
-    device, use_program_cache, functional_bloom, batch_size=8, max_length=384
-):
+def test_performance_of_bloom_for_question_answering(device, functional_bloom, batch_size=8, max_length=384):
     disable_persistent_kernel_cache()
 
     model_name = "bigscience/bloom-560m"
@@ -121,7 +119,7 @@ def test_performance_of_bloom_for_question_answering(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("functional_bloom", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
-def test_performance_of_causal_lm(device, use_program_cache, functional_bloom, batch_size=8, max_length=128):
+def test_performance_of_causal_lm(device, functional_bloom, batch_size=8, max_length=128):
     disable_persistent_kernel_cache()
 
     model_name = "bigscience/bloom-560m"

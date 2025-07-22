@@ -109,7 +109,7 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
     SetRuntimeArgs(program, sender_kernel, master_core_set, master_run_args);
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
@@ -120,6 +120,7 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
     // Launch program and record outputs
@@ -133,10 +134,10 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
     if (!pcc) {
-        log_error("PCC Check failed");
-        log_info("Golden vector");
+        log_error(tt::LogTest, "PCC Check failed");
+        log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
-        log_info("Output vector");
+        log_info(tt::LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
     return pcc;
@@ -147,7 +148,8 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
 TEST_F(DeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     // Parameters
     uint32_t max_transactions = 256;
-    uint32_t max_transaction_size_pages = 64;
+    uint32_t max_transaction_size_pages =
+        arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;                     // Max total transaction size == 64 KB
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
     CoreCoord master_core_coord = {0, 0};
     NOC noc_id = NOC::NOC_0;

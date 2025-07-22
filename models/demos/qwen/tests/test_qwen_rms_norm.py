@@ -27,7 +27,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     indirect=True,
 )
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
-def test_qwen_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc, mode):
+def test_qwen_rms_norm_inference(mesh_device, reset_seeds, ensure_gc, mode):
     if mesh_device.shape != (1, 1):
         pytest.skip("Only N150 is supported")
     dtype = ttnn.bfloat16

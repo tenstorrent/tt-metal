@@ -112,7 +112,7 @@ def test_moreh_dot(input_shape, dtype, device):
         None,
     ),
 )
-def test_moreh_matmul_1d_callback(input_shape, dtype, device, use_program_cache):
+def test_moreh_matmul_1d_callback(input_shape, dtype, device):
     torch.manual_seed(3072)
 
     for i in range(2):

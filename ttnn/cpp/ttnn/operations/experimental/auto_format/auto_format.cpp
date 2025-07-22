@@ -72,7 +72,7 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
 Tensor AutoFormat::move_tensor_to_device_and_pad(
     const Tensor& input, IDevice* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     using namespace tt::constants;
-    const auto device_shape = input.get_padded_shape();
+    const auto& device_shape = input.padded_shape();
     const Shape new_device_shape(
         {device_shape[0],
          device_shape[1],
@@ -89,8 +89,8 @@ Tensor AutoFormat::format_input_tensor(
     float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
-    bool pad_input = input.get_padded_shape() != padded_shape;
-    bool convert_layout = input.get_layout() != target_layout;
+    bool pad_input = input.padded_shape() != padded_shape;
+    bool convert_layout = input.layout() != target_layout;
 
     if (!pad_input && !convert_layout) {
         return AutoFormat::move_tensor_to_device(input, device);
@@ -104,19 +104,19 @@ Tensor AutoFormat::format_input_tensor(
     }
 
     Tensor formatted_input = input;
-    auto shape = formatted_input.get_padded_shape();
+    auto shape = formatted_input.padded_shape();
 
     // TODO: Profile if it is faster to put host tensor to device and then pad/convert if possible
     // Device side conversions
     if (formatted_input.storage_type() == StorageType::DEVICE) {
         if (convert_layout && !pad_input) {
-            if (target_layout == Layout::TILE && formatted_input.get_layout() == Layout::ROW_MAJOR) {
+            if (target_layout == Layout::TILE && formatted_input.layout() == Layout::ROW_MAJOR) {
                 return ttnn::tilize(formatted_input, mem_config);
-            } else if (target_layout == Layout::ROW_MAJOR && formatted_input.get_layout() == Layout::TILE) {
+            } else if (target_layout == Layout::ROW_MAJOR && formatted_input.layout() == Layout::TILE) {
                 return ttnn::untilize(formatted_input, mem_config);
             }
         } else if (!convert_layout && pad_input) {
-            if (formatted_input.get_layout() == Layout::ROW_MAJOR || formatted_input.get_layout() == Layout::TILE) {
+            if (formatted_input.layout() == Layout::ROW_MAJOR || formatted_input.layout() == Layout::TILE) {
                 return ttnn::pad(
                     DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
@@ -127,16 +127,16 @@ Tensor AutoFormat::format_input_tensor(
                     mem_config);
             }
         } else if (convert_layout && pad_input) {
-            if (formatted_input.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
+            if (formatted_input.layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
                 PadValue pad_value_variant;
-                if (formatted_input.get_dtype() == ttnn::DataType::BFLOAT16 or
-                    formatted_input.get_dtype() == ttnn::DataType::FLOAT32) {
+                if (formatted_input.dtype() == ttnn::DataType::BFLOAT16 or
+                    formatted_input.dtype() == ttnn::DataType::FLOAT32) {
                     pad_value_variant = (float)pad_value;
                 } else {
                     pad_value_variant = (uint32_t)pad_value;
                 }
                 return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value_variant, mem_config);
-            } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
+            } else if (formatted_input.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(
                     DefaultQueueId,
@@ -154,9 +154,9 @@ Tensor AutoFormat::format_input_tensor(
 
     // Host side conversions
     if (pad_input) {
-        if (formatted_input.get_layout() != Layout::ROW_MAJOR) {
+        if (formatted_input.layout() != Layout::ROW_MAJOR) {
             formatted_input = formatted_input.to_layout(Layout::ROW_MAJOR);
-            convert_layout = formatted_input.get_layout() != target_layout;
+            convert_layout = formatted_input.layout() != target_layout;
         }
         formatted_input = ttnn::pad(
             (const ttnn::Tensor)formatted_input,
@@ -178,8 +178,8 @@ Tensor AutoFormat::format_output_tensor(
     IDevice* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
-    bool unpad_output = output.get_padded_shape() != shape;
-    bool convert_layout = output.get_layout() != target_layout;
+    bool unpad_output = output.padded_shape() != shape;
+    bool convert_layout = output.layout() != target_layout;
 
     if (!unpad_output && !convert_layout) {
         return output;
@@ -196,20 +196,20 @@ Tensor AutoFormat::format_output_tensor(
     if (formatted_output.storage_type() == StorageType::DEVICE) {
         if (!unpad_output && convert_layout) {
             // If target layout is tile but shape does not support tile, we don't do any conversions
-            if (target_layout == Layout::TILE && formatted_output.get_layout() == Layout::ROW_MAJOR) {
-                if (CMAKE_UNIQUE_NAMESPACE::legal_tile_shape(formatted_output.get_padded_shape())) {
+            if (target_layout == Layout::TILE && formatted_output.layout() == Layout::ROW_MAJOR) {
+                if (CMAKE_UNIQUE_NAMESPACE::legal_tile_shape(formatted_output.padded_shape())) {
                     formatted_output = ttnn::tilize(formatted_output, mem_config);
                 }
                 return formatted_output;
-            } else if (target_layout == Layout::ROW_MAJOR && formatted_output.get_layout() == Layout::TILE) {
+            } else if (target_layout == Layout::ROW_MAJOR && formatted_output.layout() == Layout::TILE) {
                 formatted_output = ttnn::untilize(formatted_output, mem_config);
                 return formatted_output;
             }
 
         } else if (unpad_output && !convert_layout) {
             // Output can be unpadded and layout supports the shape
-            if ((formatted_output.get_layout() == Layout::TILE && CMAKE_UNIQUE_NAMESPACE::legal_tile_shape(shape)) ||
-                (formatted_output.get_layout() == Layout::ROW_MAJOR)) {
+            if ((formatted_output.layout() == Layout::TILE && CMAKE_UNIQUE_NAMESPACE::legal_tile_shape(shape)) ||
+                (formatted_output.layout() == Layout::ROW_MAJOR)) {
                 auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
                 auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
@@ -217,7 +217,7 @@ Tensor AutoFormat::format_output_tensor(
                 formatted_output = ttnn::slice(formatted_output, begins, ends, step, mem_config);
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
-            } else if (formatted_output.get_layout() == Layout::TILE) {
+            } else if (formatted_output.layout() == Layout::TILE) {
                 formatted_output = ttnn::untilize_with_unpadding(
                     formatted_output,
                     ttnn::Shape({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
@@ -225,14 +225,14 @@ Tensor AutoFormat::format_output_tensor(
                 return formatted_output;
             }
         } else if (unpad_output && convert_layout) {
-            if (formatted_output.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
+            if (formatted_output.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_output = ttnn::untilize_with_unpadding(
                     formatted_output,
                     ttnn::Shape({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
             } else if (
-                formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
+                formatted_output.layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
                 CMAKE_UNIQUE_NAMESPACE::legal_tile_shape(shape)) {
                 auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
@@ -249,9 +249,9 @@ Tensor AutoFormat::format_output_tensor(
     // Host side conversions
     if (unpad_output) {
         // Requires RM for unpad
-        if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
+        if (formatted_output.layout() != Layout::ROW_MAJOR) {
             formatted_output = formatted_output.to_layout(Layout::ROW_MAJOR);
-            convert_layout = formatted_output.get_layout() != target_layout;
+            convert_layout = formatted_output.layout() != target_layout;
         }
         auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
         auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
@@ -262,8 +262,8 @@ Tensor AutoFormat::format_output_tensor(
     if (convert_layout) {
         // Default to RM layout if we can't match the formatted_input layout
         if (target_layout == Layout::TILE &&
-            !CMAKE_UNIQUE_NAMESPACE::legal_tile_shape(formatted_output.get_padded_shape())) {
-            if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
+            !CMAKE_UNIQUE_NAMESPACE::legal_tile_shape(formatted_output.padded_shape())) {
+            if (formatted_output.layout() != Layout::ROW_MAJOR) {
                 formatted_output = formatted_output.to_layout(Layout::ROW_MAJOR);
             }
         } else {
@@ -274,8 +274,7 @@ Tensor AutoFormat::format_output_tensor(
     // Send formatted_output to device if possible
     // Check that shape is supported on device
     if (formatted_output.storage_type() != StorageType::DEVICE) {
-        if (CMAKE_UNIQUE_NAMESPACE::legal_device_shape(
-                formatted_output.get_padded_shape(), formatted_output.get_layout())) {
+        if (CMAKE_UNIQUE_NAMESPACE::legal_device_shape(formatted_output.padded_shape(), formatted_output.layout())) {
             formatted_output = AutoFormat::move_tensor_to_device(formatted_output, device, mem_config);
         }
     }
@@ -309,7 +308,7 @@ ttnn::Shape AutoFormat::pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
 
 bool AutoFormat::check_input_tensor_format(
     const Tensor& a, const ttnn::Shape& shape, tt::tt_metal::Layout target_layout) {
-    return a.get_layout() == target_layout && a.get_padded_shape() == shape &&
+    return a.layout() == target_layout && a.padded_shape() == shape &&
            a.storage_type() == tt::tt_metal::StorageType::DEVICE;
 }
 

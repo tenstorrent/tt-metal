@@ -29,10 +29,11 @@ from ..tt.parallel_config import StableDiffusionParallelManager
         "sp",
         "tp",
         "topology",
+        "num_links",
     ),
     [
-        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
     ],
     ids=[
         "t3k_cfg1_sp2_tp4",
@@ -41,7 +42,6 @@ from ..tt.parallel_config import StableDiffusionParallelManager
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("affine", [True, False], ids=["affine", "noaffine"])
-@pytest.mark.usefixtures("use_program_cache")
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_layer_norm(
     *,
@@ -53,6 +53,7 @@ def test_layer_norm(
     sp: tuple[int, int],
     tp: tuple[int, int],
     topology: ttnn.Topology,
+    num_links: int,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -68,6 +69,7 @@ def test_layer_norm(
         cfg_axis=cfg_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        num_links=num_links,
     )
     submesh = parallel_manager.submesh_devices[0]
     input_shape = [1, *input_shape]
@@ -103,6 +105,16 @@ def test_layer_norm(
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
+    # Unsqueeze shape to 4D
+    buffer_shape = list(tt_input_tensor.padded_shape)
+    buffer_shape = [1] * (4 - len(buffer_shape)) + buffer_shape
+
+    parallel_manager.maybe_init_persistent_buffers(
+        KV_shape=[1, 1, 32, 32],  # dummy
+        spatial_shape=buffer_shape,
+        prompt_shape=buffer_shape,
+    )
+
     tt_output = sd_layer_norm(tt_input_tensor, parameters, parallel_manager, cfg_index=0)
     if not distributed:
         dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 0
@@ -120,7 +132,6 @@ def test_layer_norm(
     ],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
 def test_rms_norm(
     *,
     mesh_device: ttnn.MeshDevice,

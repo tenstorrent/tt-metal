@@ -84,7 +84,6 @@ def test_vae_upblock(
     resnet_conv_in_channel_split_factors,
     upsample_conv_channel_split_factors,
     block_id,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")

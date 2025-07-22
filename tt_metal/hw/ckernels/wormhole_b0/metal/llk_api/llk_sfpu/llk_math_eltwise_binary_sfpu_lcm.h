@@ -21,8 +21,7 @@ inline void llk_math_eltwise_binary_sfpu_lcm_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lcm(
     uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
-        sfpu::calculate_sfpu_lcm, dst_index0, dst_index1, vector_mode);
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(sfpu::calculate_sfpu_lcm, dst_index0, dst_index1, vector_mode);
 }
 
 }  // namespace ckernel

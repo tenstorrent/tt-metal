@@ -24,7 +24,7 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
 @pytest.mark.parametrize("model_name", ["deepset/roberta-large-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_roberta(device, use_program_cache, reset_seeds, model_name, batch_size, sequence_size):
+def test_roberta(device, reset_seeds, model_name, batch_size, sequence_size):
     config = transformers.RobertaConfig.from_pretrained(model_name)
     model = transformers.RobertaModel.from_pretrained(model_name)
     config.use_dram = True
@@ -72,7 +72,7 @@ def test_roberta(device, use_program_cache, reset_seeds, model_name, batch_size,
 @pytest.mark.parametrize("model_name", ["deepset/roberta-large-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_roberta_for_question_answering(device, use_program_cache, reset_seeds, model_name, batch_size, sequence_size):
+def test_roberta_for_question_answering(device, reset_seeds, model_name, batch_size, sequence_size):
     config = RobertaConfig.from_pretrained(model_name)
     model = RobertaForQuestionAnswering.from_pretrained(model_name)
     config.use_dram = True

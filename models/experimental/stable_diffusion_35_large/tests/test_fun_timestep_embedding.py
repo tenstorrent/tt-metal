@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     [(1, 8)],
     indirect=True,
 )
-@pytest.mark.usefixtures("use_program_cache")
 def test_timestep_embedding(
     *,
     mesh_device: ttnn.MeshDevice,

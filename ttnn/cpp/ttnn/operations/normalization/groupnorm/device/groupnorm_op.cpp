@@ -25,58 +25,58 @@ void GroupNorm::validate(
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);
-    TT_FATAL(a.get_dtype() == DataType::BFLOAT16, "Error");
-    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    TT_FATAL(a.get_padded_shape()[3] % this->num_groups == 0, "channel must be divisible by num_groups!");
-    TT_FATAL(a.get_padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
+    TT_FATAL(a.dtype() == DataType::BFLOAT16, "Error");
+    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
+    TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+    TT_FATAL(a.padded_shape()[3] % this->num_groups == 0, "channel must be divisible by num_groups!");
+    TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
 
     if (gamma.has_value()) {
-        if (gamma.value().get_layout() == Layout::TILE) {
+        if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.get_padded_shape()[3] == gamma.value().get_padded_shape()[3],
+                a.padded_shape()[3] == gamma.value().padded_shape()[3],
                 "{} != {}",
-                a.get_padded_shape()[3],
-                gamma.value().get_padded_shape()[3]);
+                a.padded_shape()[3],
+                gamma.value().padded_shape()[3]);
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().get_padded_shape()[2] == TILE_HEIGHT, "Error");
+                gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().padded_shape()[2] == TILE_HEIGHT, "Error");
         } else {
-            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL((gamma.value().get_padded_shape()[3] == TILE_WIDTH), "Error");
+            TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL((gamma.value().padded_shape()[3] == TILE_WIDTH), "Error");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().get_dtype() == DataType::BFLOAT16, "Error");
+                gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().dtype() == DataType::BFLOAT16, "Error");
         }
         if (beta.has_value()) {
-            TT_FATAL(gamma.value().get_layout() == beta.value().get_layout(), "Error");
+            TT_FATAL(gamma.value().layout() == beta.value().layout(), "Error");
         }
     }
 
     if (beta.has_value()) {
-        if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_padded_shape()[3] == beta.value().get_padded_shape()[3], "Error");
+        if (beta.value().layout() == Layout::TILE) {
+            TT_FATAL(a.padded_shape()[3] == beta.value().padded_shape()[3], "Error");
             TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().get_padded_shape()[2] == TILE_HEIGHT, "Error");
+                beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(beta.value().padded_shape()[2] == TILE_HEIGHT, "Error");
         } else {
-            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL(beta.value().get_padded_shape()[3] == TILE_WIDTH, "Error");
+            TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL(beta.value().padded_shape()[3] == TILE_WIDTH, "Error");
             TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().get_dtype() == DataType::BFLOAT16, "Error");
+                beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(beta.value().dtype() == DataType::BFLOAT16, "Error");
         }
     }
 
     if (input_mask.has_value()) {
-        TT_FATAL(input_mask.value().get_layout() == Layout::TILE, "Error");
-        TT_FATAL(input_mask.value().get_padded_shape()[1] == this->num_groups, "Error");
-        TT_FATAL(input_mask.value().get_padded_shape()[2] == TILE_HEIGHT, "Error");
-        TT_FATAL(input_mask.value().get_padded_shape()[3] % TILE_WIDTH == 0, "Error");
+        TT_FATAL(input_mask.value().layout() == Layout::TILE, "Error");
+        TT_FATAL(input_mask.value().padded_shape()[1] == this->num_groups, "Error");
+        TT_FATAL(input_mask.value().padded_shape()[2] == TILE_HEIGHT, "Error");
+        TT_FATAL(input_mask.value().padded_shape()[3] % TILE_WIDTH == 0, "Error");
     }
 }
 std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -87,7 +87,7 @@ std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if (program_config.inplace) {
                 if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
-                    return {input_tensor.get_tensor_spec()};
+                    return {input_tensor.tensor_spec()};
                 } else {
                     TT_THROW("inplace groupnorm not supported for unsharded tensors");
                 }
@@ -95,7 +95,7 @@ std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor
 
             auto mem_config = this->output_mem_config;
             return {TensorSpec(
-                input_tensor.get_logical_shape(),
+                input_tensor.logical_shape(),
                 TensorLayout(program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
         },
         this->program_config);
@@ -132,12 +132,11 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
-                MathFidelity fidelity = program_config.math_fidelity;
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 bool inplace = program_config.inplace;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-                uint32_t batch = a.get_padded_shape()[0];
+                uint32_t batch = a.padded_shape()[0];
 
                 return groupnorm_multi_core_sharded(
                     a,
@@ -148,18 +147,17 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                     this->eps,
                     this->num_groups,
                     batch,
-                    fidelity,
                     program_config.im_data_format,
                     program_config.compute_with_storage_grid_size,
-                    inplace);
+                    inplace,
+                    this->compute_kernel_config);
             } else {
-                MathFidelity fidelity = program_config.math_fidelity;
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 bool inplace = program_config.inplace;
                 uint32_t num_out_blocks = program_config.num_out_blocks;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-                uint32_t batch = a.get_padded_shape()[0];
+                uint32_t batch = a.padded_shape()[0];
 
                 return groupnorm_multi_core(
                     a,
@@ -170,11 +168,11 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                     this->eps,
                     this->num_groups,
                     batch,
-                    fidelity,
                     program_config.im_data_format,
                     program_config.compute_with_storage_grid_size,
                     inplace,
-                    num_out_blocks);
+                    num_out_blocks,
+                    this->compute_kernel_config);
             }
         },
         this->program_config);

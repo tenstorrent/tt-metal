@@ -28,7 +28,6 @@ from ..tt.utils import assert_quality, from_torch_fast
         (32, 128, 256),
     ],
 )
-@pytest.mark.usefixtures("use_program_cache")
 def test_feed_forward(
     *,
     mesh_device: ttnn.MeshDevice,

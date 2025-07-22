@@ -18,17 +18,17 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
 
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    uint32_t num_tiles = a.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / tt::constants::TILE_HW;
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    auto output_shape = output.get_padded_shape();
+    auto output_shape = output.padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
         unary_reader_kernel_id,
         core,
         {src0_buffer->address(),
-         a.get_padded_shape()[3] / tt::constants::TILE_WIDTH,
+         a.padded_shape()[3] / tt::constants::TILE_WIDTH,
          (uint32_t)output_shape[0],
          (uint32_t)output_shape[1],
          (uint32_t)output_shape[2] / tt::constants::TILE_HEIGHT,
@@ -121,8 +121,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     bool split_work_by_old_sticks) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_padded_shape();
-    auto output_shape = output_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
+    auto output_shape = output_tensor.padded_shape();
 
     uint32_t old_stick_size = input_shape[3] * input_tensor.element_size();
     uint32_t new_stick_size = output_shape[3] * output_tensor.element_size();
@@ -209,22 +209,22 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 
 operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& output) {
-    TT_FATAL(a.get_dtype() == output.get_dtype(), "Error");
+    TT_FATAL(a.dtype() == output.dtype(), "Error");
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::IDevice* device = a.device();
 
-    auto output_shape = output.get_padded_shape();
+    auto output_shape = output.padded_shape();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t num_old_sticks = a.get_padded_shape()[0] * a.get_padded_shape()[1] * a.get_padded_shape()[2];
+    uint32_t num_old_sticks = a.padded_shape()[0] * a.padded_shape()[1] * a.padded_shape()[2];
     uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
 
-    uint32_t old_stick_size = a.get_padded_shape()[3] * a.element_size();
+    uint32_t old_stick_size = a.padded_shape()[3] * a.element_size();
     uint32_t new_stick_size = output_shape[3] * output.element_size();
 
     TT_FATAL(
@@ -322,7 +322,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
 
         auto dst_tensor = output_tensors.at(0);
 
@@ -331,13 +331,13 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
 
         uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-        auto output_shape = dst_tensor.get_logical_shape();
+        auto output_shape = dst_tensor.logical_shape();
 
         uint32_t num_old_sticks =
-            src_tensor.get_padded_shape()[0] * src_tensor.get_padded_shape()[1] * src_tensor.get_padded_shape()[2];
+            src_tensor.padded_shape()[0] * src_tensor.padded_shape()[1] * src_tensor.padded_shape()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
 
-        uint32_t old_stick_size = src_tensor.get_padded_shape()[3] * src_tensor.element_size();
+        uint32_t old_stick_size = src_tensor.padded_shape()[3] * src_tensor.element_size();
         uint32_t new_stick_size = output_shape[3] * dst_tensor.element_size();
 
         bool split_work_by_old_sticks = old_stick_size > new_stick_size;
@@ -366,9 +366,13 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
         for (uint32_t i = 0; i < num_cores_total; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-            { SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first); }
+            {
+                SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
+            }
 
-            { SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second); }
+            {
+                SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+            }
         }
     };
 

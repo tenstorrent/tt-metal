@@ -25,7 +25,6 @@ void bind_reduction_topk_operation(py::module& module) {
             Input tensor must have BFLOAT8 or BFLOAT16 data type and TILE_LAYOUT layout.
 
             Output value tensor will have the same data type as input tensor and output index tensor will have UINT16 data type.
-            Note that when using BFLOAT8, a different set of elements than in the input may share the same exponent, causing some values to be rounded up or down.
 
             Equivalent pytorch code:
 

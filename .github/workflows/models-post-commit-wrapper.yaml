@@ -5,9 +5,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:

@@ -16,8 +16,8 @@ struct ExecuteRepeatAndInterleaveEltwiseMul {
         const Tensor& a,
         const Tensor& b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DataType> dtype = std::nullopt,
-        const std::optional<MathFidelity> math_fidelity = std::nullopt);
+        std::optional<DataType> dtype = std::nullopt,
+        std::optional<MathFidelity> math_fidelity = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::ssm

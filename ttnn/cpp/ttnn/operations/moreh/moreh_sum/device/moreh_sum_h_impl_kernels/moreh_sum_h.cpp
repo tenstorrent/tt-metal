@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -47,9 +47,9 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
-                    reduce_init_delta<false>(cb_input, cb_scaler, cb_accum_dst);
+                    reduce_init(cb_input, cb_scaler, cb_accum_dst);
                     reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-                    reduce_revert_delta(cb_accum_dst);
+                    reduce_uninit();
 
                     cb_pop_front(cb_input, onetile);
                 }
@@ -104,9 +104,9 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(cb_input, cb_scaler);
 #endif
-            reduce_init_delta<false>(cb_input, cb_scaler, cb_out);
+            reduce_init(cb_input, cb_scaler, cb_out);
             reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-            reduce_revert_delta(cb_out);
+            reduce_uninit();
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);

@@ -1,5 +1,8 @@
 pack_tile
 =========
 
-.. doxygenfunction:: pack_tile(uint32_t idst, uint32_t cbid, std::uint32_t output_tile_index = 0)
-.. doxygenfunction:: matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
+.. doxygenfunction:: pack_tile
+.. doxygenfunction:: pack_tile_block
+.. doxygenfunction:: pack_reconfig_data_format(const uint32_t new_operand)
+.. doxygenfunction:: pack_reconfig_data_format(const uint32_t old_operand, const uint32_t new_operand)
+.. doxygenfunction:: pack_reconfig_l1_acc

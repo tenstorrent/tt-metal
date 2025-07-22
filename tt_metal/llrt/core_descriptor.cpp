@@ -20,7 +20,9 @@
 #include "metal_soc_descriptor.h"
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_simulation_device.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
@@ -31,7 +33,7 @@ namespace tt {
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    string core_desc_dir;
+    std::string core_desc_dir;
     if (getenv("TT_METAL_HOME")) {
         core_desc_dir = getenv("TT_METAL_HOME");
     } else {
@@ -42,8 +44,14 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
-    bool targeting_sim = tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
-    if (targeting_sim) {
+    bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
+    if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+        if (init.get_soc_descriptor().grid_size.y <= 2) { // these SOC descriptors declare a 2x2 grid
+            use_small_core_desc_yaml = true;
+        }
+    }
+    if (use_small_core_desc_yaml) {
         switch (arch) {
             default:
                 throw std::runtime_error(
@@ -171,7 +179,7 @@ const core_descriptor_t& get_core_descriptor_config(
     CoreCoord grid_size =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     auto logical_active_eth_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
@@ -262,7 +270,6 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
 std::optional<uint32_t> get_storage_core_bank_size(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     if (core_desc.storage_core_bank_size.has_value()) {
         TT_FATAL(
             core_desc.storage_core_bank_size.value() %

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,6 @@ from models.utility_functions import run_for_wormhole_b0
 )
 def test_run_vgg_unet_trace_2cqs_inference(
     device,
-    use_program_cache,
     batch_size,
     model_location_generator,
 ):

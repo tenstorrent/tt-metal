@@ -31,11 +31,11 @@ MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     std::vector<std::optional<TensorSpec>> result(2);
     if (tensor_args.gamma_grad.has_value()) {
-        result[0] = tensor_args.gamma_grad->get_tensor_spec();
+        result[0] = tensor_args.gamma_grad->tensor_spec();
     }
 
     if (tensor_args.beta_grad.has_value()) {
-        result[1] = tensor_args.beta_grad->get_tensor_spec();
+        result[1] = tensor_args.beta_grad->tensor_spec();
     }
     return result;
 };

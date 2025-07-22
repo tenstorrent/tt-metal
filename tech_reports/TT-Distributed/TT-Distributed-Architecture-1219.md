@@ -1,6 +1,11 @@
 # TT-Metalium Distributed
 
+December 19, 2024
+
 Authors: TT-Metalium Scale-Out Team
+
+> [!IMPORTANT]
+> This document represents high-level architectural decisions and specifications as they existed at the time of writing. The information contained in this document may no longer reflect the current state of TT-Metalium. Implementation details, APIs, and design decisions are subject to change as the project evolves. Please consult the most recent documentation or contact the TT-Metalium Scale-Out team for the latest information.
 
 For questions and comments please use the [TT-Metalium Scale-Out Discord Server](https://discord.com/channels/863154240319258674/1321621251269328956)
 
@@ -376,7 +381,7 @@ In a single-device context, a CommandQueueHandle is associated with a CQ tied to
 
 **All APIs discussed in this section will be required for V1.**
 
-This section introduces the MeshBuffer and the MeshAllocator, through which memory management mechanisms exposed by TT-Metallium are extended to a distributed address space across a DRAM and SRAM banks in a Virtual Mesh.
+This section introduces the MeshBuffer and the MeshAllocator, through which memory management mechanisms exposed by TT-Metalium are extended to a distributed address space across a DRAM and SRAM banks in a Virtual Mesh.
 
 ### 3.3.1 Background: Device Buffer and Single-Device Allocator
 

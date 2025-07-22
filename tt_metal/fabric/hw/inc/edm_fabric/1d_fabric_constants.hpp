@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "compile_time_args.h"
 #include "dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
@@ -123,6 +124,14 @@ constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
 constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
 constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
 
+// For multi-RISC router implementations, the two risc cores must coordinate
+// on the teardown process.
+// The teardown process is as follows:
+// Every RISC core must increment this counter when it is ready to teardown.
+// each waits for the counter to reach the active RISC core count before proceeding
+// One of the RISC cores is designated as the master to complete the teardown (RISC0)
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = 31;
+
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
 
@@ -191,22 +200,29 @@ constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_STA
 constexpr size_t SENDER_NUM_BUFFERS_IDX = MAIN_CT_ARGS_START_IDX + 8;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
-// assume the internal sender channels have the same buffer slots for now, dateline edm send channel 2 has 0 buffer
-// slots.
-constexpr size_t SENDER_NUM_BUFFERS = SENDER_NUM_BUFFERS_ARRAY[1];
 
+// dateline edm recv channel 0 has 0 buffer slots, dateline upstream channel 1 has 0 buffer.
 constexpr size_t RECEIVER_NUM_BUFFERS_IDX = SENDER_NUM_BUFFERS_IDX + NUM_SENDER_CHANNELS;
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
-// assume the non-dateline receiver channels have the same buffer slots for now, dateline edm recv channel 0 has 0
-// buffer slots.
-constexpr size_t RECEIVER_NUM_BUFFERS = RECEIVER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
 constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS_IDX = RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, REMOTE_RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
 
-constexpr size_t MAIN_CT_ARGS_IDX_1 = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
+    fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
+// TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
+
+constexpr size_t SKIP_CHANNEL_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
+constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);
+constexpr bool skip_sender_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 1);
+constexpr bool skip_sender_vc1_channel_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 2);
+
+constexpr size_t MAIN_CT_ARGS_IDX_1 = SKIP_CHANNEL_IDX + 3;
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1);
 constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
 constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
@@ -234,10 +250,8 @@ constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
 constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
 
-constexpr bool persistent_mode = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3) != 0;
-
 // Per-channel counters
-constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 4;
+constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 3;
 constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 0) != 0;
 constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 1);
 constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 2);
@@ -278,6 +292,8 @@ constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_IDX
 constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 2) != 0;
 constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 3);
 constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 4);
+constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
+
 constexpr size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 5);
 constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 6);
 constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 7);
@@ -290,7 +306,17 @@ constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK = get_compile_time
 
 constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 11);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 12;
+// Context switch timeouts
+constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 12);
+constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
+
+constexpr size_t MY_ETH_CHANNEL = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 14);
+
+constexpr size_t MY_ERISC_ID = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 15);
+constexpr size_t NUM_ACTIVE_ERISCS = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 16);
+static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NUM_ACTIVE_ERISCS");
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 17;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -334,7 +360,62 @@ static_assert(
     "Special marker 1 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
+    conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();
+
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_completion_counter_addrs =
+    conditional_get_next_n_args<
+        multi_txq_enabled,
+        size_t,
+        TO_SENDER_CREDIT_COUNTERS_START_IDX + NUM_SENDER_CHANNELS,
+        NUM_SENDER_CHANNELS>();
+
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_ack_counter_ptrs = conditional_get_next_n_args<
+    multi_txq_enabled,
+    size_t,
+    TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * NUM_SENDER_CHANNELS,
+    NUM_RECEIVER_CHANNELS>();
+
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_completion_counter_ptrs =
+    conditional_get_next_n_args<
+        multi_txq_enabled,
+        size_t,
+        TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS,
+        NUM_RECEIVER_CHANNELS>();
+
+template <typename T>
+constexpr bool counter_credit_addresses_are_valid(const T& counter_addresses) {
+    for (size_t i = 0; i < counter_addresses.size(); i++) {
+        if (counter_addresses[i] == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(
+    !multi_txq_enabled || counter_credit_addresses_are_valid(to_sender_remote_ack_counter_addrs),
+    "to_sender_remote_ack_counter_addrs must be valid");
+static_assert(
+    !multi_txq_enabled || counter_credit_addresses_are_valid(to_sender_remote_completion_counter_addrs),
+    "to_sender_remote_completion_counter_addrs must be valid");
+static_assert(
+    !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_ack_counter_ptrs),
+    "local_receiver_ack_counter_ptrs must be valid");
+static_assert(
+    !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_completion_counter_ptrs),
+    "local_receiver_completion_counter_ptrs must be valid");
+
+constexpr size_t SPECIAL_MARKER_2_IDX =
+    TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) : 0);
+constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
+    "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
+    "CT args.");
+
+constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
 // TODO: Add type safe getter
 constexpr bool is_local_handshake_master =
@@ -377,14 +458,20 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_3_pkts_completed_id, to_sender_4_pkts_completed_id});
 
 // Miscellaneous configuration
-constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
+
+// TODO: move this to compile time args if we need to enable it
+constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
 namespace tt::tt_fabric {
 static_assert(
     receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,
     "edm_to_local_chip_noc must equal to receiver_channel_local_write_noc_ids");
 static constexpr uint8_t edm_to_downstream_noc = receiver_channel_forwarding_noc_ids[0];
+#ifdef ARCH_BLACKHOLE
+static constexpr uint8_t worker_handshake_noc = noc_index;
+#else
 static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
+#endif
 constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];

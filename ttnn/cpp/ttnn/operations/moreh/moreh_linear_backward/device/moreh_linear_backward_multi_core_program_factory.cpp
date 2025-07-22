@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"
@@ -23,8 +24,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     Program program{};
     auto& output_grad = tensor_args.output_grad;
 
-    const auto& bias_grad_shape = bias_grad.get_logical_shape();
-    const auto& output_grad_shape_wo_padding = output_grad.get_logical_shape();
+    const auto& bias_grad_shape = bias_grad.logical_shape();
+    const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
     auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -36,8 +37,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const uint32_t mask_w =
         do_mask_w ? output_grad_shape_wo_padding[-1] % constants::TILE_WIDTH : constants::TILE_WIDTH;
 
-    const auto& output_grad_shape = output_grad.get_padded_shape();
-    uint32_t batch_num = output_grad.volume() / output_grad_shape[-2] / output_grad_shape[-1];
+    const auto& output_grad_shape = output_grad.padded_shape();
+    uint32_t batch_num = output_grad.physical_volume() / output_grad_shape[-2] / output_grad_shape[-1];
     uint32_t Ht = output_grad_shape[-2] / constants::TILE_HEIGHT;
     uint32_t Wt = output_grad_shape[-1] / constants::TILE_WIDTH;
     uint32_t num_tiles = batch_num * Ht;
@@ -70,7 +71,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const uint32_t out0_t = 1;
     const uint32_t im0_t = 1;
     const uint32_t im1_t = 1;
-    auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
+    auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
 
     CreateCircularBuffer(
         program,
@@ -105,7 +106,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);

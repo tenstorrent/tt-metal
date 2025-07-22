@@ -40,8 +40,8 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
     uint64_t remote_signal_semaphore_addr = get_noc_addr(next_core_noc_x, next_core_noc_y, signal_semaphore_addr, noc);
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(6);
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;

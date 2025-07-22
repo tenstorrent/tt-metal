@@ -42,10 +42,18 @@ class TtUpsample2D(nn.Module):
             bias,
             self.conv_config.weights_dtype,
             fp32_dest_acc_en=(self.conv_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+            and (self.conv_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):
+        memory_config = ttnn.create_sharded_memory_config(
+            shape=hidden_states.shape,
+            core_grid=ttnn.CoreGrid(y=8, x=5),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        hidden_states = ttnn.to_memory_config(hidden_states, memory_config)
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
         B, H, W, C = list(hidden_states.shape)
         return hidden_states, [B, C, H, W]
@@ -74,6 +82,7 @@ class TtUpsample2D(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
 

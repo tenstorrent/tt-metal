@@ -7,11 +7,11 @@
 
 #include <optional>
 #include <cmath>
+#include <string>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/logger.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
@@ -54,9 +54,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     may be less than padded length. K, V are gathered, so logical_n tells the true length of K and V.
     */
 
-    const auto q_shape = input_tensor_q.get_logical_shape();
-    const auto k_shape = gathered_input_tensor_k.get_logical_shape();
-    const auto joint_q_shape = joint_tensor_q.get_logical_shape();
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& k_shape = gathered_input_tensor_k.logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.logical_shape();
     const uint32_t B = q_shape[0], NH = q_shape[1], local_N = q_shape[2], DH = q_shape[3];
     const uint32_t global_N = k_shape[2];
     const uint32_t L = joint_q_shape[2];
@@ -105,41 +105,41 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t global_logical_NK_chunks = tt::div_up(logical_n, k_chunk_size);
     const uint32_t global_padded_NK_chunks = global_N / k_chunk_size;
 
-    tt::log_debug("B: {}", B);
-    tt::log_debug("NH: {}", NH);
-    tt::log_debug("N: {}", local_N);
-    tt::log_debug("L: {}", L);
-    tt::log_debug("DH: {}", DH);
+    log_debug(tt::LogOp, "B: {}", B);
+    log_debug(tt::LogOp, "NH: {}", NH);
+    log_debug(tt::LogOp, "N: {}", local_N);
+    log_debug(tt::LogOp, "L: {}", L);
+    log_debug(tt::LogOp, "DH: {}", DH);
 
     // Log padded dimensions
-    tt::log_debug("padded_Lq: {}", padded_Lq);
-    tt::log_debug("padded_Lk: {}", padded_Lk);
-    tt::log_debug("padded_Lqt: {}", padded_Lqt);
-    tt::log_debug("padded_Lkt: {}", padded_Lkt);
+    log_debug(tt::LogOp, "padded_Lq: {}", padded_Lq);
+    log_debug(tt::LogOp, "padded_Lk: {}", padded_Lk);
+    log_debug(tt::LogOp, "padded_Lqt: {}", padded_Lqt);
+    log_debug(tt::LogOp, "padded_Lkt: {}", padded_Lkt);
 
     // Log tile dimensions
-    tt::log_debug("DHt: {}", DHt);
-    tt::log_debug("local_Nt: {}", local_Nt);
-    tt::log_debug("global_Nt: {}", global_Nt);
-    tt::log_debug("logical_Lt: {}", logical_Lt);
-    tt::log_debug("logical_n: {}", logical_n);
-    tt::log_debug("global_N: {}", global_N);
+    log_debug(tt::LogOp, "DHt: {}", DHt);
+    log_debug(tt::LogOp, "local_Nt: {}", local_Nt);
+    log_debug(tt::LogOp, "global_Nt: {}", global_Nt);
+    log_debug(tt::LogOp, "logical_Lt: {}", logical_Lt);
+    log_debug(tt::LogOp, "logical_n: {}", logical_n);
+    log_debug(tt::LogOp, "global_N: {}", global_N);
 
     // Log chunking parameters
-    tt::log_debug("Sq_chunk_t: {}", Sq_chunk_t);
-    tt::log_debug("Sk_chunk_t: {}", Sk_chunk_t);
-    tt::log_debug("q_chunk_size: {}", q_chunk_size);
-    tt::log_debug("k_chunk_size: {}", k_chunk_size);
-    tt::log_debug("q_num_chunks: {}", q_num_chunks);
-    tt::log_debug("k_num_chunks: {}", k_num_chunks);
+    log_debug(tt::LogOp, "Sq_chunk_t: {}", Sq_chunk_t);
+    log_debug(tt::LogOp, "Sk_chunk_t: {}", Sk_chunk_t);
+    log_debug(tt::LogOp, "q_chunk_size: {}", q_chunk_size);
+    log_debug(tt::LogOp, "k_chunk_size: {}", k_chunk_size);
+    log_debug(tt::LogOp, "q_num_chunks: {}", q_num_chunks);
+    log_debug(tt::LogOp, "k_num_chunks: {}", k_num_chunks);
 
     // Log concatenated dimensions
-    tt::log_debug("cat_Sq: {}", cat_Sq);
-    tt::log_debug("cat_Sk: {}", cat_Sk);
-    tt::log_debug("cat_Sqt: {}", cat_Sqt);
-    tt::log_debug("cat_Skt: {}", cat_Skt);
+    log_debug(tt::LogOp, "cat_Sq: {}", cat_Sq);
+    log_debug(tt::LogOp, "cat_Sk: {}", cat_Sk);
+    log_debug(tt::LogOp, "cat_Sqt: {}", cat_Sqt);
+    log_debug(tt::LogOp, "cat_Skt: {}", cat_Skt);
 
-    tt::log_debug("use_joint_mask: {}", use_joint_mask);
+    log_debug(tt::LogOp, "use_joint_mask: {}", use_joint_mask);
 
     // Program program = CreateProgram();
 
@@ -162,9 +162,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     TT_FATAL(sdpa_fused_op_signaler.has_value(), "SDPA fused op signaler must be provided");
     sdpa_fused_op_signaler->init_fused_op(program, device, core_grid);
 
-    tt::log_debug("num_cores: {}", num_cores);
-    tt::log_debug("device->compute_with_storage_grid_size(): {}", device->compute_with_storage_grid_size());
-    tt::log_debug("grid_size: {}", grid_size);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "device->compute_with_storage_grid_size(): {}", device->compute_with_storage_grid_size());
+    log_debug(tt::LogOp, "grid_size: {}", grid_size);
 
     TT_FATAL(
         num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
@@ -172,31 +172,17 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         num_cores,
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
-    // Parallelization scheme
-    // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor = std::min(B, num_cores);
-    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NH);
-    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
-
-    TT_FATAL(
-        batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores,
-        "Parallelism must not exceed number of cores. Got {}, expected at most {}.",
-        batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
-        num_cores);
-
-    tt::log_debug("Parallelization scheme:");
-    tt::log_debug("batch_parallel_factor: {}", batch_parallel_factor);
-    tt::log_debug("nh_parallel_factor: {}", nh_parallel_factor);
-    tt::log_debug("q_parallel_factor: {}", q_parallel_factor);
-
-    // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core = tt::div_up(B, batch_parallel_factor);
-    const uint32_t nh_per_core = tt::div_up(NH, nh_parallel_factor);
-    const uint32_t q_per_core = tt::div_up(q_num_chunks, q_parallel_factor);
+    /**
+     * This parallelization scheme is efficient because it divides the global work,
+     * the total number of Q chunks processed, evenly across the cores.
+     *
+     */
+    const uint32_t global_q_chunks = B * NH * q_num_chunks;
+    const uint32_t q_per_core = tt::div_up(global_q_chunks, num_cores);
 
     const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
 
-    tt::log_debug("q_per_core: {}", q_per_core);
+    log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -210,14 +196,14 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
 
     // log all values
-    tt::log_debug("q_tiles: {}", q_tiles);
-    tt::log_debug("k_tiles: {}", k_tiles);
-    tt::log_debug("v_tiles: {}", v_tiles);
-    tt::log_debug("mask_tiles: {}", mask_tiles);
-    tt::log_debug("qk_tiles: {}", qk_tiles);
-    tt::log_debug("out0_t: {}", out0_t);
-    tt::log_debug("scale_tiles: {}", scale_tiles);
-    tt::log_debug("statistics_tiles: {}", statistics_tiles);
+    log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
+    log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
+    log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
+    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
+    log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
+    log_debug(tt::LogOp, "out0_t: {}", out0_t);
+    log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
+    log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -244,19 +230,19 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // log all values
-    tt::log_debug("dst_size: {}", dst_size);
-    tt::log_debug("qk_in0_block_w: {}", qk_in0_block_w);
-    tt::log_debug("qk_out_subblock_w: {}", qk_out_subblock_w);
-    tt::log_debug("qk_out_subblock_h: {}", qk_out_subblock_h);
-    tt::log_debug("qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
-    tt::log_debug("qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
-    tt::log_debug("qk_num_blocks: {}", qk_num_blocks);
-    tt::log_debug("out_in0_block_w: {}", out_in0_block_w);
-    tt::log_debug("out_out_subblock_w: {}", out_out_subblock_w);
-    tt::log_debug("out_out_subblock_h: {}", out_out_subblock_h);
-    tt::log_debug("out_in0_num_subblocks: {}", out_in0_num_subblocks);
-    tt::log_debug("out_in1_num_subblocks: {}", out_in1_num_subblocks);
-    tt::log_debug("out_num_blocks: {}", out_num_blocks);
+    log_debug(tt::LogOp, "dst_size: {}", dst_size);
+    log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
+    log_debug(tt::LogOp, "qk_out_subblock_w: {}", qk_out_subblock_w);
+    log_debug(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
+    log_debug(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
+    log_debug(tt::LogOp, "qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
+    log_debug(tt::LogOp, "qk_num_blocks: {}", qk_num_blocks);
+    log_debug(tt::LogOp, "out_in0_block_w: {}", out_in0_block_w);
+    log_debug(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
+    log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
+    log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
+    log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
+    log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
     const uint32_t stats_granularity = std::min(Sq_chunk_t, dst_size);
@@ -295,14 +281,14 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         dht_granularity);
 
     // Log these
-    tt::log_debug("stats_granularity: {}", stats_granularity);
-    tt::log_debug("log2_stats_granularity: {}", log2_stats_granularity);
-    tt::log_debug("sub_exp_granularity: {}", sub_exp_granularity);
-    tt::log_debug("log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
-    tt::log_debug("mul_bcast_granularity: {}", mul_bcast_granularity);
-    tt::log_debug("log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
-    tt::log_debug("dht_granularity: {}", dht_granularity);
-    tt::log_debug("log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
+    log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
+    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
+    log_debug(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
+    log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
+    log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
+    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
+    log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -315,7 +301,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     scale_union.f = scale.value_or(1.0f);
 
     // log scale
-    tt::log_debug("scale: {}", scale_union.f);
+    log_debug(tt::LogOp, "scale: {}", scale_union.f);
 
     std::vector<uint32_t> reader_compile_time_args = {
         B,
@@ -334,7 +320,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         L_k_num_chunks,
         global_logical_NK_chunks,
         global_padded_NK_chunks,
-    };
+        q_num_chunks};
 
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
@@ -345,8 +331,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t mask_chunk_1 =
         (padded_Lk != L) ? (cat_Skt / Sk_chunk_t) - 1 : (uint32_t)(-1);  // idx of last chunk in second sequence
 
-    tt::log_debug("mask_chunk_0: {}", mask_chunk_0);
-    tt::log_debug("mask_chunk_1: {}", mask_chunk_1);
+    log_debug(tt::LogOp, "mask_chunk_0: {}", mask_chunk_0);
+    log_debug(tt::LogOp, "mask_chunk_1: {}", mask_chunk_1);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -372,7 +358,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         L_k_num_chunks,
         global_logical_NK_chunks,
         global_padded_NK_chunks,
-    };
+        q_num_chunks};
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -401,9 +387,10 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         L_k_num_chunks,
         global_logical_NK_chunks,
         global_padded_NK_chunks,
-    };
+        q_num_chunks,
+        scale_union.u};
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
@@ -439,11 +426,11 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
 
     // Create circular buffers
 
-    tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.get_dtype());
-    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.get_dtype());
-    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.get_dtype());
+    tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
+    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
     tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -458,14 +445,14 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
     uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
 
-    log_debug("q_data_format: {}", q_df);
-    log_debug("k_data_format: {}", k_df);
-    log_debug("v_data_format: {}", v_df);
-    log_debug("mask_data_format: {}", mask_df);
-    log_debug("out_data_format: {}", out_df);
-    log_debug("scalar_data_format: {}", scalar_df);
-    log_debug("intermediate_data_format: {}", im_df);
-    log_debug("statistics_data_format: {}", stats_df);
+    log_debug(tt::LogOp, "q_data_format: {}", q_df);
+    log_debug(tt::LogOp, "k_data_format: {}", k_df);
+    log_debug(tt::LogOp, "v_data_format: {}", v_df);
+    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
+    log_debug(tt::LogOp, "out_data_format: {}", out_df);
+    log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
+    log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
+    log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
     // Q input
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
@@ -508,6 +495,11 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     auto c_in7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_7, im_df}})
                             .set_page_size(tt::CBIndex::c_7, im_tile_size);
     auto cb_in7_id = CreateCircularBuffer(program, core_grid, c_in7_config);
+
+    // column identity input
+    auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_8, scalar_tile_size);
+    auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
 
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
@@ -573,30 +565,18 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-        uint32_t local_batch_end = local_batch_start + batch_per_core;
-        uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-        uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-        uint32_t local_q_end = local_q_start + q_per_core;
+        uint32_t global_q_start = q_per_core * i;
+        uint32_t global_q_end = global_q_start + q_per_core;
 
         // clamp all to max values for non-even partitioning
-        local_batch_start = std::min(local_batch_start, B);
-        local_batch_end = std::min(local_batch_end, B);
-        local_nh_start = std::min(local_nh_start, NH);
-        local_nh_end = std::min(local_nh_end, NH);
-        local_q_start = std::min(local_q_start, q_num_chunks);
-        local_q_end = std::min(local_q_end, q_num_chunks);
+        global_q_start = std::min(global_q_start, global_q_chunks);
+        global_q_end = std::min(global_q_end, global_q_chunks);
 
         // log the above
-        tt::log_debug("core: {}", i);
-        tt::log_debug("x={},y={}", core.x, core.y);
-        tt::log_debug("local_batch_start: {}", local_batch_start);
-        tt::log_debug("local_batch_end: {}", local_batch_end);
-        tt::log_debug("local_nh_start: {}", local_nh_start);
-        tt::log_debug("local_nh_end: {}", local_nh_end);
-        tt::log_debug("local_q_start: {}", local_q_start);
-        tt::log_debug("local_q_end: {}", local_q_end);
+        log_debug(tt::LogOp, "core: {}", i);
+        log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
+        log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
+        log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
 
         std::vector<uint32_t> reader_args = {
             q_addr,
@@ -605,12 +585,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             joint_q_addr,
             joint_k_addr,
             joint_v_addr,
-            local_batch_start,
-            local_batch_end,
-            local_nh_start,
-            local_nh_end,
-            local_q_start,
-            local_q_end};
+            global_q_start,
+            global_q_end,
+        };
 
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
 
@@ -621,18 +598,17 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             out_addr,
             joint_out_addr,
             lse_addr,
-            local_batch_start,
-            local_batch_end,
-            local_nh_start,
-            local_nh_end,
-            local_q_start,
-            local_q_end};
+            global_q_start,
+            global_q_end,
+        };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
         // Compute args
         std::vector<uint32_t> compute_args = {
-            local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end};
+            global_q_start,
+            global_q_end,
+        };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }

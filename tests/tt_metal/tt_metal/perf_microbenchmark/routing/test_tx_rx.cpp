@@ -15,7 +15,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -24,7 +23,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -177,7 +176,7 @@ int main(int argc, char **argv) {
                 rx_disable_header_check, // 18: disable_header_check
             };
 
-        std::map<string, string> common_defines = {
+        std::map<std::string, std::string> common_defines = {
             {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
         };
 
@@ -262,7 +261,7 @@ int main(int argc, char **argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

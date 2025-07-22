@@ -19,7 +19,7 @@ struct ExecuteTilizeWithValPadding {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<uint32_t>& output_padded_shape,
-        const PadValue pad_value,
+        PadValue pad_value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = true);
@@ -27,7 +27,7 @@ struct ExecuteTilizeWithValPadding {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<uint32_t>& output_padded_shape,
-        const PadValue pad_value,
+        PadValue pad_value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = true);
@@ -36,7 +36,7 @@ struct ExecuteTilizeWithValPadding {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& output_padded_shape,
-        const PadValue pad_value,
+        PadValue pad_value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = true);
@@ -44,7 +44,7 @@ struct ExecuteTilizeWithValPadding {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& output_padded_shape,
-        const PadValue pad_value,
+        PadValue pad_value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = true);

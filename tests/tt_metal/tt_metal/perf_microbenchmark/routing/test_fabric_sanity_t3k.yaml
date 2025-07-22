@@ -1,0 +1,136 @@
+Tests:
+  - name: "LinearMulticast"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_multicast
+
+  - name: "UnidirLinearMulticast"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: unidirectional_linear_multicast
+
+  - name: "SingleSenderLinearUnicastAllDevices"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      ssize: 1024
+      num_packets: 100
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+      - device: [0, 4]
+        patterns:
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+
+  - name: "FullRingMulticast"
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: full_ring_multicast
+
+  - name: "HalfRingMulticast"
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: half_ring_multicast
+
+  - name: "MeshMulticast"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_multicast
+
+  - name: "MeshMulticastDynamic"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_multicast
+
+  - name: "SingleSenderMeshUnicastAllDevices"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]

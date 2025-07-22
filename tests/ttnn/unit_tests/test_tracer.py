@@ -87,7 +87,7 @@ def test_bloom(show_modules):
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
-def test_ttnn_bert(device, use_program_cache, model_name, batch_size, sequence_size, bert):
+def test_ttnn_bert(device, model_name, batch_size, sequence_size, bert):
     config = transformers.BertConfig.from_pretrained(model_name)
 
     if bert == ttnn_bert:

@@ -14,8 +14,8 @@ MorehDotBackwardOperation::program_factory_t MorehDotBackwardOperation::select_p
 }
 
 void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
-    const auto& tensor_shape = tensor.get_logical_shape();
-    const auto& grad_tensor_shape = grad_tensor.get_logical_shape();
+    const auto& tensor_shape = tensor.logical_shape();
+    const auto& grad_tensor_shape = grad_tensor.logical_shape();
     TT_FATAL(tensor_shape == grad_tensor_shape, "Tensor shape and grad tensor shape should be the same.");
     TT_FATAL(grad_tensor.storage_type() == StorageType::DEVICE, "Operands to dot backward need to be on device!");
     TT_FATAL(grad_tensor.device() == tensor.device(), "Operands to dot backward need to be on the same device!");
@@ -34,8 +34,7 @@ void validate_tensors(
     TT_FATAL(is_1d_tensor(other), "Invalid input tensor dimensions.");
     TT_FATAL(is_same_shape(input, other), "Tensor A and B should have the same shape.");
 
-    TT_FATAL(
-        input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(
         output_grad.storage_type() == StorageType::DEVICE and input.storage_type() == StorageType::DEVICE and
             other.storage_type() == StorageType::DEVICE,
@@ -75,7 +74,7 @@ MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::comput
     output_specs.reserve(tensor_args.output_tensors.size());
     for (const auto& output_tensor : tensor_args.output_tensors) {
         if (output_tensor.has_value()) {
-            output_specs.push_back(output_tensor->get_tensor_spec());
+            output_specs.push_back(output_tensor->tensor_spec());
         } else {
             output_specs.push_back(std::nullopt);
         }

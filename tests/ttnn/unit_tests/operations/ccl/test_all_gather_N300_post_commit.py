@@ -62,7 +62,6 @@ def test_all_gather_on_n300_post_commit(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_n300_impl(
@@ -74,7 +73,6 @@ def test_all_gather_on_n300_post_commit(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
@@ -127,7 +125,6 @@ def test_all_gather_sharded_n300_post_commit(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_sharded_n300(
@@ -143,7 +140,6 @@ def test_all_gather_sharded_n300_post_commit(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )

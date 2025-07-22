@@ -666,8 +666,7 @@ void kernel_main() {
             fabric_set_mcast_route(&low_latency_packet_header, eth_chan_directions::SOUTH, s_depth);
         }
     } else {
-        uint32_t outgoing_direction =
-            get_next_hop_router_direction(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+        uint32_t outgoing_direction = get_next_hop_router_direction(dest_device >> 16, dest_device & 0xFFFF);
         fabric_set_unicast_route(
             client_interface, &low_latency_packet_header, outgoing_direction, dest_device & 0xFFFF);
     }

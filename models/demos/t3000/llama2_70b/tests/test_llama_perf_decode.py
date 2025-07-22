@@ -208,7 +208,6 @@ def test_Llama_perf_host(
     max_context_len,
     mesh_device,
     llama_version,
-    use_program_cache,
     n_layers=80,
     n_devices=8,
 ):
@@ -417,7 +416,6 @@ def test_Llama_perf_hybrid_data_tensor_parallel(
     seq_len,
     max_context_len,
     llama_version,
-    use_program_cache,
     n_layers=80,
     n_devices=8,
 ):

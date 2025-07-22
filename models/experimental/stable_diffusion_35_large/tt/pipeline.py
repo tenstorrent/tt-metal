@@ -21,8 +21,7 @@ from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderMo
 from ..tt.utils import from_torch_fast, to_torch
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .transformer import TtSD3Transformer2DModel, TtSD3Transformer2DModelParameters
-
-# from .vae_decoder.vae_decoder import TtVaeDecoder, TtVaeDecoderParameters
+from .vae_decoder import TtVaeDecoder, TtVaeDecoderParameters
 
 TILE_SIZE = 32
 

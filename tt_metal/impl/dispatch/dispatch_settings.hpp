@@ -26,17 +26,17 @@ namespace tt::tt_metal {
 class DispatchSettings {
 public:
     // Returns the default settings for WORKER cores
-    static DispatchSettings worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings worker_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the default settings for ETH cores
-    static DispatchSettings eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings eth_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the default settings
-    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the settings for a core type and number hw cqs. The values can be modified, but customization must occur
     // before command queue kernels are created.
-    static DispatchSettings& get(const CoreType& core_type, const uint32_t num_hw_cqs);
+    static DispatchSettings& get(const CoreType& core_type, uint32_t num_hw_cqs);
 
     // Reset the settings
     static void initialize(const tt::Cluster& cluster);
@@ -141,6 +141,9 @@ public:
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                         // 1GB
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                      // 256 MB;
     static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE;  // 256 MB;
+
+    // Number of entries in the fabric header ring buffer
+    static constexpr uint32_t FABRIC_HEADER_RB_ENTRIES = 1;
 
     //
     // Configurable Settings

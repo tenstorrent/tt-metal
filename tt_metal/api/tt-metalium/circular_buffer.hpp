@@ -35,7 +35,7 @@ public:
         const experimental::GlobalCircularBuffer& global_circular_buffer);
     CircularBuffer(const CBDescriptor& descriptor);
 
-    const CBHandle id() const { return id_; }
+    CBHandle id() const { return id_; }
 
     const CoreRangeSet& core_ranges() const { return core_ranges_; }
 

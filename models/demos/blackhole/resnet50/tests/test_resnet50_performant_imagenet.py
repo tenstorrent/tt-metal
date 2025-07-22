@@ -26,7 +26,6 @@ from models.utility_functions import profiler, run_for_blackhole
 )
 def test_run_resnet50_trace_2cqs_inference(
     device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict,

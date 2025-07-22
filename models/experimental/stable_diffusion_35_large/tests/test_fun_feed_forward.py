@@ -36,10 +36,11 @@ TILE_SIZE = 32
         "sp",
         "tp",
         "topology",
+        "num_links",
     ),
     [
-        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
     ],
     ids=[
         "t3k_cfg1_sp2_tp4",
@@ -48,7 +49,6 @@ TILE_SIZE = 32
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
 def test_feed_forward(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -61,6 +61,7 @@ def test_feed_forward(
     tp: int,
     topology: ttnn.Topology,
     shard_sequence: bool,
+    num_links: int,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -76,6 +77,7 @@ def test_feed_forward(
         cfg_axis=cfg_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        num_links=num_links,
     )
     submesh = parallel_manager.submesh_devices[0]
     torch_dtype = torch.float32
@@ -132,11 +134,23 @@ def test_feed_forward(
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
+    buffer_shape = list(tt_input_tensor.padded_shape)
+    buffer_shape[3] //= parallel_manager.dit_parallel_config.tensor_parallel.factor
+
+    parallel_manager.maybe_init_persistent_buffers(
+        KV_shape=[1, 1, 32, 32],  # dummy
+        spatial_shape=buffer_shape,
+        prompt_shape=buffer_shape,
+    )
+
+    is_spatial = not shard_sequence
+
     tt_output = sd_feed_forward(
         tt_input_tensor,
         parameters,
         parallel_manager=parallel_manager,
         cfg_index=0,
+        is_spatial=is_spatial,
     )
     dims = [None, None]
     dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2

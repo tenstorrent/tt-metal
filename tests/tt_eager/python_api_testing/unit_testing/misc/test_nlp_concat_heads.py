@@ -86,7 +86,7 @@ def test_nlp_concat_heads_test(
     run_nlp_concat_heads_test(batch, seq_len, num_heads, head_dim, dtype, in0_mem_config, out_mem_config, device)
 
 
-def test_nlp_concat_heads_with_program_cache(device, use_program_cache):
+def test_nlp_concat_heads_with_program_cache(device):
     num_heads = 71
     head_dim = 64
     dtype = ttnn.bfloat8_b

@@ -53,20 +53,19 @@ void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_fe
             num_devices));
     }
 
-    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
+    auto weight_shape = ttnn::Shape({1, 1, out_features, in_features});
 
     uint32_t rank = 4U;
     auto mesh_shape = device->shape();
     const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
 
-    ttml::core::XTensorToMeshVariant<float> shard_composer =
-        ttml::core::ShardXTensorToMesh<float>(mesh_shape, rank - 1U);
     auto weight = init::uniform_init(weight_shape, init::UniformRange{-init_k, init_k});
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 1U);
     m_weight = autograd::create_tensor(
-        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, shard_composer));
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, ttnn::Layout::TILE, mapper.get()));
 
     if (has_bias) {
-        auto bias_shape = core::create_shape({1, 1, 1, out_features});
+        auto bias_shape = ttnn::Shape({1, 1, 1, out_features});
         m_bias = ttml::autograd::create_tensor();
         init::uniform_init(m_bias, bias_shape, init::UniformRange{-init_k, init_k});
     }
@@ -104,25 +103,23 @@ void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out
             num_devices));
     }
 
-    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
+    auto weight_shape = ttnn::Shape({1, 1, out_features, in_features});
 
     uint32_t rank = 4U;
     auto mesh_shape = device->shape();
     const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
 
-    ttml::core::XTensorToMeshVariant<float> shard_composer =
-        ttml::core::ShardXTensorToMesh<float>(mesh_shape, rank - 2U);
     auto weight = init::uniform_init(weight_shape, init::UniformRange{-init_k, init_k});
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 2U);
     m_weight = autograd::create_tensor(
-        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, shard_composer));
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, ttnn::Layout::TILE, mapper.get()));
 
     if (has_bias) {
-        auto bias_shape = core::create_shape({1, 1, 1, out_features});
+        auto bias_shape = ttnn::Shape({1, 1, 1, out_features});
         auto bias = init::uniform_init(bias_shape, init::UniformRange{-init_k, init_k});
-        ttml::core::XTensorToMeshVariant<float> shard_composer =
-            ttml::core::ShardXTensorToMesh<float>(mesh_shape, rank - 1U);
+        mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 1U);
         m_bias = autograd::create_tensor(
-            ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(bias, device, shard_composer));
+            ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(bias, device, ttnn::Layout::TILE, mapper.get()));
     }
 }
 

@@ -19,7 +19,7 @@ expected_cols = [
     "Throughput CPU (Batch*inf/sec)",
 ]
 
-check_cols = ["Inference Time (sec)", "Compile Time (sec)"]
+check_cols = ["Inference Time (sec)"]
 
 if __name__ == "__main__":
     fname = f"Models_Perf_{today}.csv"

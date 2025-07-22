@@ -37,7 +37,7 @@ public:
 
     void set_issue_queue_size(uint8_t cq_id, uint32_t issue_queue_size);
 
-    void set_bypass_mode(const bool enable, const bool clear);
+    void set_bypass_mode(bool enable, bool clear);
 
     bool get_bypass_mode();
 

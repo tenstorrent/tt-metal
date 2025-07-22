@@ -7,7 +7,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
@@ -138,8 +139,7 @@ void kernel_main() {
         uint32_t num_tiles_to_read_this_core = 1;
         cb_wait_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
         size_t l1_read_addr = get_read_ptr(cb_to_allgather_writer);
-        uint64_t noc0_dest_noc_addr =
-            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
+        uint64_t noc0_dest_noc_addr = safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
         fused_write_atomic_and_advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,

@@ -9,7 +9,12 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import (
+    check_with_pcc,
+    check_with_pcc_without_tensor_printout,
+    start_measuring_time,
+    stop_measuring_time,
+)
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -114,7 +119,6 @@ def run_conv2d_full_sweep(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
         weights_dtype=weights_dtype,
         shard_layout=None,
         deallocate_activation=deallocate_activation,
@@ -157,6 +161,7 @@ def run_conv2d_full_sweep(
         groups=groups,
         return_output_dim=True,
         return_weights_and_bias=True,
+        dtype=activations_dtype,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -254,6 +259,8 @@ def run_conv2d_short_sweep(
     )
 
     tt_bias_tensor = None
+    conv_config = ttnn.Conv2dConfig()
+    conv_output_dtype = ttnn.bfloat16
     if is_forge_suite:
         input_layout = ttnn.Layout(input_layout)
         input_dtype = ttnn.DataType(input_dtype)
@@ -267,25 +274,17 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, weights_dtype)
         output_layout = ttnn.Layout(output_layout)
         output_dtype = ttnn.DataType(output_dtype)
-        enable_kernel_stride_folding = False
         if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 16 and pad_h == 0 and pad_w == 0:
-            enable_kernel_stride_folding = True
-        conv_config = ttnn.Conv2dConfig(
-            dtype=output_dtype,
-            weights_dtype=weights_dtype,
-            output_layout=output_layout,
-            preprocess_weights_on_device=True,
-            enable_kernel_stride_folding=enable_kernel_stride_folding,
-        )
+            conv_config.enable_kernel_stride_folding = True
+        conv_output_dtype = output_dtype
+        conv_config.weights_dtype = weights_dtype
+        conv_config.output_layout = output_layout
     else:
         tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
         if has_bias:
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
-        conv_config = ttnn.Conv2dConfig(
-            preprocess_weights_on_device=True,
-        )
 
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
@@ -306,6 +305,7 @@ def run_conv2d_short_sweep(
         conv_config=conv_config,
         return_output_dim=True,
         return_weights_and_bias=True,
+        dtype=conv_output_dtype,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -319,7 +319,7 @@ def run_conv2d_short_sweep(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
+    return [check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
 
 
 def run_conv1d_short_sweep(
@@ -379,6 +379,7 @@ def run_conv1d_short_sweep(
         batch_size=batch_size,
         input_length=input_length,
         groups=groups,
+        dtype=ttnn.bfloat16,
         return_output_dim=True,
         return_weights_and_bias=True,
     )
@@ -393,4 +394,4 @@ def run_conv1d_short_sweep(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 2, 1))
 
-    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
+    return [check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]

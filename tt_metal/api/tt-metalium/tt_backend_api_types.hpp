@@ -150,8 +150,9 @@ enum RISCV : uint8_t {
     TRISC1 = 3,
     TRISC2 = 4,
     ERISC = 5,
-    COMPUTE = 6,  // Encompasses TRISC0, TRISC1, and TRISC2
-    MAX = 7,
+    ERISC1 = 6,
+    COMPUTE = 7,  // Encompasses TRISC0, TRISC1, and TRISC2
+    MAX = 8,
 };
 
 inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {
@@ -162,6 +163,7 @@ inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {
         case RISCV::TRISC1: os << "TRISC1"; break;
         case RISCV::TRISC2: os << "TRISC2"; break;
         case RISCV::ERISC: os << "ERISC"; break;
+        case RISCV::ERISC1: os << "ERISC1"; break;
         case RISCV::COMPUTE: os << "COMPUTE"; break;
         default: throw std::invalid_argument("Unknown format");
     }

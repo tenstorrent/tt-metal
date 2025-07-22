@@ -25,7 +25,7 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - config-t3000
-      - pipeline-perf
+      - pipeline-functional
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}

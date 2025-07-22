@@ -9,7 +9,7 @@ To build and execute, you may use the following commands:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/add_2_integers_in_compute
+    ./build/programming_examples/metal_example_add_2_integers_in_compute
 ```
 ## Set up device and program/collaboration mechanisms
 

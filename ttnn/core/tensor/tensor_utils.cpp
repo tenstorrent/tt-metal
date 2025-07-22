@@ -6,6 +6,7 @@
 
 #include <tt_stl/overloaded.hpp>
 
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -17,7 +18,7 @@ namespace tt {
 namespace tt_metal {
 
 ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
-    int64_t old_volume = tensor.get_logical_volume();
+    int64_t old_volume = tensor.logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
     bool has_zero = false;
@@ -60,7 +61,7 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
     return ttnn::Shape(std::move(new_shape));
 }
 
-int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides) {
+int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint64_t> strides) {
     int flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];
@@ -94,39 +95,7 @@ bool is_arch_whb0(const tt::ARCH& arch) { return arch == tt::ARCH::WORMHOLE_B0; 
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
-bool is_multi_device_host_tensor(const Tensor& tensor) {
-    return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST;
-}
-
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
-
-Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func) {
-    TT_FATAL(is_multi_device_host_tensor(tensor), "transform only supports multi-device host tensors");
-    const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
-
-    std::vector<TensorSpec> transformed_specs;
-    std::vector<HostBuffer> transformed_buffers;
-    transformed_buffers.reserve(storage.num_buffers());
-    transformed_specs.reserve(storage.num_buffers());
-    for (size_t i = 0; i < storage.num_buffers(); i++) {
-        Tensor transformed_tensor_shard = transform_func(Tensor(storage.get_buffer(i), tensor.get_tensor_spec()));
-        transformed_specs.push_back(transformed_tensor_shard.get_tensor_spec());
-        auto* host_storage = std::get_if<HostStorage>(&transformed_tensor_shard.get_storage());
-        TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
-        transformed_buffers.push_back(std::move(host_storage->buffer));
-    }
-    TensorSpec reference_spec = transformed_specs.front();
-    MultiDeviceHostStorage transformed_storage(std::move(transformed_buffers));
-    return Tensor(std::move(transformed_storage), reference_spec, tensor.get_distributed_tensor_config());
-}
-
-void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
-    TT_FATAL(is_multi_device_host_tensor(tensor), "apply only supports multi-device host tensors");
-    const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
-    for (size_t i = 0; i < storage.num_buffers(); i++) {
-        callable(Tensor(storage.get_buffer(i), tensor.get_tensor_spec()));
-    }
-}
 
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
     const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());

@@ -4,8 +4,8 @@
 
 #include "dataflow_api.h"
 
-#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 
 using namespace tt::data_movement::common;
 using ttnn::operations::data_movement::reshape::detail::SegmentMapData;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,14 +20,15 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     const int8_t dim,
     const bool largest,
     const bool sorted,
+    const bool uint16_output,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
     Tensor& index_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    tt::DataFormat output_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.get_dtype());
-    tt::DataFormat output_ind_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat output_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
+    tt::DataFormat output_ind_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
 
     auto core = corerange_to_cores(sub_core_grids, 1, true).at(0);
 
@@ -43,10 +44,10 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     bool values_is_dram = values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_input_tiles = input_tensor.volume() / TILE_HW;
-    uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
+    uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
+    uint32_t num_value_tiles = value_tensor.physical_volume() / TILE_HW;
 
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
 
@@ -128,7 +129,8 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
             .set_page_size(output_ind_cb_index, index_tile_size);
     auto cb_output_ind_tensor = tt::tt_metal::CreateCircularBuffer(program, core, output_ind_cb_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {input_cb_index, index_cb_index, (uint32_t)input_is_dram, Ht, Wt};
+    std::vector<uint32_t> reader_compile_time_args = {
+        input_cb_index, index_cb_index, (uint32_t)input_is_dram, Ht, Wt, (uint32_t)uint16_output};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
@@ -184,7 +186,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
         core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = !uint16_output, .compile_args = compute_args});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_kernel_id, core](
                                               const void* operation,
@@ -271,9 +273,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     using namespace tt::constants;
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.get_dtype());
-    tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
+    tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
 
     auto first_core_range = sub_core_grids.ranges().at(0);
     auto first_core_range_set = CoreRangeSet(first_core_range);
@@ -290,11 +292,11 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     bool values_is_dram = values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_input_tiles = input_tensor.volume() / TILE_HW;
-    uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
+    uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
+    uint32_t num_value_tiles = value_tensor.physical_volume() / TILE_HW;
     auto device = input_tensor.device();
 
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size] = cores_utilized(
         input_shape[dim],

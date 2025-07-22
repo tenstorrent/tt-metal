@@ -21,16 +21,23 @@ class VitTestInfra:
         inputs_mesh_mapper=None,
         weights_mesh_mapper=None,
         output_mesh_composer=None,
+        use_random_input_tensor=False,
     ):
         super().__init__()
         torch.manual_seed(0)
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
+        self.num_devices = device.get_num_devices()
         self.batch_size = batch_size
-        self.inputs_mesh_mapper = inputs_mesh_mapper
-        self.weights_mesh_mapper = weights_mesh_mapper
-        self.output_mesh_composer = output_mesh_composer
+
+        # Set up mesh mappers if not provided
+        if inputs_mesh_mapper is None and weights_mesh_mapper is None and output_mesh_composer is None:
+            self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
+        else:
+            self.inputs_mesh_mapper = inputs_mesh_mapper
+            self.weights_mesh_mapper = weights_mesh_mapper
+            self.output_mesh_composer = output_mesh_composer
 
         model_name = "google/vit-base-patch16-224"
         sequence_size = 224
@@ -64,24 +71,25 @@ class VitTestInfra:
             torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        torch_attention_mask = torch.ones(self.config.num_hidden_layers, sequence_size, dtype=torch.float32)
-        if torch_attention_mask is not None:
-            self.head_masks = [
-                ttnn.from_torch(
-                    torch_attention_mask[index].reshape(1, 1, 1, sequence_size).expand(batch_size, -1, -1, -1),
-                    dtype=ttnn.bfloat8_b,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                for index in range(self.config.num_hidden_layers)
-            ]
+        if use_random_input_tensor == False:
+            ## IMAGENET INFERENCE
+            data_loader = get_data_loader("ImageNet_data", batch_size * self.num_devices, 2)
+            self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
         else:
-            self.head_masks = [None for _ in range(self.config.num_hidden_layers)]
+            self.torch_pixel_values = torch.randn(
+                batch_size * self.num_devices, 3, sequence_size, sequence_size, dtype=torch.bfloat16
+            )
 
-        ## IMAGENET INFERENCE
-        data_loader = get_data_loader("ImageNet_data", batch_size, 2)
-        self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
+    def get_mesh_mappers(self, device):
+        if device.get_num_devices() != 1:
+            inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+            weights_mesh_mapper = None  # ttnn.ReplicateTensorToMesh(device) causes unnecessary replication/takes more time on the first pass
+            output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+        else:
+            inputs_mesh_mapper = None
+            weights_mesh_mapper = None
+            output_mesh_composer = None
+        return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
     def setup_l1_sharded_input(self, device, torch_pixel_values, mesh_mapper=None, mesh_composer=None):
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
@@ -91,6 +99,7 @@ class VitTestInfra:
         torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
 
         N, H, W, C = torch_pixel_values.shape
+        N = N // self.num_devices
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -104,7 +113,9 @@ class VitTestInfra:
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
-        tt_inputs_host = ttnn.from_torch(torch_pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_inputs_host = ttnn.from_torch(
+            torch_pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
+        )
 
         return tt_inputs_host, input_mem_config
 
@@ -134,7 +145,6 @@ class VitTestInfra:
         self.output_tensor = ttnn_optimized_sharded_vit_wh.vit(
             self.config,
             self.input_tensor,
-            self.head_masks,
             self.cls_token,
             self.position_embeddings,
             parameters=self.parameters,
@@ -148,6 +158,7 @@ def create_test_infra(
     inputs_mesh_mapper=None,
     weights_mesh_mapper=None,
     output_mesh_composer=None,
+    use_random_input_tensor=False,
 ):
     return VitTestInfra(
         device,
@@ -155,4 +166,5 @@ def create_test_infra(
         inputs_mesh_mapper,
         weights_mesh_mapper,
         output_mesh_composer,
+        use_random_input_tensor,
     )

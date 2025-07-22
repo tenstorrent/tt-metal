@@ -177,7 +177,6 @@ def test_moreh_dot_backward_callback(
     input_shape,
     requires_grad,
     device,
-    use_program_cache,
 ):
     num_program_in_cache = []
     for i in range(2):

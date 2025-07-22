@@ -43,7 +43,6 @@ def test_cross_attention_transformer_text_inference(
     text_seq_len,
     batch,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     is_ci_env,
 ):

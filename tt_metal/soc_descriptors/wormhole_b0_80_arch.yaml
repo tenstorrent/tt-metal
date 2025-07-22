@@ -19,80 +19,81 @@ dram:
   ]
 
 # Dram view parameters are used by tt-metal and are not recognized by UMD.
-# Eth and worker dram endpoints represent subchannel id from dram array.
-# For example, a dram view where channel is 0 and worker_endpoint is 2 would resolve to dram core at position [0,2] which is 0-11.
+# Eth and worker dram endpoints represent subchannel id from dram array for each noc.
+# For example, a dram view where channel is 0 and worker_endpoint is [1, 2] would resolve to dram core at position [0,2] for noc1 which is 0-11.
+# Endpoint assignments are arbitrary.
 dram_views:
   [
     {
       channel: 0,
-      eth_endpoint: 0,
-      worker_endpoint: 2,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [2, 2],
       address_offset: 0
     },
     {
       channel: 0,
-      eth_endpoint: 0,
-      worker_endpoint: 1,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [1, 1],
       address_offset: 1073741824
     },
     {
       channel: 1,
-      eth_endpoint: 1,
-      worker_endpoint: 0,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [0, 0],
       address_offset: 0
     },
     {
       channel: 1,
-      eth_endpoint: 1,
-      worker_endpoint: 2,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [2, 2],
       address_offset: 1073741824
     },
     {
       channel: 2,
-      eth_endpoint: 0,
-      worker_endpoint: 1,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [1, 1],
       address_offset: 0
     },
     {
       channel: 2,
-      eth_endpoint: 0,
-      worker_endpoint: 2,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [2, 2],
       address_offset: 1073741824
     },
     {
       channel: 3,
-      eth_endpoint: 2,
-      worker_endpoint: 0,
+      eth_endpoint: [2, 2],
+      worker_endpoint: [0, 0],
       address_offset: 0
     },
     {
       channel: 3,
-      eth_endpoint: 2,
-      worker_endpoint: 1,
+      eth_endpoint: [2, 2],
+      worker_endpoint: [1, 1],
       address_offset: 1073741824
     },
     {
       channel: 4,
-      eth_endpoint: 1,
-      worker_endpoint: 2,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [2, 2],
       address_offset: 0
     },
     {
       channel: 4,
-      eth_endpoint: 1,
-      worker_endpoint: 0,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [0, 0],
       address_offset: 1073741824
     },
     {
       channel: 5,
-      eth_endpoint: 1,
-      worker_endpoint: 0,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [0, 0],
       address_offset: 0
     },
     {
       channel: 5,
-      eth_endpoint: 1,
-      worker_endpoint: 2,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [2, 2],
       address_offset: 1073741824
     }
   ]

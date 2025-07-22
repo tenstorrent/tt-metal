@@ -4,9 +4,7 @@
 
 #include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
-#include <algorithm>
 #include <functional>
-#include <map>
 #include <string>
 #include <variant>
 #include <vector>
@@ -18,10 +16,9 @@
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -32,7 +29,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-const std::vector<string>& golden_output = {
+const std::vector<std::string> golden_output = {
     "(0,0): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,0): Adding \
 the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,0): Now, in reverse, to make it \
 even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",

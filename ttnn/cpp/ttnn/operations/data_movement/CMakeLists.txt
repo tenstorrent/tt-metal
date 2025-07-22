@@ -1,11 +1,46 @@
 add_library(ttnn_op_data_movement ${LIB_TYPE})
-add_library(TT::NN::Ops::DataMovement ALIAS ttnn_op_data_movement)
+add_library(TTNN::Ops::DataMovement ALIAS ttnn_op_data_movement)
 
 target_precompile_headers(ttnn_op_data_movement REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
+set_target_properties(
+    ttnn_op_data_movement
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    common/kernels/*
+    move/device/kernels/*
+    permute/device/kernels/*
+    sharded/device/kernels/*
+    transpose/device/kernels/*
+)
 target_sources(
     ttnn_op_data_movement
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            sharded/reshard/device/reshard_op.hpp
+            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            copy/device/copy_device_operation.hpp
+            reshape_view/reshape.hpp
+            reshape_view/reshape_common.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+            reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+            reshape_view/device/device/rm_reshape_interleaved.cpp
+            reshape_view/device/hostdevcommon/common.hpp
     PRIVATE
         bcast/bcast.cpp
         bcast/bcast_types.cpp
@@ -70,6 +105,7 @@ target_sources(
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
         sharded/reshard/device/reshard_op.cpp
         sharded/reshard/device/reshard_program_factory.cpp
+        sharded/reshard/device/nd_reshard_program_factory.cpp
         sharded/reshard/reshard.cpp
         sharded/sharded_common.cpp
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.cpp
@@ -104,6 +140,13 @@ target_sources(
         untilize_with_unpadding/device/untilize_with_unpadding_program_factory.cpp
         untilize_with_unpadding/untilize_with_unpadding.cpp
         view/view.cpp
+        sort/sort.cpp
+        sort/device/sort_device_operation.cpp
+        sort/device/sort_program_factory.cpp
+        gather/gather.cpp
+        gather/device/gather_device_operation.cpp
+        gather/device/gather_program_factory.cpp
+        gather/tosa/gather_tosa.cpp
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})
@@ -111,7 +154,19 @@ target_link_libraries(
     ttnn_op_data_movement
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_data_movement
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_data_movement LIBRARY COMPONENT tar)

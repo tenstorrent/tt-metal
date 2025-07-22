@@ -79,7 +79,6 @@ def run_all_reduce_test(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
     topology=ttnn.Topology.Ring,
@@ -100,7 +99,7 @@ def run_all_reduce_test(
     logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}")
     # Generate input tensors
 
-    tt_input_tensors = []
+    canonical_input_tensors = []
     input_tensors = []
 
     numel = math.prod(per_chip_output_shape)
@@ -108,16 +107,25 @@ def run_all_reduce_test(
         input_tensors[-1] = torch.arange(numel).reshape(per_chip_output_shape).bfloat16()
     for i in range(num_devices):
         input_tensor = torch.rand(per_chip_output_shape).bfloat16()
-        t = ttnn.from_torch(input_tensor, input_dtype, layout=layout)
-        tt_input_tensors.append(t)
+        canonical_input_tensors.append(input_tensor)
         input_tensor = input_tensor.view(1, -1, input_tensor.shape[2], input_tensor.shape[3])
         input_tensors.append(input_tensor)
 
     unchunked_input_tensor = torch.cat(input_tensors)
 
-    assert len(tt_input_tensors) == num_devices
+    assert len(canonical_input_tensors) == num_devices
+    input_tensor_mesh = ttnn.from_torch(
+        torch.cat(canonical_input_tensors),
+        dtype=input_dtype,
+        layout=layout,
+        device=mesh_device,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            mesh_device,
+            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(0)], ttnn.MeshShape(1, num_devices)),
+        ),
+    )
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, mem_config)
     # Run the op
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.all_reduce(
@@ -213,7 +221,6 @@ def test_ring_all_reduce_post_commit(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=2,
 ):
@@ -226,7 +233,6 @@ def test_ring_all_reduce_post_commit(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
     )
@@ -275,7 +281,6 @@ def test_ring_all_reduce_post_commit_2chip(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=2,
 ):
@@ -288,7 +293,6 @@ def test_ring_all_reduce_post_commit_2chip(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         topology=ttnn.Topology.Linear,

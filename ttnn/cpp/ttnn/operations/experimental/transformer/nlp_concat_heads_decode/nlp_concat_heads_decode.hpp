@@ -13,13 +13,13 @@ struct NLPConcatHeadsDecodeOperation {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const uint32_t num_heads,
+        uint32_t num_heads,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
         const Tensor& input_tensor,
-        const uint32_t num_heads,
+        uint32_t num_heads,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };

@@ -11,8 +11,10 @@
 namespace ttnn::operations::experimental::scatter {
 
 struct operation_attributes_t {
+    // scatter dim
     const int32_t dim;
     const tt::tt_metal::MemoryConfig output_memory_config;
+    // reduction applied to source values coming from repeating indices
     const std::optional<ScatterReductionType> opt_reduction;
 };
 
@@ -20,7 +22,6 @@ struct tensor_args_t {
     const Tensor& input_tensor;
     const Tensor& index_tensor;
     const Tensor& src_tensor;
-    std::optional<Tensor> opt_output;
 };
 
 using spec_return_value_t = TensorSpec;

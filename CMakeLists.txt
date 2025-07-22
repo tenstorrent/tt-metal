@@ -128,6 +128,10 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
+# Top-level target to build all generated files
+# Useful for eg: ensuring all files exist before linting
+add_custom_target(all_generated_files)
+
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
@@ -165,7 +169,7 @@ add_compile_options(
     -Wno-deprecated-declarations
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
-    "$<$<CONFIG:Release>:-Wno-unused-but-set-variable>"
+    -Wno-unused-but-set-variable
     -Wno-unused-function
     -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
@@ -175,7 +179,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-mismatched-tags>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-local-typedef>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
@@ -196,6 +199,9 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-unused-local-typedefs>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-volatile>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-pessimizing-move>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-dangling-reference>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
 )
 
 # Planned to be temporary, remove later.
@@ -203,6 +209,23 @@ if(TT_ENABLE_LIGHT_METAL_TRACE)
     add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=1)
 else()
     add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=0)
+endif()
+
+# Control compile time logging for TT_METAL - needs to be set before PCH compilation
+if(NOT DEFINED TT_METAL_ENABLE_LOGGING)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        set(_default_enable_logging OFF)
+    else()
+        set(_default_enable_logging ON)
+    endif()
+endif()
+option(
+    TT_METAL_ENABLE_LOGGING
+    "Enables inclusion of log_trace and log_debug into the binary."
+    ${_default_enable_logging}
+)
+if(TT_METAL_ENABLE_LOGGING)
+    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 endif()
 
 include(GNUInstallDirs)

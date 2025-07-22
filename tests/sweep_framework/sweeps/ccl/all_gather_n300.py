@@ -67,15 +67,11 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 def mesh_device_fixture():
     assert ttnn.get_num_devices() == 2, "Not N300!"
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested))
 
-    num_devices = ttnn.GetNumAvailableDevices()
-    device_ids = [i for i in range(num_devices)]
+    yield (mesh_device, "N300 Fixture")
 
-    devices = ttnn.CreateDevices(device_ids)
-
-    yield ([devices[i] for i in range(num_devices)], "N300 Fixture")
-
-    ttnn.close_device(devices[0])
+    ttnn.close_mesh_device(mesh_device)
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -94,28 +90,32 @@ def run(
     *,
     device,
 ) -> list:
-    all_devices = device
-
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(layout).to(all_devices[i], mem_config)
-        )
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        device=device,
+        layout=layout,
+        dtype=input_dtype,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            device,
+            ttnn.MeshMapperConfig(
+                [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+            ),
+        ),
+        tile=ttnn.Tile(tile),
+    )
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
         start_time = start_measuring_time()
         tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
         e2e_perf = stop_measuring_time(start_time)
 
-        for d in all_devices:
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_device(device)
         logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):

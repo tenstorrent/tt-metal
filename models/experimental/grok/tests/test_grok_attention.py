@@ -23,7 +23,7 @@ from models.utility_functions import (
 )
 
 
-def test_grok_attention_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_grok_attention_inference(t3k_mesh_device, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")

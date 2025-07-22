@@ -9,6 +9,7 @@ import ttnn
 from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -18,7 +19,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler
     ],
 )
 @pytest.mark.parametrize("num_inference_steps", [5])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_euler_discrete_scheduler(device, input_shape, num_inference_steps):
     try:
         from tracy import signpost

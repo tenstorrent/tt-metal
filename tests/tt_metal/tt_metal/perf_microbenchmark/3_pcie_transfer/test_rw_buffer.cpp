@@ -23,7 +23,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
         // Validation & teardown
         // Data check is only valid if both read and write are enabled
         if (!skip_read && !skip_write && !(src_vec == result_vec)) {
-            log_error("Read data mismatch");
+            log_error(tt::LogTest, "Read data mismatch");
             pass = false;
         }
         pass &= tt_metal::CloseDevice(device);
@@ -232,13 +232,18 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_rw_buffer");
+    log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_rw_buffer");
     log_info(
+        tt::LogTest,
         "CSV_INPUT:buffer-type:{}:transfer-size:{}",
         BUFFER_TYPEToString(static_cast<BUFFER_TYPE>(buffer_type)),
         transfer_size);
-    log_info("CSV_OUTPUT:H2D_Bandwidth(GB/s):{:.3f}:D2H_Bandwidth(GB/s):{:.3f}", avg_h2d_bandwidth, avg_d2h_bandwidth);
-    log_info("CSV_RESULT:pass:{}", pass);
+    log_info(
+        tt::LogTest,
+        "CSV_OUTPUT:H2D_Bandwidth(GB/s):{:.3f}:D2H_Bandwidth(GB/s):{:.3f}",
+        avg_h2d_bandwidth,
+        avg_d2h_bandwidth);
+    log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

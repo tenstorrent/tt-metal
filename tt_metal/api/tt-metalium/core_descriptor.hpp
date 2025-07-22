@@ -40,13 +40,13 @@ inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested
 }
 
 const core_descriptor_t& get_core_descriptor_config(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
+    chip_id_t device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
     chip_id_t chip, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 std::optional<uint32_t> get_storage_core_bank_size(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
+    chip_id_t device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 inline const std::vector<CoreCoord>& get_logical_storage_cores(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {

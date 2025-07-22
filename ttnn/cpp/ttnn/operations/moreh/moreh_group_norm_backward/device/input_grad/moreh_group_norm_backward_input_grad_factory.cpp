@@ -22,7 +22,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
 
-    auto input_grad = outputs;
+    const auto& input_grad = outputs;
     auto gamma = tensor_args.gamma;
     auto num_groups = operation_attributes.num_groups;
     ////////////////////////////////////////////////////////////////////////////
@@ -34,14 +34,14 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_padded_shape();
+    const auto output_grad_shape = output_grad.padded_shape();
 
     const auto n = output_grad_shape[0];
     const auto c = output_grad_shape[1];
     const auto h = output_grad_shape[2];
     const auto w = output_grad_shape[3];
 
-    const auto origin_output_grad_shape = output_grad.get_logical_shape();
+    const auto origin_output_grad_shape = output_grad.logical_shape();
 
     const auto origin_h = origin_output_grad_shape[2];
     const auto origin_w = origin_output_grad_shape[3];
@@ -102,7 +102,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const uint32_t im6_t{1};
     uint32_t im7_t{1};
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t + im0_t + im1_t +

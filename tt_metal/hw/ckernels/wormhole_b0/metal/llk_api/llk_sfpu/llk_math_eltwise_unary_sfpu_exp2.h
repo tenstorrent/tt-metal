@@ -17,9 +17,10 @@ inline void llk_math_eltwise_unary_sfpu_exp2_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::exp2, APPROXIMATE>(sfpu::exp2_init<APPROXIMATE>);
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_exp2(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_exp2<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_exp2<APPROXIMATE>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

@@ -425,7 +425,7 @@ def test_tg_llama_sharded_embedding(
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-def test_tg_llama_sharded_rm_embedding(device, use_program_cache):
+def test_tg_llama_sharded_rm_embedding(device):
     torch.manual_seed(1234)
     unharvested_grid_size = (7, 10)
     compute_grid_size = device.compute_with_storage_grid_size()
