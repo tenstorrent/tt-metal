@@ -435,6 +435,20 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
     }
 }
 
+void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_core, bool enable) {
+    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
+    const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
+    std::vector<uint32_t> en = {enable};
+    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+        en.data(), tt_cxy_pair(device_id, virtual_core), run_flag_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+}
+
 }  // namespace internal_
 
 }  // namespace llrt

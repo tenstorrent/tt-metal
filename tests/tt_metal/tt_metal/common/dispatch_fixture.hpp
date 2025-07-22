@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include "context/metal_context.hpp"
 #include "gtest/gtest.h"
@@ -65,6 +66,7 @@ public:
     }
     int NumDevices() { return this->devices_.size(); }
     bool IsSlowDispatch() { return this->slow_dispatch_; }
+    tt::ARCH GetArch() const { return this->arch_; }
 
 protected:
     tt::ARCH arch_{tt::ARCH::Invalid};

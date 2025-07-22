@@ -8,6 +8,12 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#include <string>
+#include <fmt/ranges.h>
+#include <umd/device/types/cluster_descriptor_types.h>
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
@@ -387,6 +393,8 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
     for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         clear_ethernet_core(eth_core);
     }
+
+    cluster_->l1_barrier(device_id);
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
@@ -601,7 +609,6 @@ void MetalContext::initialize_control_plane() {
 
 void MetalContext::reset_cores(chip_id_t device_id) {
     ZoneScoped;
-
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
@@ -611,9 +618,32 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             CoreCoord virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
             if (erisc_app_still_running(device_id, virtual_core)) {
+                log_info(
+                    tt::LogMetal,
+                    "While initializing device {}, active ethernet dispatch core {} detected as still "
+                    "running, issuing exit signal.",
+                    device_id,
+                    virtual_core.str());
                 erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
                 device_to_early_exit_cores[device_id].insert(virtual_core);
             }
+        }
+    } else {
+        for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+            // Ensure exit to base firmware. Send this before assertion subordinate cores otherwise if we stop the
+            // subordinates we could hang waiting for subordinates to finish
+            CoreCoord virtual_core =
+                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+            tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
+            llrt::internal_::wait_for_heartbeat(device_id, virtual_core);
+
+            // Only send reset to subordinate cores
+            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+            reset_val =
+                reset_val & static_cast<TensixSoftResetOptions>(
+                                ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                tt_cxy_pair(device_id, virtual_core), reset_val);
         }
     }
 
@@ -648,12 +678,13 @@ void MetalContext::reset_cores(chip_id_t device_id) {
     }
 
     // Reset idle ethernet cores
-    // TODO: reset BH eth cores as well
     for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
     }
+
+    cluster_->l1_barrier(device_id);
 }
 
 void MetalContext::assert_cores(chip_id_t device_id) {
@@ -672,6 +703,12 @@ void MetalContext::assert_cores(chip_id_t device_id) {
 
             if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
                 if (!storage_only_cores_set.contains(logical_core)) {
+                    if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
+                        this->get_control_plane().get_active_ethernet_cores(device_id, false).contains(logical_core)) {
+                        // Cannot put these cores into reset because they are running base FW
+                        // Below will return to base FW
+                        continue;
+                    }
                     cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
                 }
             } else {
@@ -682,14 +719,24 @@ void MetalContext::assert_cores(chip_id_t device_id) {
 
     if (!hal_->get_eth_fw_is_cooperative()) {
         // Assert riscs on active eth
-        for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+        const auto assert_eth_core = [&](const CoreCoord& logical_eth_core) {
             CoreCoord virtual_eth_core =
-                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_eth_core, CoreType::ETH);
+            // Return primary to base FW
+            tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_eth_core, false);
+            // Ensure that the core has returned to base fw
+            llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
+
+            // Stop subordinate
             TensixSoftResetOptions reset_val =
                 TENSIX_ASSERT_SOFT_RESET &
                 static_cast<TensixSoftResetOptions>(
                     ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
+        };
+
+        for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+            assert_eth_core(eth_core);
         }
     }
 }
@@ -826,6 +873,35 @@ void MetalContext::initialize_firmware(
     auto jit_build_config =
         hal_->get_jit_build_config(core_type_idx, 0, 0);  // Only the first risc needs to be programmed
 
+    // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
+    // launch_message during program execution need to at least have the correct dispatch mode.
+    // When using Fast Dispatch on Tensix:
+    // dispatch cores (Tensix) configured with DISPATCH_MODE_HOST
+    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
+    // Idle Eth cores configured with DISPATCH_MODE_HOST but not used
+    // When using Fast Dispatch on Idle Eth:
+    // dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
+    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
+    // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
+    const auto write_initial_go_launch_msg = [&]() {
+        std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
+        auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+        cluster_->write_core(
+            init_launch_msg_data.data(),
+            launch_msg_buffer_num_entries * sizeof(launch_msg_t),
+            tt_cxy_pair(device_id, virtual_core),
+            hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+        uint32_t go_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+        cluster_->write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(device_id, virtual_core), go_addr);
+        uint64_t launch_msg_buffer_read_ptr_addr =
+            hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+        uint32_t zero = 0;
+        cluster_->write_core(
+            &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
+        uint32_t go_message_index_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        cluster_->write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+    };
+
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
@@ -841,7 +917,13 @@ void MetalContext::initialize_firmware(
                         // In this context, ncrisc_kernel_size16 is the size of the fw
                         launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
                     }
-                    log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
+                    log_debug(
+                        tt::LogMetal,
+                        "RISC {} DM{} fw {} binary size: {} in bytes",
+                        virtual_core.str(),
+                        riscv_id,
+                        fw_path,
+                        fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
                         llrt::test_load_write_read_risc_binary(
@@ -870,13 +952,22 @@ void MetalContext::initialize_firmware(
                 }
             }
 
+            write_initial_go_launch_msg();
+            cluster_->write_core(
+                &jit_build_config.fw_launch_addr_value,
+                sizeof(uint32_t),
+                tt_cxy_pair(device_id, virtual_core),
+                jit_build_config.fw_launch_addr);
+
             break;
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
-            bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
+            const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
+            const bool is_active_eth = !is_idle_eth;
             TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
-            if (not is_idle_eth) {
+            // Do not put dm0 into reset. It is running base fw
+            if (is_active_eth) {
                 reset_val =
                     reset_val & static_cast<TensixSoftResetOptions>(
                                     ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
@@ -894,7 +985,14 @@ void MetalContext::initialize_firmware(
                                 .get_target_out_path("");
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
-                        log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
+                        log_debug(
+                            tt::LogMetal,
+                            "{} ERISC {} DM{} fw {} binary size: {} in bytes",
+                            is_active_eth ? "Active" : "Idle",
+                            virtual_core.str(),
+                            processor_class,
+                            fw_path,
+                            fw_size);
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, device_id, virtual_core, core_type_idx, processor_class, eriscv_id);
                     }
@@ -904,45 +1002,40 @@ void MetalContext::initialize_firmware(
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
             launch_msg->kernel_config.mode =
                 (!rtoptions_.get_fast_dispatch() or is_idle_eth) ? DISPATCH_MODE_HOST : DISPATCH_MODE_DEV;
+
+            // For eth, write the go and launch message before initializing because when using the ETH FW API
+            // it will launch immediately. DM0 is not in a reset state as it is running base FW.
+            write_initial_go_launch_msg();
+
+            // Write firmware main to primary erisc (DM0)
+            if (hal_->get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH) {
+                // PC
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    &jit_build_config.fw_launch_addr_value,
+                    sizeof(uint32_t),
+                    tt_cxy_pair(device_id, virtual_core),
+                    jit_build_config.fw_launch_addr);
+            } else {
+                // Active ethernet firmware launched immediately. Set the enable flag to 1 so FW doesn't exit
+                // immediately.
+                // tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
+                // Wait for ack not required because we wait for the done message
+                constexpr uint32_t mailbox_index = 0;
+                tt::llrt::internal_::send_msg_to_eth_mailbox(
+                    device_id,
+                    virtual_core,
+                    tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
+                    mailbox_index,
+                    {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
+                    false);
+            }
+
             break;
         }
         default:
             TT_THROW(
                 "Unsupported programable core type {} to initialize build states", enchantum::to_string(core_type));
     }
-
-    cluster_->write_core(
-        &jit_build_config.fw_launch_addr_value,
-        sizeof(uint32_t),
-        tt_cxy_pair(device_id, virtual_core),
-        jit_build_config.fw_launch_addr);
-
-    // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
-    // launch_message during program execution need to at least have the correct dispatch mode.
-    // When using Fast Dispatch on Tensix:
-    // dispatch cores (Tensix) configured with DISPATCH_MODE_HOST
-    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
-    // Idle Eth cores configured with DISPATCH_MODE_HOST but not used
-    // When using Fast Dispatch on Idle Eth:
-    // dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
-    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
-    // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
-    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
-    auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
-    cluster_->write_core(
-        init_launch_msg_data.data(),
-        launch_msg_buffer_num_entries * sizeof(launch_msg_t),
-        tt_cxy_pair(device_id, virtual_core),
-        hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
-    uint32_t go_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
-    cluster_->write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(device_id, virtual_core), go_addr);
-    uint64_t launch_msg_buffer_read_ptr_addr =
-        hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
-    uint32_t zero = 0;
-    cluster_->write_core(
-        &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
-    uint32_t go_message_index_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
-    cluster_->write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 }
 
 void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
@@ -1090,7 +1183,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     core_info->worker_grid_size_y = logical_grid_size.y;
 
     // Download to worker cores
-    log_debug(LogDevice, "Initializing firmware");
+    log_debug(tt::LogMetal, "Initializing worker cores");
     std::unordered_set<CoreCoord> not_done_cores;
 
     const auto& storage_only_cores = tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config_);
@@ -1136,6 +1229,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     }
 
     // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
+    log_debug(tt::LogMetal, "Initializing active ethernet cores");
     std::unordered_set<CoreCoord> active_eth_cores;
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
@@ -1154,6 +1248,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         }
     }
 
+    log_debug(tt::LogMetal, "Initializing idle ethernet cores");
     for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
@@ -1172,16 +1267,11 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     cluster_->l1_barrier(device_id);
 
     // Deassert worker cores
-    TensixSoftResetOptions reset_val;
     for (const auto& worker_core : not_done_cores) {
-        if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
-            // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val = TENSIX_DEASSERT_SOFT_RESET &
-                        static_cast<TensixSoftResetOptions>(
-                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
-        } else {
-            reset_val = TENSIX_DEASSERT_SOFT_RESET;
+        if (active_eth_cores.contains(worker_core)) {
+            continue;
         }
+        TensixSoftResetOptions reset_val = TENSIX_DEASSERT_SOFT_RESET;
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
 

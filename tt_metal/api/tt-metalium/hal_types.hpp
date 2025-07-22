@@ -48,6 +48,7 @@ enum class HalL1MemAddrType : uint8_t {
     LINK_UP,    // Link status - Link up status
     FABRIC_ROUTER_CONFIG,
     ETH_FW_MAILBOX,
+    ETH_METAL_RUN_FLAG,
     TENSIX_ROUTING_TABLE,
     TENSIX_FABRIC_CONNECTIONS,
     COUNT  // Keep this last so it always indicates number of enum options
