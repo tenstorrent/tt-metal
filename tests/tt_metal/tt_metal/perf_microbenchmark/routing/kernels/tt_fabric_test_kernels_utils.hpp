@@ -332,6 +332,47 @@ struct NocUnicastWriteAtomicIncFields {
     NocUnicastAtomicIncFields atomic_inc_fields;
 };
 
+struct NocUnicastScatterWriteFields {
+    static constexpr uint32_t MAX_CHUNKS = 2;
+
+    template <bool IS_SOURCE>
+    static NocUnicastScatterWriteFields build_from_args(size_t& arg_idx) {
+        uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
+
+        std::array<uint32_t, MAX_CHUNKS> dst_addresses;
+        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+            dst_addresses[i] = get_local_arg_val<uint32_t>(arg_idx++);
+        }
+
+        uint32_t dst_noc_encoding = 0;
+        if constexpr (IS_SOURCE) {
+            dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
+        }
+
+        std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
+        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
+            chunk_sizes[i] = get_local_arg_val<uint32_t>(arg_idx++);
+        }
+
+        return NocUnicastScatterWriteFields(payload_size_bytes, dst_addresses, chunk_sizes, dst_noc_encoding);
+    }
+
+    NocUnicastScatterWriteFields(
+        uint32_t payload_size_bytes,
+        const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
+        const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
+        uint32_t dst_noc_encoding) :
+        payload_size_bytes(payload_size_bytes),
+        dst_addresses(dst_addresses),
+        chunk_sizes(chunk_sizes),
+        dst_noc_encoding(dst_noc_encoding) {}
+
+    uint32_t payload_size_bytes;
+    std::array<uint32_t, MAX_CHUNKS> dst_addresses;
+    std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
+    uint32_t dst_noc_encoding;
+};
+
 template <typename T>
 void setup_2d_unicast_route(
     uint32_t packet_header_address, eth_chan_directions outgoing_direction, const ChipUnicastFields2D& unicast_fields) {
@@ -462,6 +503,11 @@ struct NocAtomicSenderOperations {
 };
 
 struct NocFusedSenderOperations {
+    static void parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig* config);
+};
+
+struct NocScatterWriteSenderOperations {
     static void parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx);
     static void update_header_impl(SenderKernelTrafficConfig* config);
 };
@@ -597,6 +643,10 @@ struct SenderKernelTrafficConfig {
                 noc_ops_.parse_and_setup = NocFusedSenderOperations::parse_and_setup_impl;
                 noc_ops_.update_header = NocFusedSenderOperations::update_header_impl;
                 break;
+            case NocSendType::NOC_UNICAST_SCATTER_WRITE:
+                noc_ops_.parse_and_setup = NocScatterWriteSenderOperations::parse_and_setup_impl;
+                noc_ops_.update_header = NocScatterWriteSenderOperations::update_header_impl;
+                break;
             default: ASSERT(false); break;
         }
 
@@ -705,6 +755,7 @@ struct SenderKernelTrafficConfig {
     friend struct NocWriteSenderOperations;
     friend struct NocAtomicSenderOperations;
     friend struct NocFusedSenderOperations;
+    friend struct NocScatterWriteSenderOperations;
 
 private:
     void update_header_for_next_packet() {
@@ -729,6 +780,7 @@ private:
         NocUnicastWriteFields write_fields;
         NocUnicastAtomicIncFields atomic_inc_fields;
         NocUnicastWriteAtomicIncFields write_atomic_inc_fields;
+        NocUnicastScatterWriteFields scatter_write_fields;
 
         // Constructor needed because member types have user-defined constructors
         NocFields() {}  // Will be properly initialized later based on NOC type
@@ -807,6 +859,40 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
             fields.atomic_inc_fields.atomic_inc_val,
             fields.atomic_inc_fields.atomic_inc_wrap},
         fields.write_fields.payload_size_bytes);
+}
+
+inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
+    auto fields = NocUnicastScatterWriteFields::build_from_args<true>(arg_idx);
+
+    // Build the scatter command header
+    NocUnicastScatterCommandHeader scatter_header;
+    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[i]);
+    }
+    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
+    }
+
+    config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
+    config->noc_fields_.scatter_write_fields = fields;
+    config->payload_size_bytes = fields.payload_size_bytes;
+}
+
+inline void NocScatterWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+    const auto& fields = config->noc_fields_.scatter_write_fields;
+    uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
+
+    // Build the scatter command header with updated addresses
+    NocUnicastScatterCommandHeader scatter_header;
+    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+        uint32_t dest_address = fields.dst_addresses[i] + buffer_offset;
+        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, dest_address);
+    }
+    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
+    }
+
+    config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
 }
 
 struct CommonMemoryMap {
@@ -1197,6 +1283,109 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     uint32_t expected_atomic_value;
 };
 
+struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
+    ScatterWriteValidationConfig(
+        const NocUnicastScatterWriteFields& scatter_write_fields, const ReceiverTrafficConfigMetadata& metadata) :
+        TrafficValidationConfigBase(metadata) {
+        // Set up function pointers
+        ops.poll = poll_impl;
+        ops.validate = validate_impl;
+        ops.update = update_impl;
+
+        // Store base addresses and chunk sizes
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+            base_dst_addresses[i] = scatter_write_fields.dst_addresses[i];
+            dst_addresses[i] = scatter_write_fields.dst_addresses[i];
+        }
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+            chunk_sizes[i] = scatter_write_fields.chunk_sizes[i];
+        }
+
+        // Last chunk size is implicit (remaining payload)
+        uint32_t chunk_size = 0;
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+            chunk_size += chunk_sizes[i];
+        }
+        last_chunk_size = scatter_write_fields.payload_size_bytes - chunk_size;
+
+        payload_size_bytes = scatter_write_fields.payload_size_bytes;
+        current_offset = 0;
+    }
+
+    static bool poll_impl(TrafficValidationConfigBase* base_config) {
+        auto* config = static_cast<ScatterWriteValidationConfig*>(base_config);
+
+        // Check if all chunks have been written by polling the last word of each chunk
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+            uint32_t chunk_size = config->chunk_sizes[i];
+            if (!SequentialDataPattern::poll(
+                    config->dst_addresses[i], chunk_size, config->metadata.seed + offset / sizeof(uint32_t))) {
+                return false;
+            }
+            offset += chunk_size;
+        }
+
+        // Check the last chunk
+        if (!SequentialDataPattern::poll(
+                config->dst_addresses[NocUnicastScatterWriteFields::MAX_CHUNKS - 1],
+                config->last_chunk_size,
+                config->metadata.seed + offset / sizeof(uint32_t))) {
+            return false;
+        }
+
+        return true;
+    }
+
+    static bool validate_impl(TrafficValidationConfigBase* base_config) {
+        auto* config = static_cast<ScatterWriteValidationConfig*>(base_config);
+
+        // Validate all chunks
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+            uint32_t chunk_size = config->chunk_sizes[i];
+            if (!SequentialDataPattern::validate(
+                    config->dst_addresses[i], chunk_size, config->metadata.seed + offset / sizeof(uint32_t))) {
+                return false;
+            }
+            offset += chunk_size;
+        }
+
+        // Validate the last chunk
+        if (!SequentialDataPattern::validate(
+                config->dst_addresses[NocUnicastScatterWriteFields::MAX_CHUNKS - 1],
+                config->last_chunk_size,
+                config->metadata.seed + offset / sizeof(uint32_t))) {
+            return false;
+        }
+
+        return true;
+    }
+
+    static void update_impl(TrafficValidationConfigBase* base_config) {
+        auto* config = static_cast<ScatterWriteValidationConfig*>(base_config);
+        config->metadata.seed = prng_next(config->metadata.seed);
+
+        // Advance buffer offset (similar to ReceiverPayloadBuffer::advance())
+        config->current_offset += config->payload_size_bytes;
+        if (config->current_offset >= config->metadata.payload_buffer_size) {
+            config->current_offset = 0;  // Wrap around
+        }
+
+        // Update all destination addresses based on new offset
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+            config->dst_addresses[i] = config->base_dst_addresses[i] + config->current_offset;
+        }
+    }
+
+    std::array<uint32_t, NocUnicastScatterWriteFields::MAX_CHUNKS> base_dst_addresses;
+    std::array<uint32_t, NocUnicastScatterWriteFields::MAX_CHUNKS> dst_addresses;
+    std::array<uint16_t, NocUnicastScatterWriteFields::MAX_CHUNKS - 1> chunk_sizes;
+    uint32_t last_chunk_size;
+    uint32_t payload_size_bytes;
+    uint32_t current_offset;
+};
+
 /* Layout for the run time args for receiver
 1. Memory map args (unified: result buffer only, as receivers don't allocate memory)
 2. Traffic config args
@@ -1212,8 +1401,13 @@ struct ReceiverKernelConfig {
     uint32_t get_result_buffer_size() const { return common_memory_map.result_buffer_size; }
 
     CommonMemoryMap common_memory_map;
-    alignas(TrafficValidationConfigBase)
-        std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(WriteAtomicIncValidationConfig)> validation_configs_storage;
+    alignas(TrafficValidationConfigBase) std::array<
+        char,
+        NUM_TRAFFIC_CONFIGS * std::max(
+                                  {sizeof(WriteValidationConfig),
+                                   sizeof(AtomicIncValidationConfig),
+                                   sizeof(WriteAtomicIncValidationConfig),
+                                   sizeof(ScatterWriteValidationConfig)})> validation_configs_storage;
     std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs;
 
 private:
@@ -1233,7 +1427,12 @@ private:
             NocSendType noc_send_type = static_cast<NocSendType>(get_local_arg_val<uint32_t>(local_args_idx++));
 
             // Get pointer to pre-allocated storage for this config
-            char* config_storage = validation_configs_storage.data() + i * sizeof(WriteAtomicIncValidationConfig);
+            constexpr size_t max_config_size = std::max(
+                {sizeof(WriteValidationConfig),
+                 sizeof(AtomicIncValidationConfig),
+                 sizeof(WriteAtomicIncValidationConfig),
+                 sizeof(ScatterWriteValidationConfig)});
+            char* config_storage = validation_configs_storage.data() + i * max_config_size;
 
             if (noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
                 const auto write_fields = NocUnicastWriteFields::build_from_args<false>(local_args_idx);
@@ -1246,6 +1445,9 @@ private:
                     NocUnicastWriteAtomicIncFields::build_from_args<false>(local_args_idx);
                 traffic_configs[i] =
                     new (config_storage) WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata);
+            } else if (noc_send_type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+                const auto scatter_write_fields = NocUnicastScatterWriteFields::build_from_args<false>(local_args_idx);
+                traffic_configs[i] = new (config_storage) ScatterWriteValidationConfig(scatter_write_fields, metadata);
             } else {
                 ASSERT(false);
             }

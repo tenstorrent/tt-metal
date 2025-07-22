@@ -581,7 +581,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
                 bool allocate_write_address = true;
                 bool allocate_atomic_inc_address = true;
-                if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
+                if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE ||
+                    pattern.ntype.value() == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
                     allocate_atomic_inc_address = false;
                 } else if (pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC) {
                     allocate_write_address = false;

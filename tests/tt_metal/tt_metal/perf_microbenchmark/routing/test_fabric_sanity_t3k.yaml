@@ -13,7 +13,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "UnidirLinearMulticast"
     fabric_setup:
@@ -29,7 +29,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: unidirectional_linear_multicast
+      - type: unidirectional_linear
 
   - name: "SingleSenderLinearUnicastAllDevices"
     fabric_setup:
@@ -77,7 +77,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: full_ring_multicast
+      - type: full_ring
 
   - name: "HalfRingMulticast"
     fabric_setup:
@@ -94,7 +94,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: half_ring_multicast
+      - type: half_ring
 
   - name: "MeshMulticast"
     fabric_setup:
@@ -109,7 +109,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "MeshMulticastDynamic"
     fabric_setup:
@@ -125,7 +125,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "SingleSenderMeshUnicastAllDevices"
     fabric_setup:

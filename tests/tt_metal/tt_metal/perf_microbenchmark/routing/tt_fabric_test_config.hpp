@@ -77,6 +77,7 @@ static const StringEnumMapper<NocSendType> noc_send_type_mapper({
     {"unicast_write", NocSendType::NOC_UNICAST_WRITE},
     {"atomic_inc", NocSendType::NOC_UNICAST_ATOMIC_INC},
     {"fused_atomic_inc", NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC},
+    {"unicast_scatter_write", NocSendType::NOC_UNICAST_SCATTER_WRITE},
 });
 
 static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
@@ -103,12 +104,11 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
 });
 
 static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
-    {"all_to_all_unicast", HighLevelTrafficPattern::AllToAllUnicast},
+    {"all_to_all", HighLevelTrafficPattern::AllToAll},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
-    {"all_to_all_multicast", HighLevelTrafficPattern::AllToAllMulticast},
-    {"unidirectional_linear_multicast", HighLevelTrafficPattern::UnidirectionalLinearMulticast},
-    {"full_ring_multicast", HighLevelTrafficPattern::FullRingMulticast},
-    {"half_ring_multicast", HighLevelTrafficPattern::HalfRingMulticast},
+    {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
+    {"full_ring", HighLevelTrafficPattern::FullRing},
+    {"half_ring", HighLevelTrafficPattern::HalfRing},
 });
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
@@ -277,12 +277,7 @@ private:
 const std::string no_default_test_yaml_config = "";
 
 const std::vector<std::string> supported_high_level_patterns = {
-    "all_to_all_unicast",
-    "full_device_random_pairing",
-    "all_to_all_multicast",
-    "unidirectional_linear_multicast",
-    "full_ring_multicast",
-    "half_ring_multicast"};
+    "all_to_all", "full_device_random_pairing", "unidirectional_linear", "full_ring", "half_ring"};
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -690,8 +685,8 @@ inline void CmdlineParser::print_help() {
         "simple unicast test is run.");
     log_info(
         LogTest,
-        "                                               Supported types: all_to_all_unicast, "
-        "full_device_random_pairing, all_to_all_multicast.");
+        "                                               Supported types: all_to_all, "
+        "full_device_random_pairing, unidirectional_linear, full_ring, half_ring.");
     log_info(
         LogTest,
         "  --src-device <id>                            Source device for simple unicast test. "
@@ -990,7 +985,7 @@ private:
             resolve_missing_params(iteration_test);
 
             // After expansion and resolution, apply universal transformations like mcast splitting.
-            split_all_multicast_patterns(iteration_test);
+            split_all_unnicast_or_multicast_patterns(iteration_test);
 
             // Convert to resolved TestConfig
             TestConfig resolved_test = resolve_test_config(iteration_test);
@@ -1117,15 +1112,20 @@ private:
     void validate_chip_unicast(
         const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
         TT_FATAL(
-            pattern.destination.has_value() && pattern.destination->device.has_value(),
-            "Test '{}': Unicast pattern for sender on device {} is missing a destination device.",
+            pattern.destination.has_value() &&
+                (pattern.destination->device.has_value() || pattern.destination->hops.has_value()),
+            "Test '{}': Unicast pattern for sender on device {} is missing a destination device or hops.",
             test.name,
             sender.device);
-        TT_FATAL(
-            sender.device != pattern.destination->device.value(),
-            "Test '{}': Sender on device {} cannot have itself as a destination.",
-            test.name,
-            sender.device);
+
+        if (pattern.destination->device.has_value()) {
+            TT_FATAL(
+                sender.device != pattern.destination->device.value(),
+                "Test '{}': Sender on device {} cannot have itself as a destination.",
+                test.name,
+                sender.device);
+        }
+
         TT_FATAL(
             !pattern.mcast_start_hops.has_value(),
             "Test '{}': 'mcast_start_hops' cannot be specified for a 'unicast' ftype pattern.",
@@ -1221,18 +1221,20 @@ private:
                 continue;
             }
 
-            if (pattern.type == "all_to_all_unicast") {
-                expand_all_to_all_unicast(test, defaults);
+            if (pattern.type == "all_to_all") {
+                if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
+                    expand_all_to_all_unicast(test, defaults);
+                } else {
+                    expand_all_to_all_multicast(test, defaults);
+                }
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
-            } else if (pattern.type == "all_to_all_multicast") {
-                expand_all_to_all_multicast(test, defaults);
-            } else if (pattern.type == "unidirectional_linear_multicast") {
-                expand_unidirectional_linear_multicast(test, defaults);
-            } else if (pattern.type == "full_ring_multicast" || pattern.type == "half_ring_multicast") {
+            } else if (pattern.type == "unidirectional_linear") {
+                expand_unidirectional_linear_unicast_or_multicast(test, defaults);
+            } else if (pattern.type == "full_ring" || pattern.type == "half_ring") {
                 HighLevelTrafficPattern pattern_type =
                     detail::high_level_traffic_pattern_mapper.from_string(pattern.type, "HighLevelTrafficPattern");
-                expand_full_or_half_ring_multicast(test, defaults, pattern_type);
+                expand_full_or_half_ring_unicast_or_multicast(test, defaults, pattern_type);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -1281,11 +1283,11 @@ private:
         }
     }
 
-    void expand_unidirectional_linear_multicast(
+    void expand_unidirectional_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding unidirectional_linear_multicast pattern for test: {}", test.name);
+        log_info(LogTest, "Expanding unidirectional_linear pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear_multicast because no devices were found.");
+        TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear because no devices were found.");
 
         for (const auto& src_node : devices) {
             // instantiate N/S E/W traffic on seperate senders to avoid bottlnecking on sender.
@@ -1307,11 +1309,11 @@ private:
         }
     }
 
-    void expand_full_or_half_ring_multicast(
+    void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
-        log_info(LogTest, "Expanding full_or_half_ring_multicast pattern for test: {}", test.name);
+        log_info(LogTest, "Expanding full_or_half_ring pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
+        TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring because no devices were found.");
 
         bool wrap_around_mesh = this->route_manager_.wrap_around_mesh(devices.front());
 
@@ -1336,7 +1338,6 @@ private:
 
                 ParsedTrafficPatternConfig specific_pattern;
                 specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
-                specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
 
@@ -1469,7 +1470,7 @@ private:
         }
     }
 
-    void split_all_multicast_patterns(ParsedTestConfig& test) {
+    void split_all_unnicast_or_multicast_patterns(ParsedTestConfig& test) {
         // This function iterates through all sender patterns and splits any multi-direction
         // multicast hops.
         for (auto& sender : test.senders) {
@@ -1482,8 +1483,7 @@ private:
                 // Determine if this specific pattern needs to be split.
                 bool needs_split = false;
                 std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops_vec;
-                if (pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST &&
-                    pattern.destination.has_value() && pattern.destination.value().hops.has_value()) {
+                if (pattern.destination.has_value() && pattern.destination.value().hops.has_value()) {
                     const auto& hops = pattern.destination.value().hops.value();
                     split_hops_vec = this->route_manager_.split_multicast_hops(hops);
                     if (split_hops_vec.size() > 1) {

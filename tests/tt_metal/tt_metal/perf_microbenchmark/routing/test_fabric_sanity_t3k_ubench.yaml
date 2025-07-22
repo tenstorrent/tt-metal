@@ -15,7 +15,7 @@ Tests:
       num_packets: 200000
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "UnidirLinearMulticast"
     benchmark_mode: true
@@ -33,7 +33,7 @@ Tests:
       num_packets: 200000
 
     patterns:
-      - type: unidirectional_linear_multicast
+      - type: unidirectional_linear
 
   - name: "SingleSenderLinearUnicastAllDevices"
     benchmark_mode: true
@@ -84,7 +84,7 @@ Tests:
       num_packets: 200000
 
     patterns:
-      - type: full_ring_multicast
+      - type: full_ring
 
   - name: "HalfRingMulticast"
     benchmark_mode: true
@@ -102,7 +102,7 @@ Tests:
       num_packets: 200000
 
     patterns:
-      - type: half_ring_multicast
+      - type: half_ring
 
   - name: "MeshMulticast"
     benchmark_mode: true
@@ -119,7 +119,7 @@ Tests:
       num_packets: 200000
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "MeshMulticastDynamic"
     benchmark_mode: true
@@ -137,7 +137,7 @@ Tests:
       num_packets: 200000
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "SingleSenderMeshUnicastAllDevices"
     benchmark_mode: true
