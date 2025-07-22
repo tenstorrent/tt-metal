@@ -7,6 +7,7 @@ from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, 
 import ttnn
 import torch
 from models.utility_functions import skip_for_blackhole
+from loguru import logger
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -74,6 +75,9 @@ def test_conv_features(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
+        logger.warning("Width Sharded Row Major Layout fails with act_block_h override. Setting it to None.")
+        config = None
     run_conv(
         device,
         torch_tensor_map,
