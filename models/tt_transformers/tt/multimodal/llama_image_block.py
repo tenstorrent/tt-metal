@@ -87,7 +87,7 @@ class TtLlamaImageTransformerBlock(LightweightModule):
 
     def forward(self, x_11SH, mask=None):
         seq_len = x_11SH.shape[-2]
-        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
 
         attn_out = self.attn(self.ln_1(x_11SH), mask=mask)
         if self.gated:
@@ -98,4 +98,7 @@ class TtLlamaImageTransformerBlock(LightweightModule):
         if self.gated:
             mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffn))
         out = ttnn.add(res, mlp_out)
+        ttnn.deallocate(mlp_out)
+        ttnn.deallocate(attn_out)
+        ttnn.deallocate(res)
         return out

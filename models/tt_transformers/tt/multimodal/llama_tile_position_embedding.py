@@ -123,6 +123,6 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
         )
 
         # Concatenate with input tensor
-        x = x + out_pos_embed[:, :, : x.shape[2], :]
+        x = x + out_pos_embed[:, : x.shape[1], : x.shape[2], :]
 
         return x
