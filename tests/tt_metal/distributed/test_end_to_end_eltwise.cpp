@@ -110,14 +110,13 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
 namespace tt::tt_metal::distributed::test {
 
-using MeshEndToEndT3kTests = MeshDevice2x4Fixture;
+using MeshEndToEnd2x4Tests = MeshDevice2x4Fixture;
 using ::testing::Each;
 using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
-TEST_F(MeshEndToEndT3kTests, ProgramDispatchTest) {
-
+TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
     auto& cq = mesh_device_->mesh_command_queue();
 
     uint8_t cq_id = cq.id();
@@ -155,7 +154,7 @@ TEST_F(MeshEndToEndT3kTests, ProgramDispatchTest) {
     Finish(cq);
 }
 
-TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
+TEST_F(MeshEndToEnd2x4Tests, BufferRoundtripTest) {
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
     auto& cq = mesh_device_->mesh_command_queue();
@@ -190,7 +189,7 @@ TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
     EXPECT_THAT(read_back_data, Pointwise(Eq(), src_data));
 }
 
-TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
+TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     constexpr uint8_t kAddOpId = 0;
 
     auto shard_shape = Shape2D{32, 32};

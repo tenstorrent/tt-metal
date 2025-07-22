@@ -42,11 +42,9 @@ std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-class T3000MultiCQFabricMeshDeviceFixture : public MultiCQMeshDevice2x4Fixture {
+class MultiCQFabricMeshDevice2x4Fixture : public MultiCQMeshDevice2x4Fixture {
 protected:
-    T3000MultiCQFabricMeshDeviceFixture() {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    }
+    MultiCQFabricMeshDevice2x4Fixture() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D); }
     void TearDown() override {
         MultiCQMeshDevice2x4Fixture::TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
@@ -74,7 +72,7 @@ TEST_F(MultiCQMeshDevice2x4Fixture, AllGather) {
     }
 }
 
-TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherAsync) {
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
