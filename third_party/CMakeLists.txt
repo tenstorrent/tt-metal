@@ -126,7 +126,7 @@ include(FetchContent)
 FetchContent_Declare(
 enchantum
   GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
-  GIT_TAG        8ed8888e2ab3dd11313f76943ea6849f8b69a9f6
+  GIT_TAG        32531119022d0effeb95a763e069e3e0f7f1ff2f
 )
 
 FetchContent_MakeAvailable(enchantum)
