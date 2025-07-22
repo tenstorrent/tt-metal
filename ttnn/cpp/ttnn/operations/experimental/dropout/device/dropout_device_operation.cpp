@@ -4,7 +4,6 @@
 
 #include "dropout_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 

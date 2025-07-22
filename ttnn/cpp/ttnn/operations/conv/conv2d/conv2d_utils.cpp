@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <tuple>
+#include <enchantum/enchantum.hpp>
 
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_types.hpp>

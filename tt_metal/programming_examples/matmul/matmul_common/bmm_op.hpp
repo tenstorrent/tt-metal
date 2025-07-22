@@ -13,7 +13,6 @@
 #include <tt-metalium/bfloat16.hpp>
 
 #include <umd/device/tt_xy_pair.h>
-#include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/work_split.hpp>
 

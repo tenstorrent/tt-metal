@@ -10,8 +10,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-#include <enchantum/enchantum.hpp>
-
 #include <optional>
 
 using uint32_t = std::uint32_t;

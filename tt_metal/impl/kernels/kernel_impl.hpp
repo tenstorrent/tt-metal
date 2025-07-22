@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <enchantum/enchantum.hpp>
 
 #include "api/tt-metalium/kernel.hpp"
 #include "jit_build/jit_build_settings.hpp"

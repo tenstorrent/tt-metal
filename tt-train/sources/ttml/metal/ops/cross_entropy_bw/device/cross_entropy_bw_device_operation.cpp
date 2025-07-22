@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cross_entropy_bw_device_operation.hpp"
+#include <enchantum/enchantum.hpp>
 
 #include "cross_entropy_bw_program_factory.hpp"
 

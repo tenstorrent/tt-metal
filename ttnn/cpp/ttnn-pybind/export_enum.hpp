@@ -10,6 +10,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <enchantum/type_name.hpp>
+#include <enchantum/enchantum.hpp>
 
 template <typename E, typename... Extra>
 pybind11::enum_<E> export_enum(const pybind11::handle& scope, std::string name = "", Extra&&... extra) {

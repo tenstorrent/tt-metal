@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "profiler_no_op_program_factory.hpp"
+#include <enchantum/enchantum.hpp>
 
 #include <core/ttnn_all_includes.hpp>
 

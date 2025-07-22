@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <enchantum/enchantum.hpp>
+
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"

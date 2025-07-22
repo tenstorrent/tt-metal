@@ -7,7 +7,6 @@
 #include <functional>
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include <enchantum/enchantum.hpp>
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn::operations::complex_binary {

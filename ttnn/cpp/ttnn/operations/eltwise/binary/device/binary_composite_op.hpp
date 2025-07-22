@@ -8,7 +8,6 @@
 #include <functional>
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include <enchantum/enchantum.hpp>
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::binary {

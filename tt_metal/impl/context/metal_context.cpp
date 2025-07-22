@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <enchantum/enchantum.hpp>
+
 #include "metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"

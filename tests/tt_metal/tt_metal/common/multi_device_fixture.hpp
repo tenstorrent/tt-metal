@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 #include <boost/algorithm/string.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "serialization.hpp"
+#include <enchantum/enchantum.hpp>
 
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>

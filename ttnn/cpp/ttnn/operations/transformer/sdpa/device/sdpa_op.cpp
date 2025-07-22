@@ -7,6 +7,7 @@
 #include "sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include <enchantum/enchantum.hpp>
 
 using namespace tt::tt_metal;
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rmsnorm_fw_device_operation.hpp"
+#include <enchantum/enchantum.hpp>
 
 #include "rmsnorm_fw_program_factory.hpp"
 
