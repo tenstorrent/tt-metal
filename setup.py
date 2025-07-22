@@ -134,11 +134,11 @@ def get_from_precompiled_dir():
 
 
 @dataclass(frozen=True)
-class MetalliumBuildConfig:
+class MetaliumBuildConfig:
     from_precompiled_dir = get_from_precompiled_dir()
 
 
-metal_build_config = MetalliumBuildConfig()
+metal_build_config = MetaliumBuildConfig()
 
 
 class CMakeBuild(build_ext):
@@ -205,6 +205,12 @@ class CMakeBuild(build_ext):
                     cmake_args.extend(
                         [
                             "-DENABLE_TRACY=ON",
+                        ]
+                    )
+                else:
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=OFF",
                         ]
                     )
 

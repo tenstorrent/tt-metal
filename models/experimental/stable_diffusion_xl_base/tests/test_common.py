@@ -14,7 +14,8 @@ import ttnn
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
-SDXL_L1_SMALL_SIZE = 57344
+SDXL_L1_SMALL_SIZE = 47000
+SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 
 
 # Copied from sdxl pipeline
