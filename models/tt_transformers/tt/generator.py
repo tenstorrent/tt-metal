@@ -77,8 +77,7 @@ class Generator:
             logger.info(f"Prefilling User {user_id + 1}")
 
             model_id = user_id // max_batch_size_per_model
-            group_user_id = user_id % max_batch_size_per_model
-
+            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
 
@@ -86,17 +85,19 @@ class Generator:
             prefill_ids = torch.cat(
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
-            if page_table is not None:
-                page_table_user = self._get_prefill_user_page_table(
-                    page_table[idx : idx + 1], kv_cache[model_id], seq_len
-                )
+            page_table_user = (
+                self._get_prefill_user_page_table(page_table[idx : idx + 1], kv_cache[model_id], seq_len)
+                if page_table is not None
+                else None
+            )
+            model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             logits = self.prefill_forward_single_user_text(
                 prefill_ids,
-                page_table=page_table_user if page_table is not None else None,
-                user_id=0 if page_table is not None else group_user_id,
+                page_table=page_table_user,
+                user_id=group_user_id,
                 last_token_idx=last_token_idx,
-                kv_cache=kv_cache[model_id] if kv_cache is not None else None,
+                kv_cache=model_kv_cache,
                 model_id=model_id,
             )
             out_list.append(logits)
@@ -106,6 +107,7 @@ class Generator:
             last_token_idx = seq_len - 1
             user_id = empty_slots[idx]
             model_id = user_id // max_batch_size_per_model
+
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
 
@@ -519,16 +521,16 @@ class Generator:
             logger.info(f"Prefilling User {user_id + 1}")
 
             model_id = user_id // max_batch_size_per_model
-            group_user_id = user_id % max_batch_size_per_model
-
+            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
+
             user_page_table = page_table[idx : idx + 1] if page_table is not None else None
-            user_kv_cache = kv_cache[model_id] if kv_cache is not None else None
             user_cross_page_table = cross_page_table[idx : idx + 1] if kv_cache is not None else None
-            xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
+            model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
+            model_xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
 
             (
-                xattn_cache,
+                model_xattn_cache,
                 prefill_cross_attention_masks,
                 prefill_full_text_row_masked_out_mask,
                 decode_cross_attention_masks,
@@ -538,18 +540,18 @@ class Generator:
                 vision_images=vision_images[idx],
                 vision_mask=vision_masks[idx],
                 tokens=tokens[idx : idx + 1, :seq_len],  # Keep batch dimension
-                xattn_caches=xattn_cache,
-                user_id=0 if page_table is not None else group_user_id,
+                xattn_caches=model_xattn_cache,
+                user_id=group_user_id,
                 total_len=total_lens[idx],
                 prefill_len=seq_len,
                 page_table=user_page_table,
-                kv_cache=user_kv_cache,
+                kv_cache=model_kv_cache,
                 cross_page_table=user_cross_page_table,
                 model_id=model_id,
             )
 
             if xattn_caches is not None:
-                xattn_caches[model_id] = xattn_cache
+                xattn_caches[model_id] = model_xattn_cache
 
             out_list.append(logits)
             prefill_output_xattn_masks.append(prefill_cross_attention_masks)
@@ -560,7 +562,6 @@ class Generator:
         # We gather prefill output at the end of prefill to reduce unnecessary device sync
         for idx, user_id in enumerate(empty_slots):
             model_id = user_id // max_batch_size_per_model
-            group_user_id = user_id % max_batch_size_per_model
 
             last_token_idx = prompt_lens[idx] - 1
             output_logits[idx] = self.model[model_id].process_output_prefill(
