@@ -35,10 +35,10 @@ void kernel_main() {
             }
             curr_src_offset += input_width - stride_w;
         }
-        curr_src_row_index += stride_w;
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, 1);
 
+        curr_src_row_index += stride_w;
         if (curr_src_row_index >= (input_width)) {
             src_index += input_width * (stride_h - 1);
             curr_src_row_index = 0;
