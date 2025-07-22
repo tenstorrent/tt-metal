@@ -16,7 +16,7 @@ import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
 SDXL_L1_SMALL_SIZE = 47000
-SDXL_TRACE_REGION_SIZE = 31969280
+SDXL_TRACE_REGION_SIZE = 33575936
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 
 
@@ -172,9 +172,10 @@ def run_tt_image_gen(
 
     ttnn.synchronize_device(ttnn_device)
 
-    profiler.end("denoising_loop")
     # reset scheduler
     tt_scheduler.set_step_index(0)
+
+    profiler.end("denoising_loop")
 
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 

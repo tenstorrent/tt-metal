@@ -109,9 +109,7 @@ def run_torch_denoising(
 
 
 @torch.no_grad()
-def run_unet_inference(
-    ttnn_device, is_ci_env, prompts, num_inference_steps, model_location_generator,
-):
+def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
     torch.manual_seed(0)
 
     if isinstance(prompts, str):
@@ -393,8 +391,5 @@ def test_unet_loop(
     is_ci_env,
     prompt,
     loop_iter_num,
-    model_location_generator,
 ):
-    return run_unet_inference(
-        device, is_ci_env, prompt, loop_iter_num, model_location_generator
-    )
+    return run_unet_inference(device, is_ci_env, prompt, loop_iter_num)

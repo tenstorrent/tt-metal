@@ -298,14 +298,14 @@ def run_demo_inference(
             tid_vae=tid_vae,
         )
 
-        logger.info(f"Image gen for {batch_size} prompts completed in {profiler.get('image_gen')[-1]:.2f} seconds")
+        logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
         logger.info(
             f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )
         logger.info(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
-        
+
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
                 break
