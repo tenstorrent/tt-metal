@@ -71,7 +71,8 @@ struct OpConfig {
         DEQUANT,
         MAXIMUM,
         MINIMUM,
-        XLOGY
+        XLOGY,
+        LT,
     };
 
     template <class EnumT>
