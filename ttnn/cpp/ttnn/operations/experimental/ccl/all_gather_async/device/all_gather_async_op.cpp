@@ -362,6 +362,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        this->barrier_semaphore.has_value(),
         input_shape,
         input_memory_layout,
         input_dtype,
