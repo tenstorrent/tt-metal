@@ -394,15 +394,6 @@ public:
 
 private:
     TestDeviceResources& get_or_create_device_resources(const FabricNodeId& node_id);
-    void allocate_link_group(
-        std::vector<std::tuple<SenderConfig*, TrafficPatternConfig*, DestinationConfig*>>& group_patterns,
-        uint32_t link_id);
-    void allocate_multicast_patterns_uniform(
-        std::vector<std::tuple<SenderConfig*, TrafficPatternConfig*, DestinationConfig*>>& multicast_patterns,
-        uint32_t link_id);
-    void allocate_unicast_patterns(
-        std::vector<std::tuple<SenderConfig*, TrafficPatternConfig*, DestinationConfig*>>& unicast_patterns,
-        uint32_t link_id);
 
     const IDeviceInfoProvider& device_info_provider_;
     const IRouteManager& route_manager_;
@@ -476,15 +467,10 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
     // PASS 2: Allocate receivers and their memory. Now that all senders are known, the
     // remaining pristine cores on all devices can form the receiver pool.
-
-    // Group ALL patterns by link ID for separate allocation (both unicast and multicast), we dont need to have a
-    // uniform address space allocated to all links, since each link works indepedently.
-    std::map<uint32_t, std::vector<std::tuple<SenderConfig*, TrafficPatternConfig*, DestinationConfig*>>> link_groups;
     for (auto& sender : test_config.senders) {
         for (auto& pattern : sender.patterns) {
             auto& dest = pattern.destination.value();
 
-            // skip the current pattern since address has been assigned
             if (dest.core.has_value() && dest.target_address.has_value() &&
                 ((pattern.ntype.value() != NocSendType::NOC_UNICAST_ATOMIC_INC &&
                   pattern.ntype.value() != NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) ||
@@ -496,11 +482,15 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 continue;
             }
 
-            // Group ALL patterns by link_id (both unicast and multicast)
-            uint32_t link_id = sender.link_id.value_or(0);
-            link_groups[link_id].emplace_back(&sender, &pattern, &dest);
-        }
-    }
+            if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
+                std::vector<FabricNodeId> dst_node_ids;
+                if (dest.hops.has_value()) {
+                    dst_node_ids = route_manager_.get_dst_node_ids_from_hops(
+                        sender.device, dest.hops.value(), pattern.ftype.value());
+                } else {
+                    TT_FATAL(dest.device.has_value(), "Multicast destination requires hops");
+                    dst_node_ids.push_back(dest.device.value());
+                }
 
                 uint32_t chunk_size = policies_.default_payload_chunk_size;
                 TT_FATAL(
@@ -509,32 +499,31 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     pattern.size.value(),
                     chunk_size);
 
-inline void GlobalAllocator::allocate_link_group(
-    std::vector<std::tuple<SenderConfig*, TrafficPatternConfig*, DestinationConfig*>>& group_patterns,
-    uint32_t link_id) {
-    // Separate unicast and multicast patterns within this link group
-    std::vector<std::tuple<SenderConfig*, TrafficPatternConfig*, DestinationConfig*>> multicast_patterns;
-    std::vector<std::tuple<SenderConfig*, TrafficPatternConfig*, DestinationConfig*>> unicast_patterns;
+                // Use histogram analysis to find uniform receiver core and memory address
+                std::map<CoreCoord, uint32_t> core_counts;
+                std::map<CoreCoord, std::map<uint32_t, uint32_t>> memory_histograms;
 
-    for (auto& pattern_tuple : group_patterns) {
-        auto& pattern = *std::get<1>(pattern_tuple);
-        if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
-            multicast_patterns.push_back(pattern_tuple);
-        } else {
-            unicast_patterns.push_back(pattern_tuple);
-        }
-    }
+                // Build histograms for all destination devices
+                for (const auto& device_id : dst_node_ids) {
+                    auto& device_resources = get_or_create_device_resources(device_id);
 
-    // Allocate multicast patterns with uniform allocation
-    if (!multicast_patterns.empty()) {
-        allocate_multicast_patterns_uniform(multicast_patterns, link_id);
-    }
+                    const auto& receiver_pool = device_resources.core_pools_[RECEIVER_TYPE_IDX];
+                    if (!receiver_pool.initialized) {
+                        device_resources.initialize_receiver_pool();
+                    }
 
-    // Allocate unicast patterns individually
-    if (!unicast_patterns.empty()) {
-        allocate_unicast_patterns(unicast_patterns, link_id);
-    }
-}
+                    const auto available_cores = receiver_pool.get_available_cores(device_resources.core_workload_);
+                    for (const auto& core : available_cores) {
+                        core_counts[core]++;
+                        auto& core_resources = device_resources.get_or_create_core_resources(core, CoreType::RECEIVER);
+                        if (core_resources.has_available_payload_chunk()) {
+                            const auto& available_chunks = core_resources.get_available_payload_chunks();
+                            for (auto addr : available_chunks) {
+                                memory_histograms[core][addr]++;
+                            }
+                        }
+                    }
+                }
 
                 std::optional<std::pair<CoreCoord, uint32_t>> uniform_receiver = std::nullopt;
                 for (const auto& [core, device_count] : core_counts) {
@@ -552,167 +541,70 @@ inline void GlobalAllocator::allocate_link_group(
                     }
                 }
 
-    std::vector<FabricNodeId> dst_node_ids(unique_destinations.begin(), unique_destinations.end());
+                if (!uniform_receiver.has_value()) {
+                    TT_THROW("Could not find a uniform core and memory address for multicast pattern.");
+                }
 
-    uint32_t chunk_size = policies_.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
+                dest.core = uniform_receiver->first;
+                if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
+                    dest.target_address = uniform_receiver->second;
+                } else {
+                    TT_THROW("Multicast atomic/fused atomic not supported yet");
+                }
 
-    // Validate payload sizes for this group
-    for (auto& [sender_ptr, pattern_ptr, dest_ptr] : multicast_patterns) {
-        auto& pattern = *pattern_ptr;
-        TT_FATAL(
-            pattern.size.value() <= chunk_size,
-            "Requested payload size {} exceeds the per-worker buffer chunk size of {}",
-            pattern.size.value(),
-            chunk_size);
-    }
+                // Reserve resources on all destination devices
+                for (const auto& node_id : dst_node_ids) {
+                    auto& device_resources = get_or_create_device_resources(node_id);
+                    device_resources.reserve_receiver_core(dest.core);
+                    auto& core_resources =
+                        device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
+                    if (pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC ||
+                        pattern.ntype.value() == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+                        // TODO: need to allocate from a separate pool?
+                        TT_THROW("Multicast atomic/fused atomic not supported yet");
+                    } else {
+                        core_resources.reserve_payload_chunk(dest.target_address.value());
+                    }
+                }
+            } else {  // Unicast
+                TT_FATAL(dest.device.has_value(), "Unicast destination requires a device ID.");
+                auto& device_resources = get_or_create_device_resources(dest.device.value());
 
-    // Use histogram analysis to find uniform receiver core and memory address for this link group
-    std::map<CoreCoord, uint32_t> core_counts;
-    std::map<CoreCoord, std::map<uint32_t, uint32_t>> memory_histograms;
+                if (!dest.core.has_value()) {
+                    dest.core = device_resources.reserve_receiver_core(std::nullopt);
+                } else {
+                    device_resources.reserve_receiver_core(dest.core);
+                }
 
-    // Build histograms for all destination devices in this link group
-    for (const auto& device_id : dst_node_ids) {
-        auto& device_resources = get_or_create_device_resources(device_id);
+                auto& core_resources =
+                    device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
 
-        const auto& receiver_pool = device_resources.core_pools_[RECEIVER_TYPE_IDX];
-        if (!receiver_pool.initialized) {
-            device_resources.initialize_receiver_pool();
-        }
+                bool allocate_write_address = true;
+                bool allocate_atomic_inc_address = true;
+                if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
+                    allocate_atomic_inc_address = false;
+                } else if (pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC) {
+                    allocate_write_address = false;
+                }
 
-        const auto available_cores = receiver_pool.get_available_cores(device_resources.core_workload_);
-
-        for (const auto& core : available_cores) {
-            core_counts[core]++;
-            auto& core_resources = device_resources.get_or_create_core_resources(core, CoreType::RECEIVER);
-            if (core_resources.has_available_payload_chunk()) {
-                const auto& available_chunks = core_resources.get_available_payload_chunks();
-                for (auto addr : available_chunks) {
-                    memory_histograms[core][addr]++;
+                if (allocate_write_address) {
+                    TT_FATAL(
+                        pattern.size.value() <= core_resources.payload_chunk_size,
+                        "Requested payload size {} exceeds the per-worker buffer chunk size of {}",
+                        pattern.size.value(),
+                        core_resources.payload_chunk_size);
+                    if (!core_resources.has_available_payload_chunk()) {
+                        TT_THROW(
+                            "No payload buffer chunk available on device {} core {} for allocation.",
+                            dest.device.value(),
+                            dest.core.value());
+                    }
+                    dest.target_address = core_resources.allocate_payload_chunk();
+                }
+                if (allocate_atomic_inc_address) {
+                    dest.atomic_inc_address = core_resources.allocate_atomic_counter();
                 }
             }
-        }
-    }
-
-    // Helper lambda to check if a core has uniform memory addresses
-    auto has_uniform_address = [&](const CoreCoord& core) -> bool {
-        const auto& address_histogram = memory_histograms[core];
-        for (const auto& [addr, addr_count] : address_histogram) {
-            if (addr_count == dst_node_ids.size()) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    // Find the best core that has uniform memory addresses available for this link group
-    std::optional<CoreCoord> best_core = std::nullopt;
-    uint32_t max_count = 0;
-
-    for (const auto& [core, count] : core_counts) {
-        // Only consider cores with uniform addresses
-        if (!has_uniform_address(core)) {
-            continue;
-        }
-
-        // Among cores with uniform addresses, pick the one available on most devices
-        if (count > max_count) {
-            max_count = count;
-            best_core = core;
-
-            // Early exit if we found the theoretical maximum (available on ALL devices)
-            if (count == dst_node_ids.size()) {
-                break;
-            }
-        }
-    }
-
-    std::optional<std::pair<CoreCoord, uint32_t>> uniform_receiver = std::nullopt;
-    if (best_core.has_value()) {
-        const auto& address_histogram = memory_histograms[best_core.value()];
-        for (const auto& [addr, count] : address_histogram) {
-            if (count == dst_node_ids.size()) {
-                uniform_receiver = std::make_pair(best_core.value(), addr);
-                break;
-            }
-        }
-    }
-
-    if (!uniform_receiver.has_value()) {
-        TT_THROW("Could not find a uniform core and memory address for multicast patterns in link group {}.", link_id);
-    }
-
-    // Apply the uniform allocation to all multicast patterns in this link group
-    for (auto& [sender_ptr, pattern_ptr, dest_ptr] : multicast_patterns) {
-        auto& pattern = *pattern_ptr;
-        auto& dest = *dest_ptr;
-
-        dest.core = uniform_receiver->first;
-        if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
-            dest.target_address = uniform_receiver->second;
-        } else {
-            TT_THROW("Multicast atomic/fused atomic not supported yet");
-        }
-    }
-
-    // Reserve resources on all destination devices for this link group
-    for (const auto& node_id : dst_node_ids) {
-        auto& device_resources = get_or_create_device_resources(node_id);
-        device_resources.reserve_receiver_core(uniform_receiver->first);
-        auto& core_resources =
-            device_resources.get_or_create_core_resources(uniform_receiver->first, CoreType::RECEIVER);
-        if (std::get<1>(multicast_patterns[0])->ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC ||
-            std::get<1>(multicast_patterns[0])->ntype.value() == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
-            // TODO: need to allocate from a separate pool?
-            TT_THROW("Multicast atomic/fused atomic not supported yet");
-        } else {
-            core_resources.reserve_payload_chunk(uniform_receiver->second);
-        }
-    }
-}
-
-inline void GlobalAllocator::allocate_unicast_patterns(
-    std::vector<std::tuple<SenderConfig*, TrafficPatternConfig*, DestinationConfig*>>& unicast_patterns,
-    uint32_t link_id) {
-    for (auto& [sender_ptr, pattern_ptr, dest_ptr] : unicast_patterns) {
-        auto& sender = *sender_ptr;
-        auto& pattern = *pattern_ptr;
-        auto& dest = *dest_ptr;
-
-        TT_FATAL(dest.device.has_value(), "Unicast destination requires a device ID.");
-        auto& device_resources = get_or_create_device_resources(dest.device.value());
-
-        if (!dest.core.has_value()) {
-            dest.core = device_resources.reserve_receiver_core(std::nullopt);
-        } else {
-            device_resources.reserve_receiver_core(dest.core);
-        }
-
-        auto& core_resources = device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
-
-        bool allocate_write_address = true;
-        bool allocate_atomic_inc_address = true;
-        if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
-            allocate_atomic_inc_address = false;
-        } else if (pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC) {
-            allocate_write_address = false;
-        }
-
-        if (allocate_write_address) {
-            TT_FATAL(
-                pattern.size.value() <= core_resources.payload_chunk_size,
-                "Requested payload size {} exceeds the per-worker buffer chunk size of {}",
-                pattern.size.value(),
-                core_resources.payload_chunk_size);
-            if (!core_resources.has_available_payload_chunk()) {
-                TT_THROW(
-                    "No payload buffer chunk available on device {} core {} for allocation.",
-                    dest.device.value(),
-                    dest.core.value());
-            }
-            dest.target_address = core_resources.allocate_payload_chunk();
-        }
-        if (allocate_atomic_inc_address) {
-            dest.atomic_inc_address = core_resources.allocate_atomic_counter();
         }
     }
 }
