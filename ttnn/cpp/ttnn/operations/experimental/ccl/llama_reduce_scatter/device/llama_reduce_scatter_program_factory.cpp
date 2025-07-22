@@ -303,7 +303,6 @@ std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs
     uint32_t num_links = operation_attributes.num_links;
     const uint32_t num_devices = ring_size;
     auto intermediate_packet_buffer_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
-    // UNCOMMENT this once we can allocate persistent buffers across all device lifetimes
     uint32_t ncores_input = (input_tensor_width + input_shard_width - 1) / input_shard_width;
     if (ncores_input % num_devices != 0) {
         ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
