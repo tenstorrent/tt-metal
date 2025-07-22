@@ -20,7 +20,7 @@
 
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)) &&                         \
+    defined(COMPILE_FOR_IDLE_ERISC)) &&                                                        \
     defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
@@ -166,7 +166,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
     }
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
-    if (write && (addr < MEM_MAP_END)) {
+    if (write && (addr < MEM_MAP_READ_ONLY_END)) {
         return DebugSanitizeNocAddrMailbox;
     }
 #endif
@@ -262,10 +262,7 @@ void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
     // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
     // kernel is written. In this case we'll do an early exit back to base FW.
     internal_::disable_erisc_app();
-    // Subordinates do not have an erisc exit
-#if !(defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1)
     erisc_exit();
-#endif
 #endif
 
     while (1) {
@@ -445,7 +442,7 @@ void debug_sanitize_noc_and_worker_addr(
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
         // Local addr needs to be checked depending on whether we're on eth or tensix.
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
         uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
         uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);

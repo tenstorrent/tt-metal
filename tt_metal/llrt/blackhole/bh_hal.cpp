@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
-#include <tt-logger/tt-logger.hpp>
 #include <vector>
 
 #include "blackhole/bh_hal.hpp"
@@ -106,12 +105,6 @@ void Hal::initialize_bh() {
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
-            // For firmware with base fw, __ldm_data is already offset by base fw.
-            // So we need to undo that offset here to get the correct relocation address
-            // for copying by the kernel to local memory.
-            if (local_init_addr == MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH) {
-                addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
-            }
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
 
@@ -147,18 +140,7 @@ void Hal::initialize_bh() {
 
     this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t {
         return get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) +
-               offsetof(blackhole::EthFwMailbox, arg) + (arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]));
-    };
-
-    this->device_features_func_ = [](DeviceFeature feature) -> bool {
-        switch (feature) {
-            case DeviceFeature::ETH_FW_API: return true;
-            case DeviceFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return true;
-            case DeviceFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
-            case DeviceFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
-            case DeviceFeature::ETH_LINKS_INTERMESH_ROUTING: return false;
-            default: TT_THROW("Invalid Blackhole device feature {}", static_cast<int>(feature));
-        }
+               offsetof(blackhole::EthFwMailbox, arg) + arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]);
     };
 
     this->num_nocs_ = NUM_NOCS;
@@ -178,6 +160,7 @@ void Hal::initialize_bh() {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
+    this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Blackhole
     this->virtualized_core_types_ = {
         AddressableCoreType::TENSIX, AddressableCoreType::ETH, AddressableCoreType::PCIE, AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
@@ -201,11 +184,6 @@ void Hal::initialize_bh() {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
-
-    this->eth_live_link_status_func_ = [](std::span<uint32_t> bytes) -> EthLiveLinkStatus {
-        eth_live_status_t* bh_status = reinterpret_cast<eth_live_status_t*>(bytes.data());
-        return {.retrain_count = bh_status->retrain_count, .rx_link_up = bh_status->rx_link_up};
-    };
 }
 
 }  // namespace tt_metal
