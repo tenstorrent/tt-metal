@@ -19,7 +19,7 @@ import pytest
 from models.utility_functions import skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
+from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
 from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
     precompute_freqs_cis,
@@ -761,13 +761,13 @@ def run_rmsnorm_impl(
 
     # Setup: Convert weights and get weight_config
     state_dict = {"weight": rms_norm.weight.unsqueeze(0)}
-    weight_config = RMSNorm.convert_weights(hf_config, state_dict, temp_dir, device, norm_category=norm_category)
+    weight_config = RMSNorm.convert_weights(hf_config, state_dict, temp_dir, device)
 
     # Generate appropriate config
     if mode == "prefill":
-        model_config = RMSNorm.prefill_model_config(hf_config, device, norm_category=norm_category)
+        model_config = RMSNorm.prefill_model_config(hf_config, device)
     else:
-        model_config = RMSNorm.decode_model_config(hf_config, device, norm_category=norm_category)
+        model_config = RMSNorm.decode_model_config(hf_config, device)
 
     model_state = RMSNorm.create_state(hf_config, mesh_device=device)
 
