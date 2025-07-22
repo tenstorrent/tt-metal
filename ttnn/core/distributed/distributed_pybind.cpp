@@ -18,6 +18,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -31,6 +32,17 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
+
+struct SystemMeshDescriptor {
+private:
+    tt::tt_metal::distributed::SystemMesh& system_mesh_;
+
+public:
+    SystemMeshDescriptor() : system_mesh_(tt::tt_metal::distributed::SystemMesh::instance()) {}
+
+    const MeshShape& shape() const { return system_mesh_.shape(); }
+    const MeshShape& local_shape() const { return system_mesh_.local_shape(); }
+};
 
 namespace py = pybind11;
 
@@ -49,6 +61,7 @@ void py_module_types(py::module& module) {
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
     py::class_<MeshCoordinateRangeSet>(
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
+    py::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
 }
 
 void py_module(py::module& module) {
@@ -149,6 +162,11 @@ void py_module(py::module& module) {
             return str.str();
         });
 
+    static_cast<py::class_<SystemMeshDescriptor>>(module.attr("SystemMeshDescriptor"))
+        .def(py::init([]() { return SystemMeshDescriptor(); }))
+        .def("shape", &SystemMeshDescriptor::shape)
+        .def("local_shape", &SystemMeshDescriptor::local_shape);
+
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
@@ -197,7 +215,6 @@ void py_module(py::module& module) {
         .def(
             "create_submeshes",
             &MeshDevice::create_submeshes,
-            py::arg("submesh_shape"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
         .def(
             "get_submeshes",
