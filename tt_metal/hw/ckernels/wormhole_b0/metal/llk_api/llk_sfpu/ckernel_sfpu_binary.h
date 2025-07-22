@@ -14,7 +14,7 @@ namespace ckernel {
 namespace sfpu {
 
 // Helper function for _sfpu_binary_power_
-// This function is based _float32_to_int32_, but expects a positive input, which allows us to optimize
+// This function is based on _float32_to_int32_, but expects a positive input, which allows us to optimize
 // away several lines (and make it faster)
 sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     sfpi::vInt result;
@@ -89,7 +89,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     sfpi::vFloat log2_result = expf + series_result * vConst1Ln2;  // exp correction: ln(1+x) + exp*ln(2)
 
     // Step 2: Compute base**pow = 2**(pow * log2(base))
-    // If (base, exponent) => (0, +inf) or (base, exponent) => (N, -inf) then ooutput should be 0
+    // If (base, exponent) => (0, +inf) or (base, exponent) => (N, -inf) then output should be 0
     // However, intermediary values can overflow, which leads to output increasing again instead of
     // staying at 0.
     // This overflows happens when zff < -127. Therefore, we clamp zff to -127.
