@@ -20,7 +20,7 @@ def randomize_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16)
     return torch_tensor
 
 
