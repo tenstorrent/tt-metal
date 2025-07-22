@@ -57,7 +57,8 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    size_t sync_semaphore = get_arg_val<uint32_t>(arg_idx++);
+    bool use_barrier_semaphore = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_semaphore = get_arg_val<uint32_t>(arg_idx++);
 
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
@@ -104,6 +105,11 @@ void kernel_main() {
     pkt_hdr->to_chip_unicast(1);
 
     fabric_connection.open();
+
+    bool signal_on_barrier_semaphore = use_barrier_semaphore && ((direction == 1 && num_targets_forward_direction) ||
+                                                                 (direction == 0 && num_targets_backward_direction));
+    bool wait_on_barrier_semaphore = use_barrier_semaphore && ((direction == 1 && num_targets_backward_direction) ||
+                                                               (direction == 0 && num_targets_forward_direction));
 
     // Write the unicast packet
     // if (direction == 1) {
