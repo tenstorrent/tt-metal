@@ -1025,8 +1025,6 @@ private:
                             auto& next_config = next_level_configs.back();
                             // Explicitly preserve benchmark_mode
                             next_config.benchmark_mode = current_config.benchmark_mode;
-                            // Use optimized string concatenation utility
-                            detail::append_with_separator(next_config.name, "_", param_name, value);
 
                             ParsedTrafficPatternConfig param_default;
                             if (param_name == "ftype") {

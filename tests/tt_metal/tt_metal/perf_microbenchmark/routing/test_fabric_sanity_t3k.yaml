@@ -5,10 +5,10 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -21,10 +21,10 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -37,10 +37,10 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: unicast
-      ntype: unicast_write
       ssize: 1024
       num_packets: 100
 
@@ -54,10 +54,10 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -70,7 +70,7 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: unicast
@@ -87,10 +87,10 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -100,12 +100,13 @@ Tests:
   - name: "MeshMulticast"
     fabric_setup:
       topology: Mesh
-      # more links caused rt args exceed 256
-      num_links: 1
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -116,12 +117,13 @@ Tests:
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
-      # more links caused rt args exceed 256
-      num_links: 1
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -134,10 +136,10 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: unicast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 

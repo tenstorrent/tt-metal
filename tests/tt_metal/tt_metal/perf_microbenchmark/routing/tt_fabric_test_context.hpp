@@ -356,9 +356,10 @@ public:
         }
 
         // Write detailed header
-        csv_stream << "test_name,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,"
-                      "packet_size,cycles,"
-                      "bandwidth_gb_s,packets_per_second\n";
+        csv_stream
+            << "test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,"
+               "packet_size,cycles,"
+               "bandwidth_gb_s,packets_per_second\n";
         csv_stream.close();
 
         log_info(tt::LogTest, "Initialized CSV file: {}", csv_file_path_.string());
@@ -376,8 +377,8 @@ public:
         }
 
         // Write summary header
-        summary_csv_stream
-            << "test_name,topology,num_devices,num_links,packet_size,cycles,bandwidth_gb_s,packets_per_second\n";
+        summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,cycles,bandwidth_gb_s,"
+                              "packets_per_second\n";
         summary_csv_stream.close();
 
         log_info(tt::LogTest, "Initialized summary CSV file: {}", csv_summary_file_path_.string());
@@ -852,6 +853,19 @@ private:
     }
 
     void generate_bandwidth_csv(const TestConfig& config) {
+        // Extract representative ftype and ntype from first sender's first pattern
+        std::string ftype_str = "None";
+        std::string ntype_str = "None";
+        if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
+            const auto& first_pattern = config.senders[0].patterns[0];
+            if (first_pattern.ftype.has_value()) {
+                ftype_str = magic_enum::enum_name(first_pattern.ftype.value()).data();
+            }
+            if (first_pattern.ntype.has_value()) {
+                ntype_str = magic_enum::enum_name(first_pattern.ntype.value()).data();
+            }
+        }
+
         // Open CSV file in append mode
         std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::app);
         if (!csv_stream.is_open()) {
@@ -861,8 +875,9 @@ private:
 
         // Write data rows (header already written in initialize_csv_file)
         for (const auto& result : bandwidth_results_) {
-            csv_stream << config.name << "," << magic_enum::enum_name(config.fabric_setup.topology) << ","
-                       << result.num_devices << "," << result.device_id << "," << config.fabric_setup.num_links << ","
+            csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
+                       << magic_enum::enum_name(config.fabric_setup.topology) << "," << result.num_devices << ","
+                       << result.device_id << "," << config.fabric_setup.num_links << ","
                        << magic_enum::enum_name(result.direction) << "," << result.total_traffic_count << ","
                        << result.num_packets << "," << result.packet_size << "," << result.cycles << "," << std::fixed
                        << std::setprecision(6) << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
@@ -892,11 +907,11 @@ private:
             }
             num_devices_str += "]";
 
-            summary_csv_stream << config.name << "," << magic_enum::enum_name(config.fabric_setup.topology) << ",\""
-                               << num_devices_str << "\"," << config.fabric_setup.num_links << "," << result.packet_size
-                               << "," << result.cycles << "," << std::fixed << std::setprecision(6)
-                               << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
-                               << result.packets_per_second << "\n";
+            summary_csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
+                               << magic_enum::enum_name(config.fabric_setup.topology) << ",\"" << num_devices_str
+                               << "\"," << config.fabric_setup.num_links << "," << result.packet_size << ","
+                               << result.cycles << "," << std::fixed << std::setprecision(6) << result.bandwidth_gb_s
+                               << "," << std::fixed << std::setprecision(3) << result.packets_per_second << "\n";
         }
 
         summary_csv_stream.close();
