@@ -1,0 +1,28 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+
+Board: [
+  { name: T3K,
+    type: Mesh,
+    topology: [1, 8]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: T3K,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+  host_ranks: [[0]]}
+]
+
+Graph: [
+]

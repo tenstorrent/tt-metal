@@ -77,9 +77,6 @@ public:
     // Setter for dispatch_s_buffer_size and update dispatch_s_buffer_pages
     DispatchSettings& dispatch_s_buffer_size(uint32_t val);
 
-    // Setter for tunneling_buffer_size and update tunneling_buffer_pages
-    DispatchSettings& tunneling_buffer_size(uint32_t val);
-
     // Sets pointer values based on L1 alignment
     DispatchSettings& with_alignment(uint32_t l1_alignment);
 
@@ -173,10 +170,6 @@ public:
     uint32_t dispatch_pages_;  // total buffer size / page size
     uint32_t dispatch_s_buffer_size_;
     uint32_t dispatch_s_buffer_pages_;  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
-
-    // packet_mux, packet_demux, vc_eth_tunneler, vc_packet_router
-    uint32_t tunneling_buffer_size_;
-    uint32_t tunneling_buffer_pages_;  // tunneling_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
     CoreType core_type_;  // Which core this settings is for
 };

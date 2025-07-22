@@ -48,14 +48,6 @@ uint32_t DispatchMemMap::prefetch_d_buffer_size() const { return settings.prefet
 
 uint32_t DispatchMemMap::prefetch_d_buffer_pages() const { return settings.prefetch_d_pages_; }
 
-uint32_t DispatchMemMap::mux_buffer_size(uint8_t num_hw_cqs) const {
-    return settings.tunneling_buffer_size_ / num_hw_cqs;
-}
-
-uint32_t DispatchMemMap::mux_buffer_pages(uint8_t num_hw_cqs) const {
-    return settings.tunneling_buffer_pages_ / num_hw_cqs;
-}
-
 uint32_t DispatchMemMap::dispatch_s_buffer_size() const { return settings.dispatch_s_buffer_size_; }
 
 uint32_t DispatchMemMap::dispatch_s_buffer_pages() const {
