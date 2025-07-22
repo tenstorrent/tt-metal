@@ -40,6 +40,7 @@ protected:
         const chip_id_t device_id = 0;
         const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
         this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        this->devices_.push_back(this->device_);
     }
 
     void TearDown() override {
@@ -303,7 +304,6 @@ class DISABLED_MultiCQMultiDeviceOnFabricFixture : public UnitMeshMultiCQMultiDe
 private:
     // Save the result to reduce UMD calls
     inline static bool should_skip_ = false;
-    bool original_fd_fabric_en_ = false;
 
 protected:
     void SetUp() override {
@@ -314,22 +314,14 @@ protected:
         if (tt::tt_metal::IsGalaxyCluster()) {
             GTEST_SKIP();
         }
-        original_fd_fabric_en_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_fabric::SetFabricConfig(GetParam(), tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         UnitMeshMultiCQMultiDeviceFixture::SetUp();
-
-        if (::testing::Test::IsSkipped()) {
-            tt::tt_fabric::SetFabricConfig(
-                tt::tt_fabric::FabricConfig::DISABLED, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-        }
     }
 
     void TearDown() override {
         UnitMeshMultiCQMultiDeviceFixture::TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(original_fd_fabric_en_);
     }
 };
 

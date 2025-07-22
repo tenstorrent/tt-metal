@@ -59,7 +59,6 @@ tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
 tt_metal/impl/debug/ @pgkeller
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @omilyutin-tt
 tt_metal/impl/dispatch/ @pgkeller @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
-tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
 tt_metal/impl/event @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
 tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @omilyutin-tt
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
@@ -239,6 +238,7 @@ models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
+models/demos/t3000/sentence_bert @atupe-tt @tenstorrent/cse-developer-ttnn
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/whisper @skhorasganiTT @uaydonat
 models/demos/grayskull @uaydonat @yieldthought @cglagovichTT

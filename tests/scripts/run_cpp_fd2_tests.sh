@@ -85,24 +85,6 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -x -rb -spre -sdis"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -x -rb -spre -sdis"  # Random Test
 
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -spre -sdis -packetized_en" # TrueSmoke Test with packetized path
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -spre -sdis -packetized_en" # Smoke Test with packetized path
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -spre -sdis -packetized_en" # Random Test with packetized path
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -spre -sdis -packetized_en" # Host Test with packetized path
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 7 -i 5 -spre -sdis -packetized_en" # Packed Read Test
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 8 -i 5 -spre -sdis -packetized_en" # Ringbuffer Test
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -rb -spre -sdis -packetized_en"  # Smoke Test
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -rb -spre -sdis -packetized_en"  # Random Test
-
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -x -spre -sdis -packetized_en" # TrueSmoke Test with packetized path+exec
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre -sdis -packetized_en" # Smoke Test with packetized path+exec
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -x -spre -sdis -packetized_en" # Random Test with packetized path+exec
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -x -spre -sdis -packetized_en" # Host Test with packetized path+exec
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 7 -i 5 -x -spre -sdis -packetized_en" # Packed Read Test+exec
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 8 -i 5 -x -spre -sdis -packetized_en" # Ringbuffer Test+exec
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -x -rb -spre -sdis -packetized_en"  # Smoke Test
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -x -rb -spre -sdis -packetized_en"  # Random Test
-
 # Testcase: Paged Write Cmd to DRAM. 256 pages, 256b size.
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 256 -dpgr 256
 # Testcase: Paged Write Cmd to DRAM. 120 pages, 64b size.
@@ -143,21 +125,3 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 
 # Packed Write Large
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 5 -t 5 -min 1024 -max 1024"
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 10 -w 5 -t 5"
-
-if [[ $ARCH_NAME == "wormhole_b0" ]]; then
-    #############################################
-    # PACKETIZED PATH TESTS - WH only           #
-    #############################################
-    echo "Running packetized path tests now...";
-    # 4 TX -> 4:1 Mux -> 1:4 Demux -> 4 RX
-    run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux"
-
-    # 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
-    TT_METAL_THREADCOUNT=64 ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level
-
-    echo "::notice Running mux, demux, vc router perf ubench test now..."
-    for max_packet_size_words in 256 512 1024 2048; do
-        run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux --max_packet_size_words $max_packet_size_words --tx_skip_pkt_content_gen 1 --rx_disable_data_check 1 --rx_disable_header_check 1 --tx_pkt_dest_size_choice 1 --check_txrx_timeout 0 --data_kb_per_tx 1048576 --tx_queue_size_bytes 65536 --rx_queue_size_bytes 131072 --mux_queue_size_bytes 65536 --demux_queue_size_bytes 131072"
-        run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_vc_mux_demux --max_packet_size_words $max_packet_size_words --tx_skip_pkt_content_gen 1 --rx_disable_data_check 1 --rx_disable_header_check 1 --tx_pkt_dest_size_choice 1 --check_txrx_timeout 0 --data_kb_per_tx 1048576 --tx_queue_size_bytes 65536 --rx_queue_size_bytes 131072 --mux_queue_size_bytes 65536 --demux_queue_size_bytes 131072"
-    done
-fi
