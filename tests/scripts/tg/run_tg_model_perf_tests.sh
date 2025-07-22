@@ -90,7 +90,7 @@ main() {
     run_tg_cnn_tests
   elif [[ "$pipeline_type" == "tg_llama_model_perf_tg_device" ]]; then
     run_tg_llama_70b_model_perf_tests
-  elif [[ "$pipeline_type" == "run_tg_sentence_bert_tests" ]]; then
+  elif [[ "$pipeline_type" == "sentence_bert_tg_tests" ]]; then
     run_tg_sentence_bert_tests
   else
     echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, tg_llama_model_perf_tg_device])" 2>&1

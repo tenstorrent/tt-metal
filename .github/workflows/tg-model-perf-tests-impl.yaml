@@ -39,7 +39,7 @@ jobs:
             model-type: "CNN",
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type run_tg_sentence_bert_tests --dispatch-mode ""',
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type sentence_bert_tg_tests --dispatch-mode ""',
             owner_id: U088413NP0Q  # Ashai Reddy
           },
           {
