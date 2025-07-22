@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
     bool pass = true;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     vector<chip_id_t> ids;
+    ids.reserve(num_devices);
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
@@ -124,11 +125,9 @@ int main(int argc, char** argv) {
             const std::array<uint32_t, 8> runtime_args = {
                 l1_buffer->address(),
                 input_dram_buffer->address(),
-                0,
                 output_dram_buffer->address(),
-                0,
-                l1_buffer->size()
-            };
+                l1_buffer->size(),
+                num_tiles};
 
             SetRuntimeArgs(
                 program,

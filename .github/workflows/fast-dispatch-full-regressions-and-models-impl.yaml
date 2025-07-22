@@ -12,74 +12,11 @@ on:
       docker-image:
         required: true
         type: string
-
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 jobs:
-  fd-nightly:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        test-group:
-          [
-            {
-              name: "WH N150 ttnn nightly",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 70
-            }, # Nathan Sidwell
-            {
-              name: "WH N300 ttnn nightly",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 70
-            }, # Nathan Sidwell
-          ]
-    defaults:
-      run:
-        shell: bash
-    name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
-    runs-on: ${{ matrix.test-group.runs-on }}
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Run frequent reg tests scripts
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          install_wheel: true
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-          run_args: ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: generated/test_reports/
-          prefix: "test_reports_"
   nightly-wh-models:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -87,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, whisper, yolov8s_world, yolov9c, vgg_unet, ufld_v2, mobilenetv2, vanilla_unet, yolov10, openpdn_mnist, yolov8x, vit, sentence_bert, yolov7, yolov8s, swin_s, yolov11, yolov6l, swin_v2]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
         include:
           - model: stable_diffusion_xl_base
@@ -100,7 +37,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
+    runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -133,6 +70,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            ${{ matrix.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |
@@ -174,7 +112,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
+    runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4

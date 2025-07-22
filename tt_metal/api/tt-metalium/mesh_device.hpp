@@ -71,8 +71,10 @@ private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
-        std::map<chip_id_t, IDevice*> opened_devices_;
-        std::vector<IDevice*> devices_;
+        std::vector<MaybeRemote<IDevice*>> devices_;
+
+        std::vector<IDevice*> local_devices_;
+        std::map<chip_id_t, IDevice*> opened_local_devices_;
 
     public:
         // Constructor acquires physical resources
@@ -84,7 +86,7 @@ private:
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
         ScopedDevices(
-            const std::vector<int>& device_ids,
+            const std::vector<MaybeRemote<int>>& device_ids,
             size_t l1_small_size,
             size_t trace_region_size,
             size_t num_command_queues,
@@ -97,9 +99,10 @@ private:
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
         // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
-        const std::vector<IDevice*>& root_devices() const;
-    };
+        const std::vector<IDevice*>& local_root_devices() const;
 
+        const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
+    };
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -269,6 +272,10 @@ public:
     size_t num_rows() const;
     size_t num_cols() const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
+
+    // Returns true if the coordinate is local to this mesh device.
+    // Throws if the coordinate is out of bounds of this mesh device.
+    bool is_local(const MeshCoordinate& coord) const;
 
     const MeshShape& shape() const;
 

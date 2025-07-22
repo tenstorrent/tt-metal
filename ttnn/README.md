@@ -1,5 +1,5 @@
 # TT-NN
-TT-NN is an open-source C++ and Python library of neural network operations, built on top of the TT-Metallium programming model.
+TT-NN is an open-source C++ and Python library of neural network operations, built on top of the TT-Metalium programming model.
 It provides a PyTorch-like interface for running machine learning workloads on Tenstorrent AI accelerators, and serves as the primary high-level API for developing and optimizing ML models on Tenstorrent hardware.
 
 ## Purpose
@@ -59,8 +59,6 @@ Current best example can be found in the training framework here:
 All tests can be found under tests/ttnn
 
 #### What is the difference between each kind of test?
- * tests/ttnn/integration_tests
-     * Demonstrates the inference models built with ttnn
  * tests/ttnn/sweep_tests
      * Used to check coverage of what is and what is NOT supported
      * Tests can be added well before the actual implementation is finished

@@ -25,11 +25,6 @@ using namespace tt::tt_metal;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 int main() {
-    // Fast Dispatch = support for async operations. We need it for most applications.
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     bool pass = true;
 
     try {
@@ -57,35 +52,30 @@ int main() {
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        // Data on Tensix is (usually) stored in tiles. A tile is a 2D array of 32x32 elements. And the Tensix uses
+        // Data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
         // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
+        constexpr uint32_t num_tiles = 50;
         constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
-        constexpr uint32_t num_tiles = 50;
         constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
         // Configuration for the buffers.
         tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,          // Device which owns the buffer
-            .size = dram_buffer_size,  // Size of the buffer in bytes
-            .page_size =
-                dram_buffer_size,  // Number of bytes when round-robin between banks. Usually this is the same as the
-                                   // tile size for efficiency. But just for demo, we show it can be different.
-            .buffer_type = tt::tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1)
+            .device = device,              // Device which owns the buffer
+            .size = dram_buffer_size,      // Size of the buffer in bytes
+            .page_size = tile_size_bytes,  // Number of bytes when round-robin between banks. Usually this is the same
+                                           // as the tile size for efficiency.
+            .buffer_type = tt::tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
         tt::tt_metal::InterleavedBufferConfig l1_config{
             .device = device,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
+            .size = tile_size_bytes,
+            .page_size = tile_size_bytes,
             .buffer_type = tt::tt_metal::BufferType::L1};  // This time we allocate on L1
 
         // Allocate the buffers
         auto l1_buffer = CreateBuffer(l1_config);
         auto input_dram_buffer = CreateBuffer(dram_config);
         auto output_dram_buffer = CreateBuffer(dram_config);
-
-        // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
-        const uint32_t input_bank_id = 0;
-        const uint32_t output_bank_id = 0;
 
         // Initialize the input buffer with random data.
         std::vector<bfloat16> input_vec(elements_per_tile * num_tiles);
@@ -104,12 +94,7 @@ int main() {
 
         // Set the arguments for the kernel.
         const std::vector<uint32_t> runtime_args = {
-            l1_buffer->address(),
-            input_dram_buffer->address(),
-            input_bank_id,
-            output_dram_buffer->address(),
-            output_bank_id,
-            l1_buffer->size()};
+            l1_buffer->address(), input_dram_buffer->address(), output_dram_buffer->address(), num_tiles};
 
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 

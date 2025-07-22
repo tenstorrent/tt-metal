@@ -211,6 +211,9 @@ void EnqueueReadBuffer(
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::ReadFromBuffer(buffer_obj, (uint8_t *)dst);
+    }
     BufferRegion region(0, buffer_obj.size());
     EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
 }
@@ -243,6 +246,10 @@ void EnqueueWriteBuffer(
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::WriteToBuffer(buffer_obj,
+            tt::stl::Span<const uint8_t>((const uint8_t *)std::get<const void *>(src), buffer_obj.size()));
+    }
     BufferRegion region(0, buffer_obj.size());
     EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
 }
@@ -263,6 +270,9 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     ZoneScoped;
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return detail::LaunchProgram((IDevice *)&cq, program);
+    }
     detail::DispatchStateCheck(true);
 
     IDevice* device = cq.device();
@@ -277,11 +287,20 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
 
 void EnqueueRecordEvent(
     CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Ignore record event in slow dispatch.
+        return;
+    }
     detail::DispatchStateCheck(true);
     cq.enqueue_record_event(event, sub_device_ids);
 }
 
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch conservatively flushes all work since there's no cq.
+        Synchronize(event->device);
+        return;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Worker thread.
     log_trace(
@@ -296,6 +315,11 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) 
 }
 
 void EventSynchronize(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch conservatively flushes all work since there's no cq.
+        Synchronize(event->device);
+        return;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
     log_trace(
@@ -319,6 +343,10 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
 }
 
 bool EventQuery(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.
+        return true;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
     bool event_completed = event->device->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;
@@ -335,6 +363,9 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
 void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return;
+    }
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
     // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.

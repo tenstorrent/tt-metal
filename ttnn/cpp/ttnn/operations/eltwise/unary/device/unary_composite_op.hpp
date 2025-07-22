@@ -27,7 +27,6 @@ enum class UnaryCompositeOpType {
     STD_HW,
     NORMALIZE_HW,
     HARDSWISH,
-    HARDSIGMOID,
     HARDTANH,
     SELU,
     GLU,
@@ -38,7 +37,6 @@ enum class UnaryCompositeOpType {
     TRIL,
     TRIU,
     POLYGAMMA,
-    HARDSHRINK,
     SOFTSHRINK,
     LOGIT,
     CELU,
@@ -67,11 +65,6 @@ Tensor _hardswish(
     float scale = 1.0f / 6.0f,
     float shift = 0.5f,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _hardsigmoid(
-    const Tensor&,
-    float scale = 1.0f / 6.0f,
-    float shift = 0.5f,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _hardtanh(
     const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _selu(
@@ -86,8 +79,6 @@ Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor _hardshrink(
-    const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _softshrink(
     const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -181,13 +172,6 @@ struct OpHandler<UnaryCompositeOpType::HARDSWISH> {
 };
 
 template <>
-struct OpHandler<UnaryCompositeOpType::HARDSIGMOID> {
-    static Tensor handle(const Tensor& t1, float scale, float shift, const std::optional<MemoryConfig>& mem_cfg) {
-        return _hardsigmoid(t1, scale, shift, mem_cfg);
-    }
-};
-
-template <>
 struct OpHandler<UnaryCompositeOpType::HARDTANH> {
     static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg) {
         return _hardtanh(t1, low, high, mem_cfg);
@@ -248,13 +232,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::SWIGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg) {
         return _swiglu(t1, dim, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::HARDSHRINK> {
-    static Tensor handle(const Tensor& t1, float lambd, const std::optional<MemoryConfig>& mem_cfg) {
-        return _hardshrink(t1, lambd, mem_cfg);
     }
 };
 

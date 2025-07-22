@@ -1,15 +1,17 @@
 # SPDX-FileCopyrightText: © 2023 DeepSeek
 # SPDX-License-Identifier: MIT
 
+import importlib.util
 from typing import Tuple
 
 import torch
-import triton
-import triton.language as tl
-from triton import Config
+
+triton = importlib.util.find_spec("triton")
+if triton:
+    import triton.language as tl
+    from triton import Config
 
 
-@triton.jit
 def act_quant_kernel(x_ptr, y_ptr, s_ptr, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -31,7 +33,6 @@ def act_quant(x: torch.Tensor, block_size: int = 128) -> Tuple[torch.Tensor, tor
     return y, s
 
 
-@triton.jit
 def weight_dequant_kernel(x_ptr, s_ptr, y_ptr, M, N, BLOCK_SIZE: tl.constexpr):
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
@@ -64,8 +65,6 @@ fp8_gemm_configs = [
 ]
 
 
-@triton.autotune(configs=fp8_gemm_configs, key=["N", "K"])
-@triton.jit
 def fp8_gemm_kernel(
     a_ptr,
     b_ptr,

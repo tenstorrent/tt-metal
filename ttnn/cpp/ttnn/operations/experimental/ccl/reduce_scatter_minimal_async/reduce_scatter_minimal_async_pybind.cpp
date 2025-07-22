@@ -28,8 +28,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& persistent_intermediate_buffer,
-               ttnn::Tensor& persistent_output_buffer,
+               const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
                const int32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                const uint32_t num_links,
@@ -39,8 +38,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
                 return self(
                     input_tensor,
-                    persistent_intermediate_buffer,
-                    persistent_output_buffer,
+                    persistent_output_buffers,
                     dim,
                     multi_device_global_semaphore,
                     num_links,
@@ -50,8 +48,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                     cluster_axis);
             },
             py::arg("input_tensor"),
-            py::arg("persistent_intermediate_buffer"),
-            py::arg("persistent_output_buffer"),
+            py::arg("persistent_output_buffers") = std::nullopt,
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
@@ -77,7 +74,7 @@ void py_bind_reduce_scatter_minimal_async(pybind11::module& module) {
             dim (int): Dimension to scatter.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
 
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.

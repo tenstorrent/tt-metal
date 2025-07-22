@@ -13,6 +13,7 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 OUTPUT_ARCH(riscv)
 
 #include "dev_mem_map.h"
+#include "tensix_dev_map.h"
 
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
@@ -313,3 +314,8 @@ SECTIONS
         *(.got.plt) *(.igot.plt) *(.got) *(.igot)
   }
 }
+
+#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_BRISC)
+/* Tensix memory mapped devices (also visible from brisc). */
+PROVIDE(__instrn_buffer = INSTRN_BUF_BASE);
+#endif

@@ -128,6 +128,10 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
+# Top-level target to build all generated files
+# Useful for eg: ensuring all files exist before linting
+add_custom_target(all_generated_files)
+
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25

@@ -43,8 +43,8 @@ public:
 
     void reset_semaphore_value(uint32_t reset_value) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("cores");
-    auto attribute_values() const { return std::make_tuple(this->cores_); }
+    static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
+    auto attribute_values() const { return std::make_tuple(this->cores_, this->buffer_.get_buffer()->buffer_type()); }
 
 private:
     void setup_buffer(uint32_t initial_value, BufferType buffer_type);

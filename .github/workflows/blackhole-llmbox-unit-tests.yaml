@@ -2,7 +2,19 @@ name: "(Blackhole) LLMBox unit tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      runner-label:
+          description: 'Optional runner label, default: BH-LLMBox'
+          required: false
+          type: string
+          default: 'BH-LLMBox'
   workflow_call:
+    inputs:
+      runner-label:
+          description: 'Optional runner label, default: BH-LLMBox'
+          required: false
+          type: string
+          default: 'BH-LLMBox'
 
 jobs:
   build-artifact:
@@ -19,7 +31,7 @@ jobs:
     uses: ./.github/workflows/blackhole-llmbox-unit-tests-impl.yaml
     with:
       arch: blackhole
-      runner-label: BH-LLMBox
+      runner-label: ${{ inputs.runner-label || 'BH-LLMBox' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

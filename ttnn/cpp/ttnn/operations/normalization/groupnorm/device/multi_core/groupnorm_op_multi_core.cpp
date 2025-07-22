@@ -1080,9 +1080,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
         auto src_buffer_a = input_tensors.at(0).buffer();
-        auto gamma_tensor = optional_input_tensors.at(0);
-        auto beta_tensor = optional_input_tensors.at(1);
-        auto mask_tensor = optional_input_tensors.at(2);
+        const auto& gamma_tensor = optional_input_tensors.at(0);
+        const auto& beta_tensor = optional_input_tensors.at(1);
+        const auto& mask_tensor = optional_input_tensors.at(2);
         auto dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
@@ -2469,9 +2469,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             auto src_buffer_a = input_tensors.at(0).buffer()->address();
-            auto gamma_tensor = optional_input_tensors.at(0);
-            auto beta_tensor = optional_input_tensors.at(1);
-            auto mask_tensor = optional_input_tensors.at(2);
+            const auto& gamma_tensor = optional_input_tensors.at(0);
+            const auto& beta_tensor = optional_input_tensors.at(1);
+            const auto& mask_tensor = optional_input_tensors.at(2);
             auto dst_buffer = output_tensors.at(0).buffer()->address();
 
             // updatedynamiccircularbufferaddress(program, cb_in0, *src_buffer_a);
@@ -2496,7 +2496,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             uint32_t sender_index = 0;
             uint32_t receiver_index = 0;
             for (int i = 0; i < mcast_groups.size(); ++i) {
-                auto group = mcast_groups[i];
+                const auto& group = mcast_groups[i];
                 for (int j = 0; j < group.size(); ++j) {
                     CoreCoord core = group[j];
                     if (j == 0) {

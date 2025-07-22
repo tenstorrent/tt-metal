@@ -70,9 +70,9 @@ void check_support(
     const auto& input_layout = input_tensor.layout();
     const auto& index_layout = index_tensor.layout();
     const auto& source_layout = source_tensor.layout();
-    const auto& input_shape = input_tensor.get_logical_shape();
-    const auto& index_shape = index_tensor.get_logical_shape();
-    const auto& source_shape = source_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto& index_shape = index_tensor.logical_shape();
+    const auto& source_shape = source_tensor.logical_shape();
     // check if transpose int garbage case
     TT_FATAL(
         !(is_i32(input_dtype) && !is_last_dim(input_shape, dim)),
@@ -194,9 +194,9 @@ Tensor post_scatter_transform_tensor(
     }
 
     TT_FATAL(
-        output_tensor.get_logical_shape() == original_logical_shape,
+        output_tensor.logical_shape() == original_logical_shape,
         "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-        output_tensor.get_logical_shape(),
+        output_tensor.logical_shape(),
         original_logical_shape);
 
     // if the output tensor's original layout is not row-major, convert the output tensor back

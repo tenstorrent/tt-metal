@@ -113,8 +113,14 @@ struct ParsedTestConfig {
     std::optional<ParametrizationOptionsMap> parametrization_params;
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
+    // add sync sender configs here, each config contains current device and the patterns
+    std::vector<SenderConfig> global_sync_configs;
     std::vector<ParsedSenderConfig> senders;
     std::optional<std::string> bw_calc_func;
+    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
+                                  // cross-chip start-skew effects
+    uint32_t global_sync_val = 0;
     uint32_t seed;
 };
 
@@ -126,8 +132,14 @@ struct TestConfig {
     std::optional<ParametrizationOptionsMap> parametrization_params;
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
+    // add sync sender configs here, each config contains current device and the patterns
+    std::vector<SenderConfig> global_sync_configs;
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
+    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
+                                  // cross-chip start-skew effects
+    uint32_t global_sync_val = 0;
     uint32_t seed;
 };
 
@@ -140,6 +152,7 @@ constexpr uint32_t DEFAULT_MAX_RECEIVER_CONFIGS_PER_CORE = 2;
 constexpr uint32_t DEFAULT_SENDER_INITIAL_POOL_SIZE = 1;
 constexpr uint32_t DEFAULT_SENDER_POOL_REFILL_SIZE = 1;
 constexpr uint32_t DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES = 0x80000;  // 512KB
+constexpr uint32_t DEFAULT_RECEIVER_L1_SIZE = 0x100000;
 }  // namespace detail
 
 enum class CoreType {
@@ -163,26 +176,56 @@ struct CoreAllocationConfig {
     uint32_t initial_pool_size = 0;
     // When the pool is exhausted, how many new cores to add to the active set.
     uint32_t pool_refill_size = 1;
+
+    static CoreAllocationConfig get_default_sender_allocation_config() {
+        // Default sender policy: one sender per core.
+        return CoreAllocationConfig{
+            .policy = CoreAllocationPolicy::ExhaustFirst,
+            .max_configs_per_core = detail::DEFAULT_MAX_SENDER_CONFIGS_PER_CORE,
+            .initial_pool_size = 1,  // ExhaustFirst is equivalent to a pool size of 1.
+            .pool_refill_size = detail::DEFAULT_SENDER_POOL_REFILL_SIZE,
+        };
+    }
+
+    static CoreAllocationConfig get_default_receiver_allocation_config() {
+        // Default receiver policy: reuse a core until it's full.
+        return CoreAllocationConfig{
+            .policy = CoreAllocationPolicy::ExhaustFirst,
+            .max_configs_per_core = detail::DEFAULT_MAX_RECEIVER_CONFIGS_PER_CORE,
+            // No default pool sizes for receivers. The pool will be populated with all remaining cores
+            // after senders have been allocated.
+        };
+    }
 };
 
 struct AllocatorPolicies {
     CoreAllocationConfig sender_config;
     CoreAllocationConfig receiver_config;
-    std::optional<uint32_t> default_payload_chunk_size;
+    uint32_t default_payload_chunk_size;
 
-    AllocatorPolicies() {
-        // Default sender policy: one sender per core to isolate performance.
-        sender_config.policy = CoreAllocationPolicy::ExhaustFirst;
-        sender_config.max_configs_per_core = detail::DEFAULT_MAX_SENDER_CONFIGS_PER_CORE;
-        sender_config.pool_refill_size = detail::DEFAULT_SENDER_POOL_REFILL_SIZE;
-        sender_config.initial_pool_size = 1;  // ExhaustFirst is equivalent to a pool size of 1.
+    AllocatorPolicies(
+        std::optional<CoreAllocationConfig> sender_config = std::nullopt,
+        std::optional<CoreAllocationConfig> receiver_config = std::nullopt,
+        std::optional<uint32_t> default_payload_chunk_size = std::nullopt) {
+        if (sender_config.has_value()) {
+            this->sender_config = sender_config.value();
+        } else {
+            this->sender_config = CoreAllocationConfig::get_default_sender_allocation_config();
+        }
 
-        // Default receiver policy: reuse a core until it's full (shared receiver model).
-        receiver_config.policy = CoreAllocationPolicy::ExhaustFirst;
-        receiver_config.max_configs_per_core = detail::DEFAULT_MAX_RECEIVER_CONFIGS_PER_CORE;
-        // No default pool sizes for receivers. The pool will be populated with all remaining cores
-        // after senders have been allocated.
-        default_payload_chunk_size = detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES;
+        if (receiver_config.has_value()) {
+            this->receiver_config = receiver_config.value();
+        } else {
+            this->receiver_config = CoreAllocationConfig::get_default_receiver_allocation_config();
+        }
+
+        if (default_payload_chunk_size.has_value()) {
+            this->default_payload_chunk_size = default_payload_chunk_size.value();
+        } else {
+            // derive a reasonable default based on the number of configs served per receiver core
+            this->default_payload_chunk_size =
+                detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
+        }
     }
 };
 

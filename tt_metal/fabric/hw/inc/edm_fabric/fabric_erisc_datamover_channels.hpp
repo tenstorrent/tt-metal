@@ -59,8 +59,10 @@ public:
         channel_id(channel_id) {
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
-            for (size_t j = 0; j < this->max_eth_payload_size_in_bytes; j++) {
-                reinterpret_cast<volatile uint8_t*>(this->buffer_addresses[i])[j] = 0;
+// need to avoid unrolling to keep code size within limits
+#pragma GCC unroll 1
+            for (size_t j = 0; j < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
         set_cached_next_buffer_slot_addr(this->buffer_addresses[0]);
@@ -250,10 +252,12 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, tt::tt_fabric::worker_handshake_noc);
     }
 
+    template <uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
     FORCE_INLINE void cache_producer_noc_addr() {
         invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
-        uint64_t worker_semaphore_address = get_noc_addr(
+        uint64_t worker_semaphore_address;
+        worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
     }

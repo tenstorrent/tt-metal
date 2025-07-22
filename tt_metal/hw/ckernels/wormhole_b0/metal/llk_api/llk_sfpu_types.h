@@ -99,6 +99,7 @@ enum SfpuType {
     right_shift,
     floor,
     trunc,
+    frac,
     left_shift,
     remainder,
     fmod,
@@ -112,4 +113,5 @@ enum SfpuType {
     cpy_values,
     gcd,
     lcm,
+    hardsigmoid,
 };
