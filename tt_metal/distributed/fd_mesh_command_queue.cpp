@@ -485,7 +485,7 @@ void FDMeshCommandQueue::read_shard_from_device(
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
