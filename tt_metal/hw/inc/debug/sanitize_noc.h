@@ -166,7 +166,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
     }
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
-    if (write && (addr < MEM_MAP_END)) {
+    if (write && (addr < MEM_MAP_READ_ONLY_END)) {
         return DebugSanitizeNocAddrMailbox;
     }
 #endif
