@@ -89,5 +89,3 @@ def test_decoder_inference(mesh_device, reset_seeds):
         ).max()
         logger.info(f"decode_input max: {debug_max(decode_input)=}, {decode_input.memory_config()=}")
         logger.info(f"tt_out max: {debug_max(tt_out)=}, {tt_out.memory_config()=}")
-
-    tt_ccl.close()
