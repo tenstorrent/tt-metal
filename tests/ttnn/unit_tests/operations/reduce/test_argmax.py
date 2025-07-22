@@ -86,3 +86,52 @@ def test_argmax(device, tensor_shape, dim, keepdim, use_multicore):
     assert torch.allclose(
         torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
     ), f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.parametrize(
+    argnames="tensor_shape, dim, keepdim, use_multicore",
+    argvalues=[
+        ([], None, True, True),
+        ([32], -1, False, False),
+        ([32, 0], 1, True, True),
+        ([64], -1, True, False),
+        ([1, 512], -1, True, True),
+        ([1, 1024], -1, True, True),
+        ([1, 65], -1, True, True),
+        ([8, 10, 129], 2, True, False),
+        ([1, 8, 160], -1, False, True),
+        ([1, 256, 1024 * 8], -1, False, True),
+        ([32, 32, 32, 1], -1, True, True),
+    ],
+)
+def test_argmax_datatypes(device, tensor_shape, dim, keepdim, use_multicore):
+    """
+    Test argmax with different input datatypes to ensure consistent behavior.
+    """
+    data_types = [torch.bfloat16, torch.float32, torch.int32]
+
+    for dtype in data_types:
+        rank = len(tensor_shape)
+
+        torch_tensor = torch.randn(*tensor_shape, dtype=dtype) if rank > 0 else torch.randn((), dtype=dtype)
+        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device)
+
+        # Get reference result from torch
+        torch_result = (
+            torch.argmax(torch_tensor, dim=dim, keepdim=keepdim) if dim is not None else torch.argmax(torch_tensor)
+        )
+
+        # Get ttnn result
+        if dim is not None:
+            ttnn_result = ttnn.argmax(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
+        else:
+            ttnn_result = ttnn.argmax(ttnn_tensor, use_multicore=use_multicore)
+
+        ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+
+        # Convert torch dtype from uint64 to int32 for comparison
+        torch_result = torch_result.to(torch.int32)
+
+        assert torch.allclose(
+            torch_result, ttnn_result, atol=0.1, rtol=0.1, equal_nan=True
+        ), f"mismatch for dtype {dtype}: torch: {torch_result}, ttnn: {ttnn_result}"

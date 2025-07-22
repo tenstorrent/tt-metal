@@ -15,6 +15,8 @@ auto get_default_value() {
     // Check for supported datatypes
     if constexpr (data_format == DataFormat::Float16_b) {
         return uint16_t{NEG_INF_BFLOAT16};
+    } else if constexpr (data_format == DataFormat::UInt16) {
+        return uint16_t{NEG_INF_BFLOAT16};  // NEG_INF_BFLOAT16 is saved as uint16_t
     } else if constexpr (data_format == DataFormat::Float32) {
         return uint32_t{NEG_INF_FLOAT32};
     } else if constexpr (data_format == DataFormat::Int32) {
