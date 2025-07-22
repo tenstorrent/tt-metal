@@ -117,7 +117,7 @@ struct fabric_aligned_connection_info_t {
     // 16-byte aligned semaphore address for flow control
     uint32_t worker_flow_control_semaphore;
     uint32_t padding_0[3];
-} __attribute__((packed));
+};
 
 struct tensix_fabric_connections_l1_info_t {
     static constexpr uint8_t MAX_FABRIC_ENDPOINTS = 16;
