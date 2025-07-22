@@ -295,21 +295,87 @@ jobs:
               retries=$((retries + 1))
               if [ $retries -lt ${{ env.MAX_RETRIES }} ]; then
                 echo "Retrying $DISPLAY_NAME (attempt $((retries + 1))/${{ env.MAX_RETRIES }})"
-                gh run rerun "$run_id" --failed --repo "${{ github.repository }}" || break
-                sleep 60  # Wait for retry to start
+
+                # Record retry trigger time
+                RETRY_TRIGGER_TIME=$(date +%s)
+
+                if gh run rerun "$run_id" --failed --repo "${{ github.repository }}"; then
+                  # Wait for the new retry run to appear
+                  local new_run_id=""
+                  for j in {1..15}; do
+                    sleep 10
+
+                    # Get runs created after retry trigger time
+                    local retry_runs=$(gh run list --workflow "$WORKFLOW" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt --repo "${{ github.repository }}")
+
+                    # Find the newest run created after retry trigger
+                    new_run_id=$(echo "$retry_runs" | jq -r --argjson trigger_time "$RETRY_TRIGGER_TIME" '
+                      map(select(
+                        (.createdAt | fromdateiso8601) >= $trigger_time and
+                        .databaseId != '"$run_id"'
+                      )) |
+                      sort_by(.createdAt) |
+                      reverse |
+                      .[0].databaseId // empty
+                    ')
+
+                    if [ -n "$new_run_id" ] && [ "$new_run_id" != "empty" ]; then
+                      echo "✅ Found new retry run ID: $new_run_id"
+                      run_id="$new_run_id"
+                      break
+                    fi
+
+                    echo "Retry attempt $j: Waiting for retry run to appear..."
+                  done
+
+                  if [ -z "$new_run_id" ] || [ "$new_run_id" = "empty" ]; then
+                    echo "❌ Failed to find new retry run ID"
+                    break
+                  fi
+                else
+                  echo "❌ Failed to trigger retry"
+                  break
+                fi
               fi
             done
 
             return 1
           }
 
+          # Record trigger time before triggering workflow
+          TRIGGER_TIME=$(date +%s)
+          echo "Trigger timestamp: $TRIGGER_TIME"
+
           # Trigger workflow
           echo "Triggering $WORKFLOW..."
           gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
-          sleep 30
 
-          # Find the run ID
-          run_id=$(gh run list --workflow "$WORKFLOW" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq '.[0].databaseId' --repo "${{ github.repository }}")
+          # Wait for the new run to appear and ensure it's created after trigger time
+          run_id=""
+          for i in {1..20}; do
+            sleep 10
+
+            # Get runs created after trigger time
+            RUNS_DATA=$(gh run list --workflow "$WORKFLOW" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt,status --repo "${{ github.repository }}")
+
+            # Find the newest run created after our trigger timestamp
+            NEW_RUN_ID=$(echo "$RUNS_DATA" | jq -r --argjson trigger_time "$TRIGGER_TIME" '
+              map(select(
+                (.createdAt | fromdateiso8601) >= $trigger_time
+              )) |
+              sort_by(.createdAt) |
+              reverse |
+              .[0].databaseId // empty
+            ')
+
+            if [ -n "$NEW_RUN_ID" ] && [ "$NEW_RUN_ID" != "empty" ]; then
+              run_id="$NEW_RUN_ID"
+              echo "✅ Found new run ID: $run_id (created after trigger time)"
+              break
+            fi
+
+            echo "Attempt $i: Waiting for new workflow run to appear..."
+          done
 
           if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
             run_url="https://github.com/${{ github.repository }}/actions/runs/$run_id"
@@ -439,10 +505,20 @@ jobs:
             TEST_STATUS+="**Workflow Results:**"$'\n'
           fi
 
+          # Get PR creation time to filter runs created after PR
+          if [ "${{ inputs.recheck_tests }}" != "true" ]; then
+            PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq '.createdAt' --repo "${{ github.repository }}")
+            echo "PR created at: $PR_CREATED_AT"
+          fi
+
           # Collect workflow results
           if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
-            # Get Wormhole workflow results
-            WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            # Get Wormhole workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq --arg pr_created_at "$PR_CREATED_AT" 'map(select(.status == "completed" and .createdAt >= $pr_created_at)) | .[0] // empty' --repo "${{ github.repository }}")
+            fi
 
             if [ "$WH_RUNS" != "empty" ]; then
               WH_CONCLUSION=$(echo "$WH_RUNS" | jq -r '.conclusion // "unknown"')
@@ -457,8 +533,12 @@ jobs:
           fi
 
           if [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
-            # Get Blackhole workflow results
-            BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            # Get Blackhole workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq --arg pr_created_at "$PR_CREATED_AT" 'map(select(.status == "completed" and .createdAt >= $pr_created_at)) | .[0] // empty' --repo "${{ github.repository }}")
+            fi
 
             if [ "$BH_RUNS" != "empty" ]; then
               BH_CONCLUSION=$(echo "$BH_RUNS" | jq -r '.conclusion // "unknown"')
