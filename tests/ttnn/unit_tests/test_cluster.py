@@ -33,19 +33,6 @@ def test_cluster_get_cluster_type():
         print(f"Detected cluster type: {cluster_type}")
 
 
-def test_cluster_is_galaxy_cluster():
-    """Test galaxy cluster detection"""
-    is_galaxy = ttnn.cluster.is_galaxy_cluster()
-    cluster_type = ttnn.cluster.get_cluster_type()
-
-    # Verify consistency between is_galaxy_cluster() and cluster type
-    galaxy_types = [ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG]
-    expected_is_galaxy = cluster_type in galaxy_types
-    assert (
-        is_galaxy == expected_is_galaxy
-    ), f"is_galaxy_cluster() returned {is_galaxy} but cluster type is {cluster_type}"
-
-
 def test_cluster_number_of_user_devices():
     """Test getting number of user devices"""
     num_devices = ttnn.cluster.number_of_user_devices()
@@ -220,31 +207,25 @@ def test_cluster_functions_integration():
     """Test integration between different cluster functions"""
     # Get all cluster information
     cluster_type = ttnn.cluster.get_cluster_type()
-    is_galaxy = ttnn.cluster.is_galaxy_cluster()
     num_devices = ttnn.cluster.number_of_user_devices()
 
     print(f"Cluster Information:")
     print(f"  Type: {cluster_type}")
-    print(f"  Is Galaxy: {is_galaxy}")
     print(f"  User Devices: {num_devices}")
-
-    # Test consistency checks
-    galaxy_types = [ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG]
-    assert is_galaxy == (cluster_type in galaxy_types), "Galaxy detection inconsistent"
 
     # Verify device count makes sense for cluster type
     if cluster_type == ttnn.cluster.ClusterType.T3K:
-        # T3K should have multiple devices (typically 8)
-        assert num_devices > 1, f"T3K cluster should have multiple devices, got {num_devices}"
+        # T3K should have 8 devices
+        assert num_devices == 8, f"T3K cluster should have multiple devices, got {num_devices}"
     elif cluster_type in [ttnn.cluster.ClusterType.P150_X2, ttnn.cluster.ClusterType.N300_2x2]:
         # X2 variants should have at least 2 devices
         assert num_devices >= 2, f"{cluster_type} should have at least 2 devices, got {num_devices}"
     elif cluster_type == ttnn.cluster.ClusterType.P150_X4:
         # X4 variant should have at least 4 devices
         assert num_devices >= 4, f"P150_X4 should have at least 4 devices, got {num_devices}"
-    elif cluster_type in galaxy_types:
-        # Galaxy clusters can have variable numbers of devices
-        assert num_devices >= 1, f"Galaxy cluster should have at least 1 device, got {num_devices}"
+    elif cluster_type in [ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG]:
+        # Galaxy clusters have 32 devices
+        assert num_devices == 32, f"Galaxy cluster should have 32 devices, got {num_devices}"
     else:
         # Single device clusters
         assert num_devices >= 1, f"Cluster should have at least 1 device, got {num_devices}"
