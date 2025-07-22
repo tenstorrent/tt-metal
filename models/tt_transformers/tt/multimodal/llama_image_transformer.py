@@ -46,7 +46,7 @@ class TtLlamaImageTransformer(LightweightModule):
         Outer code will have to be aware and handle this correctly.
         """
         seq_len = x.shape[-2]
-        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
 
         out = []
         for idx, r in enumerate(self.resblocks):
