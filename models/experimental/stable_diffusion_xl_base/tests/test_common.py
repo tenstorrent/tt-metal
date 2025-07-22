@@ -125,36 +125,42 @@ def run_tt_image_gen(
     vae,  # can be host vae or tt vae
     batch_size,
     iter,
+    use_tp,
 ):
     profiler.start("denoising_loop")
     for i, t in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
         unet_outputs = []
 
-        latent_model_input = tt_latents
-        noise_pred, noise_shape = run_tt_iteration(
-            ttnn_device,
-            tt_unet,
-            tt_scheduler,
-            latent_model_input,
-            input_shape,
-            tt_prompt_embeds[iter],
-            tt_time_ids,
-            tt_text_embeds[iter],
-            t,
-            i,
-        )
-        C, H, W = noise_shape
+        for slice in range(1 if use_tp else 2):  # TODO: looks ugly
+            latent_model_input = tt_latents
+            noise_pred, noise_shape = run_tt_iteration(
+                ttnn_device,
+                tt_unet,
+                tt_scheduler,
+                latent_model_input,
+                input_shape,
+                tt_prompt_embeds[iter] if use_tp else tt_prompt_embeds[iter][slice],
+                tt_time_ids if use_tp else tt_time_ids[slice],
+                tt_text_embeds[iter] if use_tp else ttnn.unsqueeze(tt_text_embeds[iter][slice], dim=0),
+                t,
+                i,
+            )
+            C, H, W = noise_shape
 
-        unet_outputs.append(noise_pred)
-        noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
-        noise_pred = ttnn.to_layout(noise_pred, ttnn.ROW_MAJOR_LAYOUT)
-        noise_pred = ttnn.pad(noise_pred, [(0, 0), (0, 0), (0, 0), (0, 4)], 0)
-        noise_pred = ttnn.all_gather(noise_pred, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
-        noise_pred = noise_pred[..., :4]
+            unet_outputs.append(noise_pred)
 
+        if use_tp:
+            noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
+            noise_pred = ttnn.to_layout(noise_pred, ttnn.ROW_MAJOR_LAYOUT)
+            noise_pred = ttnn.pad(noise_pred, [(0, 0), (0, 0), (0, 0), (0, 4)], 0)
+            noise_pred = ttnn.all_gather(noise_pred, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
+            noise_pred = noise_pred[..., :4]
+
+            noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
+        else:
+            noise_pred_uncond, noise_pred_text = unet_outputs
         # perform guidance
-        noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         ttnn.deallocate(noise_pred_uncond)

@@ -21,8 +21,8 @@ from models.utility_functions import profiler
 
 
 @torch.no_grad()
-def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae_on_device, evaluation_range):
-    batch_size = 1
+def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae_on_device, evaluation_range, use_tp):
+    batch_size = list(ttnn_device.shape)[1] if use_tp else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
     torch.manual_seed(0)
@@ -56,7 +56,7 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
             model_config=tt_model_config,
         )
         tt_vae = (
-            TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict(), tt_model_config, batch_size)
+            TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict(), tt_model_config, batch_size, use_tp)
             if vae_on_device
             else None
         )
@@ -180,7 +180,8 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         device=ttnn_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
+        # mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
+        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_device, list(ttnn_device.shape), dims=(1, 0)),
     )
     ttnn_add_text_embeds = ttnn.from_torch(
         torch_add_text_embeds,
@@ -188,7 +189,8 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         device=ttnn_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
+        # mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
+        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_device, list(ttnn_device.shape), dims=(1, 0)),
     )
 
     torch_add_time_ids = torch.stack([negative_add_time_ids.squeeze(0), add_time_ids.squeeze(0)], dim=0)
@@ -199,7 +201,8 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         device=ttnn_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+        # mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_device, list(ttnn_device.shape), dims=(0, None)),
     )
     ttnn_time_ids = ttnn.squeeze(ttnn_time_ids, dim=0)
 
@@ -249,6 +252,7 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         tt_vae if vae_on_device else pipeline.vae,
         batch_size,
         0,
+        use_tp,
     )
     profiler.clear()
 
@@ -277,6 +281,7 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
             tt_vae if vae_on_device else pipeline.vae,
             batch_size,
             iter,
+            use_tp,
         )
 
         logger.info(
@@ -310,6 +315,12 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     return images
 
 
+def prepare_device(mesh_device, use_tp):
+    if use_tp:
+        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
+        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
@@ -327,12 +338,12 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     ],
     ids=("device_vae", "host_vae"),
 )
-def test_demo(
-    mesh_device,
-    is_ci_env,
-    prompt,
-    num_inference_steps,
-    vae_on_device,
-    evaluation_range,
-):
-    return run_demo_inference(mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range)
+@pytest.mark.parametrize(
+    "use_tp",
+    ((False),),  # TODO: add both cases as well as ids
+)
+def test_demo(mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range, use_tp):
+    prepare_device(mesh_device, use_tp)
+    return run_demo_inference(
+        mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range, use_tp
+    )
