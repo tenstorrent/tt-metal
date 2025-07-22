@@ -275,8 +275,6 @@ def test_attention_inference(
                     logger.warning(f"{label} Cache Failed! PCC value is lower than {pcc}")
                     all_tests_pass = False
 
-    tt_ccl.close()
-
     if all_tests_pass:
         logger.info("Attention output Passed!")
     else:

@@ -190,8 +190,6 @@ def test_decoder_inference(
             logger.warning("Decoder Block Failed!")
             all_tests_pass = False
 
-    tt_ccl.close()
-
     if all_tests_pass:
         logger.info(f"All decode iterations Passed!")
     else:
