@@ -262,10 +262,9 @@ def test_multidevice_scatter(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("per_device_output_shape", [(16, 1, 1, 7168)])
+@pytest.mark.parametrize("per_device_output_shape, dim", [((16, 1, 1, 7168), 0), ((1, 1, 8, 7168), 2)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("dim", [0])
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG])
