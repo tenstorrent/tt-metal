@@ -140,7 +140,6 @@ void kernel_main() {
                     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                 }
             }
-            uint32_t extra = tiles_to_read - tiles_read;
             while (tiles_read < tiles_to_read) {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
@@ -152,7 +151,6 @@ void kernel_main() {
                 }
 
                 cb_reserve_back(cb_in0, tile_granularity);
-
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
@@ -169,9 +167,7 @@ void kernel_main() {
 
                 if (do_reduce) {
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-
                     cb_reserve_back(cb_intermediate_id, tile_granularity);
-
                     uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t intermediate_tile_id =
