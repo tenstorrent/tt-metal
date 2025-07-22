@@ -180,3 +180,80 @@ void compare_values(
         static_assert(data_format != data_format, "Unsupported data format in compare_values");
     }
 }
+
+/**
+ * @brief Helper function template for processing a single core's data in argmax reduction.
+ *
+ * This function template provides a unified interface for comparing values from different
+ * data formats by using appropriate comparison functions and pointer types.
+ *
+ * @tparam data_format Data format of the values being compared
+ * @tparam ValueType The underlying C++ type for the data format (e.g., uint16_t for Float16_b)
+ * @tparam CompareFunc Function type for value comparison
+ *
+ * @param inner_idx Index within the core's output buffer
+ * @param i_red_vals Pointer to the core's reduction values
+ * @param i_red_idxs Pointer to the core's reduction indices
+ * @param max_val Reference to the current maximum value
+ * @param max_idx Reference to the current maximum index
+ * @param compare_func Function to compare two values of the data format
+ */
+template <DataFormat data_format, typename ValueType, typename CompareFunc>
+inline void process_core_data(
+    const uint32_t inner_idx,
+    volatile tt_l1_ptr ValueType* i_red_vals,
+    volatile tt_l1_ptr uint32_t* i_red_idxs,
+    decltype(get_default_value<data_format>())& max_val,
+    uint32_t& max_idx,
+    CompareFunc compare_func) {
+    ValueType val = i_red_vals[inner_idx];
+
+    if (compare_func(val, max_val)) {
+        max_idx = i_red_idxs[inner_idx];
+        max_val = val;
+    } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+        max_idx = i_red_idxs[inner_idx];
+    }
+}
+
+/**
+ * @brief Helper function template for processing value comparison in find_argmax_for_core.
+ *
+ * This function template provides a unified interface for comparing values and updating
+ * max_val and max_idx based on different data formats and reduction modes.
+ *
+ * @tparam data_format Data format of the values being compared
+ * @tparam ValueType The underlying C++ type for the data format
+ * @tparam CompareFunc Function type for value comparison
+ * @tparam reduce_all Boolean flag indicating reduction mode
+ *
+ * @param val The current value being compared
+ * @param max_val Reference to the current maximum value
+ * @param max_idx Reference to the current maximum index
+ * @param i Current element index in reduction dimension
+ * @param outer_idx Current outer dimension index
+ * @param j Current inner dimension index
+ * @param inner_dim_units Number of inner dimension units
+ * @param red_dim_units Total reduction dimension units
+ * @param compare_func Function to compare two values of the data format
+ */
+template <DataFormat data_format, typename ValueType, bool reduce_all, typename CompareFunc>
+inline void process_value_comparison(
+    ValueType val,
+    decltype(get_default_value<data_format>())& max_val,
+    uint32_t& max_idx,
+    const uint32_t i,
+    const uint32_t outer_idx,
+    const uint32_t j,
+    const uint32_t inner_dim_units,
+    const uint32_t red_dim_units,
+    CompareFunc compare_func) {
+    if (compare_func(val, max_val)) {
+        auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+        max_idx = reduce_all ? full_idx : i;
+        max_val = val;
+    } else if (val == max_val) {
+        auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+        max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
+    }
+}
