@@ -57,41 +57,41 @@ inline void mul_int32(const uint dst_offset) {
 
         // a0*b0 (bits 0-15)
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG7, p_sfpu::LREG7, 6);  // fp32 -> uint16
+        TTI_SFP_STOCH_RND(
+            SFPSTOCHRND_RND_EVEN,
+            0,
+            0,
+            p_sfpu::LREG7,
+            p_sfpu::LREG7,
+            SFPSTOCHRND_MOD1_FP32_TO_UINT16);  // fp32 -> uint16
 
         // a0*b1 (bits 8-23)
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPSHFT(8, p_sfpu::LREG6, p_sfpu::LREG6, 1);                     // Shift left by 8
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);  // Accumulate in LREG7
 
         // a0*b2 (bits 16-31)
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPSHFT(16, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // Shift left by 16
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
 
         // a1*b0 (bits 8-23)
         TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPSHFT(8, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // Shift left by 8
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
 
         // a1*b1 (bits 16-31)
         TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPSHFT(16, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // Shift left by 16
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
 
         // a2*b0 (bits 16-31)
         TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPSHFT(16, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // Shift left by 16
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
 
@@ -99,16 +99,14 @@ inline void mul_int32(const uint dst_offset) {
 
         // a1*b2 --> goes beyond 32-bits [24:39]. We need to extract the bits upto 32.
         TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);  // store result to LREG5
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);    // zero out high overflow bits
         TTI_SFPSHFT(24, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // Shift left by 24
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
 
         // a2*b1 --> goes beyond 32-bits [24:39]. We need to extract the bits upto 32.
         TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);    // zero out high overflow bits
         TTI_SFPSHFT(24, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // Shift left by 24
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
@@ -135,16 +133,14 @@ inline void mul_int32(const uint dst_offset) {
 
         // a0*b3 --> goes beyond 32-bits [24:39]. We need to extract the bits upto 32.
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);    // zero out high overflow bits
         TTI_SFPSHFT(24, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // Shift left by 24
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
 
         // a3*b0 --> goes beyond 32-bits [24:39]. We need to extract the bits upto 32.
         TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, 6);
+        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);    // zero out high overflow bits
         TTI_SFPSHFT(24, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // Shift left by 24
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);

@@ -524,8 +524,5 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
 
     output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
     output_tensor = ttnn.to_torch(output_tensor)
-    print(torch_input_tensor_a)
-    print(torch_output_tensor)
-    print(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
