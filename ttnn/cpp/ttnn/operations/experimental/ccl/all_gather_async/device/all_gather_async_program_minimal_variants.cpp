@@ -434,10 +434,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             semaphore.at(1).address(),                                // out_ready_semaphore_forward
             input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
             input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
+            barrier_semaphore.has_value(),                             // use synchronize barrier semaphore
+            barrier_semaphore.has_value()                              // synchronize barrier semaphore
+                ? barrier_semaphore.value().address()
+                : 0,
+            sender_backward_worker_core.x,
+            sender_backward_worker_core.y
         };
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output_tensor, writer_forward_rt_args);
-        }
+        }   
         writer_forward_rt_args.push_back(false);
         writer_forward_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
@@ -459,36 +465,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         tt::tt_metal::SetRuntimeArgs(
             program, worker_sender_writer_forward_kernel_id, sender_worker_cores[1 + 2 * link], writer_forward_rt_args);
 
-        // writer_runtime_args.push_back(forward_fabric_connection);
-        // if (forward_fabric_connection) {
-        //     const auto target_device_fabric_node_id =
-        //         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-        //     const auto forward_device_fabric_node_id =
-        //         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-        //     tt::tt_fabric::append_fabric_connection_rt_args(
-        //         target_device_fabric_node_id,
-        //         forward_device_fabric_node_id,
-        //         link_idx,
-        //         program,
-        //         core,
-        //         writer_runtime_args);
-        // }
-
-        // writer_runtime_args.push_back(backward_fabric_connection);
-        // if (backward_fabric_connection) {
-        //     const auto target_device_fabric_node_id =
-        //         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-        //     const auto backward_device_fabric_node_id =
-        //         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-        //     tt::tt_fabric::append_fabric_connection_rt_args(
-        //         target_device_fabric_node_id,
-        //         backward_device_fabric_node_id,
-        //         link_idx,
-        //         program,
-        //         core,
-        //         writer_runtime_args);
-        // }
-
         std::vector<uint32_t> writer_backward_rt_args = {
             output_tensor.buffer()->address(),                        // output_tensor_address
             input_tensor_Wt,                                          // width in tiles of the output shard
@@ -505,6 +481,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             semaphore.at(0).address(),                                // out_ready_semaphore_backward
             input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
             input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
+            barrier_semaphore.has_value(),                             // use synchronize barrier semaphore
+            barrier_semaphore.has_value()                              // synchronize barrier semaphore
+                ? barrier_semaphore.value().address()
+                : 0,
+            sender_forward_worker_core.x,
+            sender_forward_worker_core.y
         };
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output_tensor, writer_backward_rt_args);
@@ -523,20 +505,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 sender_worker_cores[0 + 2 * link],
                 writer_backward_rt_args);
         }
-        writer_backward_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id,
-                backward_device_fabric_node_id,
-                link,
-                program,
-                sender_worker_cores[0 + 2 * link],
-                writer_backward_rt_args);
-        }
+        writer_backward_rt_args.push_back(false);
         if (fuse_op) {
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 0);
         }
