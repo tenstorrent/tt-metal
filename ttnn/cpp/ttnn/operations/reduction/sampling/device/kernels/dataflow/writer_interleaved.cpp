@@ -8,7 +8,6 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
@@ -270,9 +269,9 @@ void kernel_main() {
     // cb_push_back(cb_id_temp, 1);
 
     volatile tt_l1_ptr uint16_t* temp_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_temp_ptr);
-    uint32_t temp = temp_ptr[0];
-    // uint32_t temp_packed = static_cast<uint32_t>(temp) << 16 | temp;
-    generate_bcast_unary_scalar(cb_id_temp, temp);
+    uint16_t temp = temp_ptr[0];
+    uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
+    generate_bcast_unary_scalar(cb_id_temp, temp_packed);
     // generate the top-k mask
     constexpr uint32_t one = 1;
     generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);

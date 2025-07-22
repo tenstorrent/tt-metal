@@ -351,23 +351,27 @@ void mul_block_bcast_scalar_inplace() {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_scalar_cb has 1 produced
 
-    constexpr uint32_t dst_tiles = num_tiles;
+    uint32_t dst_tiles = num_tiles;
+    uint32_t granularity = 1;
+
     reconfig_data_format(in0_cb, in1_scalar_cb);
     mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_scalar_cb, 1);
 
-    acquire_dst();
-    for (uint32_t i = 0; i < dst_tiles; ++i) {
-        mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, i, 0, i);
+    for (uint32_t g = 0; g < granularity; ++g) {
+        acquire_dst();
+        for (uint32_t i = 0; i < dst_tiles; ++i) {
+            mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, i, 0, i);
+        }
+        cb_pop_front(in0_cb, dst_tiles);
+        cb_reserve_back(in0_cb, dst_tiles);
+        for (uint32_t i = 0; i < dst_tiles; ++i) {
+            pack_tile(i, in0_cb);
+        }
+        cb_push_back(in0_cb, dst_tiles);
+        release_dst();
     }
-    cb_pop_front(in0_cb, dst_tiles);
-    cb_reserve_back(in0_cb, dst_tiles);
-    for (uint32_t i = 0; i < dst_tiles; ++i) {
-        pack_tile(i, in0_cb);
-    }
-    cb_push_back(in0_cb, dst_tiles);
-    release_dst();
 }
 
 void MAIN {
@@ -411,11 +415,11 @@ void MAIN {
     constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
 
     // scale temperature
-    mul_block_bcast_scalar_inplace<values_cb_index, temp_cb_index, Ht * Kt>();
 
     // mask out all values except the top-k
     cb_wait_front(topk_mask_cb_index, Kt);
     add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
+    mul_block_bcast_scalar_inplace<values_cb_index, temp_cb_index, Ht * Kt>();
     // softmax
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
 

@@ -365,7 +365,7 @@ class Generator:
             self.model.tt_sampling.reset_params(
                 k=[sampling_params.top_k] * 32,
                 p=[sampling_params.top_p] * 32,
-                temp=[sampling_params.temperature] * 32,
+                temp=[1 / sampling_params.temperature] * 32,
             )
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
