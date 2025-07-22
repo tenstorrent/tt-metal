@@ -94,7 +94,7 @@ Tests:
       ftype: unicast
     patterns:
       - type: all_to_all_unicast
-        iterations: 2
+        iterations: 100
   # ======================================================================================
   # Test 4: Parameterized Unicast Test
   # ======================================================================================
@@ -109,4 +109,4 @@ Tests:
       num_packets: 10
     patterns:
       - type: full_device_random_pairing
-        iterations: 1
+        iterations: 100

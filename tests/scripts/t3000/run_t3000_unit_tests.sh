@@ -113,6 +113,7 @@ run_t3000_tt_metal_multiprocess_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_tt_metal_multiprocess_tests"
+  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
   tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
   # Record the end time
   end_time=$(date +%s)
