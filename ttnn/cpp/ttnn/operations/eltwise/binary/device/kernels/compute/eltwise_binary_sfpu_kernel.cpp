@@ -19,6 +19,7 @@
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/gcd.h"
 #include "compute_kernel_api/lcm.h"
+#include "compute_kernel_api/relational_int32_sfpu.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -127,6 +128,9 @@ void MAIN {
 #endif
 #ifdef MUL_INT32_INIT
             MUL_INT32_INIT
+#endif
+#ifdef LT_INT32_INIT
+            LT_INT32_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT
