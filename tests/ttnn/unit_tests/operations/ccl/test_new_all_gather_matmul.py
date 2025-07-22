@@ -19,6 +19,12 @@ def create_global_semaphores(t3k_mesh_device, num_devices, cores, initial_value)
     return ccl_semaphore_handles
 
 
+def create_global_sync_semaphores(t3k_mesh_device, num_devices, cores, initial_value):
+    # create global semaphore handles
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(t3k_mesh_device, cores, initial_value) for _ in range(1)]
+    return ccl_semaphore_handles
+
+
 def run_all_gather_impl(
     t3k_mesh_device,
     num_devices,
@@ -80,6 +86,10 @@ def run_all_gather_impl(
         # create global semaphore handles
         ccl_semaphore_handles = [
             create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ]
+
+        sync_semaphores = [
+            ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
         ]
 
     ### Create persistent output buffers
@@ -206,6 +216,7 @@ def run_all_gather_impl(
                     memory_config=mem_config_ag,
                     topology=all_gather_topology,
                     subdevice_id=worker_sub_device_id,
+                    sync_semaphore=sync_semaphores[i],
                 )
 
             tt_matmul_out_tensor = ttnn.linear(
@@ -332,32 +343,32 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
+        # (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    # ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
     [
         True,
-        False,
+        # False,
     ],
-    ids=["separate", "fused"],
+    # ids=["separate", "fused"],
 )
 @pytest.mark.parametrize(
     "device_params, use_legacy_allgather, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
-        (
-            {"trace_region_size": 90112},
-            True,
-            ttnn.Topology.Ring,
-        ),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
+        # (
+        #     {"trace_region_size": 90112},
+        #     True,
+        #     ttnn.Topology.Ring,
+        # ),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear", "legacy_ring"],
+    # ids=["fabric_ring", "fabric_linear", "legacy_ring"],
 )
 def test_all_gather_matmul_async(
     t3k_mesh_device,

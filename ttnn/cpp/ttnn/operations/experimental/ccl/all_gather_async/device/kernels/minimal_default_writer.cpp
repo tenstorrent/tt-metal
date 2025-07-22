@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "debug/dprint.h"
+
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
@@ -55,6 +57,7 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    size_t sync_semaphore = get_arg_val<uint32_t>(arg_idx++);
 
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
@@ -101,6 +104,47 @@ void kernel_main() {
     pkt_hdr->to_chip_unicast(1);
 
     fabric_connection.open();
+
+    // Write the unicast packet
+    // if (direction == 1) {
+    //     DPRINT << "SENDING" << ENDL();
+
+    //     uint64_t sync_sem_noc_addr_in_pkt =
+    //         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, sync_semaphore, 0);
+    //     auto* pkt_hdr_sem_sync = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+    //     pkt_hdr_sem_sync->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+    //         sync_sem_noc_addr_in_pkt,
+    //         static_cast<uint16_t>(1),  // increment 1
+    //         32});
+
+    //     fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+    //     pkt_hdr_sem_sync->to_chip_unicast(1);
+    //     fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+    //         packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+    //     DPRINT << "WAITING" << ENDL();
+    //     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore), 1);
+    //     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore), 0);
+    //     DPRINT << "RECEIVED" << ENDL();
+    // }
+    // else {
+    // DPRINT << "SENDING" << ENDL();
+
+    // uint64_t sync_sem_noc_addr_in_pkt =
+    //     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, sync_semaphore, 0);
+    // auto* pkt_hdr_sem_sync = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+    // pkt_hdr_sem_sync->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+    //     sync_sem_noc_addr_in_pkt,
+    //     static_cast<uint16_t>(1),  // increment 1
+    //     32});
+    //     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+    //     pkt_hdr_sem_sync->to_chip_unicast(1);
+    //     fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+    //         packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+    //    DPRINT << "WAITING" << ENDL();
+    //     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore), 1);
+    //     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore), 0);
+    //    DPRINT << "RECEIVED" << ENDL();
+    // }
 
     uint32_t slice_writes = 0;
 
