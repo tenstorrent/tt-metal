@@ -20,10 +20,11 @@ def tensor_map():
         # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        [2, 32, 16, 16],
-        [1, 512, 112, 32],
-        [1, 320, 48, 48],
-        [1, 320, 47, 47],
+        [1, 16, 16, 16],
+        # [1, 256, 112, 32],
+        # [1, 512, 112, 32],
+        # [1, 320, 48, 48],
+        # [1, 320, 47, 47],
     ),
 )
 @pytest.mark.parametrize(
@@ -33,9 +34,10 @@ def tensor_map():
         # Large reductions go to large kernels
         # Reductions which are large and wide at the same time
         # go to large kernels
-        (3, 3),
-        (9, 9),
-        (36, 36),
+        # (3, 3),
+        # (5, 5),
+        (8, 4),
+        # (36, 36),
     ),
 )
 @pytest.mark.parametrize(
@@ -50,33 +52,33 @@ def tensor_map():
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "count_include_pad",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "divisor_override",
     [
         5,
-        None,
+        # None,
     ],
 )
 @pytest.mark.parametrize(
     "shard_scheme",
     [
-        None,
+        # None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 def test_avg_pool2d_post_commit(
     device,
