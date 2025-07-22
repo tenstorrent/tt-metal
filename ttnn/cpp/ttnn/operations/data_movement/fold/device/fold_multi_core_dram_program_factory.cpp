@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <optional>
-#include <vector>
 #include "hostdevcommon/kernel_structs.h"
-#include "tt-metalium/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -23,89 +20,10 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include "fold_device_op.hpp"
-#include "ttnn/operations/cb_utils.hpp"
 namespace ttnn::operations::data_movement {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-
-static Tensor create_fold_mapping_table(
-    IDevice* device,
-    const uint32_t batch_size,
-    const uint32_t input_height,
-    const uint32_t input_width,
-    const uint32_t stride_h,
-    const uint32_t stride_w,
-    const uint32_t total_elems,
-    const uint32_t elems_per_core,
-    const CoreRange& all_cores,
-    const uint32_t num_cores_total) {
-    // Calculate output dimensions
-    const uint32_t output_height = input_height / stride_h;
-    const uint32_t output_width = input_width / stride_w;
-    const uint32_t patch_size = stride_h * stride_w;
-    const uint32_t input_hw = input_height * input_width;
-    const uint32_t output_hw = output_height * output_width;
-
-    // Create vector to store mapping entries (src_index, dst_index)
-    std::vector<uint32_t> config_vector(num_cores_total * 3, 0xFFFFFFFF);
-    uint32_t entry_idx = 0;
-    uint32_t curr_elems = 0;
-    std::cout << "elems_per_core: " << elems_per_core << std::endl;
-    std::cout << "total_elems: " << total_elems << std::endl;
-    for (uint32_t i = 0; i < num_cores_total; i++) {
-        if (curr_elems >= total_elems) {
-            break;
-        }
-        uint32_t output_offset = i * elems_per_core;
-        uint32_t batch_idx = output_offset / output_hw;
-        uint32_t batch_offset = output_offset % output_hw;
-        uint32_t out_height = batch_offset / output_width;
-        uint32_t out_width = batch_offset % output_width;
-
-        uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
-        uint32_t src_row_offset = out_height * stride_h * input_width;
-        uint32_t src_col_offset = out_width * stride_w;
-
-        // std::cout << "batch_idx: " << batch_idx << ", batch_offset: " << batch_offset << ", out_height: " <<
-        // out_height << ", out_width: " << out_width << std::endl; std::cout << "src_batch_offset: " <<
-        // src_batch_offset << ", src_row_offset: " << src_row_offset << ", src_col_offset: " << src_col_offset <<
-        // std::endl;
-
-        uint32_t src_idx = src_batch_offset + src_row_offset + src_col_offset;
-        uint32_t dst_idx = output_offset * patch_size;
-
-        config_vector[entry_idx++] = src_idx;
-        config_vector[entry_idx++] = dst_idx;
-        config_vector[entry_idx++] = src_col_offset;
-        // std::cout << "src_idx: " << src_idx << ", dst_idx: " << dst_idx << ", src_col_offset: " << src_col_offset <<
-        // std::endl; std::cout << std::endl;
-        curr_elems += elems_per_core;
-    }
-
-    // std::cout << "config_vector size: " << config_vector.size() << std::endl;
-    // repeat last entry if needed
-    if (entry_idx < num_cores_total * 3) {
-        auto src_idx = config_vector[entry_idx - 3];
-        auto dst_idx = config_vector[entry_idx - 2];
-        auto src_col_offset = config_vector[entry_idx - 1];
-        for (uint32_t i = entry_idx; i < num_cores_total * 3; i += 3) {
-            config_vector[i] = src_idx;
-            config_vector[i + 1] = dst_idx;
-            config_vector[i + 2] = src_col_offset;
-        }
-    }
-
-    ttnn::Shape config_shape({tt::div_up(config_vector.size(), 3), 3});
-    auto config_buffer = HostBuffer(std::move(config_vector));
-    auto config_tensor = Tensor(std::move(config_buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
-    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
-    auto config_tensor_shard_orientation = ShardOrientation::ROW_MAJOR;
-    ShardSpec config_shard_spec(all_cores, shard_shape, config_tensor_shard_orientation);
-    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, config_shard_spec};
-    auto config_tensor_device = config_tensor.to_device(device, memory_config);
-    return config_tensor_device;
-}
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
@@ -306,18 +224,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         cores_with_rtargs.push_back(core);
     }
 
-    return {
-        std::move(program),
-        {unary_writer_kernel_id,
-         unary_reader_kernel_id,
-         cores_with_rtargs,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt}};
+    return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores_with_rtargs}};
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
@@ -337,7 +244,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     // Calculate total input work
-    uint32_t total_work = (batch_size * input_height * input_width) / (stride_h * stride_w);
+    uint32_t total_patches = (batch_size * input_height * input_width) / (stride_h * stride_w);
 
     // Get compute grid size and calculate work distribution
     auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -349,14 +256,14 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     log_debug(tt::LogOp, "output_tensor_shape: {}", output.padded_shape());
 
     // Calculate work per core based on input dimensions
-    uint32_t work_per_core = tt::div_up(total_work, num_cores_total);
+    uint32_t patches_per_core = tt::div_up(total_patches, num_cores_total);
 
     log_debug(
         tt::LogOp,
-        "total_work: {}, num_cores_total: {}, work_per_core: {}",
-        total_work,
+        "total_patches: {}, num_cores_total: {}, patches_per_core: {}",
+        total_patches,
         num_cores_total,
-        work_per_core);
+        patches_per_core);
 
     // Create core ranges
     CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -385,40 +292,19 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
             .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w * stride_h);
     auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
 
-    Tensor config_tensor_device = create_fold_mapping_table(
-        device,
-        batch_size,
-        input_height,
-        input_width,
-        stride_h,
-        stride_w,
-        total_work,
-        work_per_core,
-        all_cores,
-        num_cores_total);
-
-    tt::DataFormat config_df = tt::DataFormat::RawUInt32;
-    auto config_storage = config_tensor_device.device_storage();
-    auto config_buffer = config_storage.get_buffer();
-    auto config_buffer_page_size = config_buffer->page_size();
-
-    auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
-        tt::CBIndex::c_2, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
-
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_nbytes);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_nbytes) : 0;
     // Create reader kernel
     std::vector<uint32_t> compile_time_args(
         {stick_nbytes,
          cb_src0_index,
-         config_cb_id,
          src_stick_size_is_power_of_two,
          src_log2_stick_size,
          aligned_stick_nbytes,
          stride_h,
          stride_w,
          input_width,
-         work_per_core});
+         patches_per_core});
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
@@ -432,29 +318,44 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         tt::tt_metal::WriterDataMovementConfig(compile_time_args));
 
     // Set runtime arguments for each core
+
+    const uint32_t output_height = input_height / stride_h;
+    const uint32_t output_width = input_width / stride_w;
+    const uint32_t patch_size = stride_h * stride_w;
+    const uint32_t output_hw = output_height * output_width;
+    uint32_t curr_patches = 0;
     std::vector<CoreCoord> cores_with_rtargs;
+    uint32_t src_idx, dst_idx, src_col_offset;
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
         std::vector<uint32_t> reader_runtime_args = {src0_buffer->address()};
         std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
 
+        if (curr_patches < total_patches) {
+            uint32_t output_offset = i * patches_per_core;
+            uint32_t batch_idx = output_offset / output_hw;
+            uint32_t batch_offset = output_offset % output_hw;
+            uint32_t out_height = batch_offset / output_width;
+            uint32_t out_width = batch_offset % output_width;
+
+            uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
+            uint32_t src_row_offset = out_height * stride_h * input_width;
+            src_col_offset = out_width * stride_w;
+
+            src_idx = src_batch_offset + src_row_offset + src_col_offset;
+            dst_idx = output_offset * patch_size;
+        }
+
+        curr_patches += patches_per_core;
+        reader_runtime_args.push_back(src_idx);
+        reader_runtime_args.push_back(src_col_offset);
+        writer_runtime_args.push_back(dst_idx);
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         cores_with_rtargs.push_back(core);
     }
 
-    return {
-        std::move(program),
-        {writer_kernel_id,
-         reader_kernel_id,
-         cores_with_rtargs,
-         config_cb,
-         batch_size,
-         input_height,
-         input_width,
-         num_cores_total,
-         work_per_core,
-         all_cores}};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores_with_rtargs}};
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(
@@ -487,30 +388,6 @@ void Fold::MultiCoreDRAMFold::override_runtime_arguments(
 
     auto dst_dram_buffer = output_tensor.buffer();
 
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        auto stride_h = operation_attributes.stride_h;
-        auto stride_w = operation_attributes.stride_w;
-        auto config_cb = cached_program.shared_variables.config_cb.value();
-        auto batch_size = cached_program.shared_variables.batch_size.value();
-        auto input_height = cached_program.shared_variables.input_height.value();
-        auto input_width = cached_program.shared_variables.input_width.value();
-        auto num_cores_total = cached_program.shared_variables.num_cores_total.value();
-        auto work_per_core = cached_program.shared_variables.work_per_core.value();
-        CoreRange all_cores = cached_program.shared_variables.all_cores.value();
-        Tensor config_tensor_device = create_fold_mapping_table(
-            input_tensor.device(),
-            batch_size,
-            input_height,
-            input_width,
-            stride_h,
-            stride_w,
-            work_per_core * num_cores_total,
-            work_per_core,
-            all_cores,
-            num_cores_total);
-
-        UpdateDynamicCircularBufferAddress(program, config_cb, *(config_tensor_device.buffer()));
-    }
     // Update runtime arguments for each core
     for (auto i = 0; i < cores_with_rtargs.size(); i++) {
         CoreCoord core = cores_with_rtargs[i];
