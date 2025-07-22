@@ -462,8 +462,7 @@ private:
         uint32_t l1_unreserved_base = this->fixture_->get_l1_unreserved_base();
         uint32_t l1_unreserved_size = this->fixture_->get_l1_unreserved_size();
         uint32_t l1_alignment = this->fixture_->get_l1_alignment();
-        uint32_t default_payload_chunk_size = allocation_policies_.default_payload_chunk_size.value_or(
-            tt::tt_fabric::fabric_tests::detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
+        uint32_t default_payload_chunk_size = allocation_policies_.default_payload_chunk_size;
         uint32_t max_configs_per_core = std::max(
             allocation_policies_.sender_config.max_configs_per_core,
             allocation_policies_.receiver_config.max_configs_per_core);
