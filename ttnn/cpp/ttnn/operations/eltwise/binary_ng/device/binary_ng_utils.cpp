@@ -174,7 +174,20 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             }
             break;
         case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
-        case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
+        // case BinaryOpType::LT:
+        //     if (dtype != DataType::INT32) {
+        //         postprocess = unary::UnaryOpType::LTZ;
+        //     } else {
+        //         binary_op = SfpuBinaryOp::LT;
+        //     }
+        //     break;
+        case BinaryOpType::LT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         case BinaryOpType::GE: postprocess = unary::UnaryOpType::GEZ; break;
         case BinaryOpType::LE: postprocess = unary::UnaryOpType::LEZ; break;
         case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
@@ -438,6 +451,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
+        case LT:
+            if (dtype == DataType::INT32) {
+                return {"lt_int32_tile_init();", "lt_int32_tile"};
+            } else {
+                return {"sub_binary_tile_init();", "sub_binary_tile"};
+            }
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }

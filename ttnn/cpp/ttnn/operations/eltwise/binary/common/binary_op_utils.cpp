@@ -402,11 +402,13 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::LT:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
-                op_name = "sub_int32_tile";
+                new_defines.insert({"LT_INT32_INIT", fmt::format("lt_int32_tile_init();")});
+                op_name = "lt_int32_tile";
             } else {
                 op_name = "sub_binary_tile";
+                new_defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst1, input_a_dtype));
             }
-            new_defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst1, input_a_dtype));
+
             break;
         case BinaryOpType::GE:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
