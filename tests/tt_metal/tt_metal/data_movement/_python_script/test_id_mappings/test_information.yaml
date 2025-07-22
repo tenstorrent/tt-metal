@@ -128,7 +128,7 @@ tests:
     name: "One from One Directed Ideal"
 
   52:
-    name: "One to All Directed Ideal"
+    name: "One to All Unicast Directed Ideal"
 
   53:
     name: "One to All Multicast Directed Ideal"
