@@ -32,7 +32,7 @@ from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_f
 def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, cache_hf=True)
     # state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     state_dict = model_args.load_state_dict()
 

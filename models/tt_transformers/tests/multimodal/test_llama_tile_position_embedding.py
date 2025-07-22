@@ -50,7 +50,7 @@ def test_conv2d_inference(
     gated = True
     pcc_required = 0.9999
 
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, cache_hf=True)
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

@@ -59,12 +59,11 @@ def create_multimodal_model(
     dtype=ttnn.bfloat16,
     use_paged_kv_cache=False,
     checkpoint=None,
-    cache_hf=False,
 ):
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
-    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, cache_hf=cache_hf)
+    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
     assert tt_model_args.is_vision(), "This model is multimodal"
 
     # limit length or we'll run out of space
@@ -96,7 +95,6 @@ def prepare_generator_args(
     max_seq_len,
     dtype=ttnn.bfloat16,
     use_paged_kv_cache=False,
-    cache_hf=False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -112,7 +110,6 @@ def prepare_generator_args(
             dtype=dtype,
             use_paged_kv_cache=use_paged_kv_cache,
             checkpoint=state_dict,
-            cache_hf=cache_hf,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -135,12 +132,12 @@ def prepare_generator_args(
     ids=["normal"],
 )
 @pytest.mark.parametrize(
-    "warmup_iters, enable_trace, max_batch_size, include_text_only_prompts, cache_hf",
+    "warmup_iters, enable_trace, max_batch_size, include_text_only_prompts",
     [
-        (0, False, 1, False, False),  # batch1-notrace
-        (0, True, 1, False, False),  # batch1-trace
-        (0, True, 32, False, False),  # batch32-trace
-        (0, True, 4, True, False),  # batch4-trace-with-text-prompts
+        (0, False, 1, False),  # batch1-notrace
+        (0, True, 1, False),  # batch1-trace
+        (0, True, 32, False),  # batch32-trace
+        (0, True, 4, True),  # batch4-trace-with-text-prompts
     ],
     ids=["batch1-notrace", "batch1-trace", "batch32-trace", "batch4-trace-with-text-prompts"],
 )
@@ -162,7 +159,6 @@ def test_multimodal_demo_text(
     test_type,
     max_seq_len,
     is_ci_env,
-    cache_hf,
     temperature: float = 0,
     top_p: float = 0.9,
     max_gen_len: Optional[int] = 500,
@@ -188,7 +184,6 @@ def test_multimodal_demo_text(
         mesh_device=mesh_device,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
-        cache_hf=cache_hf,
     )
     generator = Generator(model, model_args, mesh_device)
     tokenizer = Tokenizer(model_path=tokenizer_path)

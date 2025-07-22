@@ -184,7 +184,6 @@ If you want to provide your own demo configuration, please take a look at the py
 - `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
 - `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
 - `stop_at_eos (bool)`: Flag to stop decoding when the model generates an EoS token
-- `cache_hf (bool)`: Whether to cache HuggingFace model to avoid multiple loads (uses extra memory). Default: True for better performance, False to save memory.
 - `optimizations (ModelOptimizations)`: Optimization level to use for the model [`accuracy`, `performance`]. Applied uniformly across all decoders unless an override config exists in `models/tt_transformers/model_params/<model-name>`
 - `decoder_config_file (DecodersPrecision)`: Fine-grained optimization control that allows specifying a configuration file to set different settings for each decoder.
 
@@ -199,11 +198,8 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 # Batch-32
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
 
-# Batch-1 with HF caching disabled (saves memory)
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --cache_hf=False
-
 # Long context with custom parameters
-pytest models/tt_transformers/demo/simple_text_demo.py -k "long-context" --cache_hf=False --max_seq_len=16384
+pytest models/tt_transformers/demo/simple_text_demo.py -k "long-context" --max_seq_len=16384
 
 # Long-context
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
@@ -311,15 +307,6 @@ model_args = ModelArgs(
 The `cache_hf` parameter affects:
 - `load_state_dict()` method: Controls whether HF model is cached after loading
 - `reference_transformer()` method: Controls whether to reuse cached model or load fresh
-
-**Command Line Usage:**
-```bash
-# Disable HF model caching (saves memory)
-pytest models/tt_transformers/demo/simple_text_demo.py --cache_hf=False
-
-# Enable HF model caching (better performance, uses more memory)
-pytest models/tt_transformers/demo/simple_text_demo.py --cache_hf=True
-```
 
 **Memory Impact:**
 - Disabling caching saves approximately the full model size in memory

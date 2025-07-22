@@ -40,7 +40,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, cache_hf=True)
     model_args.max_seq_len = text_seq_len
     state_dict = model_args.load_state_dict()
 
