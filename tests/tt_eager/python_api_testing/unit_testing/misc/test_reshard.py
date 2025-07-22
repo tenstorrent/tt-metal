@@ -13,6 +13,14 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 def run_reshard_test(
     device,
     input_shape,
@@ -57,7 +65,8 @@ def run_reshard_test(
         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
         buffer_type=ttnn.BufferType.DRAM,
     )
-    torch_tensor = torch.randn(input_shape).bfloat16()
+    # torch_tensor = torch.randn(input_shape).bfloat16()
+    torch_tensor = random_torch_tensor(tt_dtype, input_shape)
     tt_tensor_sharded = ttnn.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
     tt_tensor_sharded = ttnn.interleaved_to_sharded(
@@ -196,7 +205,7 @@ def run_reshard_test(
         ),
     ],
 )
-@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32])
 def test_reshard(
     device,
     input_shape,
@@ -252,7 +261,7 @@ def test_reshard(
         ),
     ],
 )
-@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32])
 def test_reshard_rn50(
     device,
     input_shape,
@@ -307,7 +316,7 @@ def test_reshard_rn50(
         ),
     ],
 )
-@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32])
 def test_reshard_with_program_cache(
     device,
     input_shape,
@@ -559,6 +568,7 @@ def test_reshard_with_program_cache(
         ),
     ],
 )
+@pytest.mark.parametrize("tt_dtype", [ttnn.int32, ttnn.bfloat16])
 def test_dram_reshard(
     device,
     input_shape,
@@ -573,14 +583,15 @@ def test_dram_reshard(
     output_shard_orientation,
     output_sharding_scheme,
     output_buffer_type,
+    tt_dtype,
 ):
     input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, input_shard_orientation)
     input_mem_config = ttnn.MemoryConfig(input_sharding_scheme, input_buffer_type, input_shard_spec)
     output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, output_buffer_type, output_shard_spec)
 
-    input = torch.randn(input_shape).bfloat16()
-    input_tensor = ttnn.Tensor(input, ttnn.bfloat16, device=device, layout=input_layout, mem_config=input_mem_config)
+    input = random_torch_tensor(tt_dtype, input_shape)
+    input_tensor = ttnn.Tensor(input, tt_dtype, device=device, layout=input_layout, mem_config=input_mem_config)
 
     output_tensor = ttnn.reshard(input_tensor, output_mem_config)
 
@@ -623,6 +634,7 @@ def test_dram_reshard(
         ),
     ],
 )
+@pytest.mark.parametrize("tt_dtype", [ttnn.int32, ttnn.bfloat16])
 def test_dram_reshard_with_program_cache(
     device,
     input_shape,
@@ -637,6 +649,7 @@ def test_dram_reshard_with_program_cache(
     output_shard_orientation,
     output_sharding_scheme,
     output_buffer_type,
+    tt_dtype,
 ):
     dtype = ttnn.bfloat8_b
     for _ in range(4):
@@ -657,6 +670,7 @@ def test_dram_reshard_with_program_cache(
             output_shard_orientation,
             output_sharding_scheme,
             output_buffer_type,
+            tt_dtype,
         )
         dummy_tensor = (
             ttnn.Tensor(torch.rand([2, 2, 128, 64]), dtype).to(ttnn.TILE_LAYOUT).to(device, ttnn.L1_MEMORY_CONFIG)

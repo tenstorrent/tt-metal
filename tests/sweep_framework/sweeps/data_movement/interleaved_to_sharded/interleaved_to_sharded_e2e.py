@@ -42,7 +42,8 @@ parameters = {
             ttnn.CoreGrid(y=1, x=2),
             ttnn.CoreGrid(y=2, x=2),
         ],
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        # "dtype": [ttnn.bfloat16],
+        "dtype": [ttnn.int32],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_buffer_type": [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
         "output_buffer_type": [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
@@ -80,6 +81,14 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 def run(
     shard_specs,
     strategy,
@@ -115,7 +124,8 @@ def run(
 
     # Create a random tensor of the specified shape
     torch.manual_seed(0)
-    input_data = torch.randn(shape, dtype=torch.bfloat16)
+    # input_data = torch.randn(shape, dtype=torch.bfloat16)
+    input_data = random_torch_tensor(dtype, shape)
     interleaved_data = ttnn.from_torch(
         input_data,
         device=device,

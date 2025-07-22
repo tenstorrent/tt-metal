@@ -172,8 +172,9 @@ parameters = {
             {"dims": [8732, 4], "dim": 1, "start": 0, "end": -1, "step": 4},
             {"dims": [8732, 4], "dim": 1, "start": 0, "end": 2},
         ],
-        "dtype": [ttnn.bfloat16],
-        "layout": [ttnn.ROW_MAJOR_LAYOUT],
+        # "dtype": [ttnn.bfloat16],
+        "dtype": [ttnn.int32],
+        "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
 
@@ -192,6 +193,14 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 def run(
     slice_specs,
     dtype,
@@ -205,7 +214,8 @@ def run(
     end = slice_specs["end"]
     step = slice_specs.get("step", 1)
 
-    tensor = torch_random(dims, -0.1, 0.1, dtype=torch.bfloat16)
+    # tensor = torch_random(dims, -0.1, 0.1, dtype=torch.bfloat16)
+    tensor = random_torch_tensor(dtype, dims)
     # Create a slice object
     slice_obj = slice(start, end, step)
 
