@@ -50,6 +50,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
@@ -66,6 +67,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         ring_index,
         topology,
         semaphore,
+        barrier_semaphore,
         sub_device_id,
         empty_fused_op_signaler);
 }
@@ -83,6 +85,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
@@ -456,6 +459,36 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         tt::tt_metal::SetRuntimeArgs(
             program, worker_sender_writer_forward_kernel_id, sender_worker_cores[1 + 2 * link], writer_forward_rt_args);
 
+        // writer_runtime_args.push_back(forward_fabric_connection);
+        // if (forward_fabric_connection) {
+        //     const auto target_device_fabric_node_id =
+        //         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+        //     const auto forward_device_fabric_node_id =
+        //         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        //     tt::tt_fabric::append_fabric_connection_rt_args(
+        //         target_device_fabric_node_id,
+        //         forward_device_fabric_node_id,
+        //         link_idx,
+        //         program,
+        //         core,
+        //         writer_runtime_args);
+        // }
+
+        // writer_runtime_args.push_back(backward_fabric_connection);
+        // if (backward_fabric_connection) {
+        //     const auto target_device_fabric_node_id =
+        //         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+        //     const auto backward_device_fabric_node_id =
+        //         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        //     tt::tt_fabric::append_fabric_connection_rt_args(
+        //         target_device_fabric_node_id,
+        //         backward_device_fabric_node_id,
+        //         link_idx,
+        //         program,
+        //         core,
+        //         writer_runtime_args);
+        // }
+
         std::vector<uint32_t> writer_backward_rt_args = {
             output_tensor.buffer()->address(),                        // output_tensor_address
             input_tensor_Wt,                                          // width in tiles of the output shard
@@ -490,7 +523,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 sender_worker_cores[0 + 2 * link],
                 writer_backward_rt_args);
         }
-        writer_backward_rt_args.push_back(false);
+        writer_backward_rt_args.push_back(backward_device.has_value());
+        if (backward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                sender_fabric_node_id,
+                backward_device_fabric_node_id,
+                link,
+                program,
+                sender_worker_cores[0 + 2 * link],
+                writer_backward_rt_args);
+        }
         if (fuse_op) {
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 0);
         }
