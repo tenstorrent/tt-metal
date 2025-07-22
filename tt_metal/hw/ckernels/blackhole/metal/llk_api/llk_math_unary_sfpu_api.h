@@ -4,6 +4,7 @@
 
 #pragma once
 #include "llk_math_common_api.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "llk_math_eltwise_unary_sfpu_abs.h"
 #include "llk_math_eltwise_unary_sfpu_unary_max_min.h"
 #include "llk_math_eltwise_unary_sfpu_exp2.h"
