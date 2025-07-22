@@ -47,6 +47,7 @@ def test_ufld_v2_dataset_inference(
     device,
     use_pretrained_weight,
     reset_seeds,
+    model_location_generator,
 ):
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
