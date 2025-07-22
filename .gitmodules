@@ -18,7 +18,3 @@
 	path = tt_metal/third_party/tt_llk
 	url = https://github.com/tenstorrent/tt-llk.git
 	branch = main
-[submodule "tt_metal/third_party/mlp-op-perf"]
-	path = tt_metal/third_party/mlp-op-perf
-	url = https://github.com/xanderchin/mlp-op-perf.git
-	branch = brapanan/metal-build-integration
