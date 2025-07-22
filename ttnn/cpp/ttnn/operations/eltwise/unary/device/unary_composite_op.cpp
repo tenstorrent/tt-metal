@@ -297,30 +297,12 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
     return z;
 }
 
-// Function Hard Sigmoid
-//     Ref: https://github.com/Theano/Theano/blob/master/theano/tensor/nnet/sigm.py
-//
-//     slope = tensor.constant(0.2, dtype=out_dtype)
-//     shift = tensor.constant(0.5, dtype=out_dtype)
-//
-//     x1 = (x * slope) + shift
-//     y = tensor.clip(x1, 0, 1)
-//
-// PyTorch version:
-// hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
-Tensor _hardsigmoid(
-    const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor a_mac = ttnn::mac(a, value_1, value_2);  // multiply and add.
-    Tensor a_clip = relu_max(a_mac, 1.0f);
-    return a_clip;
-}
-
 // Function @hard_swish
 // use transformation y = x * hardsigmoid( x ) by broadcast
 // Ref: PyTorch
 // hard swish(x) = x*hardsigmoid(x,scale,shift)
 Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor a_sigmoid = _hardsigmoid(a, value_1, value_2, output_mem_config);
+    Tensor a_sigmoid = ttnn::hardsigmoid(a, output_mem_config);
     Tensor result_sq = ttnn::multiply(a_sigmoid, a, std::nullopt, output_mem_config);
     return result_sq;
 }
