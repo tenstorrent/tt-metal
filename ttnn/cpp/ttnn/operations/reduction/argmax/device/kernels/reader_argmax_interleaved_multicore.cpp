@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-#include <algorithm>
 #include <cstdint>
 
 #include "dataflow_api.h"
@@ -11,43 +9,29 @@
 #include "utils/bfloat16.h"
 #include "argmax_common.hpp"
 
-template <DataFormat data_format>
-auto get_tt_l1_ptr_based_on_data_format(const uint32_t addr) {
-    if constexpr (data_format == DataFormat::Float16_b) {
-        return reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr);
-    } else if constexpr (data_format == DataFormat::Float32) {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
-    } else if constexpr (data_format == DataFormat::Int32) {
-        return reinterpret_cast<volatile tt_l1_ptr int32_t*>(addr);
-    } else if constexpr (data_format == DataFormat::UInt32) {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
-    } else {
-        static_assert(data_format != data_format, "Unsupported data format in get_tt_l1_ptr_based_on_data_format");
-    }
-}
-
 /**
- * @brief Process inner dimension units for argmax reduction
+ * @brief Finds the argmax (argument of maximum value) for a specific core in a multicore reduction operation.
  *
- * This function handles the core logic of processing inner dimension units,
- * including reading data, finding max values and indices, and storing results.
+ * This function performs argmax computation on interleaved data for a single core, supporting various
+ * data formats and memory configurations. It processes data in units along inner and outer dimensions
+ * and handles both DRAM and SRAM source locations.
  *
- * @tparam src_is_dram Whether source is in DRAM
- * @tparam reduce_all Whether to reduce across all dimensions
- * @param inner_dim_units Number of units in the inner dimension
- * @param outer_idx Current outer dimension index
- * @param src_offset Source offset for reading data
- * @param s_src Source stream descriptor
- * @param src_cb_addr Source circular buffer address
- * @param src_read_size Size of data to read from source
- * @param red_dim_offset Reduction dimension offset
- * @param red_dim_units_this_core Number of reduction units for this core
- * @param in_vals Input values buffer
- * @param red_dim_units Total reduction dimension units
- * @param max_idx Maximum index found (output parameter)
- * @param max_val Maximum value found (output parameter)
- * @param red_idxs Buffer for reduction indices
- * @param red_vals Buffer for reduction values
+ * @tparam src_is_dram Boolean flag indicating whether source data is stored in DRAM (true) or SRAM (false)
+ * @tparam reduce_all Boolean flag indicating whether to reduce across all dimensions (true) or specific dimensions
+ * (false)
+ * @tparam data_format Compile-time data format specification that determines the data type and layout
+ *                     (e.g., Float16, BFloat16, Float32, Int32, etc.) used for input values and computations
+ *
+ * @param inner_dim_units Number of units to process along the inner dimension
+ * @param outer_idx Index of the current outer dimension being processed
+ * @param src_offset Offset into the source data buffer
+ * @param s_src Interleaved address generator for source data access
+ * @param src_cb_addr Address of the source circular buffer
+ * @param src_read_size Size of data to read from source in bytes
+ * @param red_dim_offset Offset along the reduction dimension
+ * @param red_dim_units_this_core Number of reduction dimension units assigned to this core
+ * @param in_vals Pointer to L1 memory containing input values with data type determined by data_format template
+ * parameter
  */
 template <bool src_is_dram, bool reduce_all, DataFormat data_format>
 inline void find_argmax_for_core(
@@ -86,6 +70,16 @@ inline void find_argmax_for_core(
                     auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
                     max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
                 }
+            } else if constexpr (data_format == DataFormat::UInt16) {
+                uint16_t val = in_vals[i - red_dim_offset];
+                if (val > max_val) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? full_idx : i;
+                    max_val = val;
+                } else if (val == max_val) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
+                }
             } else if constexpr (data_format == DataFormat::Float32) {
                 uint32_t val = in_vals[i - red_dim_offset];
                 if (float32_greater(val, max_val)) {
@@ -117,7 +111,7 @@ inline void find_argmax_for_core(
                     max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
                 }
             } else {
-                ASSERT(sizeof(DataFormat) == 0, "Unsupported data format in get_tt_l1_ptr_based_on_data_format");
+                static_assert(data_format != data_format, "Unsupported data format in find_argmax_for_core");
             }
         }
 
@@ -129,19 +123,31 @@ inline void find_argmax_for_core(
 }
 
 /**
- * @brief Finds the argmax from intermediate outputs across all cores
+ * @brief Finds the argument (index) of the maximum value from intermediate reduction outputs across multiple cores.
  *
- * This function processes the intermediate outputs from all cores to find the final
- * argmax values. It compares values from each core and selects the maximum value,
- * with ties broken by selecting the smaller index.
+ * This function performs a final reduction step to find the global argmax by comparing intermediate
+ * maximum values computed by different cores. It handles tie-breaking by selecting the smaller index
+ * when values are equal.
  *
- * @tparam num_cores Total number of cores participating in the reduction
- * @param inner_idx Index of the inner dimension unit to find argmax for
- * @param red_val_cb_local_base_addr Base address of the circular buffer storing intermediate values
- * @param red_idx_cb_local_base_addr Base address of the circular buffer storing intermediate indices
- * @param red_val_size_per_core Size of the value buffer per core
- * @param red_idx_size_per_core Size of the index buffer per core
- * @param inner_dim_units Number of elements in the inner dimension
+ * @tparam num_cores Number of cores that participated in the reduction operation
+ * @tparam data_format Data format of the values being compared. Supported formats:
+ *                     - DataFormat::Float16_b: 16-bit bfloat16 floating point
+ *                     - DataFormat::UInt16: 16-bit unsigned integer
+ *                     - DataFormat::Float32: 32-bit IEEE 754 floating point
+ *                     - DataFormat::Int32: 32-bit signed integer
+ *                     - DataFormat::UInt32: 32-bit unsigned integer
+ *
+ * @param inner_idx Index within each core's output buffer to compare
+ * @param red_val_cb_local_base_addr Base address of the circular buffer containing reduction values
+ * @param red_idx_cb_local_base_addr Base address of the circular buffer containing reduction indices
+ * @param red_val_size_per_core Size in bytes of reduction values buffer per core
+ * @param red_idx_size_per_core Size in bytes of reduction indices buffer per core
+ *
+ * @return The global index of the maximum value across all cores
+ *
+ * @note The function uses volatile L1 pointers for accessing core-local memory
+ * @note Tie-breaking favors the smaller index when multiple cores have the same maximum value
+ * @note Compilation will fail with static_assert for unsupported data formats
  */
 template <uint32_t num_cores, DataFormat data_format>
 inline uint32_t find_argmax_from_intermediate_outputs(
@@ -164,6 +170,17 @@ inline uint32_t find_argmax_from_intermediate_outputs(
             uint16_t val = i_red_vals[inner_idx];
 
             if (bfloat16_greater(val, max_val)) {
+                max_idx = i_red_idxs[inner_idx];
+                max_val = val;
+            } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+                max_idx = i_red_idxs[inner_idx];
+            }
+        } else if constexpr (data_format == DataFormat::UInt16) {
+            volatile tt_l1_ptr auto i_red_vals =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(red_val_cb_local_base_addr + i * red_val_size_per_core);
+            uint16_t val = i_red_vals[inner_idx];
+
+            if (val > max_val) {
                 max_idx = i_red_idxs[inner_idx];
                 max_val = val;
             } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
