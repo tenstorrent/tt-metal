@@ -10,8 +10,6 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "multidevice_scatter.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::ccl {
 
 void py_bind_multidevice_scatter(py::module& module) {

@@ -43,11 +43,6 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-    using namespace tt::tt_fabric;
-    using namespace ttnn::ccl;
-
     const auto& input_tensor = tensor_args.input_tensor;
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();

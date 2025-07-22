@@ -22,8 +22,8 @@ void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
     auto input_tensor = tensor_args.input_tensor;
     uint32_t rank = input_tensor.logical_shape().rank();
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    auto output_shape = output_spec.logical_shape();
-    auto input_shape = input_tensor.logical_shape();
+    const auto& output_shape = output_spec.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
     TT_FATAL(operation_attributes.dim < rank, "dim must be less than the rank of the input tensor");
 
@@ -56,8 +56,6 @@ void MultiDeviceScatterDeviceOperation::validate_on_program_cache_hit(
 
 MultiDeviceScatterDeviceOperation::spec_return_value_t MultiDeviceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    using namespace tt::tt_metal;
-
     auto input_tensor = tensor_args.input_tensor;
     auto output_shape = input_tensor.logical_shape();
     const auto& mesh_view = input_tensor.mesh_device()->get_view();
@@ -67,7 +65,10 @@ MultiDeviceScatterDeviceOperation::spec_return_value_t MultiDeviceScatterDeviceO
     output_shape[operation_attributes.dim] = output_shape[operation_attributes.dim] / num_devices;
     return {TensorSpec(
         Shape(output_shape),
-        TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), operation_attributes.output_mem_config))};
+        tt::tt_metal::TensorLayout(
+            input_tensor.dtype(),
+            tt::tt_metal::PageConfig(input_tensor.layout()),
+            operation_attributes.output_mem_config))};
 }
 
 MultiDeviceScatterDeviceOperation::tensor_return_value_t MultiDeviceScatterDeviceOperation::create_output_tensors(
