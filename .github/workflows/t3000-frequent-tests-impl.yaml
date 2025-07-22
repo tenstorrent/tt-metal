@@ -32,7 +32,6 @@ jobs:
           { name: "t3k llama3.2-90b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b-vision_freq_tests, timeout: 180, owner_id: U07RY6B5FLJ},  #Gongyu Wang
           { name: "t3k llama3 tests", arch: wormhole_b0, cmd: run_t3000_llama3_tests, timeout: 45, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
           { name: "t3k llama3 accuracy tests", arch: wormhole_b0, cmd: run_t3000_llama3_accuracy_tests, timeout: 45, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
-          { name: "t3k llama2_70b tests", arch: wormhole_b0, cmd: run_t3000_llama2_70b_tests, timeout: 45, owner_id: U03FJB5TM5Y}, #Colman Glagovich
           { name: "t3k llama3_90b tests", arch: wormhole_b0, cmd: run_t3000_llama3_90b_tests, timeout: 45, owner_id: U07RY6B5FLJ}, #Gongyu Wang
           # { name: "t3k llama3_70b tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 45, owner_id: U03FJB5TM5Y}, #Colman Glagovich  # FIXME issue #14934
           { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 60, owner_id: U03PUAKE719}, #Miguel Tairum Cruz

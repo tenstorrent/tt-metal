@@ -191,6 +191,9 @@ class CrossAttentionTransformer(torch.nn.Module):
                 max_num_images=max_num_images,
             )
 
+            max_actual_num_chunks = max([i for chunk in num_chunks for i in chunk])
+            max_actual_num_chunks = max_actual_num_chunks if max_actual_num_chunks <= 2 else self.max_num_chunks
+
         if skip_vision_encoder:
             vision_tokens = torch.zeros(
                 (
@@ -203,11 +206,11 @@ class CrossAttentionTransformer(torch.nn.Module):
             )
         else:
             # TT vision_model
-            vision_tokens = self.vision_model(stacked_images, aspect_ratios)
+            vision_tokens = self.vision_model(stacked_images, aspect_ratios, max_actual_num_chunks)
             chunk_seq_len = self.configuration.vision_chunk_ntok
             # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
             vision_tokens = ttnn.reshape(
-                vision_tokens[0, :, :chunk_seq_len], (bsz, max_num_images, self.max_num_chunks, -1, self.model_dim)
+                vision_tokens[0, :, :chunk_seq_len], (bsz, max_num_images, max_actual_num_chunks, -1, self.model_dim)
             )
 
         bsz, nimg, nchunk, ntok, image_token_dim = tuple(vision_tokens.shape)
@@ -223,7 +226,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             batch_masks,
             num_chunks,
             total_len,
-            self.max_num_chunks,
+            max_actual_num_chunks,
             prefill_len,
         )
 
