@@ -5,15 +5,15 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "UnidirLinearMulticast"
     fabric_setup:
@@ -21,15 +21,15 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
     patterns:
-      - type: unidirectional_linear_multicast
+      - type: unidirectional_linear
 
   - name: "SingleSenderLinearUnicastAllDevices"
     fabric_setup:
@@ -37,30 +37,15 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: unicast
-      ntype: unicast_write
       ssize: 1024
       num_packets: 100
 
-    senders:
-      - device: [0, 0]
-        patterns:
-          - destination:
-              device: [0, 1]
-          - destination:
-              device: [0, 2]
-          - destination:
-              device: [0, 3]
-      - device: [0, 4]
-        patterns:
-          - destination:
-              device: [0, 5]
-          - destination:
-              device: [0, 6]
-          - destination:
-              device: [0, 7]
+    patterns:
+      - type: one_to_all
 
   - name: "FullRingMulticast"
     sync: true
@@ -69,15 +54,31 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
     patterns:
-      - type: full_ring_multicast
+      - type: full_ring
+
+  - name: "FullRingUnicast"
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: full_ring
 
   - name: "HalfRingMulticast"
     fabric_setup:
@@ -86,46 +87,48 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
     patterns:
-      - type: half_ring_multicast
+      - type: half_ring
 
   - name: "MeshMulticast"
     fabric_setup:
       topology: Mesh
-      # more links caused rt args exceed 256
-      num_links: 1
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "MeshMulticastDynamic"
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
-      # more links caused rt args exceed 256
-      num_links: 1
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "PacketSizesMeshMulticast"
     fabric_setup:
@@ -168,27 +171,12 @@ Tests:
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
       ftype: unicast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
-    senders:
-      - device: [0, 0]
-        patterns:
-          - destination:
-              device: [0, 1]
-          - destination:
-              device: [0, 2]
-          - destination:
-              device: [0, 3]
-          - destination:
-              device: [0, 4]
-          - destination:
-              device: [0, 5]
-          - destination:
-              device: [0, 6]
-          - destination:
-              device: [0, 7]
+    patterns:
+      - type: one_to_all

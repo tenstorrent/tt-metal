@@ -206,7 +206,10 @@ public:
      * 2. Non wrap-around mesh: when hitting a boundary, traffic wraps around to the opposite edge of the mesh.
      */
     std::vector<FabricNodeId> get_ring_topology_dst_node_ids(
-        const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
+        const FabricNodeId& src_node_id,
+        RoutingDirection initial_direction,
+        uint32_t total_hops,
+        ChipSendType chip_send_type) const {
         std::vector<std::pair<FabricNodeId, RoutingDirection>> ring_path;
 
         // Check if this is a wrap-around mesh
@@ -224,8 +227,16 @@ public:
         ring_destinations.reserve(total_hops);
 
         // Extract destination nodes (skip the source node, get the next nodes in path)
-        for (const auto& [current_node, direction] : ring_path) {
-            ring_destinations.push_back(current_node);
+        for (uint32_t hop = 0; hop < ring_path.size(); ++hop) {
+            const auto& [current_node, direction] = ring_path[hop];
+            if (chip_send_type == ChipSendType::CHIP_UNICAST) {
+                // only push the dest node for last hop
+                if (hop == total_hops - 1) {
+                    ring_destinations.push_back(current_node);
+                }
+            } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                ring_destinations.push_back(current_node);
+            }
         }
 
         log_debug(
@@ -365,7 +376,7 @@ public:
                 }
             }
             TT_FATAL(total_hops != 0, "all directions has 0 hops");
-            return get_ring_topology_dst_node_ids(src_node, initial_direction, total_hops);
+            return get_ring_topology_dst_node_ids(src_node, initial_direction, total_hops, chip_send_type);
         }
 
         std::vector<FabricNodeId> dst_nodes;
@@ -670,10 +681,10 @@ public:
         auto num_backward_hops = 0;
         uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
 
-        if (pattern_type == HighLevelTrafficPattern::FullRingMulticast) {
+        if (pattern_type == HighLevelTrafficPattern::FullRing) {
             num_forward_hops = full_hop_count;
             num_backward_hops = full_hop_count;
-        } else if (pattern_type == HighLevelTrafficPattern::HalfRingMulticast) {
+        } else if (pattern_type == HighLevelTrafficPattern::HalfRing) {
             num_forward_hops = tt::div_up(full_hop_count, 2);
             num_backward_hops = full_hop_count - num_forward_hops;
             if (src_node_id.chip_id % 2 == 0) {
@@ -681,7 +692,7 @@ public:
             }
         } else {
             TT_THROW(
-                "Unsupported pattern type for ring multicast: only FullRingMulticast and HalfRingMulticast are "
+                "Unsupported pattern type for ring: only FullRing and HalfRing are "
                 "supported");
         }
 
@@ -716,10 +727,10 @@ public:
             TT_THROW("input mesh dim is not supported: {}", dim);
         }
 
-        if (pattern_type == HighLevelTrafficPattern::FullRingMulticast) {
+        if (pattern_type == HighLevelTrafficPattern::FullRing) {
             num_forward_hops = full_hop_count;
             num_backward_hops = full_hop_count;
-        } else if (pattern_type == HighLevelTrafficPattern::HalfRingMulticast) {
+        } else if (pattern_type == HighLevelTrafficPattern::HalfRing) {
             num_forward_hops = tt::div_up(full_hop_count, 2);
             num_backward_hops = full_hop_count - num_forward_hops;
             if (src_node_id.chip_id % 2 == 0) {
@@ -727,7 +738,7 @@ public:
             }
         } else {
             TT_THROW(
-                "Unsupported pattern type for ring multicast: only FullRingMulticast and HalfRingMulticast are "
+                "Unsupported pattern type for ring: only FullRing and HalfRing are "
                 "supported");
         }
 
@@ -917,14 +928,14 @@ public:
                     auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
 
                     multi_directional_hops = this->get_wrap_around_mesh_full_or_half_ring_mcast_hops(
-                        src_device, dst_node_forward, dst_node_backward, HighLevelTrafficPattern::FullRingMulticast);
+                        src_device, dst_node_forward, dst_node_backward, HighLevelTrafficPattern::FullRing);
 
                 } else {
                     // if not wrap around mesh, then need to get the neighbours on all directions.
-                    auto ns_hops = this->get_full_or_half_ring_mcast_hops(
-                        src_device, HighLevelTrafficPattern::FullRingMulticast, NS_DIM);
-                    auto ew_hops = this->get_full_or_half_ring_mcast_hops(
-                        src_device, HighLevelTrafficPattern::FullRingMulticast, EW_DIM);
+                    auto ns_hops =
+                        this->get_full_or_half_ring_mcast_hops(src_device, HighLevelTrafficPattern::FullRing, NS_DIM);
+                    auto ew_hops =
+                        this->get_full_or_half_ring_mcast_hops(src_device, HighLevelTrafficPattern::FullRing, EW_DIM);
                     for (const auto& [direction, hops] : ns_hops) {
                         if (hops != 0) {
                             multi_directional_hops[direction] = hops;
@@ -1397,6 +1408,8 @@ private:
         tt::tt_fabric::SetFabricConfig(fabric_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
+        // first need to re-init contorl plane so that it checks out the latest fabric config.
+        tt::tt_metal::MetalContext::instance().initialize_control_plane();
         control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
 
         // Initialize mesh and device info that was deferred from init()
