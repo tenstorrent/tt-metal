@@ -52,6 +52,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<uint32_t>& cluster_axis) {
     tt::tt_metal::Program program{};
@@ -71,6 +72,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
         ring_index,
         topology,
         semaphore,
+        barrier_semaphore,
         sub_device_id,
         empty_fused_op_signaler);
 }
@@ -89,6 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
@@ -107,6 +110,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             ring_index,
             topology,
             semaphore,
+            barrier_semaphore,
             sub_device_id,
             fused_op_signaler);
     } else {
@@ -125,6 +129,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             ring_index,
             topology,
             semaphore,
+            barrier_semaphore,
             sub_device_id,
             fused_op_signaler);
     }
@@ -144,6 +149,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
@@ -413,6 +419,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     input_tensor_Wt,                            // row_offset
                 (link * batch_slice_num_pages / num_links),     // tiles_read
                 (link + 1) * batch_slice_num_pages / num_links  // tiles_to_read
+                barrier_semaphore.has_value(),                   // use synchronize barrier semaphore
+                barrier_semaphore.has_value()                    // synchronize barrier semaphore
+                    ? barrier_semaphore.value().address()
+                    : 0
             };
             if (intermediate_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(intermediate_tensor, writer_rt_args);
@@ -500,6 +510,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
