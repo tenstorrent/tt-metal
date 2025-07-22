@@ -117,13 +117,11 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program sender_program = tt_metal::Program();
 
-    auto risc = (fixture->GetArch() == tt::ARCH::BLACKHOLE) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0;
-
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_dram_to_dram_sender.cpp",
         eth_sender_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = risc});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -146,7 +144,7 @@ bool chip_to_chip_dram_buffer_transfer(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_dram_to_dram_receiver.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = risc});  // probably want to use NOC_1 here
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -241,13 +239,11 @@ bool chip_to_chip_interleaved_buffer_transfer(
     uint32_t remaining_bytes = (uint32_t)(cfg.size_bytes % max_buffer);
     uint32_t remaining_pages = remaining_bytes / cfg.page_size_bytes;
 
-    auto risc = (fixture->GetArch() == tt::ARCH::BLACKHOLE) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0;
-
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_sender.cpp",
         eth_sender_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = risc, .compile_args = {(uint32_t)input_is_dram}});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {(uint32_t)input_is_dram}});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -277,7 +273,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_receiver.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .processor = risc, .compile_args = {(uint32_t)output_is_dram}});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = {(uint32_t)output_is_dram}});
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -415,7 +411,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     }
 }
 
-TEST_F(N300DispatchFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
+TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
