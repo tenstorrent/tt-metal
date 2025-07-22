@@ -74,14 +74,14 @@ class Generator:
 
         out_list = []
         for idx, user_id in enumerate(empty_slots):
-            logger.info(f"Prefilling User {user_id + 1}")
-
             model_id = user_id // max_batch_size_per_model
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
-
             prefill_seq_len = get_padded_prefill_len(seq_len)
+
+            logger.info(f"Prefilling User {user_id + 1} up to {prefill_seq_len} tokens")
+
             prefill_ids = torch.cat(
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
@@ -518,11 +518,11 @@ class Generator:
             empty_slots = list(range(batch_size))
 
         for idx, user_id in enumerate(empty_slots):
-            logger.info(f"Prefilling User {user_id + 1}")
-
             model_id = user_id // max_batch_size_per_model
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
+
+            logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
             user_page_table = page_table[idx : idx + 1] if page_table is not None else None
             user_cross_page_table = cross_page_table[idx : idx + 1] if kv_cache is not None else None
