@@ -238,9 +238,6 @@ ninja install # Installs to build directory by default, required for Python envi
 source python_env/bin/activate
 ```
 
-- (optional) Software dependencies for profiling use:
-  - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
-
 - Continue to [You Are All Set!](#you-are-all-set)
 
 ---
