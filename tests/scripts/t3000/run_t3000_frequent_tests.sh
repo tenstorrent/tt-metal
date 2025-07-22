@@ -21,28 +21,6 @@ run_t3000_ethernet_tests() {
   fi
 }
 
-# TODO [Deprecation notice] - Llama2-70B will be deprecated soon for the new Llama3-70B. The CI tests will be deprecated with it.
-run_t3000_llama2_70b_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama2_70b_tests"
-
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_mlp_t3000.py ; fail+=$?
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_attention_t3000.py ; fail+=$?
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_decoder_t3000.py ; fail+=$?
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_model_t3000.py --timeout=900 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama2_70b_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_llama3_tests() {
   # Record the start time
   fail=0
@@ -392,9 +370,6 @@ run_t3000_tests() {
 
   # Run llama3 small (1B, 3B, 8B, 11B) tests
   run_t3000_llama3_tests
-
-  # Run llama2-70b tests
-  run_t3000_llama2_70b_tests
 
   # Run llama3-70b tests
   run_t3000_llama3_70b_tests
