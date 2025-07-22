@@ -37,7 +37,9 @@ struct MoeExpertTokenRemapDeviceOperation {
     struct Multicore {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            // TODO
+            tt::tt_metal::KernelHandle ternary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            std::vector<CoreCoord> utilized_cores;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -79,7 +81,6 @@ struct MoeExpertTokenRemapDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // TODO
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& topk_tensor,
         const ttnn::Tensor& mapping_tensor,
