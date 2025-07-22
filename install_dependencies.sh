@@ -398,30 +398,6 @@ install_mpi_ulfm(){
     apt-get install -f -y "$TMP_DIR/$DEB_FILE"
 }
 
-# We don't really want to have hugepages dependency
-# This could be removed in the future
-
-configure_hugepages() {
-    # Check if OS is Ubuntu/Debian-based
-    if ! is_debian_based; then
-        echo "[WARNING] Hugepages configuration is currently only supported on Ubuntu/Debian-based distributions"
-        echo "[WARNING] This function needs to be expanded to support $OS_ID"
-        return
-    fi
-
-    # Fetch the lastest tt-tools release link and name of package
-    TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
-    TT_TOOLS_NAME=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .name')
-
-    echo "[INFO] Installing Tenstorrent Hugepages Service $TT_TOOLS_NAME..."
-    TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR $TT_TOOLS_LINK
-    apt-get install -y --no-install-recommends $TEMP_DIR/$TT_TOOLS_NAME
-    sudo systemctl enable --now 'dev-hugepages\x2d1G.mount'
-    sudo systemctl enable --now tenstorrent-hugepages.service
-    rm -rf "$TEMP_DIR"
-}
-
 install() {
     echo "[INFO] Installing TT-Metalium dependencies for $OS_ID ($PKG_MANAGER)..."
 
@@ -438,11 +414,6 @@ install() {
     install_sfpi
     install_llvm
     install_mpi_ulfm
-
-    # Configure system (hugepages, etc.) - only for baremetal (not docker)
-    if [ "$docker" -ne 1 ]; then
-        configure_hugepages
-    fi
 }
 
 cleanup() {
