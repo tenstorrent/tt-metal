@@ -10,6 +10,10 @@ from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
+NUM_DEVICES = ttnn.distributed.get_num_devices()
+MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
+MESH_Y = 1 if NUM_DEVICES <= 8 else NUM_DEVICES / MESH_X
+
 
 class SdxlMmTest(OpTestBase):
     def __init__(
@@ -160,6 +164,7 @@ mm_test_cases = [
         pytest.param(2, id="2chips"),
         pytest.param(8, id="8chips"),
         pytest.param((8, 4), id="galaxy"),
+        pytest.param((MESH_X, MESH_Y), id="all"),  # run on all available devices
     ],
     indirect=["mesh_device"],
 )
@@ -170,9 +175,6 @@ def test_sdxl_matmul(
     test_config,
     grid_size=(8, 8),
 ):
-    if is_blackhole() and mesh_device.get_num_devices() > 1:
-        pytest.skip("Multi-chip Blackhole has not been tested")
-
     # Initialize input configurations
     if is_blackhole():
         compute_grid = get_blackhole_grid_size(mesh_device)
@@ -246,7 +248,6 @@ def test_sdxl_matmul(
     sdxl_matmul_test.run_op_test()
 
 
-@skip_for_blackhole("Multi-chip Blackhole has not been tested")
 @pytest.mark.parametrize("test_config", mm_test_cases, ids=[c["id"] for c in mm_test_cases])
 @pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"logical_chip_{i}_" for i in range(32)])
 @pytest.mark.parametrize(

@@ -30,12 +30,9 @@ GELU = True
     indirect=["mesh_device"],
 )
 def test_reproduce_matmul_2d_hang(mesh_device, ff1_hang_dummy_param, didt_workload_iterations):
-    if is_blackhole() and mesh_device.get_num_devices() > 1:
-        pytest.skip("Multi-chip Blackhole has not been tested")
     test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, -1)
 
 
-@skip_for_blackhole("Multi-chip Blackhole has not been tested")
 @pytest.mark.parametrize(
     "logical_chip_index",
     [0, 1, 2, 3, 4, 5, 6, 7],
@@ -66,16 +63,12 @@ def test_specific_chip_reproduce_matmul_2d_hang(mesh_device, logical_chip_index,
     indirect=["mesh_device"],
 )
 def test_determinism(mesh_device, didt_workload_iterations, determinism_check_interval):
-    if is_blackhole() and mesh_device.get_num_devices() > 1:
-        pytest.skip("Multi-chip Blackhole has not been tested")
-
     if determinism_check_interval == -1:
         determinism_check_interval = 1
 
     test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, determinism_check_interval, False)
 
 
-@skip_for_blackhole("Multi-chip Blackhole has not been tested")
 @pytest.mark.parametrize(
     "logical_chip_index",
     [0, 1, 2, 3, 4, 5, 6, 7],
