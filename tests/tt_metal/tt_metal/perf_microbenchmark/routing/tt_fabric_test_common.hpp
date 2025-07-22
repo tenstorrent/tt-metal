@@ -331,21 +331,17 @@ public:
     }
 
     // Local runtime args function - writes args to local args buffer instead of using SetRuntimeArgs
-    void set_local_runtime_args(
+    void write_data_to_core(
         const MeshCoordinate& device_coord,
-        const std::vector<CoreCoord>& cores,
+        const CoreCoord& core,
         uint32_t local_args_address,
         const std::vector<uint32_t>& args) const override {
-        auto mesh_buffer = create_mesh_buffer_helper(cores, local_args_address, args.size() * sizeof(uint32_t));
+        auto mesh_buffer = create_mesh_buffer_helper({core}, local_args_address, args.size() * sizeof(uint32_t));
 
-        const auto total_size = args.size() * sizeof(uint32_t) * cores.size();
+        const auto total_size = args.size() * sizeof(uint32_t);
         std::vector<uint32_t> all_args_buffer;
         all_args_buffer.reserve(total_size / sizeof(uint32_t));
-
-        // Replicate args for each core
-        for (size_t core_idx = 0; core_idx < cores.size(); ++core_idx) {
-            all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
-        }
+        all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
 
         tt::tt_metal::distributed::WriteShard(
             mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);

@@ -55,9 +55,9 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const = 0;
-    virtual void set_local_runtime_args(
+    virtual void write_data_to_core(
         const MeshCoordinate& device_coord,
-        const std::vector<CoreCoord>& cores,
+        const CoreCoord& cores,
         uint32_t local_args_address,
         const std::vector<uint32_t>& args) const = 0;
 };

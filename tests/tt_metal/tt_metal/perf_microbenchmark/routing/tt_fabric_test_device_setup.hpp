@@ -811,7 +811,7 @@ inline void TestDevice::set_local_runtime_args_for_core(
     CoreCoord logical_core,
     uint32_t local_args_address,
     const std::vector<uint32_t>& args) const {
-    device_info_provider_->set_local_runtime_args(device_coord, {logical_core}, local_args_address, args);
+    device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 
 }  // namespace fabric_tests
