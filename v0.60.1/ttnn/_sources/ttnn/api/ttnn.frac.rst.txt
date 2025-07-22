@@ -1,0 +1,8 @@
+﻿ttnn.frac
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.frac:
+
+.. autodata:: ttnn.frac

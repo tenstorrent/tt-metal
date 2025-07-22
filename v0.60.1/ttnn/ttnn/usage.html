@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Using TT-NN &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/usage.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Tensor" href="tensor.html" />
+    <link rel="prev" title="Install" href="installing.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Using TT-NN</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#basic-examples">Basic Examples</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#converting-from-and-to-torch-tensor">1. Converting from and to torch tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#running-an-operation-on-the-device">2. Running an operation on the device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#using-getitem-to-slice-the-tensor">3. Using __getitem__ to slice the tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#enabling-program-cache">4. Enabling program cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#debugging-intermediate-tensors">5. Debugging intermediate tensors</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#tracing-the-graph-of-operations">6. Tracing the graph of operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#using-tt-lib-operation-in-tt-nn">7. Using tt_lib operation in TT-NN</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#enabling-logging">8. Enabling Logging</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#supported-python-operators">9. Supported Python Operators</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#changing-the-string-representation-of-the-tensor">10. Changing the string representation of the tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#visualize-using-web-browser">11. Visualize using Web Browser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#register-pre-and-or-post-operation-hooks">12. Register pre- and/or post-operation hooks</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#query-all-operations">13. Query all operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#falling-back-to-torch">14. Falling back to torch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#capturing-graph-of-c-functions-buffer-allocations-etc">15. Capturing graph of C++ functions, buffer allocations, etc</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Using TT-NN</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ttnn/usage.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="using-tt-nn">
+<span id="using-ttnn"></span><h1>Using TT-NN<a class="headerlink" href="#using-tt-nn" title="Permalink to this heading"></a>
+</h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>These basic snippets currently work on Grayskull only. We are working on
+updating the API for other architectures, like Wormhole.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>If you are using a wheel or a Docker Release Image,
+you will need to install Pytorch for these examples to work.
+<code class="docutils literal notranslate"><span class="pre">`sh</span>
+<span class="pre">pip</span> <span class="pre">install</span> <span class="pre">torch</span>
+<span class="pre">`</span></code></p>
+</div>
+<section id="basic-examples">
+<h2>Basic Examples<a class="headerlink" href="#basic-examples" title="Permalink to this heading"></a>
+</h2>
+<section id="converting-from-and-to-torch-tensor">
+<h3>1. Converting from and to torch tensor<a class="headerlink" href="#converting-from-and-to-torch-tensor" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="running-an-operation-on-the-device">
+<h3>2. Running an operation on the device<a class="headerlink" href="#running-an-operation-on-the-device" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor_a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">input_tensor_a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor_a</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">input_tensor_a</span><span class="p">)</span>
+<span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor_b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">input_tensor_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor_b</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">matmul_output_tensor</span> <span class="o">=</span> <span class="n">input_tensor_a</span> <span class="o">@</span> <span class="n">input_tensor_b</span>
+<span class="n">torch_matmul_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">matmul_output_tensor</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">torch_matmul_output_tensor</span><span class="p">)</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="using-getitem-to-slice-the-tensor">
+<h3>3. Using __getitem__ to slice the tensor<a class="headerlink" href="#using-getitem-to-slice-the-tensor" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+
+<span class="c1"># Note that this not a view, unlike torch tensor</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">96</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">input_tensor</span><span class="p">[:</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">:</span><span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">:</span><span class="mi">64</span><span class="p">]</span>  <span class="c1"># this particular slice will run on the device</span>
+<span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="enabling-program-cache">
+<h3>4. Enabling program cache<a class="headerlink" href="#enabling-program-cache" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Running the first time will compile the program and cache it</span>
+<span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+<span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+<span class="n">end_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">duration</span> <span class="o">=</span> <span class="n">end_time</span> <span class="o">-</span> <span class="n">start_time</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"duration of the first run: </span><span class="si">{</span><span class="n">duration</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># stdout: duration of the first run: 0.6391518115997314</span>
+
+<span class="c1"># Running the subsequent time will use the cached program</span>
+<span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+<span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+<span class="n">end_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">duration</span> <span class="o">=</span> <span class="n">end_time</span> <span class="o">-</span> <span class="n">start_time</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"duration of the second run: </span><span class="si">{</span><span class="n">duration</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># stdout: duration of the subsequent run: 0.0007393360137939453</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="debugging-intermediate-tensors">
+<h3>5. Debugging intermediate tensors<a class="headerlink" href="#debugging-intermediate-tensors" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="k">with</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">manage_config</span><span class="p">(</span><span class="s2">"enable_comparison_mode"</span><span class="p">,</span> <span class="kc">True</span><span class="p">):</span>
+    <span class="k">with</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">manage_config</span><span class="p">(</span>
+        <span class="s2">"comparison_mode_pcc"</span><span class="p">,</span> <span class="mf">0.9998</span>
+    <span class="p">):</span>  <span class="c1"># This is optional in case default value of 0.9999 is too high</span>
+        <span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+<span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="tracing-the-graph-of-operations">
+<h3>6. Tracing the graph of operations<a class="headerlink" href="#tracing-the-graph-of-operations" title="Permalink to this heading"></a>
+</h3>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This basic snippet is under construction, and may not work on all hardware architectures.</p>
+</div>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+
+<span class="k">with</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tracer</span><span class="o">.</span><span class="n">trace</span><span class="p">():</span>
+    <span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+    <span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">tracer</span><span class="o">.</span><span class="n">visualize</span><span class="p">(</span><span class="n">torch_output_tensor</span><span class="p">,</span> <span class="n">file_name</span><span class="o">=</span><span class="s2">"exp_trace.svg"</span><span class="p">)</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="using-tt-lib-operation-in-tt-nn">
+<h3>7. Using tt_lib operation in TT-NN<a class="headerlink" href="#using-tt-lib-operation-in-tt-nn" title="Permalink to this heading"></a>
+</h3>
+<p><cite>tt_lib</cite> operations are missing some of the features of TT-NN operations such as graph tracing and in order to support these features, TT-NN provides a different to call <cite>tt_lib</cite> operations that enabled the missing features.</p>
+<p><cite>tt_lib</cite> operations are missing some of the features of TT-NN operations such as graph tracing and in order to support these features, TT-NN provides a different to call <cite>tt_lib</cite> operations that enabled the missing features.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>  <span class="c1"># exp migrated to ttnn</span>
+<span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="enabling-logging">
+<h3>8. Enabling Logging<a class="headerlink" href="#enabling-logging" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># To print currently executing TT-NN operations</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TTNN_CONFIG_OVERRIDES</span><span class="o">=</span><span class="s1">'{"enable_fast_runtime_mode": false, "enable_logging": true}'</span>
+
+<span class="c1"># To print the currently executing TT-NN and tt_lib operation and its input tensors to stdout</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_LOGGER_TYPES</span><span class="o">=</span>Op
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_LOGGER_LEVEL</span><span class="o">=</span>Debug
+</pre></div>
+</div>
+<p>Logging is not a substitute for profiling.
+Please refer to <a class="reference internal" href="profiling_ttnn_operations.html"><span class="doc">Profiling TT-NN Operations</span></a> for instructions on how to profile operations.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The logging is only available when compiling with CONFIG=assert or CONFIG=debug.</p>
+</div>
+</section>
+<section id="supported-python-operators">
+<h3>9. Supported Python Operators<a class="headerlink" href="#supported-python-operators" title="Permalink to this heading"></a>
+</h3>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This basic snippet is under construction, and may not work on all hardware architectures.</p>
+</div>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">input_tensor_a</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">input_tensor_b</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Add (supports broadcasting)</span>
+<span class="n">input_tensor_a</span> <span class="o">+</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Subtract (supports broadcasting)</span>
+<span class="n">input_tensor_a</span> <span class="o">-</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Multiply (supports broadcasting)</span>
+<span class="n">input_tensor_a</span> <span class="o">-</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Matrix Multiply</span>
+<span class="n">input_tensor_a</span> <span class="o">@</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Equals</span>
+<span class="n">input_tensor_a</span> <span class="o">==</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Not equals</span>
+<span class="n">input_tensor_a</span> <span class="o">!=</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Greater than</span>
+<span class="n">input_tensor_a</span> <span class="o">&gt;</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Greater than or equals</span>
+<span class="n">input_tensor_a</span> <span class="o">&gt;=</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Less than</span>
+<span class="n">input_tensor_a</span> <span class="o">&lt;</span> <span class="n">input_tensor_b</span>
+
+<span class="c1"># Less than or equals</span>
+<span class="n">input_tensor_a</span> <span class="o">&lt;=</span> <span class="n">input_tensor_b</span>
+</pre></div>
+</div>
+</section>
+<section id="changing-the-string-representation-of-the-tensor">
+<h3>10. Changing the string representation of the tensor<a class="headerlink" href="#changing-the-string-representation-of-the-tensor" title="Permalink to this heading"></a>
+</h3>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This basic snippet is under construction, and may not work on all hardware architectures.</p>
+</div>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="c1"># Profile can be set to "empty", "short" or "full"</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">set_printoptions</span><span class="p">(</span><span class="n">profile</span><span class="o">=</span><span class="s2">"full"</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="visualize-using-web-browser">
+<h3>11. Visualize using Web Browser<a class="headerlink" href="#visualize-using-web-browser" title="Permalink to this heading"></a>
+</h3>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This basic snippet is under construction, and may not work on all hardware architectures.</p>
+</div>
+<p>Set the following environment variables as needed</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># enable_fast_runtime_mode - This has to be disabled to enable logging</span>
+<span class="c1"># enable_logging - Synchronize main thread after every operation and log the operation</span>
+<span class="c1"># report_name (optional) - Name of the report used by the visualizer. If not provided, then no data will be dumped to disk</span>
+<span class="c1"># enable_detailed_buffer_report (if report_name is set) - Enable to visualize the detailed buffer report after every operation</span>
+<span class="c1"># enable_graph_report (if report_name is set) - Enable to visualize the graph after every operation</span>
+<span class="c1"># enable_detailed_tensor_report (if report_name is set) - Enable to visualize the values of input and output tensors of every operation</span>
+<span class="c1"># enable_comparison_mode (if report_name is set) - Enable to test the output of operations against their golden implementaiton</span>
+
+
+<span class="w"> </span><span class="c1"># If running a pytest that is located inside of tests/ttnn, use this config (unless you want to override "report_name" manually)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TTNN_CONFIG_OVERRIDES</span><span class="o">=</span><span class="s1">'{</span>
+<span class="s1">    "enable_fast_runtime_mode": false,</span>
+<span class="s1">    "enable_logging": true,</span>
+<span class="s1">    "enable_graph_report": false,</span>
+<span class="s1">    "enable_detailed_buffer_report": false,</span>
+<span class="s1">    "enable_detailed_tensor_report": false,</span>
+<span class="s1">    "enable_comparison_mode": false</span>
+<span class="s1">}'</span>
+
+<span class="c1"># Otherwise, use this config and make sure to set "report_name"</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TTNN_CONFIG_OVERRIDES</span><span class="o">=</span><span class="s1">'{</span>
+<span class="s1">    "enable_fast_runtime_mode": false,</span>
+<span class="s1">    "enable_logging": true,</span>
+<span class="s1">    "report_name": "&lt;name of the run in the visualizer&gt;",</span>
+<span class="s1">    "enable_graph_report": false,</span>
+<span class="s1">    "enable_detailed_buffer_report": false,</span>
+<span class="s1">    "enable_detailed_tensor_report": false,</span>
+<span class="s1">    "enable_comparison_mode": false</span>
+<span class="s1">}'</span>
+
+<span class="c1"># Additionally, a json file can be used to override the config values</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TTNN_CONFIG_PATH</span><span class="o">=</span>&lt;path<span class="w"> </span>to<span class="w"> </span>the<span class="w"> </span>file&gt;
+</pre></div>
+</div>
+<p>Run the code. i.e.:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor_a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">2048</span><span class="p">,</span> <span class="mi">2048</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">torch_input_tensor_b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">2048</span><span class="p">,</span> <span class="mi">2048</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">input_tensor_a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch_input_tensor_a</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+    <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">input_tensor_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch_input_tensor_b</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+    <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">input_tensor_a</span><span class="p">,</span> <span class="n">input_tensor_b</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">input_tensor_a</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">input_tensor_b</span><span class="p">)</span>
+
+<span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Open the visualizer by running the following command:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>python<span class="w"> </span>ttnn/visualizer/app.py
+</pre></div>
+</div>
+</section>
+<section id="register-pre-and-or-post-operation-hooks">
+<h3>12. Register pre- and/or post-operation hooks<a class="headerlink" href="#register-pre-and-or-post-operation-hooks" title="Permalink to this heading"></a>
+</h3>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This basic snippet is under construction, and may not work on all hardware architectures.</p>
+</div>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">pre_hook_to_print_args_and_kwargs</span><span class="p">(</span><span class="n">operation</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Pre-hook called for </span><span class="si">{</span><span class="n">operation</span><span class="si">}</span><span class="s2">. Args: </span><span class="si">{</span><span class="n">args</span><span class="si">}</span><span class="s2">, kwargs: </span><span class="si">{</span><span class="n">kwargs</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">post_hook_to_print_output</span><span class="p">(</span><span class="n">operation</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">output</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Post-hook called for </span><span class="si">{</span><span class="n">operation</span><span class="si">}</span><span class="s2">. Output: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="k">with</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">register_pre_operation_hook</span><span class="p">(</span><span class="n">pre_hook_to_print_args_and_kwargs</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">register_post_operation_hook</span><span class="p">(</span><span class="n">post_hook_to_print_output</span><span class="p">):</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="mi">1</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="query-all-operations">
+<h3>13. Query all operations<a class="headerlink" href="#query-all-operations" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">query_registered_operations</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="falling-back-to-torch">
+<h3>14. Falling back to torch<a class="headerlink" href="#falling-back-to-torch" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+
+<span class="c1"># Recommended approach</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">silu</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+
+<span class="c1"># Alternative approach that only works with some operations</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">get_fallback_function</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">silu</span><span class="p">)(</span><span class="n">input_tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="capturing-graph-of-c-functions-buffer-allocations-etc">
+<h3>15. Capturing graph of C++ functions, buffer allocations, etc<a class="headerlink" href="#capturing-graph-of-c-functions-buffer-allocations-etc" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
+
+<span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+
+<span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="n">size</span> <span class="o">=</span> <span class="mi">128</span>
+<span class="n">scalar</span> <span class="o">=</span> <span class="mi">3</span>
+
+<span class="k">with</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">manage_device</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="k">as</span> <span class="n">device</span><span class="p">:</span>
+    <span class="n">torch_input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">size</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">begin_graph_capture</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">RunMode</span><span class="o">.</span><span class="n">NO_DISPATCH</span><span class="p">)</span>
+    <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">output_tensor</span> <span class="o">=</span> <span class="n">input_tensor</span> <span class="o">+</span> <span class="n">scalar</span>
+    <span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">,</span> <span class="n">torch_rank</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">captured_graph</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">end_graph_capture</span><span class="p">()</span>
+
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">pretty_print</span><span class="p">(</span><span class="n">captured_graph</span><span class="p">)</span>
+
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">visualize</span><span class="p">(</span><span class="n">captured_graph</span><span class="p">,</span> <span class="n">file_name</span><span class="o">=</span><span class="s2">"graph.svg"</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="installing.html" class="btn btn-neutral float-left" title="Install" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="tensor.html" class="btn btn-neutral float-right" title="Tensor" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
