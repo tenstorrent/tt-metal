@@ -173,8 +173,9 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     auto padded_shape_w =
         parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, TILE_WIDTH);
-    ttnn::Shape output_shape({1, 1, shape_w, shape_c});
-    ttnn::Shape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
+    // auto padded_shape_w = this->untilize_out ? conv_output_w : tt::round_up(conv_output_w, TILE_WIDTH);
+    // auto padded_shape_c = this->untilize_out ? shape_c : tt::round_up(this->output_channels, TILE_WIDTH);
+    ttnn::Shape output_shape({batch_size, conv_output_h, conv_output_w, shape_c});
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
@@ -184,6 +185,12 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
         auto shard_grid = this->memory_config.shard_spec().value().grid;
         auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
         auto mem_config = this->memory_config.with_shard_spec(shard_spec);
+        log_info(
+            tt::LogOp,
+            "Output Shape : {}, Shard Shape : {}, {}",
+            output_shape,
+            shard_shape,
+            mem_config.memory_layout());
         return {TensorSpec(
             output_shape,
             TensorLayout(
@@ -191,15 +198,14 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                 PageConfig(output_layout),
                 mem_config,
                 Alignment(
-                    {tt::constants::TILE_HEIGHT,
+                    {output_layout == Layout::TILE ? tt::constants::TILE_HEIGHT : 1,
                      tt::constants::TILE_WIDTH})  // Conv2D always outputs in tile multiples, even if output layout is
                                                   // Row Major.
                 ))};
     }
     return {TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
-            dtype, PageConfig(output_layout), memory_config, output_shape, padded_output_shape))};
+        TensorLayout::fromPaddedShape(dtype, PageConfig(output_layout), memory_config, output_shape, output_shape))};
 }
 
 operation::ProgramWithCallbacks OptimizedConvNew::create_program(

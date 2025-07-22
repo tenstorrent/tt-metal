@@ -738,8 +738,9 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 input_tensor = resharded_input_tensor;
             }
         } else {
-            input_tensor = ttnn::to_device(
-                input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+            // Using to_device with sharded memory config causes the alignment to be incorrect.
+            input_tensor = ttnn::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+            input_tensor = ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config, std::nullopt);
         }
     }
     return {input_tensor, parallel_config, output_parallel_config};

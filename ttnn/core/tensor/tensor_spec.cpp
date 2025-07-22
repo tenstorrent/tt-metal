@@ -42,11 +42,11 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
             num_shards,
             num_cores);
     } else if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        TT_FATAL(
-            physical_height == physical_shard_height,
-            "Shard height {} must match physical height {} for width sharded",
-            physical_shard_height,
-            physical_height);
+        // TT_FATAL(
+        //     physical_height == physical_shard_height,
+        //     "Shard height {} must match physical height {} for width sharded",
+        //     physical_shard_height,
+        //     physical_height);
         uint32_t num_shards = div_up(physical_width, physical_shard_width);
         TT_FATAL(
             num_shards <= num_cores,

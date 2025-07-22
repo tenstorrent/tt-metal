@@ -15,7 +15,7 @@ from models.utility_functions import skip_for_blackhole
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
-        (353, 384, 8, 8, WS, None),
+        (353, 384, 8, 8, WS, {"act_block_h": 160}),
         (128, 128, 32, 32, BS, None),
         (16, 16, 256, 256, HS, {"act_block_h": 32}),
     ),

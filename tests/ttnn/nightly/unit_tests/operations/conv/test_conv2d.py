@@ -294,8 +294,8 @@ def run_conv(
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
     # out is in row major layout and NHWC shape
     # NHWC to NCHW
-    out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
-    out = out[:, :, :, :output_channels]
+    out = out[:, :, :out_width, :output_channels]
+    out = out.reshape(total_batch_size, out_height, out_width, output_channels)
 
     ref = torch.permute(ref, (0, 2, 3, 1))
 

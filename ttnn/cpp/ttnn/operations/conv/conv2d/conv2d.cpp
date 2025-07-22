@@ -575,6 +575,17 @@ Result conv2d_L1(
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
+    uint32_t width_alignment = conv_config.output_layout == Layout::ROW_MAJOR ? 1 : tt::constants::TILE_HEIGHT;
+    uint32_t output_width_padding = 0;
+    if (output_width % width_alignment) {
+        output_width_padding = width_alignment - (output_width % width_alignment);
+        padding_n4[3] += output_width_padding * stride[1];
+        log_info(
+            tt::LogOp,
+            "Conv2D: Setting padding to {} for aligning output width to {}. ",
+            output_width_padding,
+            width_alignment);
+    }
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
         compute_config,
@@ -584,10 +595,16 @@ Result conv2d_L1(
         out_channels,
         batch_size,
         output_height,
-        output_width,
+        output_width + output_width_padding,
         kernel_size,
         compute_grid_size);
 
+    log_info(
+        tt::LogOp,
+        "conv2d: Using Conv2D Op with parallel config: {}, block config: {}, output memory config: {}",
+        opt_conv_op_parallel_config,
+        opt_conv_op_block_config,
+        conv_out_memory_config);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
