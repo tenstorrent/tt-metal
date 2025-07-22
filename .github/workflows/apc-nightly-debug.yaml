@@ -21,9 +21,14 @@ jobs:
     name: apc nightly debug run (${{ matrix.version }})
     strategy:
       matrix:
-        version: ["22.04", "24.04"]
+        include:
+          - version: "22.04"
+            tests-to-run: "all"
+          - version: "24.04"
+            tests-to-run: "sd-unit-tests,fast-dispatch-unit-tests,fabric-unit-tests,ttnn-unit-tests,models-unit-tests,cpp-unit-tests,tt-train-cpp-unit-tests,t3000-fast-tests,run-profiler-regression"
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
       version: ${{ matrix.version }}
+      tests-to-run: ${{ matrix.tests-to-run }}
