@@ -301,6 +301,7 @@ conv_test_cases = [
 ]
 
 
+@skip_for_blackhole("Blackhole has not been tested, see #25544")
 @pytest.mark.parametrize("test_config", conv_test_cases, ids=[c["id"] for c in conv_test_cases])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
