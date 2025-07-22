@@ -22,8 +22,8 @@ namespace ttnn::operations::ccl {
 
 struct MultiDeviceScatterDeviceOperation {
     struct operation_attributes_t {
-        const uint32_t dim;
-        const uint32_t cluster_axis;
+        uint32_t dim;
+        uint32_t cluster_axis;
         const MemoryConfig output_mem_config;
     };
     struct tensor_args_t {
@@ -88,10 +88,7 @@ struct MultiDeviceScatterDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const int32_t dim,
-        const uint32_t cluster_axis,
-        const ttnn::MemoryConfig& memory_config);
+        const ttnn::Tensor& input_tensor, int32_t dim, uint32_t cluster_axis, const ttnn::MemoryConfig& memory_config);
 };
 }  // namespace ttnn::operations::ccl
 

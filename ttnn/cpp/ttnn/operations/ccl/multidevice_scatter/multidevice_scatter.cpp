@@ -17,8 +17,8 @@ namespace ttnn::operations::ccl {
 ttnn::Tensor ExecuteMultideviceScatter::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
+    int32_t dim,
+    uint32_t cluster_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     return ttnn::prim::multidevice_scatter(
         input_tensor, dim, cluster_axis, memory_config.value_or(input_tensor.memory_config()));

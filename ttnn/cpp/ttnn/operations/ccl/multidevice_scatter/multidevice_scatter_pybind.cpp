@@ -48,8 +48,8 @@ void py_bind_multidevice_scatter(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               uint32_t dim,
-               const uint32_t cluster_axis,
+               int32_t dim,
+               uint32_t cluster_axis,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                QueueId queue_id) { return self(queue_id, input_tensor, dim, cluster_axis, memory_config); },
             py::arg("input_tensor").noconvert(),

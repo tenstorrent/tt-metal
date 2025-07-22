@@ -16,8 +16,8 @@ struct ExecuteMultideviceScatter {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const int32_t dim,
-        const uint32_t cluster_axis,
+        int32_t dim,
+        uint32_t cluster_axis,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 

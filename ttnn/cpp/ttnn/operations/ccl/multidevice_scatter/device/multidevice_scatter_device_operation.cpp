@@ -80,10 +80,7 @@ MultiDeviceScatterDeviceOperation::tensor_return_value_t MultiDeviceScatterDevic
 
 std::tuple<MultiDeviceScatterDeviceOperation::operation_attributes_t, MultiDeviceScatterDeviceOperation::tensor_args_t>
 MultiDeviceScatterDeviceOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
-    const ttnn::MemoryConfig& memory_config) {
+    const ttnn::Tensor& input_tensor, int32_t dim, uint32_t cluster_axis, const ttnn::MemoryConfig& memory_config) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
