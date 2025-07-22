@@ -55,9 +55,11 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->mesh_id) {
-        return routing_table->intra_mesh_routing_table[dst_dev_id];
+        return static_cast<eth_chan_directions>(
+            routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
     } else {
-        return routing_table->inter_mesh_routing_table[dst_mesh_id];
+        return static_cast<eth_chan_directions>(
+            routing_table->inter_mesh_routing_table.get_original_direction(dst_mesh_id));
     }
 }
 
