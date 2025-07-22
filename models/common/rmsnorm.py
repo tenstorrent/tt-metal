@@ -160,7 +160,7 @@ class RMSNorm(LightweightModule):
                 num_links=1,
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                subdevice_id=self.tt_ccl.worker_sub_device_id,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,

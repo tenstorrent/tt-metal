@@ -78,7 +78,7 @@ def test_decoder_inference(mesh_device, reset_seeds):
             num_links=1,
             topology=model_args.ccl_topology(),
             memory_config=mem_cfg,
-            subdevice_id=tt_ccl.worker_sub_device_id,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
