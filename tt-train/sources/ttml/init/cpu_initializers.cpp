@@ -15,7 +15,6 @@ xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range) {
     std::vector<float> data(shape.volume());
     uniform_init(data, range);
     std::vector<uint32_t> shape_vec(shape.cbegin(), shape.cend());
-    // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
     return xt::adapt(data, shape_vec);
 }
 
@@ -23,30 +22,33 @@ xt::xarray<float> normal_init(const ttnn::Shape& shape, NormalParams params) {
     std::vector<float> data(shape.volume());
     normal_init(data, params);
     std::vector<uint32_t> shape_vec(shape.cbegin(), shape.cend());
-    // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
+    return xt::adapt(data, shape_vec);
+}
+
+xt::xarray<float> constant_init(const ttnn::Shape& shape, float value) {
+    std::vector<float> data(shape.volume());
+    constant_init(data, value);
+    std::vector<uint32_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(data, shape_vec);
 }
 
 void uniform_init(std::vector<float>& vec, UniformRange range) {
     auto& [a, b] = range;
-
-    std::uniform_real_distribution<float> dist(a, b);
-
-    std::generate(
-        vec.begin(), vec.end(), [&]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
+    std::function<std::uniform_real_distribution<float>(void)> dist_factory = [&]() {
+        return std::uniform_real_distribution<float>(a, b);
+    };
+    parallel_generate(vec, dist_factory);
 }
 
 void normal_init(std::vector<float>& vec, NormalParams params) {
     auto& [mean, stddev] = params;
-
-    std::normal_distribution<float> dist(mean, stddev);
-
-    std::generate(
-        vec.begin(), vec.end(), [&]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
+    std::function<std::normal_distribution<float>(void)> dist_factory = [&]() {
+        return std::normal_distribution<float>(mean, stddev);
+    };
+    parallel_generate(vec, dist_factory);
 }
 
 void constant_init(std::vector<float>& vec, float value) {
-    // Fill the vector with the specified constant value
     std::fill(vec.begin(), vec.end(), value);
 }
 
