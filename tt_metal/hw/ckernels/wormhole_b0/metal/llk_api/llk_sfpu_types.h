@@ -81,6 +81,7 @@ enum class SfpuType {
     sub_uint16,
     mul_uint16,
     mul_int32,
+    lt,
     topk_local_sort,
     topk_merge,
     topk_rebuild,
