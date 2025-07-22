@@ -88,30 +88,6 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped
     return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(chip_id);
 }
 
-template <typename CONNECTIVITY_MAP_T>
-void build_golden_link_counts(
-    CONNECTIVITY_MAP_T const& golden_connectivity_map,
-    std::unordered_map<MeshId, std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>&
-        golden_link_counts_out) {
-    static_assert(
-        std::is_same_v<CONNECTIVITY_MAP_T, IntraMeshConnectivity> ||
-            std::is_same_v<CONNECTIVITY_MAP_T, InterMeshConnectivity>,
-        "Invalid connectivity map type");
-    for (std::uint32_t mesh_id = 0; mesh_id < golden_connectivity_map.size(); mesh_id++) {
-        for (std::uint32_t chip_id = 0; chip_id < golden_connectivity_map[mesh_id].size(); chip_id++) {
-            for (const auto& [remote_connected_id, router_edge] : golden_connectivity_map[mesh_id][chip_id]) {
-                TT_FATAL(
-                    golden_link_counts_out[MeshId{mesh_id}][chip_id][router_edge.port_direction] == 0,
-                    "Golden link counts already set for chip {} in mesh {}",
-                    chip_id,
-                    mesh_id);
-                golden_link_counts_out[MeshId{mesh_id}][chip_id][router_edge.port_direction] =
-                    router_edge.connected_chip_ids.size();
-            }
-        }
-    }
-}
-
 std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
     chip_id_t chip_id, std::uint32_t num_ports_per_side) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -130,6 +106,28 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
     }
 
     return adjacent_chips;
+}
+
+// Helper function to find an unused routing direction for intermesh links
+// Returns the first NESW direction with fewer than max_channels_per_direction channels
+// Throws if no suitable direction is found
+RoutingDirection find_unused_routing_direction(
+    const std::map<FabricNodeId, std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>&
+        router_port_directions_to_physical_eth_chan_map,
+    const FabricNodeId& fabric_node_id,
+    size_t max_channels_per_direction) {
+    // Loop through NESW directions in order of preference
+    const std::vector<RoutingDirection> directions = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W};
+
+    for (const auto& direction : directions) {
+        const auto& router_directions = router_port_directions_to_physical_eth_chan_map.at(fabric_node_id);
+        auto it = router_directions.find(direction);
+        if (it == router_directions.end() || it->second.size() < max_channels_per_direction) {
+            return direction;
+        }
+    }
+    TT_THROW("Could not find free ethernet channel for link");
 }
 
 }  // namespace
@@ -168,11 +166,11 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
-            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& golden_link_counts,
             size_t& val) {
             if (skip_direction(fabric_node_id, direction)) {
                 return;
             }
+            // If the direction has valid eth channels, update the minimum to be the smallest number of eth channels
             if (auto it = port_direction_eth_chans.find(direction); it != port_direction_eth_chans.end()) {
                 val = std::min(val, it->second.size());
             }
@@ -189,15 +187,9 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         }
     }
 
-    std::unordered_map<MeshId, std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>
-        golden_link_counts;
     TT_FATAL(
         this->routing_table_generator_ != nullptr && this->routing_table_generator_->mesh_graph != nullptr,
         "Routing table generator not initialized");
-    build_golden_link_counts(
-        this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity(), golden_link_counts);
-    build_golden_link_counts(
-        this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity(), golden_link_counts);
 
     auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
         if (skip_direction(fabric_node_id, direction)) {
@@ -236,31 +228,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
                 const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
 
-                const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(fabric_chip_id);
-                apply_min(
-                    fabric_node_id,
-                    port_directions,
-                    RoutingDirection::E,
-                    golden_counts,
-                    row_min_planes.at(mesh_coord_x));
-                apply_min(
-                    fabric_node_id,
-                    port_directions,
-                    RoutingDirection::W,
-                    golden_counts,
-                    row_min_planes.at(mesh_coord_x));
-                apply_min(
-                    fabric_node_id,
-                    port_directions,
-                    RoutingDirection::N,
-                    golden_counts,
-                    col_min_planes.at(mesh_coord_y));
-                apply_min(
-                    fabric_node_id,
-                    port_directions,
-                    RoutingDirection::S,
-                    golden_counts,
-                    col_min_planes.at(mesh_coord_y));
+                apply_min(fabric_node_id, port_directions, RoutingDirection::E, row_min_planes.at(mesh_coord_x));
+                apply_min(fabric_node_id, port_directions, RoutingDirection::W, row_min_planes.at(mesh_coord_x));
+                apply_min(fabric_node_id, port_directions, RoutingDirection::N, col_min_planes.at(mesh_coord_y));
+                apply_min(fabric_node_id, port_directions, RoutingDirection::S, col_min_planes.at(mesh_coord_y));
             }
 
             // TODO: specialize by topology for better perf
@@ -360,13 +331,14 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     // Query and generate intermesh ethernet links per physical chip
     this->initialize_intermesh_eth_links();
     this->generate_local_intermesh_link_table();
-
 }
 
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+
+    // FIXME: Find a way to map the M direction to for intermesh links
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
@@ -517,7 +489,8 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 continue;
             }
             auto host_rank_id = this->get_local_host_rank_id_binding();
-            const auto& mesh_container = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+            const auto& mesh_container =
+                this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
 
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
             const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
@@ -687,9 +660,14 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             for (chip_id_t dst_mesh_id_val = 0;
                  dst_mesh_id_val < router_inter_mesh_routing_table[src_mesh_id_val][src_fabric_chip_id].size();
                  dst_mesh_id_val++) {
+
                 // Target direction is the direction to the destination mesh for all ethernet channesl
+                // FIXME: Need to change change to next mesh id instead of direction
                 const auto& target_direction =
                     router_inter_mesh_routing_table[src_mesh_id_val][src_fabric_chip_id][dst_mesh_id_val];
+
+                const std::unordered_set<RoutingDirection> valid_directions = {
+                    RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
@@ -712,11 +690,12 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                         } else if (target_direction == direction) {
                             // This entry represents an outgoing eth channel
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id_val] =
-                                src_chan_id;
+                                    src_chan_id;
                         } else {
+                            // FIXME: Need to find a way to find the ethernet channels to the target mesh without the direction
                             const auto& eth_chans_in_target_direction =
                                 this->router_port_directions_to_physical_eth_chan_map_.at(
-                                    src_fabric_node_id)[target_direction];
+                                    src_fabric_node_id)[target_direction]; // FIXME: Should change this map to use next fabric_node_id
                             const auto src_routing_plane_id =
                                 this->get_routing_plane_id(src_chan_id, eth_chans_on_side);
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id_val] =
@@ -864,8 +843,9 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                         FabricNodeId(mesh_id, logical_connected_chip_id));
 
                     const auto& connected_chips_and_eth_cores =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
-                            physical_chip_id);
+                        tt::tt_metal::MetalContext::instance()
+                            .get_cluster()
+                            .get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
                     bool connections_exist = connected_chips_and_eth_cores.find(physical_connected_chip_id) !=
                                              connected_chips_and_eth_cores.end();
@@ -1983,9 +1963,22 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
                        .get_cluster()
                        .get_soc_desc(physical_chip_id)
                        .logical_eth_core_to_chan_map.at(eth_core);
+
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
+        std::uint32_t num_ports_per_side =
+            routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
+
+        // Special case for non-directional intermesh links
+        if (direction == RoutingDirection::M) {
+            direction = find_unused_routing_direction(
+                this->router_port_directions_to_physical_eth_chan_map_,
+                fabric_node_id,
+                num_ports_per_side);  // Change teh 2 to be auto deteremined
+        }
+
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
+
     } else {
         log_debug(
             tt::LogFabric,
@@ -2059,21 +2052,20 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
                 break;  // No need to check other edges, we found the matching intermesh link
             }
         }
+
+        // Use helper function to find unused direction
+        if (intermesh_routing_direction == RoutingDirection::M) {
+            std::uint32_t num_ports_per_side =
+                routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
+            intermesh_routing_direction = find_unused_routing_direction(
+                this->router_port_directions_to_physical_eth_chan_map_, fabric_node_id, num_ports_per_side);
+        }
+
         if (intermesh_routing_direction != RoutingDirection::NONE) {
             auto& direction_to_channel_map = router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
             direction_to_channel_map[intermesh_routing_direction].push_back(eth_chan);
         }
     }
-    // Compute the number of intermesh links requsted by the user and ensure that they could be mapped to physical links
-    // on the fabric node
-    uint32_t num_links_requested_on_node = 0;
-    for (const auto& [connected_mesh_id, edge] :
-         inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
-        num_links_requested_on_node += edge.connected_chip_ids.size();
-    }
-    TT_FATAL(
-        num_directions_assigned == num_links_requested_on_node,
-        "Could not bind all edges in the Mesh Graph to an intermesh link.");
 }
 
 const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }

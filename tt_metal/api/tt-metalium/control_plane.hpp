@@ -53,8 +53,12 @@ public:
     // Printing functions
     void print_routing_tables() const;
     void print_ethernet_channels() const;
+    void print_detailed_ethernet_connections() const;
     void print_active_ethernet_connections() const;
     void print_all_ethernet_connections() const;
+    
+    // Debug function to print ethernet channel connections
+    void print_ethernet_channel_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
     void configure_routing_tables_for_fabric_ethernet_channels(

@@ -53,7 +53,8 @@ enum class RoutingDirection {
     S = 4,
     W = 8,
     C = 16,     // Centre, means that destination is same as source
-    NONE = 32,  // No direction, means that destination is not reachable
+    M = 32,     // Graph, for intermesh connections
+    NONE = 64,  // No direction, means that destination is not reachable
 };
 
 struct RouterEdge {
@@ -115,7 +116,9 @@ public:
 private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
-        const MeshCoordinate& src_mesh_coord, const MeshCoordinateRange& mesh_coord_range, FabricType fabric_type) const;
+        const MeshCoordinate& src_mesh_coord,
+        const MeshCoordinateRange& mesh_coord_range,
+        FabricType fabric_type) const;
     void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
 
     void add_to_connectivity(
