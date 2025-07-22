@@ -6,8 +6,6 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
-#include "debug/dprint.h"
-#include "ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -53,39 +51,6 @@ void kernel_main() {
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-    // {
-    //     cb_reserve_back(cb_identity_scale_in, 1);
-    //     auto ptr = ArrayView<uint32_t, cb_identity_scale_in, CBAccessType::CB_BACK_RW>();
-
-    //     for (uint32_t i = 0; i < ptr.size(); ++i) {
-    //         ptr[i] = 0;
-    //     }
-    //     // for (uint32_t i = 0; i < ptr.size(); ++i) {
-    //     //     DPRINT << " ptr[" << i << "]: " << ptr[i] << ENDL();
-    //     // }
-    //     // DPRINT << " ptr[num_elements+10]: " << ptr[ptr.size() + 10] << ENDL();
-    //     // ptr[ptr.size() + 10] = 0; // [INFO] out of bounds!
-    //     for (uint32_t k = 0; k < 4; ++k) {
-    //         uint32_t idx = k << 7;
-    //         for (uint32_t j = 0; j < 8; ++j) {
-    //             ptr[idx + j] = identity_scalar_packed;
-    //         }
-    //     }
-    //     DPRINT << " cb_id: " << cb_identity_scale_in << ENDL();
-    //     DPRINT << " scaler: " << identity_scalar_packed << ENDL();
-    //     for (uint8_t iii = 0; iii < 32; ++iii) {
-    //         DPRINT << TileSlice(
-    //                       cb_identity_scale_in,
-    //                       0,
-    //                       SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-    //                       TSLICE_OUTPUT_CB,
-    //                       TSLICE_WR_PTR,
-    //                       true,
-    //                       true)
-    //                << ENDL();
-    //     }
-    //     cb_push_back(cb_identity_scale_in, 1);
-    // }
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
@@ -104,17 +69,7 @@ void kernel_main() {
                 const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
                 uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, out_row_start_tile, 0);
 
-                // DPRINT << " out_chunk_tiles: " << out_chunk_tiles << ENDL();
                 cb_wait_front(cb_out, out_chunk_tiles);
-                // // [INFO] print out the mask tiles in its data format
-                // for (uint8_t iii = 0; iii < 32; ++iii) {
-                //     DPRINT << TileSlice(
-                //                   cb_out,
-                //                   0,
-                //                   SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws =
-                //                   1}, true, true)
-                //            << ENDL();
-                // }
                 barrier_count = 0;
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
                 for (uint32_t row = 0; row < out_row_tile_count; ++row) {
@@ -134,5 +89,4 @@ void kernel_main() {
             }
         }
     }
-    // DPRINT << "  [END writer_windowed] " << ENDL();
 }

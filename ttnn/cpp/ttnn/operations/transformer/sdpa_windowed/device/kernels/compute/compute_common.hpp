@@ -16,32 +16,6 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 
-#include "debug/dprint.h"
-#include "debug/dprint_tile.h"
-
-template <uint32_t num_tiles>
-void max_block_inplace(uint32_t in0, uint32_t in1) {
-    // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
-    max_tile_init();
-
-    constexpr uint32_t dst_reg_0 = 0;
-    constexpr uint32_t dst_reg_1 = 1;
-    cb_wait_front(in0, num_tiles);
-    cb_wait_front(in1, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst();
-        copy_tile(in0, i, dst_reg_0);
-        copy_tile(in1, i, dst_reg_1);
-        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::C));
-        pack_tile(dst_reg_0, in0);
-        release_dst();
-    }
-    cb_pop_front(in0, num_tiles);
-    cb_reserve_back(in0, num_tiles);
-    cb_push_back(in0, num_tiles);
-}
-
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows, uint32_t cols>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
@@ -187,19 +161,6 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
             tile_regs_wait();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 pack_tile(j, out_cb);
-                // DPRINT_PACK({
-                //     // [INFO] print out the mask tiles in its data format
-                //     for (uint8_t iii = 0; iii < 32; ++iii) {
-                //         DPRINT << TileSlice(
-                //                       out_cb,
-                //                       i * dst_tiles + j,
-                //                       SliceRange{
-                //                           .h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                //                       true,
-                //                       true)
-                //                << ENDL();
-                //     }
-                // });
             }
             tile_regs_release();
         }
@@ -214,36 +175,6 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
         cb_reserve_back(out_cb, num_tiles);
         cb_push_back(out_cb, num_tiles);
     }
-}
-
-template <uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t num_tiles>
-void mul_block_bcast_scalar_inplace() {
-    // Precondition: in0_cb has num_tiles produced
-    // Precondition: in1_scalar_cb has 1 produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_scalar_cb has 1 produced
-
-    constexpr uint32_t dst_tiles = MUL_BCAST_GRANULARITY;
-    constexpr uint32_t granularity = num_tiles >> LOG2_MUL_BCAST_GRANULARITY;
-    reconfig_data_format(in0_cb, in1_scalar_cb);
-    mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_scalar_cb, 1);
-    uint32_t in0_index = 0;
-    for (uint32_t g = 0; g < granularity; ++g) {
-        acquire_dst();
-        for (uint32_t i = 0; i < dst_tiles; ++i) {
-            mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, in0_index, 0, i);
-            in0_index++;
-        }
-        for (uint32_t i = 0; i < dst_tiles; ++i) {
-            pack_tile(i, in0_cb);
-        }
-        release_dst();
-    }
-    cb_pop_front(in0_cb, num_tiles);
-    cb_reserve_back(in0_cb, num_tiles);
-    cb_push_back(in0_cb, num_tiles);
 }
 
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
@@ -315,25 +246,6 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     }
 }
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-    // Precondition: in_cb has num_tiles produced
-    // Precondition: out_cb has num_tiles free
-    // Postcondition: in_cb has num_tiles consumed
-    // Postcondition: out_cb has num_tiles produced
-    copy_tile_to_dst_init_short(in_cb);
-    cb_wait_front(in_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
-#pragma GCC unroll 0
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
-        copy_tile(in_cb, i, 0 /*dst*/);
-        pack_tile(0, out_cb);
-        cb_push_back(out_cb, 1);
-        release_dst();
-    }
-    cb_pop_front(in_cb, num_tiles);
-}
-
 void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
@@ -396,19 +308,6 @@ void matmul_blocks(
         in0_index_offset += subblock_h * in0_block_w;
     }
     cb_pop_front(in1_cb, K * N);
-    // DPRINT_PACK({
-    //     DPRINT << " output_num_tiles: " << output_num_tiles << ENDL();
-    //     // [INFO] print out the mask tiles in its data format
-    //     for (uint8_t iii = 0; iii < 32; ++iii) {
-    //         DPRINT << TileSlice(
-    //                       out_cb,
-    //                       0,
-    //                       SliceRange{.h0 = iii, .h1 = (uint8_t)(iii + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-    //                       true,
-    //                       true)
-    //                << ENDL();
-    //     }
-    // });
     cb_push_back(out_cb, output_num_tiles);
 }
 
