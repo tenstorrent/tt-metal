@@ -4,7 +4,7 @@
 
 import torch
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 import ttnn
 
 
@@ -55,8 +55,7 @@ class TTMistral3PatchMerger(LightweightModule):
         self.merging_weights = as_tensor("merging_layer", dtype)
         self.merging_bias = as_tensor("merging_layer", ttnn.bfloat16, is_bias=False)
 
-    def forward(self, image_features: ttnn.Tensor, image_sizes: ttnn.Tensor) -> ttnn.Tensor:
-        image_sizes = ttnn.to_torch(image_sizes, dtype=torch.int32)
+    def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
         image_sizes = [
             (image_size[0] // self.patch_size, image_size[1] // self.patch_size) for image_size in image_sizes
         ]
@@ -148,7 +147,7 @@ class TTMistral3MultiModalProjector(LightweightModule):
         self.linear_2_weight = as_tensor("linear_2", dtype)
         self.linear_2_bias = as_tensor("linear_2", ttnn.bfloat16, is_bias=False)
 
-    def forward(self, image_features: ttnn.Tensor, image_sizes: ttnn.Tensor):
+    def forward(self, image_features: ttnn.Tensor, image_sizes):
         image_features = self.norm(image_features, mode="decode")
         image_features = self.patch_merger(image_features, image_sizes)
 
