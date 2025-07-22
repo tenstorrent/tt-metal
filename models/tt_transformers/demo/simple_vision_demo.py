@@ -59,7 +59,7 @@ def create_multimodal_model(
     dtype=ttnn.bfloat16,
     use_paged_kv_cache=False,
     checkpoint=None,
-    cache_hf=True,
+    cache_hf=False,
 ):
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
@@ -96,7 +96,7 @@ def prepare_generator_args(
     max_seq_len,
     dtype=ttnn.bfloat16,
     use_paged_kv_cache=False,
-    cache_hf=True,
+    cache_hf=False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
