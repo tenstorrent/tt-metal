@@ -275,7 +275,7 @@ Max Prefill Chunk Sizes (text-only):
 To help manage memory usage, you can control whether the HuggingFace model is cached in memory using the `cache_hf` parameter via command line or code:
 
 ```python
-# For memory-constrained environments - disable caching
+# Default: disables caching to conserve memory usage
 model_args = ModelArgs(
     mesh_device,
     cache_hf=False,  # Default: Reduces memory usage by not keeping HF model in memory
@@ -283,7 +283,7 @@ model_args = ModelArgs(
     max_seq_len=2048
 )
 
-# Default behavior - enables caching for faster repeated access
+# Optional: enables caching for faster repeated access
 model_args = ModelArgs(
     mesh_device,
     cache_hf=True,  # Cache HF model for better performance running reference tests
