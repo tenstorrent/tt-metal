@@ -316,7 +316,7 @@ public:
 
     void launch_programs() { fixture_->run_programs(); }
 
-    void wait_for_prorgams() { fixture_->wait_for_programs(); }
+    void wait_for_programs() { fixture_->wait_for_programs(); }
 
     void validate_results() {
         for (const auto& [_, test_device] : test_devices_) {

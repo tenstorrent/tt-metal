@@ -152,7 +152,7 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Launching programs");
             test_context.launch_programs();
 
-            test_context.wait_for_prorgams();
+            test_context.wait_for_programs();
             log_info(tt::LogTest, "Test {} Finished.", built_test.name);
 
             test_context.validate_results();

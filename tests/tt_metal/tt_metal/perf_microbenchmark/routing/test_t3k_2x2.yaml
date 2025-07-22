@@ -4,7 +4,7 @@
 
 # ======================================================================================
 # Optional Top-Level Configuration: Physical Mesh
-# This section allows you to specify a custom mesh descriptor pased on a mesh graph
+# This section allows you to specify a custom mesh descriptor based on a mesh graph
 # descriptor YAML file and ethernet coord mapping. If not specified, the default mesh
 # descriptor will be used. Both the ethernet mapping and yaml path are required
 # ======================================================================================
