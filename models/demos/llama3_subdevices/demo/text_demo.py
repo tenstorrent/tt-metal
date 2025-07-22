@@ -200,7 +200,7 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -217,7 +217,7 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -234,7 +234,7 @@ def create_tt_model(
             2,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -251,7 +251,7 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -268,7 +268,7 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -285,7 +285,7 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -296,13 +296,47 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # long-context-32k - Single user, 32K long prompt
+        (  # long-32k-b1 - Single user, 32K long prompt
             "models/demos/llama3_subdevices/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # long-64k-b1 - Single user, 64K long prompt
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # long-128k-b1 - Single user, 128K long prompt
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -373,6 +407,8 @@ def create_tt_model(
         "long-8k-b1",  # 4k context for 1 user
         "long-16k-b32",  # 16K context for 32 users
         "long-32k-b1",  # 32k context for 1 user
+        "long-64k-b1",  # 64k context for 1 user
+        "long-128k-b1",  # 128k context for 1 user
         "prefill-profile",  # prefill-only profile run
         "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-80L",  # pcc check for 80L + teacher forced
