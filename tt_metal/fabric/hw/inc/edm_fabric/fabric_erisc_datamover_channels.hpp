@@ -96,14 +96,6 @@ public:
     }
 #endif
 
-    FORCE_INLINE bool needs_to_send_channel_sync() const { return this->need_to_send_channel_sync; }
-
-    FORCE_INLINE void set_need_to_send_channel_sync(bool need_to_send_channel_sync) {
-        this->need_to_send_channel_sync = need_to_send_channel_sync;
-    }
-
-    FORCE_INLINE void clear_need_to_send_channel_sync() { this->need_to_send_channel_sync = false; }
-
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr() const { return this->cached_next_buffer_slot_addr; }
 
     FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
