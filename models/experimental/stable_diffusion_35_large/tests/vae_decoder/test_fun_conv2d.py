@@ -10,6 +10,7 @@ from loguru import logger
 from ...tt.vae_decoder.fun_conv2d import vae_conv2d, TtConv2dParameters
 from ...tt.utils import assert_quality, to_torch
 from models.utility_functions import comp_allclose, comp_pcc
+from ...tt.parallel_config import StableDiffusionParallelManager
 
 
 def print_stats(label, data: torch.Tensor, device=None):
@@ -22,27 +23,83 @@ def print_stats(label, data: torch.Tensor, device=None):
     return f"{label}: mean:{data_.mean()} , std:{data_.std()} , range:[{data_.max()}, {data_.min()}]"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}])
 @pytest.mark.parametrize(
-    ("batch", "in_channels", "out_channels", "height", "width"),
+    "mesh_device, cfg, sp, tp, topology",
     [
-        (1, 512, 512, 128, 128),
-        # (1, 32, 512, 512, 512),
-        # (1, 64, 512, 512, 512),
-        # (1, 128, 512, 512, 512),
-        # (1, 256, 512, 512, 512),
-        # (1, 256, 512, 32, 32),
-        # (1, 512, 512, 512, 512),
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+    ],
+    ids=[
+        "t3k_cfg2_sp2_tp2",
+        "tg_cfg2_sp4_tp4",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8284, "trace_region_size": 15210496}],
+    indirect=True,
+)
+
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}])
+@pytest.mark.parametrize(
+    ("batch", "height", "width", "in_channels", "out_channels"),
+    [
+        (1, 128, 128, 16, 512),
+        (1, 128, 128, 512, 512),
+        (1, 256, 256, 512, 512),
+        (1, 512, 512, 512, 512),
+        (1, 512, 512, 512, 256),
+        (1, 1024, 1024, 256, 256),
+        (1, 1024, 1024, 256, 128),
+        (1, 1024, 1024, 128, 3),
     ],
 )
 def test_fun_conv2d(
-    *, device: ttnn.Device, batch: int, in_channels: int, out_channels: int, height: int, width: int
+    *,
+    mesh_device: ttnn.Device,
+    batch: int,
+    in_channels: int,
+    out_channels: int,
+    height: int,
+    width: int,
+    cfg,
+    sp,
+    tp,
+    topology,
 ) -> None:
+    cfg_factor, cfg_axis = cfg
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device,
+        cfg_factor,
+        sp_factor,
+        tp_factor,
+        sp_factor,
+        tp_factor,
+        topology,
+        cfg_axis=cfg_axis,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+    )
     # torch_dtype = torch.float32
     torch_dtype = torch.bfloat16
     ttnn_dtype = ttnn.bfloat16
     torch.manual_seed(0)
+    device = parallel_manager.submesh_devices[0]  # mesh_device
     logger.info(f"Device: {device}, {device.core_grid}")
+
+    print([i for i in mesh_device.get_device_ids()])
+
+    # mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+
+    # Construct test tensor of data; 8 chunks of 32x32
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    ccl_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     torch_model = torch.nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1)
     torch_model.eval()
@@ -51,6 +108,7 @@ def test_fun_conv2d(
         torch_conv=torch_model,
         dtype=ttnn_dtype,
         device=device,
+        ccl_global_semaphore=ccl_semaphore_handles
         # act_block_h=64
     )
 
@@ -73,8 +131,11 @@ def test_fun_conv2d(
     tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
     assert_quality(out, tt_out_torch, pcc=0.94, ccc=0.94)
-    print(comp_allclose(out, tt_out_torch))
+    logger.info(comp_allclose(out, tt_out_torch))
     result, output = comp_pcc(out, tt_out_torch)
     logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")
     logger.info(print_stats("torch", out))
     logger.info(print_stats("tt", tt_out_torch, device=device))
+    logger.info("Second conv")
+    # tt_out = vae_conv2d(tt_inp, parameters)
+    # logger.info("Done...")

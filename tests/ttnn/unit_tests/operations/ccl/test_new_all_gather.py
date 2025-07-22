@@ -132,6 +132,8 @@ def run_all_gather_impl(
         pytest.fail("num_iters must be >= 1")
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    print(f"Mesh: {compute_grid_size} , mesh{mesh_device}, cluster_axis:{cluster_axis}")
+    breakpoint()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
