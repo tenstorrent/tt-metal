@@ -136,7 +136,7 @@ jobs:
         if: ${{ !matrix.test-group.civ2-compatible }}
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
-        timeout-minutes: 120
+        timeout-minutes: 60
         env:
           LOGURU_LEVEL: INFO
         with:
