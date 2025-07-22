@@ -31,6 +31,12 @@ on:
           - eltwise.unary.relu6.relu6_sharded
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
+          - eltwise.unary.asin.asin_sharded
+          - eltwise.unary.celu.celu_sharded
+          - eltwise.unary.clamp.clamp_binary_sharded
+          - eltwise.unary.clamp.clamp_ternary_sharded
+          - eltwise.unary.silu.silu_sharded
+          - eltwise.unary.logical_not_sharded.logical_not_sharded_
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
