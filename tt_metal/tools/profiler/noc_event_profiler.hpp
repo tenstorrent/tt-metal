@@ -4,9 +4,8 @@
 
 #pragma once
 
-#if defined(PROFILE_NOC_EVENTS) &&                                                              \
-    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-     defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
+#if defined(PROFILE_NOC_EVENTS) && (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || \
+                                    defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
 
 #include <utility>
 #include <tuple>

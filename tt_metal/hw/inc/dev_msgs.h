@@ -44,8 +44,14 @@ struct profiler_msg_template_t {
 #endif
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there (same as above for dprint)
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+// TODO: Review if this should  be 2 for BH (the number of eth processors)
+// Hardcode to 1 to keep size as before
+#ifdef ARCH_BLACKHOLE
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#else
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+#endif
 #else
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
@@ -265,17 +271,15 @@ enum riscv_id_t {
     DebugTrisc1 = 3,
     DebugTrisc2 = 4,
     DebugErisc = 5,
-    DebugSubordinateErisc = 6,
-    DebugIErisc = 7,
-    DebugSubordinateIErisc = 8,
-    DebugNumUniqueRiscs = 9,
-    DebugDebugMaxRiscvId = 15,  // For alignment requirements
+    DebugIErisc = 6,
+    DebugSubordinateIErisc = 7,
+    DebugNumUniqueRiscs
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[DebugDebugMaxRiscvId];
+    volatile uint8_t flags[DebugNumUniqueRiscs];
 };
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
@@ -291,7 +295,7 @@ struct debug_stack_usage_t {
         // min free stack, offset by +1 (0 == unset)
         volatile uint16_t min_free;
         volatile uint16_t watcher_kernel_id;
-    } cpu[DebugDebugMaxRiscvId];
+    } cpu[DebugNumUniqueRiscs];
 };
 
 enum watcher_enable_msg_t {
@@ -323,7 +327,7 @@ struct dprint_buf_msg_t {
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
-static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 6;
+static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
 
 enum class AddressableCoreType : uint8_t {
     TENSIX = 0,
