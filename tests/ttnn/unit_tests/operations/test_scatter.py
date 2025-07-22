@@ -27,9 +27,7 @@ def select_torch_dtype(ttnn_dtype):
 
 
 def rand_permutations(shape, dim, dtype):
-    # 1) generate uniform random floats
     r = torch.rand(*shape)
-    # 2) argsort them along `dim` → random permutation of indices
     return torch.argsort(r, dim=dim).to(dtype)
 
 
@@ -44,8 +42,6 @@ def rand_permutations(shape, dim, dtype):
         ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
         ([1, 128256], -1, [1, 128256], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
-        ##################
-        # these cases fail due to the int32 transpose issue
         ([50, 200], 0, [50, 200], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR),
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR),
@@ -72,7 +68,7 @@ def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, ind
     torch.manual_seed(0)
     torch_dtype = select_torch_dtype(input_dtype)
     torch_index_dtype = select_torch_dtype(index_dtype)
-    ##
+
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
 
@@ -127,7 +123,7 @@ def test_scatter_normal_with_callback(
     torch.manual_seed(0)
     torch_dtype = select_torch_dtype(input_dtype)
     torch_index_dtype = select_torch_dtype(index_dtype)
-    ##
+
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
 
@@ -240,7 +236,7 @@ def test_scatter_failing_cases(
     torch.manual_seed(0)
     torch_index_dtype = select_torch_dtype(index_dtype)
     torch_source_dtype = select_torch_dtype(source_dtype)
-    ##
+
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -253,3 +249,46 @@ def test_scatter_failing_cases(
 
     with pytest.raises(RuntimeError):
         ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_and_source_shape",
+    [
+        ([1, 1, 32, 32], [1, 1, 32, 32]),
+        ([1, 1, 320, 384], [1, 1, 320, 384]),
+        ([1, 3, 32, 32], [1, 3, 32, 32]),
+        ([1, 1, 32, 32], [1, 1, 64, 64]),
+        ([1, 1, 320, 320], [1, 1, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_scatter_forge(input_shape, index_and_source_shape, input_dtype, device):
+    import math
+
+    if math.prod(input_shape[:-1]) != math.prod(index_and_source_shape[:-1]):
+        pytest.xfail(
+            f"unsupported shapes configuration: input_shape has a non-last dimension of a different length than index_and_source_shape ({math.prod(input_shape[:-1])} vs {math.prod(index_and_source_shape[:-1])})"
+        )
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+    torch_index_dtype = select_torch_dtype(ttnn.int32)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_index = torch.randint(0, input_shape[-1], index_and_source_shape, dtype=torch_index_dtype)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_result = torch.scatter(torch_input, -1, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, -1, ttnn_index, ttnn_src)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
