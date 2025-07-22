@@ -74,7 +74,7 @@ private:
 
     std::shared_ptr<DistributedContext> m_distributed_context;
 
-    core::distributed::CCLResources m_ccl_resources{};
+    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources{};
 
     friend class ttsl::Indestructible<AutoContext>;
 };
