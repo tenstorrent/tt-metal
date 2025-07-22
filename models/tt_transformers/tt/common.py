@@ -9,7 +9,11 @@ from typing import Optional
 
 import torch
 from loguru import logger
+<<<<<<< HEAD
 from pydantic import AliasChoices, BaseModel, Field
+=======
+from pydantic import BaseModel, Field, AliasChoices
+>>>>>>> 8f2986c2d6 (Global and local embeddings)
 
 import ttnn
 
@@ -53,12 +57,16 @@ class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     rope_type: RopeScalingType = Field(
         validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
     )
 =======
     rope_type: RopeScalingType = Field(validation_alias="type", exclude=True, description="RoPE scaling type")
 >>>>>>> 2ad835013d (add linear scaling support to rope)
+=======
+    rope_type: RopeScalingType = Field(validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type")
+>>>>>>> 8f2986c2d6 (Global and local embeddings)
     factor: float
     original_max_position_embeddings: Optional[int] = None
 
