@@ -11,8 +11,6 @@ class TT_CCL:
         mesh_device,
     ):
         self.mesh_device = mesh_device
-
-        self.worker_sub_device_id = ttnn.SubDeviceId(0)
         self.sub_device_crs = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -25,6 +23,9 @@ class TT_CCL:
             }
         )
 
+        self.barrier_semaphore_idx = 0
+        self.barrier_semaphore_handles = []
+
         self.ag_semaphores_idx = 0
         self.ag_semaphore_handles = [[], []]
 
@@ -32,6 +33,9 @@ class TT_CCL:
         self.rs_semaphore_handles = [[], []]
 
         for i in range(2):
+            self.barrier_semaphore_handles.append(
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+            )
             for _ in range(2):
                 self.ag_semaphore_handles[i].append(
                     ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
@@ -41,16 +45,10 @@ class TT_CCL:
                     ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
                 )
 
-        self.ag_persistent_buffers = self.create_ag_persistent_buffers()  # dict[PersistentBufferKey, ttnn_tensor]
-        self.rs_persistent_buffers = (
-            self.create_rs_persistent_buffers()
-        )  # dict[tuple(PersistentBufferKey, PersistentBufferKey), ttnn_tensor] - intermediate_buffer, output_buffer
-
-        # TODO: Is this setup correct?
-        worker_sub_device = ttnn.SubDevice([self.sub_device_crs])
-        sub_device_manager = self.mesh_device.create_sub_device_manager([worker_sub_device], 0)
-        self.mesh_device.load_sub_device_manager(sub_device_manager)
-        self.mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
+    def get_and_cycle_barrier_semaphore_handle(self):
+        current_idx = self.barrier_semaphore_idx
+        self.barrier_semaphore_idx = (self.barrier_semaphore_idx + 1) % 2
+        return self.barrier_semaphore_handles[current_idx]
 
     def get_and_cycle_ag_semaphore_handles(self):
         current_idx = self.ag_semaphores_idx
@@ -61,9 +59,6 @@ class TT_CCL:
         current_idx = self.rs_semaphores_idx
         self.rs_semaphores_idx = (self.rs_semaphores_idx + 1) % 2
         return self.rs_semaphore_handles[current_idx]
-
-    def close(self):
-        self.mesh_device.reset_sub_device_stall_group()
 
 
 def tt_all_reduce(

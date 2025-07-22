@@ -445,6 +445,3 @@ class Transformer(LightweightModule):
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
-
-    def __del__(self):
-        self.tt_ccl.close()
