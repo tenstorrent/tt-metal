@@ -78,13 +78,12 @@ void MAIN {
         cb_wait_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
 
         // Sort and merge step of bitonic merge sort
-        uint32_t stages = ilog2(Wt);
+        const uint32_t stages = ilog2(Wt);
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
 
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
-                uint16_t pair_id = 0;
                 for (uint32_t i = 0; i < Wt; i++) {
                     uint32_t j = i ^ sub_dist;
 
@@ -158,35 +157,42 @@ void MAIN {
                         const uint32_t tile_id = i - global_tile_start;
                         constexpr uint32_t FIRST_TILE = 0;
 
-                        // Send tiles to other core
-                        tile_regs_acquire();
+                        if ((i & 1) == 0) {  // i % 2
+                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
 
-                        // Copy index tiles to DST register for exchange
-                        copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_index, global_old_cb);
-                        copy_tile(index_tensor_transposed_cb_index, tile_id, index_dest_start);
+                            copy_tile_between_cbs(
+                                global_old_cb,
+                                index_tensor_transposed_cb_index,
+                                tile_id,
+                                index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
 
-                        // Copy value tiles to DST register for exchange
-                        copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
-                        copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
+                            copy_tile_between_cbs(
+                                global_old_cb,
+                                input_tensor_transposed_cb_index,
+                                tile_id,
+                                value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
 
-                        tile_regs_commit();
-                        tile_regs_wait();
+                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
+                            cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
 
-                        // Send current index tile reader for exchange
-                        cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
-                        pack_reconfig_data_format(index_tensor_intermediate_cb_index);
-                        pack_tile(index_dest_start, index_tensor_intermediate_cb_index, FIRST_TILE);
-                        cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+                            copy_tile_between_cbs(
+                                global_old_cb,
+                                index_tensor_transposed_cb_index,
+                                tile_id + 1,
+                                index_tensor_intermediate_cb_index);
+                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
 
-                        // Send current value tile reader for exchange
-                        cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                        pack_reconfig_data_format(value_tensor_intermediate_cb_index);
-                        pack_tile(input_dest_start, value_tensor_intermediate_cb_index, FIRST_TILE);
-                        cb_push_back(value_tensor_intermediate_cb_index, one_tile);
-
-                        tile_regs_release();
-
-                        sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                            copy_tile_between_cbs(
+                                global_old_cb,
+                                input_tensor_transposed_cb_index,
+                                tile_id + 1,
+                                value_tensor_intermediate_cb_index);
+                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            sync_packer_unpacker(packer_unpacker_sync_cb_index);
+                        }
 
                         // Process received tiles from other core
                         tile_regs_acquire();
