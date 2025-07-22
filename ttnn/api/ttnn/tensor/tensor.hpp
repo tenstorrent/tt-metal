@@ -157,6 +157,9 @@ public:
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
+    template <typename T>
+    [[nodiscard]] T item(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+
     [[nodiscard]] Tensor to_device(
         IDevice* target_device,
         const MemoryConfig& mem_config = MemoryConfig{},
@@ -198,19 +201,6 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    // TODO: #22090 - Remove the following getters, after giving clients enough time to migrate.
-    [[deprecated("Use storage() instead")]] const Storage& get_storage() const;
-    [[deprecated("Use storage() instead")]] Storage& get_storage();
-    [[deprecated("Use dtype() instead")]] DataType get_dtype() const;
-    [[deprecated("Use layout() instead")]] Layout get_layout() const;
-    [[deprecated("Use logical_shape() instead")]] const ttnn::Shape& get_logical_shape() const;
-    [[deprecated("Use padded_shape() instead")]] const ttnn::Shape& get_padded_shape() const;
-    [[deprecated("Use tensor_spec() instead")]] const TensorSpec& get_tensor_spec() const;
-    [[deprecated("Use logical_volume() instead")]] uint64_t get_logical_volume() const;
-    [[deprecated("Use physical_volume() instead")]] uint32_t volume() const;
-    [[deprecated("Use distributed_tensor_config() instead")]] const DistributedTensorConfig&
-    get_distributed_tensor_config() const;
-
     const Storage& storage() const;
     Storage& storage();
     DataType dtype() const;
@@ -243,11 +233,13 @@ public:
 
     // Returns device `Storage`.
     // Throws if the tensor is not on device.
-    const DeviceStorage& device_storage() const;
+    const DeviceStorage& device_storage() const&;
+    const DeviceStorage& device_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns host `Storage`.
     // Throws if the tensor is not on host.
-    const HostStorage& host_storage() const;
+    const HostStorage& host_storage() const&;
+    const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.

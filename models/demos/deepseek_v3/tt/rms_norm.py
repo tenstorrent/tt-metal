@@ -57,7 +57,7 @@ class RMSNorm(AbstractModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=list(mesh_device.shape))
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=list(mesh_device.shape))
             if decoder_norm
             else ttnn.ReplicateTensorToMesh(mesh_device),
         )
@@ -87,11 +87,13 @@ class RMSNorm(AbstractModule):
         stats_memcfg = None
         is_distributed = False
         if norm_category == "attention_norm" or norm_category == "mlp_norm":
-            assert list(mesh_device.shape) == [8, 4], "Only 8x4 mesh devices are supported for Decoder RMSNorm"
+            assert (
+                list(mesh_device.shape)[1] == 8
+            ), f"Only ?x8 mesh devices are supported for Decoder RMSNorm, got {list(mesh_device.shape)}"
             is_distributed = True
             output_memcfg = None
             stats_memcfg = ttnn.create_sharded_memory_config(
-                shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * list(mesh_device.shape)[0]],
+                shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * list(mesh_device.shape)[1]],
                 core_grid=ttnn.CoreGrid(y=1, x=1),
                 strategy=ttnn.ShardStrategy.WIDTH,
             )
@@ -107,6 +109,7 @@ class RMSNorm(AbstractModule):
             output_dtype=ttnn.bfloat16,
             topology=ttnn.Topology.Linear,
             norm_category=norm_category,
+            mesh_device=MeshDeviceStub(mesh_device.shape),
         )
 
     @classmethod
@@ -144,12 +147,12 @@ class RMSNorm(AbstractModule):
         if cfg.is_distributed:
             return RMSNorm._distributed_rmsnorm(
                 x,
-                mesh_device=mesh_device,
                 epsilon=cfg.epsilon,
                 weight=cfg.weight,
                 compute_kernel_config=cfg.compute_kernel_config,
                 program_config=program_config,
                 output_memcfg=cfg.output_memcfg,
+                mesh_device=cfg.mesh_device,
                 stats_memcfg=cfg.stats_memcfg,
                 output_dtype=cfg.output_dtype,
                 topology=cfg.topology,
@@ -172,6 +175,7 @@ class RMSNorm(AbstractModule):
         compute_kernel_config,
         program_config,
         output_memcfg,
+        mesh_device,
         stats_memcfg,
         output_dtype,
         topology=ttnn.Topology.Linear,
@@ -183,7 +187,7 @@ class RMSNorm(AbstractModule):
             tt_stats,
             dim=3,
             num_links=1,
-            cluster_axis=0,
+            cluster_axis=1,
             mesh_device=mesh_device,
             memory_config=stats_memcfg,
             topology=topology,

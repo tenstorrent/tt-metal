@@ -378,7 +378,8 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                         cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
-                    std::map<uint8_t, uint32_t> num_pages_per_buffer_index = golden_num_pages_per_core.at(core_coord);
+                    const std::map<uint8_t, uint32_t>& num_pages_per_buffer_index =
+                        golden_num_pages_per_core.at(core_coord);
 
                     for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
@@ -410,7 +411,8 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                         cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
-                    std::map<uint8_t, uint32_t> num_pages_per_buffer_index = golden_num_pages_per_core.at(core_coord);
+                    const std::map<uint8_t, uint32_t>& num_pages_per_buffer_index =
+                        golden_num_pages_per_core.at(core_coord);
 
                     for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;

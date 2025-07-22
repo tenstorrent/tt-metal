@@ -197,10 +197,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->initialize_device_drivers();
 
-    // Only enable for not TG systems
-    if (!this->is_galaxy_cluster() && this->arch_ != tt::ARCH::BLACKHOLE) {
-        rtoptions.set_fd_fabric(true);
-    }
+    rtoptions.set_fd_fabric(true);
 
     this->disable_ethernet_cores_with_retrain();
 
@@ -582,7 +579,7 @@ tt_cxy_pair Cluster::get_virtual_coordinate_from_logical_coordinates(tt_cxy_pair
 CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord) const {
     auto& soc_desc = this->get_soc_desc(chip_id);
     tt::umd::CoreCoord translated_coord =
-        soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::TRANSLATED);
+        soc_desc.translate_coord_to(physical_coord, CoordSystem::NOC0, CoordSystem::TRANSLATED);
     return {translated_coord.x, translated_coord.y};
 }
 
@@ -796,22 +793,9 @@ void Cluster::read_sysmem(
     this->driver_->read_from_sysmem(vec, addr, channel & HOST_MEM_CHANNELS_MASK, size_in_bytes, src_device_id);
 }
 
-void Cluster::verify_sw_fw_versions(
-    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
-    tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
-    log_info(
-        tt::LogDevice,
-        "Software version {}, Ethernet FW version {} (Device {})",
-        sw.str(),
-        fw_first_eth_core.str(),
-        device_id);
-    for (std::uint32_t &fw_version : fw_versions) {
-        tt_version fw(fw_version);
-
-        TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
-        TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
-        TT_FATAL(sw.minor <= fw.minor, "SW version is newer than FW version");
-    }
+FirmwareVersion Cluster::get_ethernet_fw_version() const {
+    tt_version version = this->driver_->get_ethernet_fw_version();
+    return FirmwareVersion(version.major, version.minor, version.patch);
 }
 
 // DRAM barrier is used to implement host-to-device synchronization and should be used when all previous writes to DRAM
@@ -1087,23 +1071,15 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
                         }
                     }
                 }
-                // We want to also add the eth cores that are connected to other chips possibly outside the opened
-                // cluster.
-                const auto& soc_desc = get_soc_desc(chip_id);
-                for (const auto& eth_channel : cluster_desc_->get_active_eth_channels(chip_id)) {
-                    auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                    if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
-                        this->device_eth_routing_info_.at(chip_id).end()) {
-                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
-                    }
-                }
-            } else {
-                // Slow dispatch mode
-                for (const auto &[connected_chip_id, active_eth_cores] :
-                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
-                    for (const auto &eth_core : active_eth_cores) {
-                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
-                    }
+            }
+            // Mark all remaining ethernet cores as idle
+            const auto& soc_desc = get_soc_desc(chip_id);
+            for (const auto& eth_channel : cluster_desc_->get_active_eth_channels(chip_id)) {
+                auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                // Chip ID is guaranteed to be present in device_eth_routing_info_, since it was populated above
+                auto& routing_info = this->device_eth_routing_info_[chip_id];
+                if (routing_info.find(eth_core) == routing_info.end()) {
+                    routing_info.insert({eth_core, EthRouterMode::IDLE});
                 }
             }
         }
@@ -1124,8 +1100,8 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 }
 
 void Cluster::configure_ethernet_cores_for_fabric_routers(
-    tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
-    if (fabric_config != tt_metal::FabricConfig::DISABLED) {
+    tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
+    if (fabric_config != tt_fabric::FabricConfig::DISABLED) {
         TT_FATAL(num_routing_planes.has_value(), "num_routing_planes should be set for reserving cores for fabric");
         TT_FATAL(num_routing_planes.value() > 0, "Expected non-zero num_routing_planes for reserving cores for fabric");
         this->reserve_ethernet_cores_for_fabric_routers(num_routing_planes.value());
@@ -1502,8 +1478,3 @@ bool Cluster::is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) 
 }
 
 }  // namespace tt
-
-std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
-    os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram);
-    return os;
-}

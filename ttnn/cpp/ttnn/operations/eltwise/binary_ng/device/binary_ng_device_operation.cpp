@@ -38,7 +38,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
-        case RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
+        case RIGHT_SHIFT:
+        case LOGICAL_RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
         case BITWISE_XOR:
         case BITWISE_OR:
         case BITWISE_AND: return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
@@ -416,9 +417,9 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
 
     if (input_tensor_b.has_value()) {
         TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
+            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
             "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
+            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
 
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,

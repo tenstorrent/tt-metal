@@ -35,6 +35,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FLOOR:
         case UnaryOpType::CEIL:
         case UnaryOpType::TRUNC:
+        case UnaryOpType::FRAC:
         case UnaryOpType::ROUND: return "SFPU_OP_ROUND_FAMILY_INCLUDE";
         case UnaryOpType::RDIV:
         case UnaryOpType::RSUB: return "SFPU_OP_REVERSE_FAMILY_INCLUDE";
@@ -92,10 +93,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
-            // Note: bit casted to int float is used to properly pass nan/+-inf
-            op_init_and_name = {
-                "fill_tile_init();",
-                fmt::format("fill_tile_bitcast({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0)};
+            } else {
+                // Note: bit casted to int float is used to properly pass nan/+-inf
+                op_init_and_name = {
+                    "fill_tile_init();",
+                    fmt::format("fill_tile_bitcast({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::ROUND:
             op_init_and_name = {"rounding_op_tile_init();", fmt::format("round_tile({}, {});", idst, (int)param0)};
@@ -351,6 +356,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
             break;
+        case UnaryOpType::HARDSHRINK: op_init_and_name = {}; break;
+
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     return op_init_and_name;
@@ -391,6 +398,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {
                     "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_int32({});", idst)};
+            } else if (input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint32({});", idst)};
             } else {
                 op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
             }
@@ -513,6 +523,15 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile_float32({});", idst)};
             } else {
                 op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
+            }
+            break;
+        case UnaryOpType::FRAC:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::FLOAT32) {
+                op_init_and_name = {"rounding_op_tile_init();", fmt::format("frac_tile_float32({});", idst)};
+            } else {
+                op_init_and_name = {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
             }
             break;
         case UnaryOpType::RELU6:
@@ -652,11 +671,18 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
     defines[get_macro_definition(op_type)] = "1";
 }
 
-std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root) {
+std::string get_compute_kernel_path(
+    UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
         case UnaryOpType::TANHSHRINK: return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
         case UnaryOpType::IDENTITY: return fmt::format("{}/{}", compute_root, "eltwise_identity_kernel.cpp");
+        case UnaryOpType::HARDSHRINK:
+            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+                return fmt::format("{}/{}", compute_root, "hardshrink_kernel_sfpu.cpp");
+            } else {
+                return fmt::format("{}/{}", compute_root, "hardshrink_kernel.cpp");
+            }
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }
