@@ -17,6 +17,7 @@
 #include <tt-metalium/bfloat16.hpp>                                                                // NOLINT
 #include <tt-metalium/device.hpp>                                                                  // NOLINT
 #include <tt-metalium/distributed_context.hpp>                                                     // NOLINT
+#include <tt-metalium/fabric.hpp>                                                                  // NOLINT
 #include <tt-metalium/host_api.hpp>                                                                // NOLINT
 #include <tt-metalium/math.hpp>                                                                    // NOLINT
 #include <tt-metalium/mesh_device_view.hpp>                                                        // NOLINT
