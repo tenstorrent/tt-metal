@@ -281,7 +281,6 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        cu_window_seqlens_npages,  // todo)) remove this
         num_cores,
     };
 
@@ -372,6 +371,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
     uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
+    uint32_t cu_window_seqlens_tile_size = tt::tt_metal::detail::TileSize(cu_window_seqlens_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -399,16 +399,14 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
 
     // cu_window_seqlens input
     // [INFO] cu_window_seqlens is a small 1D tensor, so we can set the page size to the size of all the tiles
-    auto c_in3_config =
-        CircularBufferConfig(
-            cu_window_seqlens_npages * cu_window_seqlens_page_size, {{tt::CBIndex::c_3, cu_window_seqlens_df}})
-            .set_page_size(tt::CBIndex::c_3, cu_window_seqlens_page_size);
+    uint32_t cu_window_seqlens_page_size = cu_window_seqlens_tile_size;
+    auto c_in3_config = CircularBufferConfig(cu_window_seqlens_page_size, {{tt::CBIndex::c_3, cu_window_seqlens_df}})
+                            .set_page_size(tt::CBIndex::c_3, cu_window_seqlens_page_size);
     CreateCircularBuffer(program, core_grid, c_in3_config);
-    log_debug(tt::LogOp, "cu_window_seqlens_page_size: {}", cu_window_seqlens_page_size);
 
     // cb_mask_in
     uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
-    uint32_t mask_ntiles = qk_ntiles_per_chunk * k_num_chunks;
+    uint32_t mask_ntiles = qk_ntiles_per_chunk * 2;  // double buffer
     auto c_in4_config = CircularBufferConfig(mask_ntiles * mask_tile_size, {{tt::CBIndex::c_4, mask_df}})
                             .set_page_size(tt::CBIndex::c_4, mask_tile_size);
     CreateCircularBuffer(program, core_grid, c_in4_config);
