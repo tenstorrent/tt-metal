@@ -87,7 +87,9 @@ class Generator:
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                page_table_user = self._get_prefill_user_page_table(page_table[idx:], kv_cache[model_id], seq_len)
+                page_table_user = self._get_prefill_user_page_table(
+                    page_table[idx : idx + 1], kv_cache[model_id], seq_len
+                )
 
             logits = self.prefill_forward_single_user_text(
                 prefill_ids,
