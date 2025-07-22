@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -30,6 +31,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
+#include "tt_backend_api_types.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.h>

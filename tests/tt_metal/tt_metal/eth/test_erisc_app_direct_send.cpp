@@ -81,7 +81,7 @@ bool eth_direct_sender_receiver_kernels(
     const CoreCoord& eth_receiver_core,
     uint32_t num_bytes_per_send = 16) {
     bool pass = true;
-    log_debug(
+    log_info(
         tt::LogTest,
         "Sending {} bytes from device {} eth core {} addr {} to device {} eth core {} addr {}",
         byte_size,
@@ -112,12 +112,15 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program sender_program = tt_metal::Program();
 
+    auto risc = (fixture->GetArch() == tt::ARCH::BLACKHOLE) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0;
+
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
+            .processor = risc,
             .compile_args = {uint32_t(num_bytes_per_send), uint32_t(num_bytes_per_send >> 4)}});
 
     tt_metal::SetRuntimeArgs(
@@ -139,7 +142,7 @@ bool eth_direct_sender_receiver_kernels(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = risc});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -308,7 +311,7 @@ bool send_over_eth(
 
 namespace tt::tt_metal {
 
-TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
+TEST_F(N300DispatchFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -348,7 +351,7 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
         device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
+TEST_F(N300DispatchFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -388,7 +391,7 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
         device_1, device_0, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
+TEST_F(N300DispatchFixture, ActiveEthBidirectionalCoreDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -444,7 +447,7 @@ TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
         device_1, device_0, receiver_core_1, sender_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
+TEST_F(N300DispatchFixture, ActiveEthRandomDirectSendTests) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     srand(0);
@@ -476,7 +479,7 @@ TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
+TEST_F(N300DispatchFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -533,7 +536,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
+TEST_F(N300DispatchFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
