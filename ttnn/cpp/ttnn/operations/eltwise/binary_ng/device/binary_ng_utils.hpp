@@ -72,7 +72,8 @@ struct OpConfig {
         LOGICAL_AND,
         LOGICAL_OR,
         LOGICAL_XOR,
-        XLOGY
+        XLOGY,
+        LT,
     };
 
     template <class EnumT>
