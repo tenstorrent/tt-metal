@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional
+
 import torch
 
 import ttnn
@@ -24,8 +26,8 @@ class RotarySetup(LightweightModule):
         head_dim: int,
         max_seq_len: int,
         rope_theta: float,
-        scale_factor: float,  # use None to disable rope scaling
-        orig_context_len: int,  # only used if scaling enabled
+        scale_factor: Optional[float] = None,  # use None to disable rope scaling
+        orig_context_len: Optional[int] = None,  # only used if scaling enabled
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
