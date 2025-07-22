@@ -67,6 +67,9 @@ jobs:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
           set -x
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
+          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+          
           if [ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]; then
             export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
           fi
@@ -115,9 +118,7 @@ jobs:
             exit 1
           fi
 
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Check device perf report exists
         id: check-device-perf-report
