@@ -33,10 +33,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
 
-struct SystemMeshDescriptor {
+class SystemMeshDescriptor {
 private:
-    const MeshShape& global_shape_;
-    const MeshShape& local_shape_;
+    MeshShape global_shape_;
+    MeshShape local_shape_;
 
 public:
     SystemMeshDescriptor() :
