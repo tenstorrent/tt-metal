@@ -231,19 +231,6 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
         num_blocks_written += num_blocks_per_core;
     }
 
-    [[maybe_unused]] auto override_runtime_arguments_callback =
-        [reader_kernel_id,
-         writer_kernel_id,
-         num_cores,
-         num_cores_y,
-         read_from_input_tensor_kv = read_from_input_tensor_kv](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-
             uint32_t src_kv_buffer_addr = 0;
             if (read_from_input_tensor_kv) {
                 src_kv_buffer_addr = optional_input_tensors.at(0).value().buffer()->address();

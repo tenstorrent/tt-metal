@@ -199,7 +199,7 @@ int main(int argc, char **argv) {
 
         ////////// COMPUTE KERNEL SETUP //////////
         vector<uint32_t> compute_kernel_args = {};
-        [[maybe_unused]] KernelHandle comp_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
             receiver_cores_logical,
