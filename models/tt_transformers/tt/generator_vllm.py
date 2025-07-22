@@ -9,15 +9,15 @@ import PIL
 import torch
 from llama_models.llama3.api.chat_format import create_vision_mask
 from tqdm import tqdm
-from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext, TokenInputs, token_inputs
-from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.inputs import EncoderDecoderInputs, InputContext, TokenInputs, token_inputs
+from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsV0Only
 
 import ttnn
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.utility_functions import nearest_32
+from models.utility_functions import is_wormhole_b0, nearest_32
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -179,21 +179,8 @@ def input_processor_for_mllama(
     )
 
 
-def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
-    hf_model_name = ctx.model_config.hf_config._name_or_path
-    if ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name) and os.environ.get("MESH_DEVICE") == "N150":
-        prompt_len = len(inputs.get("prompt_token_ids"))
-        MAX_PROMPT_LEN = 65536
-        if prompt_len > MAX_PROMPT_LEN:
-            raise ValueError(
-                f"TT-LLama8B and TT-Llama11B do not support prompts longer than {MAX_PROMPT_LEN} tokens on N150 (received prompt with {prompt_len} tokens)"
-            )
-    return inputs
-
-
 # @MULTIMODAL_REGISTRY.register_image_input_mapper()  # TODO: Add once model can accept inputs from multi_modal_input_mapper (raw pixel values)
-@INPUT_REGISTRY.register_input_processor(input_processor_for_mllama)
-class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
+class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0Only):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -201,7 +188,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, tt_data_parallel=1):
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
@@ -272,15 +259,27 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
     ):
+        hf_model_name = hf_config._name_or_path
+        if (
+            ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name)
+            and mesh_device.get_num_devices() == 1
+            and is_wormhole_b0()
+        ):
+            MAX_PROMPT_LEN = 65536
+            if max_seq_len > MAX_PROMPT_LEN:
+                raise ValueError(
+                    f"TT-LLama8B and TT-Llama11B do not support max_model_len greater than {MAX_PROMPT_LEN} on N150 "
+                    f"(received {max_seq_len}). Set --max_model_len to {MAX_PROMPT_LEN} or lower in vLLM."
+                )
+
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
@@ -313,7 +312,7 @@ class QwenForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
@@ -347,7 +346,7 @@ class MistralForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=32768, n_layers=None, tt_data_parallel=1
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,

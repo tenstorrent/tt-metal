@@ -9,7 +9,6 @@ from models.demos.llama3_subdevices.tt.generator import Generator
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
-from vllm.inputs import INPUT_REGISTRY
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
@@ -88,11 +87,6 @@ def initialize_vllm_text_transformer(
     return tt_model, model_args
 
 
-def input_processor_for_llama_text(ctx, inputs):
-    return inputs
-
-
-@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
