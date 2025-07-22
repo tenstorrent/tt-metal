@@ -26,10 +26,8 @@ namespace ttnn::operations::transformer::detail {
 // read: Because the cu_window_seqlens tensor is small, we naively load the whole tensor into a circular buffer on each
 // core and then use the window indexes to compute tiles of attn_masks.
 // compute and write: mostly the same as the multi-core implementation of SDPA.
-// todo)) we can also try to copy the cu_window_seqlens tensor into L1 from the host --> is this faster? Ask @Niguel
-// about tests/tt_metal/tt_metal/test_kernels/dataflow/flatten.cpp todo)) a natural thought for potentially faster
-// implementation is to only compute the SDPA within each windown as defined by cu_window_seqlens; this should be driven
-// by performance analysis results of whole ML model
+// [INFO] a natural thought for potentially faster implementation is to only compute the SDPA within each windown as
+// defined by cu_window_seqlens; this should be driven by performance analysis results of whole ML model
 operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
