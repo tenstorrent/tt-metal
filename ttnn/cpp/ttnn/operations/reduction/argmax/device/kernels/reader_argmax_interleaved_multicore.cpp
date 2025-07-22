@@ -4,11 +4,27 @@
 
 #include <stdint.h>
 #include <algorithm>
+#include <cstdint>
 
 #include "dataflow_api.h"
 
 #include "utils/bfloat16.h"
 #include "argmax_common.hpp"
+
+template <DataFormat data_format>
+auto get_tt_l1_ptr_based_on_data_format(const uint32_t addr) {
+    if constexpr (data_format == DataFormat::Float16_b) {
+        return reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr);
+    } else if constexpr (data_format == DataFormat::Float32) {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    } else if constexpr (data_format == DataFormat::Int32) {
+        return reinterpret_cast<volatile tt_l1_ptr int32_t*>(addr);
+    } else if constexpr (data_format == DataFormat::UInt32) {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    } else {
+        static_assert(data_format != data_format, "Unsupported data format in get_tt_l1_ptr_based_on_data_format");
+    }
+}
 
 /**
  * @brief Process inner dimension units for argmax reduction
@@ -33,7 +49,7 @@
  * @param red_idxs Buffer for reduction indices
  * @param red_vals Buffer for reduction values
  */
-template <bool src_is_dram, bool reduce_all>
+template <bool src_is_dram, bool reduce_all, DataFormat data_format>
 inline void find_argmax_for_core(
     const uint32_t inner_dim_units,
     const uint32_t outer_idx,
@@ -43,12 +59,12 @@ inline void find_argmax_for_core(
     const uint32_t src_read_size,
     const uint32_t red_dim_offset,
     const uint32_t red_dim_units_this_core,
-    volatile tt_l1_ptr uint16_t* in_vals,
+    volatile tt_l1_ptr decltype(get_default_value<data_format>())* in_vals,
     const uint32_t red_dim_units,
     uint32_t& max_idx,
-    uint16_t& max_val,
+    decltype(get_default_value<data_format>())& max_val,
     volatile tt_l1_ptr uint32_t* red_idxs,
-    volatile tt_l1_ptr uint16_t* red_vals) {
+    volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals) {
     for (uint32_t j = 0; j < inner_dim_units; ++j) {
         noc_async_read(s_src.get_noc_addr(outer_idx * inner_dim_units + j, src_offset), src_cb_addr, src_read_size);
         noc_async_read_barrier();
@@ -56,18 +72,52 @@ inline void find_argmax_for_core(
         // Reset max_val for each new output
         if constexpr (not reduce_all) {
             max_idx = 0;
-            max_val = NEG_INF_BFLOAT16;
+            max_val = get_default_value<data_format>();
         }
 
         for (uint32_t i = red_dim_offset; i < (red_dim_offset + red_dim_units_this_core); ++i) {
-            uint16_t val = in_vals[i - red_dim_offset];
-            if (bfloat16_greater(val, max_val)) {
-                auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
-                max_idx = reduce_all ? full_idx : i;
-                max_val = val;
-            } else if (val == max_val) {
-                auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
-                max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
+            if constexpr (data_format == DataFormat::Float16_b) {
+                uint16_t val = in_vals[i - red_dim_offset];
+                if (bfloat16_greater(val, max_val)) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? full_idx : i;
+                    max_val = val;
+                } else if (val == max_val) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
+                }
+            } else if constexpr (data_format == DataFormat::Float32) {
+                uint32_t val = in_vals[i - red_dim_offset];
+                if (float32_greater(val, max_val)) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? full_idx : i;
+                    max_val = val;
+                } else if (val == max_val) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
+                }
+            } else if constexpr (data_format == DataFormat::Int32) {
+                int32_t val = in_vals[i - red_dim_offset];
+                if (int32_greater(val, max_val)) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? full_idx : i;
+                    max_val = val;
+                } else if (val == max_val) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
+                }
+            } else if constexpr (data_format == DataFormat::UInt32) {
+                uint32_t val = in_vals[i - red_dim_offset];
+                if (uint32_greater(val, max_val)) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? full_idx : i;
+                    max_val = val;
+                } else if (val == max_val) {
+                    auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+                    max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
+                }
+            } else {
+                ASSERT(sizeof(DataFormat) == 0, "Unsupported data format in get_tt_l1_ptr_based_on_data_format");
             }
         }
 
@@ -93,7 +143,7 @@ inline void find_argmax_for_core(
  * @param red_idx_size_per_core Size of the index buffer per core
  * @param inner_dim_units Number of elements in the inner dimension
  */
-template <uint32_t num_cores>
+template <uint32_t num_cores, DataFormat data_format>
 inline uint32_t find_argmax_from_intermediate_outputs(
     const uint32_t inner_idx,
     const uint32_t red_val_cb_local_base_addr,
@@ -101,22 +151,60 @@ inline uint32_t find_argmax_from_intermediate_outputs(
     const uint32_t red_val_size_per_core,
     const uint32_t red_idx_size_per_core) {
     // Reset max_val for each new output
-    uint16_t max_val = NEG_INF_BFLOAT16;
+    auto max_val = get_default_value<data_format>();
     uint32_t max_idx = 0;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        volatile tt_l1_ptr auto i_red_vals =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(red_val_cb_local_base_addr + i * red_val_size_per_core);
         volatile tt_l1_ptr auto i_red_idxs =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_idx_cb_local_base_addr + i * red_idx_size_per_core);
 
-        uint16_t val = i_red_vals[inner_idx];
+        if constexpr (data_format == DataFormat::Float16_b) {
+            volatile tt_l1_ptr auto i_red_vals =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(red_val_cb_local_base_addr + i * red_val_size_per_core);
+            uint16_t val = i_red_vals[inner_idx];
 
-        if (bfloat16_greater(val, max_val)) {
-            max_idx = i_red_idxs[inner_idx];
-            max_val = val;
-        } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
-            max_idx = i_red_idxs[inner_idx];
+            if (bfloat16_greater(val, max_val)) {
+                max_idx = i_red_idxs[inner_idx];
+                max_val = val;
+            } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+                max_idx = i_red_idxs[inner_idx];
+            }
+        } else if constexpr (data_format == DataFormat::Float32) {
+            volatile tt_l1_ptr auto i_red_vals =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_val_cb_local_base_addr + i * red_val_size_per_core);
+            uint32_t val = i_red_vals[inner_idx];
+
+            if (float32_greater(val, max_val)) {
+                max_idx = i_red_idxs[inner_idx];
+                max_val = val;
+            } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+                max_idx = i_red_idxs[inner_idx];
+            }
+        } else if constexpr (data_format == DataFormat::Int32) {
+            volatile tt_l1_ptr auto i_red_vals =
+                reinterpret_cast<volatile tt_l1_ptr int32_t*>(red_val_cb_local_base_addr + i * red_val_size_per_core);
+            int32_t val = i_red_vals[inner_idx];
+
+            if (int32_greater(val, max_val)) {
+                max_idx = i_red_idxs[inner_idx];
+                max_val = val;
+            } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+                max_idx = i_red_idxs[inner_idx];
+            }
+        } else if constexpr (data_format == DataFormat::UInt32) {
+            volatile tt_l1_ptr auto i_red_vals =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_val_cb_local_base_addr + i * red_val_size_per_core);
+            uint32_t val = i_red_vals[inner_idx];
+
+            if (uint32_greater(val, max_val)) {
+                max_idx = i_red_idxs[inner_idx];
+                max_val = val;
+            } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+                max_idx = i_red_idxs[inner_idx];
+            }
+        } else {
+            static_assert(
+                data_format != data_format, "Unsupported data format in find_argmax_from_intermediate_outputs");
         }
     }
     return max_idx;
@@ -216,8 +304,9 @@ void kernel_main() {
     const InterleavedAddrGen<dst_is_dram> s_dst = {.bank_base_address = dst_base_addr, .page_size = dst_page_size};
 
     // CB in L1 memory for storing input
+    constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
     const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
-    volatile tt_l1_ptr uint16_t* in_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_cb_addr);
+    volatile tt_l1_ptr auto* in_vals = get_tt_l1_ptr_based_on_data_format<src_cb_addr_data_format>(src_cb_addr);
 
     // CB in L1 memory of reducer core for storing output
     const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
@@ -234,10 +323,17 @@ void kernel_main() {
 
     // CB in L1 memory for storing partial val output
     const uint32_t red_val_cb_local_base_addr = get_write_ptr(red_vals_cb_idx);
+    constexpr DataFormat red_val_cb_local_addr_data_format = get_dataformat(red_vals_cb_idx);
     const uint32_t red_val_offset = core_id * red_val_size_per_core;
 
     const uint32_t red_val_cb_local_addr = red_val_cb_local_base_addr + red_val_offset;
-    volatile tt_l1_ptr uint16_t* red_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(red_val_cb_local_addr);
+    volatile tt_l1_ptr auto* red_vals =
+        get_tt_l1_ptr_based_on_data_format<red_val_cb_local_addr_data_format>(red_val_cb_local_addr);
+
+    static_assert(
+        red_val_cb_local_addr_data_format == src_cb_addr_data_format,
+        "Program logic error. "
+        "Partial result buffer must use the same data format as values.");
 
     const uint64_t red_val_noc_addr = get_noc_addr(reduce_core_x, reduce_core_y, red_val_cb_local_addr);
 
@@ -256,7 +352,8 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_local_addr);
 
     uint32_t max_idx = 0;
-    uint16_t max_val = NEG_INF_BFLOAT16;
+    auto max_val = get_default_value<src_cb_addr_data_format>();
+
     noc_semaphore_set(done_sem_local_ptr, 0);
 
     // -------------------------------------------------------------------------
@@ -284,7 +381,7 @@ void kernel_main() {
             noc_semaphore_wait(start_sem_local_ptr, k + 1);
         }
 
-        find_argmax_for_core<src_is_dram, reduce_all>(
+        find_argmax_for_core<src_is_dram, reduce_all, src_cb_addr_data_format>(
             inner_dim_units,
             k,
             src_offset,
@@ -319,7 +416,7 @@ void kernel_main() {
 
                 // Find argmax from intermediate outputs and write to output
                 for (uint32_t j = 0; j < inner_dim_units; ++j) {
-                    out_idxs[j] = find_argmax_from_intermediate_outputs<num_cores>(
+                    out_idxs[j] = find_argmax_from_intermediate_outputs<num_cores, src_cb_addr_data_format>(
                         j,
                         red_val_cb_local_base_addr,
                         red_idx_cb_local_base_addr,
@@ -354,7 +451,7 @@ void kernel_main() {
                 noc_semaphore_wait(done_sem_local_ptr, num_cores);
             }
 
-            out_idxs[0] = find_argmax_from_intermediate_outputs<num_cores>(
+            out_idxs[0] = find_argmax_from_intermediate_outputs<num_cores, src_cb_addr_data_format>(
                 0,  // For reduce_all, we only have one inner_dim_unit
                 red_val_cb_local_base_addr,
                 red_idx_cb_local_base_addr,
