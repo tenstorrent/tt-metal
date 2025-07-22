@@ -4,11 +4,15 @@
 
 #include "debug/assert.h"
 #include "debug/dprint_tile.h"
-
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 #include "debug/dprint.h"
 
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
+
 #define WATCHER_OVERHEAD_OK 1
+
+#define DPRINT_ARRAY_VIEW(x) x
+#else
+#define DPRINT_ARRAY_VIEW(x)
 #endif
 
 enum class CBAccessType : uint8_t { CB_FRONT_RW, CB_BACK_RW, CB_FRONT_RO, CB_BACK_RO };
