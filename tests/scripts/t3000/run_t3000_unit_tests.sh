@@ -45,6 +45,8 @@ run_t3000_ttmetal_tests() {
 
 run_t3000_dual_rank_big_mesh_tests() {
   tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTestT3K*"
+  tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshWorkloadTestSuite*"
+  tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshWorkloadTestT3000*"
 }
 
 run_t3000_ttfabric_tests() {

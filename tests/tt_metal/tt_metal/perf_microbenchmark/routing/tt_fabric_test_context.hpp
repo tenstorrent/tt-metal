@@ -199,6 +199,7 @@ public:
                     reference_sync_core.y);
             }
         }
+        std::cout << " HERE: " << std::endl;
 
         for (const auto& sender : config.senders) {
             for (const auto& pattern : sender.patterns) {
@@ -402,11 +403,11 @@ private:
     }
 
     void add_traffic_config(const TestTrafficConfig& traffic_config) {
+        std::cout << " adding traffic " << std::endl;
         // This function now assumes all allocation has been done by the GlobalAllocator.
         // It is responsible for taking the planned config and setting up the TestDevice objects.
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
         const auto& src_node_id = traffic_config.src_node_id;
-        const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
-        auto& src_test_device = this->test_devices_.at(src_coord);
 
         CoreCoord src_logical_core = traffic_config.src_logical_core.value();
         CoreCoord dst_logical_core = traffic_config.dst_logical_core.value();
@@ -425,36 +426,46 @@ private:
             hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
         }
 
-        const auto& dst_rep_coord = this->fixture_->get_device_coord(dst_node_ids[0]);
-        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_rep_coord, dst_logical_core);
         uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
         // Get payload buffer size from receiver memory map (cached during initialization)
         uint32_t payload_buffer_size = receiver_memory_map_.get_payload_chunk_size();
 
-        TestTrafficSenderConfig sender_config = {
-            .parameters = traffic_config.parameters,
-            .src_node_id = traffic_config.src_node_id,
-            .dst_node_ids = dst_node_ids,
-            .hops = hops,
-            .dst_logical_core = dst_logical_core,
-            .target_address = target_address,
-            .atomic_inc_address = atomic_inc_address,
-            .dst_noc_encoding = dst_noc_encoding,
-            .payload_buffer_size = payload_buffer_size};
+        if (*distributed_context.rank() == 0) {
+            std::cout << " running sender code " << std::endl;
+            const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
+            // const auto& dst_rep_coord = this->fixture_->get_device_coord(dst_node_ids[0]);
+            //  HACK: using src node id as the getter
+            uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(src_node_id, dst_logical_core);
+            TestTrafficSenderConfig sender_config = {
+                .parameters = traffic_config.parameters,
+                .src_node_id = traffic_config.src_node_id,
+                .dst_node_ids = dst_node_ids,
+                .hops = hops,
+                .dst_logical_core = dst_logical_core,
+                .target_address = target_address,
+                .atomic_inc_address = atomic_inc_address,
+                .dst_noc_encoding = dst_noc_encoding,
+                .payload_buffer_size = payload_buffer_size};
 
-        TestTrafficReceiverConfig receiver_config = {
-            .parameters = traffic_config.parameters,
-            .sender_id = sender_id,
-            .target_address = target_address,
-            .atomic_inc_address = atomic_inc_address,
-            .payload_buffer_size = payload_buffer_size};
-
-        src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
-        for (const auto& dst_node_id : dst_node_ids) {
-            const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
-            this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
+            auto& src_test_device = this->test_devices_.at(src_coord);
+            src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
         }
+        if (*distributed_context.rank() == 1) {
+            std::cout << " running receiver code " << std::endl;
+            TestTrafficReceiverConfig receiver_config = {
+                .parameters = traffic_config.parameters,
+                .sender_id = sender_id,
+                .target_address = target_address,
+                .atomic_inc_address = atomic_inc_address,
+                .payload_buffer_size = payload_buffer_size};
+
+            for (const auto& dst_node_id : dst_node_ids) {
+                const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
+                this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
+            }
+        }
+        std::cout << "done adding traffic " << std::endl;
     }
 
     void initialize_memory_maps() {

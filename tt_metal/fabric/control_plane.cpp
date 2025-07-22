@@ -200,6 +200,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity(), golden_link_counts);
 
     auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
+        count = 1;
         if (skip_direction(fabric_node_id, direction)) {
             return;
         }

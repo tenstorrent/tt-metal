@@ -37,5 +37,12 @@ TEST(MultiHost, TestDualGalaxyFabricSanity) {
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 }
 
+TEST(MultiHost, TestDualGalaxyControlPlaneAPIs) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+}
+
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric
