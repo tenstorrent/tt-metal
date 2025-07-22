@@ -40,7 +40,7 @@ run_tg_sentence_bert_tests() {
 
   echo "LOG_METAL: Running run_tg_sentence_bert_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_tg" ; fail+=$?
+  env pytest -n auto models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_tg" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -93,7 +93,7 @@ main() {
   elif [[ "$pipeline_type" == "sentence_bert_tg_tests" ]]; then
     run_tg_sentence_bert_tests
   else
-    echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, tg_llama_model_perf_tg_device])" 2>&1
+    echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, tg_llama_model_perf_tg_device, sentence_bert_tg_tests])" 2>&1
     exit 1
   fi
 }
