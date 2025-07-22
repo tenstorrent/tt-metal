@@ -121,7 +121,7 @@ private:
         auto output = invoke(std::forward<args_t>(args)...);
 
         tt::tt_metal::GraphTracker::instance().track_function_end(output);
-        log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        log_debug(tt::LogOp, "Finished invoking C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }
 
