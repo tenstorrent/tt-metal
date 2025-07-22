@@ -12,7 +12,11 @@
 
 inline void (*rtos_context_switch_ptr)();
 inline void (*toggle_macpcs_ptr)(uint32_t);
+#if defined(ARCH_BLACKHOLE)
+volatile inline uint32_t* flag_disable = (uint32_t*)(GET_MAILBOX_ADDRESS_DEV(aerisc_run_flag));
+#else
 volatile inline uint32_t* flag_disable = (uint32_t*)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+#endif
 
 namespace internal_ {
 inline __attribute__((always_inline)) void risc_context_switch() {

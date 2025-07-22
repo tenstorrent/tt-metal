@@ -62,11 +62,7 @@ namespace HAL_BUILD {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 // TODO: Review if this should  be 2 for BH (the number of eth processors)
 // Hardcode to 1 to keep size as before
-#ifdef ARCH_BLACKHOLE
-constexpr uint32_t PROCESSOR_COUNT = 1;
-#else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
-#endif
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
