@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import is_blackhole, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -70,19 +70,24 @@ def test_decoder_inference(mesh_device, reset_seeds):
         )
 
         # Run TT model
-        tt_out = ttnn.experimental.all_gather_async(
-            decode_input,
-            persistent_output_buffer=None,
-            dim=3,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-            num_links=1,
-            topology=model_args.ccl_topology(),
-            memory_config=mem_cfg,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
-        )
+        if is_blackhole():
+            tt_out = ttnn.all_gather(
+                decode_input, dim=3, num_links=1, topology=model_args.ccl_topology(), memory_config=mem_cfg
+            )
+        else:
+            tt_out = ttnn.experimental.all_gather_async(
+                decode_input,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=model_args.ccl_topology(),
+                memory_config=mem_cfg,
+                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
 
         debug_max = lambda t: ttnn.to_torch(
             t, mesh_composer=ttnn.ConcatMeshToTensor(model_args.mesh_device, dim=-1)

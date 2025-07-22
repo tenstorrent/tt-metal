@@ -16,6 +16,7 @@ from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.rope import RotarySetup
+from models.utility_functions import is_blackhole
 
 
 class Transformer(LightweightModule):
@@ -327,35 +328,48 @@ class Transformer(LightweightModule):
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
             if self.args.is_galaxy:
-                tt_logits = ttnn.experimental.all_gather_async(
-                    tt_logits,
-                    persistent_output_buffer=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=2,
-                    memory_config=tt_logits.memory_config(),
-                    cluster_axis=0,
-                    mesh_device=self.mesh_device,
-                    topology=self.args.ccl_topology(),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
+                if is_blackhole():
+                    tt_logits = ttnn.all_gather(
+                        tt_logits,
+                        dim=3,
+                        num_links=2,
+                        cluster_axis=0,
+                        mesh_device=self.mesh_device,
+                        topology=self.args.ccl_topology(),
+                    )
+                else:
+                    tt_logits = ttnn.experimental.all_gather_async(
+                        tt_logits,
+                        persistent_output_buffer=None,
+                        dim=3,
+                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                        num_links=2,
+                        memory_config=tt_logits.memory_config(),
+                        cluster_axis=0,
+                        mesh_device=self.mesh_device,
+                        topology=self.args.ccl_topology(),
+                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                        chunks_per_sync=10,
+                        num_workers_per_link=2,
+                        num_buffers_per_channel=2,
+                    )
             else:
-                tt_logits = ttnn.experimental.all_gather_async(
-                    tt_logits,
-                    persistent_output_buffer=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=1,
-                    memory_config=tt_logits.memory_config(),
-                    topology=self.args.ccl_topology(),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
+                if is_blackhole():
+                    tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
+                else:
+                    tt_logits = ttnn.experimental.all_gather_async(
+                        tt_logits,
+                        persistent_output_buffer=None,
+                        dim=3,
+                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                        num_links=1,
+                        memory_config=tt_logits.memory_config(),
+                        topology=self.args.ccl_topology(),
+                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                        chunks_per_sync=10,
+                        num_workers_per_link=2,
+                        num_buffers_per_channel=2,
+                    )
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
