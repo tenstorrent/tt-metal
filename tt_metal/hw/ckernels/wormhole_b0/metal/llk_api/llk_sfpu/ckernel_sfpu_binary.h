@@ -29,7 +29,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
         // extract mantissa
         sfpi::vInt man = exman8(in);
         // shift the mantissa by (23-exponent) to the right
-        sfpi::vInt shift = exp - 23;  // 23 is number of mantissa in float32
+        sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
         man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));
 
         result = man;
@@ -57,7 +57,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
- * @note This functions assumes that the programmable constants are set to the following values:
+ * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
  * - vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
@@ -66,7 +66,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow) {
-    // THe algorithm works in two steps:
+    // The algorithm works in two steps:
     // 1) Compute log2(base)
     // 2) Compute base**pow = 2**(pow * log2(base))
 
@@ -82,27 +82,43 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     sfpi::vInt exp = sfpi::exexp(base);
     v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
     v_endif;
-    sfpi::vFloat expf = sfpi::int32_to_float(exp, 0);
+    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, 0);
 
     // De-normalize to original range
-    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;        // 1.4426950408889634f;
-    sfpi::vFloat log2_result = expf + series_result * vConst1Ln2;  // exp correction: ln(1+x) + exp*ln(2)
+    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;           // vConst1Ln2 = 1.4426950408889634f;
+    sfpi::vFloat log2_result = exp_f32 + series_result * vConst1Ln2;  // exp correction: ln(1+x) + exp*ln(2)
 
     // Step 2: Compute base**pow = 2**(pow * log2(base))
     // If (base, exponent) => (0, +inf) or (base, exponent) => (N, -inf) then output should be 0
     // However, intermediary values can overflow, which leads to output increasing again instead of
     // staying at 0.
-    // This overflows happens when zff < -127. Therefore, we clamp zff to -127.
-    sfpi::vFloat zff = pow * log2_result;
+    // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 to -127.
+    sfpi::vFloat z_f32 = pow * log2_result;
     const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
-    v_if(zff < low_threshold) { zff = low_threshold; }
+    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
     v_endif;
 
-    zff = addexp(zff, 23);                                                     // * 2**23 (Mn)
-    sfpi::vInt z = _float_to_int32_positive_(zff + sfpi::vFloat(0x3f800000));  // (bias + x * log2(a)) * N_m
+    // The paper relies on the following formula (c.f. Sections 1 and 5):
+    // z = (bias + x * log2(a)) * N_m; where:
+    // N_m = 2**23
+    // bias = 0x3f800000
 
-    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));
-    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
+    // In this case, we transform the formula to:
+    // z = (bias) * N_m + (x * log2(a)) * N_m
+    // where (bias + N_m) = 0x3f800000
+    // and (x * log2(a)) * N_m = addexp(z_f32, 23)
+
+    // Notes:
+    // - N_m being a power of 2 ensures equivalent results
+    // - addexp(z_f32, 23) is used because it translates to a single-cycle SFPDIVP2
+    //   instruction with immediate operand (i.e. no extra register used).
+    //   (vs. 1 cycle SFPLOADI + 2 cycles MAD)
+
+    z_f32 = addexp(z_f32, 23);  // equal to multiplying by 2**23
+    sfpi::vInt z = _float_to_int32_positive_(z_f32 + sfpi::vFloat(0x3f800000));
+
+    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
+    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
 
     // Compute formula in Horner form
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
@@ -116,6 +132,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
 
     sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
 
+    // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
     sfpi::vInt pow_int =
         sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
@@ -132,13 +149,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
         v_if(pow_rounded == pow) {
             // if pow is odd integer, set result to negative
             v_if(pow_int & 0x1) {
-                // if negative base and negative pow then x**y = -(abs(x))**(abs(y))
+                // if negative base and negative pow, then x**y = -(abs(x))**(abs(y))
                 y = setsgn(y, 1);
             }
             v_endif;
         }
-        v_else {
-            y = sfpi::vConstFloatPrgm2;  // = NaN
+        v_else {  // negative base and non-integer power => set to NaN
+            y = sfpi::vConstFloatPrgm2;
         }
         v_endif;
     }
