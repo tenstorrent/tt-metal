@@ -733,8 +733,6 @@ void InitDeviceProfiler(IDevice* device) {
         profiler.profile_buffer_bank_size_bytes = bank_size_bytes;
         profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
 
-        profiler.hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
-
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
             MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
@@ -836,6 +834,7 @@ void DumpDeviceProfileResults(
             not tt::tt_metal::MetalContext::instance().dprint_server(),
             "Debug print server is running, cannot dump device profiler data");
 
+        profiler.hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
         profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
