@@ -35,15 +35,7 @@ public:
     FORCE_INLINE static void init() { current_offset_ = risc_pool_start; }
 
     FORCE_INLINE static volatile tt_l1_ptr PACKET_HEADER_TYPE* allocate_header() {
-        ASSERT(
-            current_offset_ + HEADER_SIZE <= risc_pool_end,
-            "=== PACKET HEADER POOL EXHAUSTION ERROR === "
-            "CRITICAL: Insufficient space in packet header pool for RISC ",
-            (uint32_t)proc_type,
-            " - Headers Allocated: ",
-            ((current_offset_ - risc_pool_start) / HEADER_SIZE),
-            " - Max Headers Capacity per RISC: ",
-            (POOL_SIZE_PER_RISC / HEADER_SIZE));
+        ASSERT(current_offset_ + HEADER_SIZE <= risc_pool_end);
         if (current_offset_ + HEADER_SIZE > risc_pool_end) {
             DPRINT << "=== PACKET HEADER POOL EXHAUSTION ERROR ==="
                    << "CRITICAL: Insufficient space in packet header pool for RISC " << (uint32_t)proc_type
