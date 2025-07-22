@@ -212,6 +212,15 @@ bool chip_to_chip_interleaved_buffer_transfer(
     const uint32_t& max_transfer_size) {
     bool pass = true;
 
+    log_info(
+        tt::LogTest,
+        "chip_to_chip_interleaved_buffer_transfer num_pages: {}, page_size_bytes: {}, size_bytes: {}, "
+        "max_transfer_size: {}",
+        cfg.num_pages,
+        cfg.page_size_bytes,
+        cfg.size_bytes,
+        max_transfer_size);
+
     TT_FATAL(cfg.num_pages * cfg.page_size_bytes == cfg.size_bytes, "Error");
 
     ////////////////////////////////////////////////////////////////////////////
