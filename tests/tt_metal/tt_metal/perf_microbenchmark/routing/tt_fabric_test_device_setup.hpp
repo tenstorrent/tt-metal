@@ -525,7 +525,6 @@ inline void TestDevice::create_sync_kernel() {
     // Local args (all the rest go to local args buffer)
     std::vector<uint32_t> local_args;
 
-    // Global sync args
     // Expected sync value for global sync
     local_args.push_back(this->global_sync_val_);
 
@@ -640,12 +639,6 @@ inline void TestDevice::create_sender_kernels() {
             local_args.reserve(local_args.size() + sender.configs_.size() * first_traffic_args.size());
             local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
-            log_info(
-                tt::LogTest,
-                "sender on core: {} from {} to {}",
-                core,
-                sender.configs_[0].first.src_node_id,
-                sender.configs_[0].first.dst_node_ids[0]);
             for (size_t i = 1; i < sender.configs_.size(); ++i) {
                 const auto traffic_args = sender.configs_[i].first.get_args();
                 local_args.insert(local_args.end(), traffic_args.begin(), traffic_args.end());

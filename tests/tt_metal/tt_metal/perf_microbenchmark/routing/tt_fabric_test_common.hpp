@@ -106,7 +106,7 @@ public:
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
     }
 
-    MeshCoordinateRange get_available_device_coordinates() const {
+    MeshCoordinateRange get_host_local_device_coordinates() const {
         return control_plane_ptr_->get_coord_range(local_mesh_id_, MeshScope::LOCAL);
     }
 
@@ -513,7 +513,6 @@ public:
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_all_unicast_pairs() const override {
         const auto device_ids = get_global_node_ids();
-        log_info(tt::LogTest, "here");
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
         pairs.reserve(device_ids.size() * (device_ids.size() - 1));
         for (const auto& src_node : device_ids) {
@@ -526,7 +525,6 @@ public:
                         continue;
                     }
                 }
-                log_info(tt::LogTest, "{} -> {}", src_node, dst_node);
                 pairs.push_back({src_node, dst_node});
             }
         }
@@ -1334,7 +1332,7 @@ public:
     }
 
     // ======================================================================================
-    // IDistributedManager methods
+    // IDistributedContextManager methods
     // ======================================================================================
     uint32_t get_randomized_master_seed() const override {
         uint32_t master_seed = std::random_device()();
@@ -1352,14 +1350,14 @@ public:
                         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
                     );
                 }
-                log_info(tt::LogTest, "Master seed generated: {}", master_seed);
+                log_info(tt::LogTest, "Master seed sent: {}", master_seed);
             } else {
                 distributed_context->recv(
                     tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
                     tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
                     tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
                 );
-                log_info(tt::LogTest, "Received master seed: {}", master_seed);
+                log_info(tt::LogTest, "Master seed received : {}", master_seed);
             }
         }
         return master_seed;
@@ -1459,7 +1457,7 @@ private:
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
-        for (const auto& coord : get_available_device_coordinates()) {
+        for (const auto& coord : get_host_local_device_coordinates()) {
             TT_FATAL(
                 coord.dims() == mesh_shape_.dims(),
                 "Device coordinate {} has different dimensions than mesh shape {}",

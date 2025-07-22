@@ -92,7 +92,6 @@ Tests:
       ntype: unicast_write
       size: 1024
       num_packets: 100
-      iterations: 10
     senders:
       - device: [0, 0]
         patterns:
@@ -113,6 +112,9 @@ Tests:
           - destination:
               device: [4, 3]
 
+  # ======================================================================================
+  # Test 2: Testing multi-hop across meshes. Each Mesh sends packets to every other mesh.
+  # ======================================================================================
   - name: MultiMeshMultiHopUnicast
     fabric_setup:
       topology: Mesh

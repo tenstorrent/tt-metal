@@ -94,7 +94,7 @@ public:
     uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
 
     void setup_devices() {
-        const auto& available_coords = this->fixture_->get_available_device_coordinates();
+        const auto& available_coords = this->fixture_->get_host_local_device_coordinates();
         for (const auto& coord : available_coords) {
             // Create TestDevice with access to memory maps
             test_devices_.emplace(
@@ -474,7 +474,6 @@ private:
         for (const auto& dst_node_id : dst_node_ids) {
             if (fixture_->is_local_fabric_node_id(dst_node_id)) {
                 const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
-                log_info(tt::LogTest, "added dst {} for sender {}", dst_node_id, src_node_id);
                 this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
             }
         }
