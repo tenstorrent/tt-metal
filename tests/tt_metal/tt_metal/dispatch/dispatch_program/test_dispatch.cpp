@@ -61,11 +61,29 @@ static void test_sems_across_core_types(
             continue;
         }
 
-        const auto& eth_cores_unordered =
-            active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+        auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+        if (active_eth) {
+            erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        }
+        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            log_info(tt::LogTest, "Test {} ethernet DM{}", active_eth ? "active" : "idle", erisc_idx);
+            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
 
-        std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
-        if (eth_cores.size() > 0) {
+            const auto& eth_cores_unordered =
+                active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+
+            std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
+            if (eth_cores.empty()) {
+                log_info(
+                    tt::LogTest,
+                    "No {} ethernet cores found on device {}, skipping",
+                    active_eth ? "active" : "idle",
+                    device->id());
+                continue;
+            }
+
             distributed::MeshWorkload workload;
             auto zero_coord = distributed::MeshCoordinate(0, 0);
             auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -83,6 +101,7 @@ static void test_sems_across_core_types(
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = active_eth ? tt::tt_metal::Eth::RECEIVER : tt::tt_metal::Eth::IDLE,
                     .noc = tt::tt_metal::NOC::NOC_0,
+                    .processor = dm_processor,
                     .compile_args = compile_args,
                 });
 
@@ -206,10 +225,28 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     auto& program_ = workload.get_programs().at(device_range);
 
     // TODO: tweak when FD supports idle eth
-    const auto& eth_cores =
-        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
+    const bool is_idle_eth = this->slow_dispatch_;
+    const auto& eth_cores = is_idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
-    if (eth_cores.size() > 0) {
+    if (eth_cores.empty()) {
+        log_info(
+            tt::LogTest,
+            "No {} ethernet cores found on device {}, skipping",
+            this->slow_dispatch_ ? "idle" : "active",
+            device->id());
+        return;
+    }
+
+    auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    if (is_idle_eth) {
+        erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+    }
+    for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+        log_info(tt::LogTest, "Test {} ethernet DM{}", this->slow_dispatch_ ? "idle" : "active", erisc_idx);
+        DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+
         CoreCoord eth_core = *eth_cores.begin();
         CreateKernel(
             program_,
