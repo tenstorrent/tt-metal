@@ -18,7 +18,21 @@ MultiDeviceScatterDeviceOperation::program_factory_t MultiDeviceScatterDeviceOpe
 }
 
 void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto input_tensor = tensor_args.input_tensor;
+    uint32_t rank = input_tensor.logical_shape().rank();
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    auto output_shape = output_spec.logical_shape();
+
+    TT_FATAL(operation_attributes.dim < rank, "dim must be less than the rank of the input tensor");
+    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        TT_FATAL(
+            output_shape == output_spec.padded_shape(),
+            "output shape {} must be equal to padded shape {} for tiled inputs",
+            output_shape,
+            output_spec.padded_shape());
+    }
+}
 
 void MultiDeviceScatterDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}

@@ -60,19 +60,19 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
                                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                                         : mesh_view.get_devices_on_row(mesh_coordinate[0]);
-    uint32_t ring_size = devices.size();
-    uint32_t ring_index = operation_attributes.cluster_axis == 0 ? mesh_coordinate[0] : mesh_coordinate[1];
+    uint32_t cluster_axis_size = devices.size();
+    uint32_t cluster_index = operation_attributes.cluster_axis == 0 ? mesh_coordinate[0] : mesh_coordinate[1];
     auto input_shape = input_tensor.logical_shape();
     uint32_t dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
 
-    auto scattered_dim_size = input_shape[dim] / ring_size;
+    auto scattered_dim_size = input_shape[dim] / cluster_axis_size;
 
     std::vector<uint32_t> begins(rank, 0);
     auto ends = input_shape;
     std::vector<uint32_t> strides(rank, 1);
 
-    begins[dim] = ring_index * scattered_dim_size;
+    begins[dim] = cluster_index * scattered_dim_size;
     ends[dim] = begins[dim] + scattered_dim_size;
 
     auto slice_start = ttnn::Shape(begins);
