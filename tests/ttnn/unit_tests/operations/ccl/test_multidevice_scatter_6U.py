@@ -16,7 +16,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_multidevice_scatter_t3000 import 
     "device_params",
     [
         {
-            "trace_region_size": 16384,
+            "trace_region_size": 18432,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
         }
     ],
