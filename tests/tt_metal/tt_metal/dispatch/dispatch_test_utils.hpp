@@ -135,6 +135,11 @@ inline void verify_kernel_coordinates(
     CoreType core_type = (processor_class == tt::RISCV::ERISC || processor_class == tt::RISCV::ERISC1)
                              ? CoreType::ETH
                              : CoreType::WORKER;
+    tt::tt_metal::HalProgrammableCoreType hal_core_type = core_type == CoreType::ETH
+                                                              ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                                              : tt::tt_metal::HalProgrammableCoreType::TENSIX;
+    hal_core_type = idle_eth ? tt::tt_metal::HalProgrammableCoreType::IDLE_ETH : hal_core_type;
+
     core_type = idle_eth ? CoreType::IDLE_ETH : core_type;
 
     const auto& sub_device_origin = mesh_device->worker_cores(hal_core_type, sub_device_id).bounding_box().start_coord;
