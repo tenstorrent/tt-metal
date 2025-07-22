@@ -99,5 +99,5 @@ def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_
     )
     logger.info(f"Mean Cosine Similarity for Reference Model: {mean_similarity1}")
     logger.info(f"Mean Cosine Similarity for TTNN Model:: {mean_similarity2}")
-    
+
     assert sentence_per_sec > 9380, "Performance Below 5% the Fluctuations Range"
