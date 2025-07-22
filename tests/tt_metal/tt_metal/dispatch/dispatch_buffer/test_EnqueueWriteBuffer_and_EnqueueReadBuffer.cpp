@@ -279,7 +279,6 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     uint32_t cq_start =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-
     auto device_coord = distributed::MeshCoordinate(0, 0);
 
     std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
