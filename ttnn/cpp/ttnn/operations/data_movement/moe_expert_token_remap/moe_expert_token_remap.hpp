@@ -21,7 +21,7 @@ struct ExecuteMoeExpertTokenRemap {
 
 }  // namespace operations::data_movement
 
-constexpr auto moe_token_expert_remap = ttnn::
-    register_operation<"ttnn::moe_token_expert_remap", ttnn::operations::data_movement::ExecuteMoeExpertTokenRemap>();
+constexpr auto moe_expert_token_remap = ttnn::
+    register_operation<"ttnn::moe_expert_token_remap", ttnn::operations::data_movement::ExecuteMoeExpertTokenRemap>();
 
 }  // namespace ttnn
