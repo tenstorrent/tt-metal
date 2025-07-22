@@ -6,11 +6,19 @@
 
 #include <string>
 
+#include <umd/device/tt_core_coordinates.h>
 #include "api/tt-metalium/kernel.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
+#include "tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
+
+// Utility function to get the programmable core type from a RISCV processor
+HalProgrammableCoreType get_programmable_core_type_from_riscv(tt::RISCV riscv_processor, bool is_idle_eth = false);
+
+// Utility function to get the core type from a RISCV processor
+CoreType get_core_type_from_riscv(tt::RISCV riscv_processor);
 
 class KernelImpl : public Kernel, public JitBuildSettings {
 public:
