@@ -56,7 +56,7 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
-          # TT_METAL_WATCHER: 5  Reenable watcher after issue 25562 is resolved
+          TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
         # skipping 2 specific tests on N150-viommu runners due to issue 25562
