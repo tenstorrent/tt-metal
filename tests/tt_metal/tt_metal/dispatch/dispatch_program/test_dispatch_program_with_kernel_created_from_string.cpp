@@ -103,17 +103,23 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
             log_info(LogTest, "Skipping this test on device {} because it has no active ethernet cores.", device_id);
             continue;
         }
-        distributed::MeshWorkload workload;
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = CreateProgram();
-        tt_metal::CreateKernelFromString(
-            program,
-            kernel_src_code,
-            *active_ethernet_cores.begin(),
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        this->RunProgram(mesh_device, workload);
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
+            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+            distributed::MeshWorkload workload;
+            auto zero_coord = distributed::MeshCoordinate(0, 0);
+            auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+            Program program = CreateProgram();
+            tt_metal::CreateKernelFromString(
+                program,
+                kernel_src_code,
+                *active_ethernet_cores.begin(),
+                tt_metal::EthernetConfig{.noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
+            distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+            this->RunProgram(mesh_device, workload);
+        }
     };
 }
 
