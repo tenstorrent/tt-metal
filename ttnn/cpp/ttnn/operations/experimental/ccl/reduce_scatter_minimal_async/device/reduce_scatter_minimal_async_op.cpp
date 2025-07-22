@@ -215,6 +215,7 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->ring_size,
         this->output_mem_config,
         this->topology,
+        this->barrier_semaphore.has_value(),
         input_shape,
         input_memory_layout,
         input_dtype,
