@@ -185,7 +185,7 @@ void MAIN {
     // - VectorMode::RC is equivalent to 32x32 tiles
     // - VectorMode::R is equivalent to 16x32 tiles
     // NOTE: Using VectorMode::RC for 16x32 tiles will be correct accuracy, just slower due to unnecessary math
-    constexpr int vector_mode = VectorMode::RC;
+    constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
 
     // Ping pong intermediate buffers between loops to avoid copies
     uint32_t cb_cur_max = cb_max_1;
@@ -296,7 +296,7 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
-                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
                 /* QK -= cb_cur_max */
@@ -344,7 +344,7 @@ void MAIN {
                     reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_exp_max_diff);
                     /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
-                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
 
                     /* cb_prev_sum *= cb_exp_max_diff */
@@ -380,7 +380,6 @@ void MAIN {
         if (do_reduce) {
             // cb_out_accumulate_im should contain o_1
             // cb_prev_max and cb_prev_sum should contain m_1 and l_1
-            /*
             if (k_chunk_end - k_chunk_start < k_num_chunks) {
                 // This indicates that there are computes done by other workers. Needs to wait for them and send to
                 // reducer's compute
@@ -388,16 +387,16 @@ void MAIN {
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
-                    max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
+                    max_block<vector_mode>(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
 
                     // l = torch.exp(m_2 - m) * l_2 + torch.exp(m_1 - m) * l_1
 
                     /// l1 = torch.exp((m_2 - m) * scale) * l_2
-                    sub_exp_block<scale_fp32>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+                    sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                     mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
 
                     /// l2 = torch.exp((m_1 - m)  * scale) * l_1
-                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                     /// l = l1 + l2
@@ -414,7 +413,7 @@ void MAIN {
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
-            }*/
+            }
             /**
              * Performs final row-reduction on the partial sum.
              */
@@ -422,7 +421,7 @@ void MAIN {
             move_block<true>(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
 
             /* cb_cur_sum = 1.0 / cb_cur_sum */
-            recip_block_inplace(cb_cur_sum, Sq_chunk_t);
+            recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
 
             /* cb_out_accumulate_im *= cb_cur_sum */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);  // DEBUG

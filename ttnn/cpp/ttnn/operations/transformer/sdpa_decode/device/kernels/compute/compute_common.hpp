@@ -25,28 +25,7 @@
 /******************************************************************************
  *                   Generic Compute Functions                                 *
  ******************************************************************************/
-void max_block_inplace(uint32_t in0, uint32_t in1, uint32_t num_tiles) {
-    // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
-    max_tile_init();
-
-    constexpr uint32_t dst_reg_0 = 0;
-    constexpr uint32_t dst_reg_1 = 1;
-    cb_wait_front(in0, num_tiles);
-    cb_wait_front(in1, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst();
-        copy_tile(in0, 0, dst_reg_0);
-        copy_tile(in1, i, dst_reg_1);
-        cb_pop_front(in0, 1);
-        cb_reserve_back(in0, 1);
-        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::C));
-        pack_tile(dst_reg_0, in0);
-        cb_push_back(in0, 1);
-        release_dst();
-    }
-}
-
+template <int vector_mode = (int)VectorMode::RC>
 void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
@@ -61,14 +40,20 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::C));
+        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(vector_mode));
         pack_tile(dst_reg_0, out_cb, i);
         release_dst();
     }
     cb_push_back(out_cb, num_tiles);
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows>
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t in0_cb,
+    uint32_t scale_cb,
+    uint32_t rows,
+    int vector_mode = (int)VectorMode::RC>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -84,6 +69,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
+    reconfig_data_format(out_cb, prev_cb);
 
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
@@ -95,7 +81,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
         }
         pack_tile(reduce_dst_idx, out_cb);
         release_dst();
@@ -114,56 +100,13 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, i, 0);
-        if (vector_mode == (int)VectorMode::R) {
-            recip_tile(0, vector_mode);
-        } else {
-            recip_tile(0, static_cast<int>(VectorMode::C));
-        }
+        recip_tile(0, static_cast<int>(vector_mode));
         pack_tile(0, in_cb);
         release_dst();
     }
     cb_pop_front(in_cb, num_tiles);
     cb_reserve_back(in_cb, num_tiles);
     cb_push_back(in_cb, num_tiles);
-}
-
-template <int vector_mode = (int)VectorMode::RC>
-void sub_exp_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
-    // Precondition: in0_cb has rows*cols produced
-    // Precondition: in1_cb has rows produced
-    // Postcondition: in0_cb has rows*cols produced
-    // Postcondition: in1_cb has rows produced
-
-    sub_bcast_cols_init_short(in0_cb, in1_cb);
-    exp_tile_init<true>();
-    cb_wait_front(in0_cb, rows * cols);
-    cb_wait_front(in1_cb, rows);
-
-#ifdef SUB_EXP_GRANULARITY
-    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
-    uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
-#else
-    uint32_t dst_tiles = cols;
-    uint32_t granularity = 1;
-#endif
-    for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t u = 0; u < granularity; u++) {
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                exp_tile<true>(j, vector_mode);
-            }
-            tile_regs_commit();
-            cb_pop_front(in0_cb, dst_tiles);
-            cb_reserve_back(in0_cb, dst_tiles);
-            tile_regs_wait();
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                pack_tile(j, in0_cb);
-            }
-            cb_push_back(in0_cb, dst_tiles);
-            tile_regs_release();
-        }
-    }
 }
 
 template <uint32_t in0_cb, uint32_t rows, uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC>
@@ -180,8 +123,8 @@ void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb
     cb_reserve_back(reduce_cb, rows);
 
 #ifdef SUB_EXP_GRANULARITY
-    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
-    constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+    uint32_t dst_tiles = SUB_EXP_GRANULARITY;
+    uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
 #else
     uint32_t dst_tiles = cols;
     uint32_t granularity = 1;
@@ -450,7 +393,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     cb_push_back(out_cb, M);
 }
 
-template <uint32_t scale_fp32>
+template <uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
@@ -468,7 +411,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
+        exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(vector_mode), scale_bf16);
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
