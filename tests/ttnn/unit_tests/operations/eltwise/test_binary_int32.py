@@ -475,7 +475,26 @@ def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device):
 @pytest.mark.parametrize("use_legacy", [True, False])
 def test_binary_mul_int32_edge_cases(use_legacy, device):
     torch_input_tensor_a = torch.tensor(
-        [0, -0, -1, 1, 2147483647, -2147483647, 1073741823, -536870911, 51130563, 131071, -1000, -10000, -2147483648]
+        [
+            0,
+            -0,
+            -1,
+            1,
+            2147483647,  # upper int32 limit
+            -2147483648,  # lower int32 limit
+            1073741823,
+            -536870911,
+            51130563,
+            131071,
+            -1000,
+            -10000,
+            # test for overflowing outputs to ensure int32 arithmetic behaviour
+            1073741824,
+            -1073741824,
+            -99999999,
+            3457894,
+        ],
+        dtype=torch.int32,
     )
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -485,7 +504,9 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    torch_input_tensor_b = torch.tensor([0, -1, -2147483647, 100000000, 1, 1, -2, 3, -40, 16384, -1000, 10000, 1])
+    torch_input_tensor_b = torch.tensor(
+        [0, -1, -2147483647, 1e8, 1, 1, -2, 3, -40, 16384, -1e3, 1e4, 2, -9867, 5e4, 63835], dtype=torch.int32
+    )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=ttnn.int32,
@@ -503,5 +524,8 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
 
     output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
     output_tensor = ttnn.to_torch(output_tensor)
+    print(torch_input_tensor_a)
+    print(torch_output_tensor)
+    print(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
