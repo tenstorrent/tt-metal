@@ -476,6 +476,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
+            auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
 
             // update senders
             std::vector<std::vector<std::vector<RuntimeArgsData>>> reader_runtime_args_by_core;
@@ -496,6 +497,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     writer_runtime_args_by_core[i % num_senders_per_link][core.x][core.y];
                 worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                 worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
+                }
             }
         };
 
