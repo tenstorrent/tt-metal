@@ -56,6 +56,16 @@ class Transformer(LightweightModule):
             args.rope_scaling_factor,
             args.orig_context_len,
         )
+
+        if args.rope_theta_local:
+            self.rope_local_setup = RotarySetup(
+                mesh_device,
+                args.max_batch_size,
+                args.head_dim,
+                args.max_seq_len,
+                args.rope_theta_local,
+            )
+
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         self.layers = [
@@ -125,10 +135,18 @@ class Transformer(LightweightModule):
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+
         tt_rot_mats_prefill = [
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
+
+        if hasattr(self, "rope_local_setup"):
+            tt_rot_mats_local_prefill = [
+                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ]
+            tt_rot_mats_prefill = {"global": tt_rot_mats_prefill, "local": tt_rot_mats_local_prefill}
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -224,6 +242,10 @@ class Transformer(LightweightModule):
         Embed tokens
         """
         tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
+        if hasattr(self, "rope_local_setup"):
+            tt_rot_mats_local = self.rope_local_setup.get_rot_mats(rope_idxs)
+            tt_rot_mats = {"global": tt_rot_mats, "local": tt_rot_mats_local}
+
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
