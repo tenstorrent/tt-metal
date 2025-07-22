@@ -52,6 +52,7 @@
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
+
 namespace tt {
 
 namespace tt_metal {
