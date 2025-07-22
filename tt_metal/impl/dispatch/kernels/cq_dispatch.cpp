@@ -17,7 +17,6 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -336,10 +335,7 @@ void process_exec_buf_end_h() {
 template <uint32_t preamble_size>
 void relay_to_next_cb(
     uint32_t data_ptr, uint32_t length, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
-    // TODO: Size for fabric
-    static_assert(
-        preamble_size == 0 || preamble_size == sizeof(tt::packet_queue::dispatch_packet_header_t),
-        "Dispatcher preamble size must be 0 or sizeof(dispatch_packet_header_t)");
+    static_assert(preamble_size == 0, "Dispatcher preamble size must be 0. This is not supported anymore with Fabric");
 
     // DPRINT << "relay_to_next_cb: " << data_ptr << " " << cb_fence << " " << length << ENDL();
 
