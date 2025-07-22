@@ -4,15 +4,17 @@ import random
 import pytest
 import torch
 
+import ttnn
 from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import get_experts_on_device
 from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import (
     gen_expert_mapping,
     get_expert_indices,
     get_metadata_tensor,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def gen_topk(experts, indices_tensor):
+def gen_topk(experts, indices_tensor, devices):
     # indices_tensor is [batch, 1, seq, k] . Entries are expert indices
     # we want  [1, batch, seq, global_experts] . Here, entries are topk weights for expert at given index
     # (replicated over devices on dim 0)
@@ -33,7 +35,7 @@ def gen_topk(experts, indices_tensor):
             for e, weight in zip(indices_tensor[b, 0, s, :].tolist(), scores):
                 topk_tensor[0, b, s, e] = weight
 
-    return topk_tensor
+    return topk_tensor.repeat([devices, 1, 1, 1])
 
 
 def gen_output_expert_token_activation(devices, topk_tensor, indices_tensor, expert_mapping_tensor):
@@ -68,7 +70,7 @@ def gen_output_expert_token_activation(devices, topk_tensor, indices_tensor, exp
 def gen_tensors(devices, experts, batch, seq, selected_experts_k, mesh_shape, scheme):
     expert_mapping = gen_expert_mapping(experts, devices, scheme)
     expert_indices = get_expert_indices(batch, experts, selected_experts_k, seq, mesh_shape, scheme)
-    topk_tensor = gen_topk(experts, expert_indices)
+    topk_tensor = gen_topk(experts, expert_indices, prod(mesh_shape))
 
     output = gen_output_expert_token_activation(devices, topk_tensor, expert_indices, expert_mapping)
 
@@ -77,14 +79,38 @@ def gen_tensors(devices, experts, batch, seq, selected_experts_k, mesh_shape, sc
     return expert_mapping, metadata_tensor, topk_tensor, output
 
 
-def test_moe_expert_token_remaps(num_iters, devices, experts, batch, seq, selected_experts_k, mesh_shape, scheme):
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("seq", [2])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("selected_experts_k", [8])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("scheme", ["random"])
+def test_moe_expert_token_remaps(
+    mesh_device,
+    mesh_shape,
+    num_iters,
+    experts_per_device,
+    batches_per_device,
+    seq,
+    selected_experts_k,
+    input_memory_config,
+    scheme,
+):
+    devices = prod(mesh_shape)
+    batch = devices * batches_per_device
+    experts = devices * experts_per_device
+
     expert_mapping_tensors = []
     expert_metadata_tensors = []
     topk_tensors = []
     output_tensor_goldens_list = []
 
     for _ in range(num_iters):
-        expert_mapping, expert_metadata, topk_tensor, output = gen_tensors(
+        expert_mapping, metadata_tensor, topk_tensor, output = gen_tensors(
             devices, experts, batch, seq, selected_experts_k, mesh_shape, scheme
         )
 
@@ -94,10 +120,12 @@ def test_moe_expert_token_remaps(num_iters, devices, experts, batch, seq, select
             topk_tensor,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=dtype,
+            dtype=ttnn.bfloat16,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
         )
+
+        assert len(ttnn.get_device_tensors(tt_topk)) == devices
 
         tt_expert_mapping = ttnn.from_torch(
             expert_mapping,
@@ -105,8 +133,10 @@ def test_moe_expert_token_remaps(num_iters, devices, experts, batch, seq, select
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+
+        assert len(ttnn.get_device_tensors(tt_expert_mapping)) == devices
 
         tt_metadata = ttnn.from_torch(
             metadata_tensor,
@@ -117,17 +147,22 @@ def test_moe_expert_token_remaps(num_iters, devices, experts, batch, seq, select
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
         )
 
-        topk_tensors.append(tt_input_contribs)
+        assert len(ttnn.get_device_tensors(tt_metadata)) == devices
+
+        topk_tensors.append(tt_topk)
         expert_mapping_tensors.append(tt_expert_mapping)
-        metadata_tensors.append(tt_metadata)
+        expert_metadata_tensors.append(tt_metadata)
 
     out_tensor_list = []
     for topk, mapping, metadata in zip(topk_tensors, expert_mapping_tensors, expert_metadata_tensors):
-        tt_op_out = ttnn.moe_expert_token_remap(topk, mapping, metadata, mesh_device)
-        out_tensor_list.append(out_tensor_list)
+        tt_op_out = ttnn.moe_expert_token_remap(topk, mapping, metadata)
+        out_tensor_list.append(tt_op_out)
 
-    for ref, test in zip(out_tensor_list, output_tensor_goldens_list):
-        assert_with_pcc(ref, test)
+    for ref, test in zip(output_tensor_goldens_list, out_tensor_list):
+        test_torch = ttnn.to_torch(test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        print(f"{test_torch=}")
+        print(f"{ref=}")
+        assert_with_pcc(test_torch, ref)
 
 
 @pytest.mark.parametrize(
@@ -149,5 +184,5 @@ def test_gen_tensors(mesh_device, mesh_shape, experts_per_device, batches_per_de
 
     assert expert_mapping.shape == (1, 1, experts, devices)
     assert metadata_tensor.shape == (devices, batch, seq, select_experts_k)
-    assert topk_tensor.shape == (1, batch, seq, experts)
+    assert topk_tensor.shape == (devices, batch, seq, experts)
     assert output.shape == (devices, batch, seq, experts_per_device)
