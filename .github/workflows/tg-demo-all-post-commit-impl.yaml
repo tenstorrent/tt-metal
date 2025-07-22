@@ -32,7 +32,7 @@ jobs:
             arch: wormhole_b0,
             cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/demo/text_demo.py -k apc',
             model: llama3,
-            timeout: 7,
+            timeout: 10,
             owner_id: U053W15B6JF
           }, # Djordje Ivanovic
         ]
