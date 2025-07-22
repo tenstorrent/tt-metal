@@ -197,6 +197,9 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
+    // Log kernels compilation commands
+    bool log_kernels_compilation_commands = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -458,6 +461,8 @@ public:
     // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
     // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
     inline bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
+
+    inline bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
