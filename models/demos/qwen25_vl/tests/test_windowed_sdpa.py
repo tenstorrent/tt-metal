@@ -68,12 +68,12 @@ def timer(description="Operation"):
         (1, 1, 4096, 96, 256, [0, 1024, 2048, 3072, 4076, 4092, 4096]),
         # real-world cases
         # -------------- from Qwen2.5-VL-3B-Instruct --------------
-        (1, 16, 8192, 96, 64, lambda: get_cu_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),
-        (1, 16, 8192, 96, 64, lambda: get_cu_window_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),
-        (1, 16, 14336, 96, 64, lambda: get_cu_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14)),
-        (1, 16, 14336, 96, 64, lambda: get_cu_window_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14)),
-        (1, 16, 43008, 96, 64, lambda: get_cu_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14)),
-        (1, 16, 43008, 96, 64, lambda: get_cu_window_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14)),
+        (1, 16, 8192, 96, 256, lambda: get_cu_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),
+        (1, 16, 8192, 96, 256, lambda: get_cu_window_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),
+        (1, 16, 14336, 96, 256, lambda: get_cu_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14)),
+        (1, 16, 14336, 96, 256, lambda: get_cu_window_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14)),
+        (1, 16, 43008, 96, 256, lambda: get_cu_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14)),
+        (1, 16, 43008, 96, 256, lambda: get_cu_window_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14)),
     ],
     ids=[
         "basic-1",

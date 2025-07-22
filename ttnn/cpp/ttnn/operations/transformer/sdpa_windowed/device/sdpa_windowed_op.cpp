@@ -24,8 +24,9 @@ void WindowedScaledDotProductAttention::validate(const std::vector<Tensor>& inpu
     TT_FATAL(cu_window_seqlens_shape.rank() == 1, "cu_window_seqlens must be a 1D tensor");
     TT_FATAL(cu_window_seqlens_shape[0] >= 2, "cu_window_seqlens must have at least 2 elements");
     TT_FATAL(
-        cu_window_seqlens_shape[0] <= cu_window_seqlens_npages * cu_window_seqlens_page_size,
-        "cu_window_seqlens must have less than 1024 elements");
+        cu_window_seqlens_shape[0] <= cu_window_seqlens_nelements,
+        "cu_window_seqlens must have less than {} elements",
+        cu_window_seqlens_nelements);
     // First element must be 0
     // todo)) use uint16_t and int16_t instead of uint32_t and int32_t
     TT_FATAL(

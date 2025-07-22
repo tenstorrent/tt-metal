@@ -6,6 +6,8 @@
 #include "debug/dprint_tile.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
+#include "debug/dprint.h"
+
 #define WATCHER_OVERHEAD_OK 1
 #endif
 
@@ -87,6 +89,22 @@ struct ArrayView {
 
 #if defined(WATCHER_OVERHEAD_OK)
     uint32_t addr(size_t i) const { return _base_addr + i * sizeof(T); }
+
+    void print() const {
+        auto ptr = _ptr;
+        for (uint32_t i = 0; i < _size; ++i) {
+            DPRINT << DEC() << ptr[i] << " ";
+        }
+        DPRINT << ENDL();
+    }
+
+    void print_hex() const {
+        auto ptr = _ptr;
+        for (uint32_t i = 0; i < _size; ++i) {
+            DPRINT << HEX() << ptr[i] << " ";
+        }
+        DPRINT << ENDL();
+    }
 #endif
 
 private:
