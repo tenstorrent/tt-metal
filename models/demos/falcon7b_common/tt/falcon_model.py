@@ -9,6 +9,7 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.falcon7b_common.tests.test_utils import (
     create_prefill_attn_mask_for_sharded_softmax,
     dump_device_profiler,
@@ -21,7 +22,7 @@ from models.utility_functions import nearest_32
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
-class TtFalconModelShared(torch.nn.Module):
+class TtFalconModelShared(LightweightModule):
     @abstractmethod
     def __init__(
         self,

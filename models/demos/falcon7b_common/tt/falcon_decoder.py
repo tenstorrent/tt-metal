@@ -5,7 +5,7 @@
 from typing import Optional, Tuple
 
 import torch
-from torch import nn
+import torch.nn as nn
 
 import ttnn
 from models.demos.falcon7b_common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill

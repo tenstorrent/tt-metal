@@ -8,9 +8,10 @@ import torch
 from safetensors.torch import load_file as safetensors_load_file
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
-class HostEmbedding(torch.nn.Module):
+class HostEmbedding(LightweightModule):
     def __init__(self, model_args):
         super().__init__()
         self.emb = torch.nn.Embedding(model_args.vocab_size, model_args.dim)
