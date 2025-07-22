@@ -59,9 +59,14 @@ jobs:
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+        # skipping 2 specific tests on N150-viommu runners due to issue 25562
         run: |
-          /usr/bin/${{ inputs.product }}-validation-basic
-
+          if [[ "${{ inputs.runner }}" == N150-viommu ]]; then
+            /usr/bin/${{ inputs.product }}-validation-basic \
+              --gtest_filter=-DispatchFixture.TensixFailOnDuplicateKernelCreationDataflow:TTNNFixtureWithDevice.TestGenericOpArgmaxSingleCore
+          else
+            /usr/bin/${{ inputs.product }}-validation-basic
+          fi
       - name: workaround
         run: |
           # The test-reporting action runs git ls-files with no way to opt-out.
