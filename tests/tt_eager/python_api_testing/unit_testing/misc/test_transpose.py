@@ -31,6 +31,7 @@ def transpose(
     input_mem_config=ttnn.MemoryConfig(),
     output_mem_config=ttnn.MemoryConfig(),
     input_dtype=ttnn.bfloat16,
+    layout=ttnn.TILE_LAYOUT,
     expected_program_cache_size=None,
 ):
     torch.manual_seed(2005)
@@ -38,9 +39,7 @@ def transpose(
     output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
     x = random_torch_tensor(input_dtype, input_shape)
 
-    ttnn_input = ttnn.from_torch(
-        x, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, device=device, memory_config=input_mem_config
-    )
+    ttnn_input = ttnn.from_torch(x, layout=layout, dtype=input_dtype, device=device, memory_config=input_mem_config)
     xtt = ttnn.transpose(ttnn_input, dim0, dim1, memory_config=output_mem_config)
 
     assert list(xtt.shape) == output_shape
@@ -79,6 +78,37 @@ def test_fold_transpose(device):
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     transpose(input_shape, device, dim0=2, dim1=3, input_mem_config=sharded_config, output_mem_config=sharded_config)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, 16, 16],  # tile padded
+        [1, 64, 1, 16],  # tile padded with outer dim
+        [1, 16, 1, 32],  # tile padded with outer dim
+        [1, 1, 32, 32],  # tile aligned
+        [1, 128, 128, 256],  # tile aligned with outer dim
+        [1, 128, 256, 120],  # tile padded with outer dim large
+        [32, 4, 128, 128],  # tile aligned with all dim
+    ],
+)
+@pytest.mark.parametrize(
+    "dim0, dim1",
+    [
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 2),
+        (1, 3),
+        (2, 3),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+)
+def test_transpose_int32(device, input_shape, dim0, dim1, layout):
+    transpose(input_shape, device, dim0=-2, dim1=-1, input_dtype=ttnn.int32, layout=layout)
 
 
 @pytest.mark.parametrize(

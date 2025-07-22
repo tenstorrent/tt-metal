@@ -21,51 +21,19 @@ TIMEOUT = 360
 random.seed(0)
 
 
-def get_factors(i, s):
-    factors = []
-    for j in range(s, i + 1, s):
-        if i % j == 0:
-            factors.append(j)
-    return factors
-
-
-@lru_cache(maxsize=10000)
-def gen_reshape_shape(input_shape, step=1):
-    volume = 1
-    for x in input_shape:
-        volume *= x
-
-    shapes = []
-    out_dims = len(input_shape)
-
-    if out_dims == 4:
-        for w in get_factors(volume, step):
-            v = volume // w
-            for h in get_factors(v, step):
-                v2 = v // h
-                for c in get_factors(v2, 1):
-                    b = v2 // c
-                    shapes.append({"reshape_dims": [b, c, h, w]})
-    elif out_dims == 3:
-        for h in get_factors(volume, step):
-            v2 = volume // h
-            for c in get_factors(v2, 1):
-                b = v2 // c
-                shapes.append({"reshape_dims": [b, c, h]})
-    elif out_dims == 2:
-        for c in get_factors(volume, 1):
-            b = volume // c
-            shapes.append({"reshape_dims": [b, c]})
-
-    return random.choice(shapes)["reshape_dims"]
-
-
 # Does not have memory_config parameter
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 6, 256, 256], [1, 1, 1, 1], 16)
-        + gen_shapes([1, 1, 1], [6, 256, 256], [1, 1, 1], 16)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
+        "shapes": [
+            ([1, 1, 16, 16], [1, 1, 8, 32]),  # tile padded to tile padded small
+            ([1, 64, 1, 16], [1, 8, 32, 32]),  # tile padded to tile aligned from outer dim small
+            ([1, 16, 1, 32], [1, 1, 32, 16]),  # tile padded to outer dim small
+            ([1, 1, 32, 32], [1, 1, 16, 64]),  # tile aligned to tile padded small
+            ([1, 1, 32, 32], [1, 32, 1, 32]),  # tile aligned to tile padded outer dim small
+            ([1, 128, 128, 2048], [128, 1, 2048, 128]),  # tile aligned outer dim to outer dim
+            ([1, 128, 2048, 120], [1, 120, 2048, 128]),  # tile padded to tile aligned from outer dim
+            ([1, 2048, 128, 128], [1, 128, 128, 2048]),  # tile aligned inner dim to outer dim
+        ],
         "input_a_dtype": [ttnn.int32],
         "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],  # ttnn.ROW_MAJOR_LAYOUT
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -73,27 +41,8 @@ parameters = {
 }
 
 
-def align_to_32(x):
-    if x % 32 == 0:
-        return x
-
-    return ((x // 32) + 1) * 32
-
-
-def max_volume(rehape_shape):
-    vol = align_to_32(rehape_shape[-1]) * align_to_32(rehape_shape[-2])
-
-    if len(rehape_shape) >= 3:
-        vol *= rehape_shape[-3]
-
-    if len(rehape_shape) == 4:
-        vol *= rehape_shape[-4]
-
-    return vol
-
-
 def run(
-    input_shape,
+    shapes,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -102,6 +51,8 @@ def run(
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
+    input_shape = shapes[0]
+    output_shape = shapes[1]
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

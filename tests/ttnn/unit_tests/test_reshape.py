@@ -12,6 +12,47 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
+from loguru import logger
+
+
+# @pytest.mark.parametrize(
+#     "input_shape, output_shape",
+#     [
+#         ([1, 1, 16, 16], [1, 1, 8, 32]), # tile padded to tile padded small
+#         ([1, 64, 1, 16], [1, 1, 32, 32]), # tile padded to tile aligned from outer dim small
+#         ([1, 16, 1, 32], [1, 1, 32, 16]), # tile padded to outer dim small
+#         ([1, 1, 32, 32], [1, 1, 16, 64]), # tile aligned to tile padded small
+#         ([1, 1, 32, 32], [1, 32, 1, 32]), # tile aligned to tile padded outer dim small
+#         ([1, 128, 128, 256], [128, 1, 256, 128]), # tile aligned outer dim to outer dim
+#         ([1, 128, 256, 120], [1, 120, 256, 128]), # tile padded to tile aligned from outer dim
+#         ([1, 256, 128, 128], [1, 128, 128, 256]), # tile aligned inner dim to outer dim
+#     ],
+# )
+# @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+# @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+# @pytest.mark.parametrize("enable_cache", [True])
+# def test_reshape_int32(device, enable_cache, input_shape, output_shape, layout, mem_config):
+#     if not enable_cache:
+#         device.disable_program_cache()
+
+#     a = torch.randint(-50, 50, input_shape, dtype=torch.int32)
+#     b = torch.randint(-50, 50, input_shape, dtype=torch.int32)
+#     size_in_bytes = a.nelement() * a.element_size()
+#     if(size_in_bytes > 84000000):
+#         mem_config = ttnn.DRAM_MEMORY_CONFIG
+#         logger.info("tensor too big, using DRAM memory config")
+
+#     tt_a = ttnn.from_torch(a, device=device, dtype=ttnn.int32, layout=layout, memory_config=mem_config)
+#     tt_b = ttnn.from_torch(b, device=device, dtype=ttnn.int32, layout=layout, memory_config=mem_config)
+
+#     a = a.reshape(output_shape)
+#     b = b.reshape(output_shape)
+
+#     tt_a = ttnn.reshape(tt_a, output_shape)
+#     tt_b = ttnn.reshape(tt_b, output_shape)
+
+#     assert torch.allclose(a, ttnn.to_torch(tt_a))
+#     assert torch.allclose(b, ttnn.to_torch(tt_b))
 
 
 @pytest.mark.parametrize(
