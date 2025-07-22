@@ -84,7 +84,7 @@ def generate_block_attention_mask_tt(patch_embeds_list, tensor, tt_device):
     tensor = ttnn.to_torch(tensor)
     device = tensor.device
     dtype = tensor.dtype
-    seq_len = tensor.shape[1]
+    seq_len = tensor.shape[-2]
     d_min = torch.finfo(dtype).min
     causal_mask = torch.full((seq_len, seq_len), fill_value=d_min, dtype=dtype, device=device)
 

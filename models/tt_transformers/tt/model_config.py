@@ -2357,7 +2357,7 @@ class ModelArgs:
                 elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
                     from transformers import Mistral3ForConditionalGeneration
 
-                    model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+                    model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
                     model = model
 
                 else:

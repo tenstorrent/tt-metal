@@ -35,7 +35,7 @@ def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
     }
 
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
-    input_tensor = torch.randn((B, C, H, W))
+    input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
 
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
@@ -52,11 +52,7 @@ def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
         configuration=model_args,
     )
 
-    submodule_partial_state_dict = {}
-    reference_submodule = model_args.reference_vision_rot_emb()
-    reference_submodule.load_state_dict(submodule_partial_state_dict)
-
-    tt_output = vision_model(input_tensor)  # [0]
+    tt_output = vision_model(input_tensor, image_sizes=[(H, W)], ref_model=reference_model)  # [0]
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(tt_output).squeeze(0)
     passing, pcc_message = comp_pcc(reference_output, tt_output, pcc_required)
