@@ -333,12 +333,7 @@ class Transformer(LightweightModule):
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
-            tt_logits = ttnn.argmax(
-                tt_logits,
-                dim=3,
-                keepdim=True,
-                use_multicore=True,
-            )
+            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
         else:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             if not self.args.is_galaxy:
