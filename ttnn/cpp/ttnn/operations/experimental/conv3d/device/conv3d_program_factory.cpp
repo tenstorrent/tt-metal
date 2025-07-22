@@ -7,6 +7,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
 
 namespace ttnn::operations::experimental::conv3d::detail {
@@ -436,13 +437,13 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
 
         // Calculate actual indices
         uint32_t t_in_start = t_out_block_start * config.T_out_block * config.stride[0];
-        uint32_t t_in_end = std::min(t_out_block_end * config.T_out_block * config.stride[0], T_in);
+        uint32_t t_in_end = std::min(t_out_block_end * config.T_out_block * config.stride[0], T_in + config.padding[0]);
 
         uint32_t h_in_start = h_out_block_start * config.H_out_block * config.stride[1];
-        uint32_t h_in_end = std::min(h_out_block_end * config.H_out_block * config.stride[1], H_in);
+        uint32_t h_in_end = std::min(h_out_block_end * config.H_out_block * config.stride[1], H_in + config.padding[1]);
 
         uint32_t w_in_start = w_out_block_start * config.W_out_block * config.stride[2];
-        uint32_t w_in_end = std::min(w_out_block_end * config.W_out_block * config.stride[2], W_in);
+        uint32_t w_in_end = std::min(w_out_block_end * config.W_out_block * config.stride[2], W_in + config.padding[2]);
 
         uint32_t t_out_start = t_out_block_start * config.T_out_block;
         uint32_t t_out_end = std::min(t_out_block_end * config.T_out_block, T_out);
