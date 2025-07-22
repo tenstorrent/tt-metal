@@ -374,10 +374,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
     // Kernel Runtime Args
     CoreCoord drain_sync_core;
+    CoreCoord opposite_core_coord;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
             CoreCoord core = sender_worker_cores[link * 2 + core_idx];
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
+
+            CoreCoord supplemental_core = sender_worker_cores[link * 2 + ((core_idx + 1) % 2)];
+            opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
 
             std::vector<uint32_t> reader_rt_args = {
                 input_tensor.buffer()->address(),         // input_tensor_address
@@ -422,7 +426,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 barrier_semaphore.has_value(),                   // use synchronize barrier semaphore
                 barrier_semaphore.has_value()                    // synchronize barrier semaphore
                     ? barrier_semaphore.value().address()
-                    : 0
+                    : 0,
+                opposite_core_coord.x,
+                opposite_core_coord.y
             };
             if (intermediate_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(intermediate_tensor, writer_rt_args);
@@ -807,6 +813,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     // Kernel Runtime Args
     uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range, 0);
     CoreCoord drain_sync_core;
+    bool use_barrier_sem = barrier_semaphore.has_value();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t core_idx = 0; core_idx < num_senders_per_routing_plane; core_idx++) {
             const bool is_forward = core_idx % num_senders_per_routing_plane;
@@ -841,6 +848,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             }
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_ids[core_idx], {core}, reader_rt_args);
 
+            int num_targets_in_direction = is_forward ? num_targets_forward : num_targets_backward;
+            bool signal_on_barrier_sem = use_barrier_sem && num_targets_in_direction;
+            bool wait_on_barrier_sem = use_barrier_sem && num_targets_in_direction;
             std::vector<uint32_t> writer_rt_args = {
                 intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                 output_tensor.buffer()->address(),        // output_tensor_address
@@ -853,7 +863,13 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 num_links,
                 fwd_bwd_semaphore_address,
                 opposite_core_coord.x,
-                opposite_core_coord.y};
+                opposite_core_coord.y,
+                signal_on_barrier_sem,         // signal_on_barrier_sem
+                wait_on_barrier_sem,           // wait_on_barrier_sem
+                barrier_semaphore.has_value()  // synchronize barrier semaphore
+                    ? barrier_semaphore.value().address()
+                    : 0
+            };
             if (intermediate_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(intermediate_tensor, writer_rt_args);
             }
