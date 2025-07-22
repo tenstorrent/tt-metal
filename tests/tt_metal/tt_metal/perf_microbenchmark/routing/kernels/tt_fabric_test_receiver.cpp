@@ -5,18 +5,14 @@
 #include "debug/dprint.h"
 #include "tt_fabric_test_kernels_utils.hpp"
 
-constexpr uint32_t LOCAL_ARGS_BASE = get_compile_time_arg_val(0);
-constexpr uint32_t LOCAL_ARGS_SIZE = get_compile_time_arg_val(1);
-constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(2);
-constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(3);
+constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(0);
+constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(1);
 
 void kernel_main() {
-    // Initialize local args system with base address and buffer size
-    tt::tt_fabric::fabric_tests::init_local_args<LOCAL_ARGS_BASE, LOCAL_ARGS_SIZE>();
+    size_t rt_args_idx = 0;
 
     using ReceiverKernelConfig = tt::tt_fabric::fabric_tests::ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS>;
 
-    size_t rt_args_idx = 0;
     auto receiver_config = ReceiverKernelConfig::build_from_args(rt_args_idx);
 
     // Clear test results area and mark as started

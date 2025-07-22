@@ -21,35 +21,33 @@ struct LocalArgsBuffer {
     uint32_t buffer_size = 0;
     uint32_t end_address = 0;
 
-    template <uint32_t base_addr, uint32_t buf_size>
-    void init() {
+    void init(uint32_t base_addr, uint32_t buf_size) {
         base_address = base_addr;
         buffer_size = buf_size;
         end_address = base_address + buffer_size;
     }
 
     template <typename T>
-    FORCE_INLINE T get_arg_val(size_t& arg_idx) {
+    FORCE_INLINE T get_arg_val(size_t arg_idx) {
         static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
 
         uint32_t current_offset = arg_idx * sizeof(T);
         ASSERT(current_offset + sizeof(T) <= end_address);  // Check bounds
 
         tt_l1_ptr T* local_args_ptr = reinterpret_cast<tt_l1_ptr T*>(base_address);
-        return local_args_ptr[arg_idx++];
+        return local_args_ptr[arg_idx];
     }
 };
 
 // Global instance of the local args buffer manager
 static LocalArgsBuffer local_args_buffer;
 
-template <uint32_t base_address, uint32_t buffer_size>
-inline void init_local_args() {
-    local_args_buffer.init<base_address, buffer_size>();
+inline void init_local_args(uint32_t base_address, uint32_t buffer_size) {
+    local_args_buffer.init(base_address, buffer_size);
 }
 
 template <typename T>
-FORCE_INLINE T get_local_arg_val(size_t& arg_idx) {
+FORCE_INLINE T get_local_arg_val(size_t arg_idx) {
     return local_args_buffer.get_arg_val<T>(arg_idx);
 }
 
@@ -191,15 +189,15 @@ struct SenderTrafficConfigMetadata {
 
 private:
     SenderTrafficConfigMetadata(size_t& arg_idx) {
-        this->num_packets = get_local_arg_val<uint32_t>(arg_idx);
-        this->seed = get_local_arg_val<uint32_t>(arg_idx);
-        this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx);
+        this->num_packets = get_local_arg_val<uint32_t>(arg_idx++);
+        this->seed = get_local_arg_val<uint32_t>(arg_idx++);
+        this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx++);
     }
 };
 
 struct ChipUnicastFields1D {
     static ChipUnicastFields1D build_from_args(size_t& arg_idx) {
-        uint32_t num_hops = get_local_arg_val<uint32_t>(arg_idx);
+        uint32_t num_hops = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipUnicastFields1D(num_hops);
     }
 
@@ -210,10 +208,10 @@ struct ChipUnicastFields1D {
 
 struct ChipUnicastFields2D {
     static ChipUnicastFields2D build_from_args(size_t& arg_idx) {
-        uint16_t src_device_id = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t ew_dim = get_local_arg_val<uint32_t>(arg_idx);
+        uint16_t src_device_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t ew_dim = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipUnicastFields2D(src_device_id, dst_device_id, dst_mesh_id, ew_dim);
     }
 
@@ -228,8 +226,8 @@ struct ChipUnicastFields2D {
 
 struct ChipMulticastFields1D {
     static ChipMulticastFields1D build_from_args(size_t& arg_idx) {
-        uint32_t mcast_start_hops = get_local_arg_val<uint32_t>(arg_idx);
-        uint32_t num_hops = get_local_arg_val<uint32_t>(arg_idx);
+        uint32_t mcast_start_hops = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t num_hops = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipMulticastFields1D(mcast_start_hops, num_hops);
     }
 
@@ -242,12 +240,12 @@ struct ChipMulticastFields1D {
 
 struct ChipMulticastFields2D {
     static ChipMulticastFields2D build_from_args(size_t& arg_idx) {
-        uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t num_hops_n = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t num_hops_s = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t num_hops_e = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t num_hops_w = get_local_arg_val<uint32_t>(arg_idx);
+        uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t num_hops_n = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t num_hops_s = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t num_hops_e = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t num_hops_w = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipMulticastFields2D(dst_device_id, dst_mesh_id, num_hops_n, num_hops_s, num_hops_e, num_hops_w);
     }
 
@@ -276,11 +274,11 @@ struct ChipMulticastFields2D {
 struct NocUnicastWriteFields {
     template <bool IS_SOURCE>
     static NocUnicastWriteFields build_from_args(size_t& arg_idx) {
-        uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx);
-        uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx);
+        uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_noc_encoding = 0;
         if constexpr (IS_SOURCE) {
-            dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx);
+            dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
         return NocUnicastWriteFields(payload_size_bytes, dst_address, dst_noc_encoding);
     }
@@ -296,12 +294,12 @@ struct NocUnicastWriteFields {
 struct NocUnicastAtomicIncFields {
     template <bool IS_SOURCE>
     static NocUnicastAtomicIncFields build_from_args(size_t& arg_idx) {
-        uint16_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx);
-        uint16_t atomic_inc_wrap = get_local_arg_val<uint32_t>(arg_idx);
-        uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx);
+        uint16_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t atomic_inc_wrap = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_noc_encoding = 0;
         if constexpr (IS_SOURCE) {
-            dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx);
+            dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
         return NocUnicastAtomicIncFields(atomic_inc_val, atomic_inc_wrap, dst_address, dst_noc_encoding);
     }
@@ -522,7 +520,7 @@ struct LocalSyncConfig {
     void setup_core_coordinates(size_t& arg_idx) {
         // Get core coordinates from runtime args
         for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
-            sync_core_xy_encoding_[i] = get_local_arg_val<uint32_t>(arg_idx);
+            sync_core_xy_encoding_[i] = get_local_arg_val<uint32_t>(arg_idx++);
         }
     }
 
@@ -568,7 +566,7 @@ struct SenderKernelTrafficConfig {
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void parse_and_setup_chip_send_type(size_t& arg_idx, uint32_t packet_header_address) {
-        ChipSendType chip_send_type = static_cast<ChipSendType>(get_local_arg_val<uint32_t>(arg_idx));
+        ChipSendType chip_send_type = static_cast<ChipSendType>(get_local_arg_val<uint32_t>(arg_idx++));
 
         if (chip_send_type == ChipSendType::CHIP_UNICAST) {
             ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
@@ -582,7 +580,7 @@ struct SenderKernelTrafficConfig {
     }
 
     void parse_and_setup_noc_send_type(size_t& arg_idx) {
-        uint32_t noc_type_raw = get_local_arg_val<uint32_t>(arg_idx);
+        uint32_t noc_type_raw = get_local_arg_val<uint32_t>(arg_idx++);
         noc_send_type_ = static_cast<NocSendType>(noc_type_raw);
 
         // Validate NOC send type and set up operations
@@ -815,13 +813,21 @@ struct CommonMemoryMap {
     CommonMemoryMap() = default;
     static CommonMemoryMap build_from_args(size_t& arg_idx) { return CommonMemoryMap(arg_idx); }
 
+    uint32_t local_args_base;
+    uint32_t local_args_size;
     uint32_t result_buffer_base;
     uint32_t result_buffer_size;
 
 private:
     CommonMemoryMap(size_t& arg_idx) {
-        result_buffer_base = get_local_arg_val<uint32_t>(arg_idx);
-        result_buffer_size = get_local_arg_val<uint32_t>(arg_idx);
+        // Extract and initialize local args system first
+        local_args_base = get_arg_val<uint32_t>(arg_idx++);
+        local_args_size = get_arg_val<uint32_t>(arg_idx++);
+        init_local_args(local_args_base, local_args_size);
+
+        // Then parse the rest
+        result_buffer_base = get_arg_val<uint32_t>(arg_idx++);
+        result_buffer_size = get_arg_val<uint32_t>(arg_idx++);
     }
 };
 
@@ -831,7 +837,7 @@ struct SenderKernelMemoryMap {
 
     SenderKernelMemoryMap() {}
 
-    static SenderKernelMemoryMap build_from_args(size_t& arg_idx) { return SenderKernelMemoryMap(arg_idx); }
+    static SenderKernelMemoryMap build_from_args(size_t& rt_args_idx) { return SenderKernelMemoryMap(rt_args_idx); }
 
     uint32_t get_packet_header_address() {
         uint32_t addr = curr_packet_header_address_;
@@ -850,13 +856,16 @@ struct SenderKernelMemoryMap {
     }
 
 private:
-    SenderKernelMemoryMap(size_t& arg_idx) {
-        // Parse all memory map arguments in unified call:
-        // [result_buffer_base, result_buffer_size, packet_header_base, payload_buffer_base, highest_usable_address]
-        common = CommonMemoryMap::build_from_args(arg_idx);  // Parses first 2 args
-        packet_header_region_base_ = get_local_arg_val<uint32_t>(arg_idx);
-        payload_buffer_region_base_ = get_local_arg_val<uint32_t>(arg_idx);
-        highest_usable_address_ = get_local_arg_val<uint32_t>(arg_idx);
+    SenderKernelMemoryMap(size_t& rt_args_idx) {
+        // Parse all memory map arguments from runtime args:
+        // [local_args_base, local_args_size, result_buffer_base, result_buffer_size, packet_header_base,
+        // payload_buffer_base, highest_usable_address]
+
+        // Parse common memory map
+        common = CommonMemoryMap::build_from_args(rt_args_idx);
+        packet_header_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
+        payload_buffer_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
+        highest_usable_address_ = get_arg_val<uint32_t>(rt_args_idx++);
 
         // set the current addresses to the base
         curr_packet_header_address_ = packet_header_region_base_;
@@ -940,8 +949,8 @@ private:
         // Use separate indices for runtime args vs local args
         size_t local_args_idx = 0;  // Start from 0 for local args
 
-        // Parse unified memory map args (common + sender-specific in one call) - uses local args
-        this->memory_map = SenderKernelMemoryMap::build_from_args(local_args_idx);
+        // Parse memory map args from runtime args
+        this->memory_map = SenderKernelMemoryMap::build_from_args(rt_args_idx);
 
         // Initialize fabric connections using placement new - these use normal runtime args
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
@@ -952,8 +961,8 @@ private:
         // add line sync initializations here, for each fabric connection, ex, forward and backward connection, run line
         // sync for all.
         if constexpr (LINE_SYNC) {
-            uint32_t sync_address = get_local_arg_val<uint32_t>(local_args_idx);
-            uint32_t sync_val = get_local_arg_val<uint32_t>(local_args_idx);
+            uint32_t sync_address = get_local_arg_val<uint32_t>(local_args_idx++);
+            uint32_t sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
             new (&local_sync_config()) LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>(sync_address, sync_val);
 
             // setup core coordinates
@@ -961,7 +970,7 @@ private:
         }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            traffic_config_to_fabric_connection_map[i] = get_local_arg_val<uint32_t>(local_args_idx);
+            traffic_config_to_fabric_connection_map[i] = get_local_arg_val<uint32_t>(local_args_idx++);
         }
 
         // Initialize traffic config pointers
@@ -1011,9 +1020,9 @@ struct ReceiverTrafficConfigMetadata {
 
 private:
     ReceiverTrafficConfigMetadata(size_t& arg_idx) {
-        this->num_packets = get_local_arg_val<uint32_t>(arg_idx);
-        this->seed = get_local_arg_val<uint32_t>(arg_idx);
-        this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx);
+        this->num_packets = get_local_arg_val<uint32_t>(arg_idx++);
+        this->seed = get_local_arg_val<uint32_t>(arg_idx++);
+        this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx++);
     }
 };
 
@@ -1212,8 +1221,8 @@ private:
         // Receivers only use local args (no fabric connections)
         size_t local_args_idx = 0;  // Start from 0 for local args
 
-        // Parse unified memory map args (common only for receivers)
-        this->common_memory_map = CommonMemoryMap::build_from_args(local_args_idx);
+        // Parse memory map args
+        this->common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_configs[i] = nullptr;
@@ -1221,7 +1230,7 @@ private:
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             const auto metadata = ReceiverTrafficConfigMetadata::build_from_args(local_args_idx);
-            NocSendType noc_send_type = static_cast<NocSendType>(get_local_arg_val<uint32_t>(local_args_idx));
+            NocSendType noc_send_type = static_cast<NocSendType>(get_local_arg_val<uint32_t>(local_args_idx++));
 
             // Get pointer to pre-allocated storage for this config
             char* config_storage = validation_configs_storage.data() + i * sizeof(WriteAtomicIncValidationConfig);
@@ -1297,8 +1306,8 @@ private:
         // Use separate indices for runtime args vs local args
         size_t local_args_idx = 0;  // Start from 0 for local args
 
-        // Parse memory map args (common only) - uses local args
-        this->memory_map = SenderKernelMemoryMap::build_from_args(local_args_idx);
+        // Parse memory map args from runtime args
+        this->memory_map = SenderKernelMemoryMap::build_from_args(rt_args_idx);
 
         // Initialize sync fabric connections using placement new - these use normal runtime args
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
@@ -1307,7 +1316,7 @@ private:
         }
 
         // Initialize line sync configurations
-        uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx);
+        uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
             new (&line_sync_configs()[i])
@@ -1319,8 +1328,8 @@ private:
         }
 
         // Initialize local sync config
-        uint32_t sync_address = get_local_arg_val<uint32_t>(local_args_idx);
-        uint32_t sync_val = get_local_arg_val<uint32_t>(local_args_idx);
+        uint32_t sync_address = get_local_arg_val<uint32_t>(local_args_idx++);
+        uint32_t sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
         new (&local_sync_config()) LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>(sync_address, sync_val);
 
         // setup core coordinates

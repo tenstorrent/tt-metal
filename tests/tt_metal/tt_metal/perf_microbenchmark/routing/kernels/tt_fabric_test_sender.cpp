@@ -4,15 +4,13 @@
 
 #include "tt_fabric_test_kernels_utils.hpp"
 
-constexpr uint32_t LOCAL_ARGS_BASE = get_compile_time_arg_val(0);
-constexpr uint32_t LOCAL_ARGS_SIZE = get_compile_time_arg_val(1);
-constexpr uint8_t IS_2D_FABRIC = get_compile_time_arg_val(2);
-constexpr uint8_t USE_DYNAMIC_ROUTING = get_compile_time_arg_val(3);
-constexpr uint8_t NUM_FABRIC_CONNECTIONS = get_compile_time_arg_val(4);
-constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(5);
-constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(6);
-constexpr bool LINE_SYNC = get_compile_time_arg_val(7);
-constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(8);
+constexpr uint8_t IS_2D_FABRIC = get_compile_time_arg_val(0);
+constexpr uint8_t USE_DYNAMIC_ROUTING = get_compile_time_arg_val(1);
+constexpr uint8_t NUM_FABRIC_CONNECTIONS = get_compile_time_arg_val(2);
+constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(3);
+constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(4);
+constexpr bool LINE_SYNC = get_compile_time_arg_val(5);
+constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(6);
 
 using SenderKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig<
     NUM_FABRIC_CONNECTIONS,
@@ -23,9 +21,6 @@ using SenderKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig<
     NUM_LOCAL_SYNC_CORES>;
 
 void kernel_main() {
-    // Initialize local args system with base address and buffer size
-    tt::tt_fabric::fabric_tests::init_local_args<LOCAL_ARGS_BASE, LOCAL_ARGS_SIZE>();
-
     size_t rt_args_idx = 0;
     auto sender_config = SenderKernelConfig::build_from_args(rt_args_idx);
 

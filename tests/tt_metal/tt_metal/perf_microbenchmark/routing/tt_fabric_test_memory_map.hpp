@@ -44,8 +44,10 @@ struct CommonMemoryMap {
 
     bool is_valid() const { return result_buffer.is_valid() && local_args_buffer.is_valid(); }
 
-    // Returns common kernel arguments: [result_buffer_base, result_buffer_size]
-    std::vector<uint32_t> get_kernel_args() const { return {result_buffer.start, result_buffer.size}; }
+    // Returns common kernel arguments: [local_args_base, local_args_size, result_buffer_base, result_buffer_size]
+    std::vector<uint32_t> get_kernel_args() const {
+        return {local_args_buffer.start, local_args_buffer.size, result_buffer.start, result_buffer.size};
+    }
 
     // Convenience methods for reading results
     uint32_t get_result_buffer_address() const { return result_buffer.start; }
