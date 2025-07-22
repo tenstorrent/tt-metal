@@ -105,6 +105,7 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
 
 static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
     {"all_to_all", HighLevelTrafficPattern::AllToAll},
+    {"one_to_all", HighLevelTrafficPattern::OneToAll},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
     {"full_ring", HighLevelTrafficPattern::FullRing},
@@ -277,7 +278,7 @@ private:
 const std::string no_default_test_yaml_config = "";
 
 const std::vector<std::string> supported_high_level_patterns = {
-    "all_to_all", "full_device_random_pairing", "unidirectional_linear", "full_ring", "half_ring"};
+    "all_to_all", "one_to_all", "full_device_random_pairing", "unidirectional_linear", "full_ring", "half_ring"};
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -685,7 +686,7 @@ inline void CmdlineParser::print_help() {
         "simple unicast test is run.");
     log_info(
         LogTest,
-        "                                               Supported types: all_to_all, "
+        "                                               Supported types: all_to_all, one_to_all, "
         "full_device_random_pairing, unidirectional_linear, full_ring, half_ring.");
     log_info(
         LogTest,
@@ -1223,9 +1224,15 @@ private:
 
             if (pattern.type == "all_to_all") {
                 if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
-                    expand_all_to_all_unicast(test, defaults);
+                    expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::AllToAll);
                 } else {
-                    expand_all_to_all_multicast(test, defaults);
+                    expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::AllToAll);
+                }
+            } else if (pattern.type == "one_to_all") {
+                if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
+                    expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::OneToAll);
+                } else {
+                    expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
                 }
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
@@ -1241,10 +1248,30 @@ private:
         }
     }
 
-    void expand_all_to_all_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding all_to_all_unicast pattern for test: {}", test.name);
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs = this->route_manager_.get_all_to_all_unicast_pairs();
-        add_senders_from_pairs(test, pairs, base_pattern);
+    void expand_one_or_all_to_all_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
+        log_info(LogTest, "Expanding {}_unicast pattern for test: {}", pattern_name, test.name);
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> all_pairs =
+            this->route_manager_.get_all_to_all_unicast_pairs();
+
+        if (pattern_type == HighLevelTrafficPattern::OneToAll) {
+            TT_FATAL(!all_pairs.empty(), "Cannot expand one_to_all_unicast because no device pairs were found.");
+
+            // Get the first device as the single sender
+            FabricNodeId first_device = all_pairs[0].first;
+
+            // Filter pairs to only include those with the first device as sender
+            std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+            for (const auto& pair : all_pairs) {
+                if (pair.first == first_device) {
+                    filtered_pairs.push_back(pair);
+                }
+            }
+            add_senders_from_pairs(test, filtered_pairs, base_pattern);
+        } else {
+            add_senders_from_pairs(test, all_pairs, base_pattern);
+        }
     }
 
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
@@ -1253,12 +1280,22 @@ private:
         add_senders_from_pairs(test, random_pairs, base_pattern);
     }
 
-    void expand_all_to_all_multicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding all_to_all_multicast pattern for test: {}", test.name);
+    void expand_one_or_all_to_all_multicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
+        log_info(LogTest, "Expanding {}_multicast pattern for test: {}", pattern_name, test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
+        TT_FATAL(!devices.empty(), "Cannot expand {}_multicast because no devices were found.", pattern_name);
 
-        for (const auto& src_node : devices) {
+        // Determine which devices should be senders
+        std::vector<FabricNodeId> sender_devices;
+        if (pattern_type == HighLevelTrafficPattern::OneToAll) {
+            sender_devices = {devices[0]};  // Only first device
+        } else {
+            sender_devices = devices;  // All devices
+        }
+
+        for (const auto& src_node : sender_devices) {
             auto hops = this->route_manager_.get_full_mcast_hops(src_node);
 
             ParsedTrafficPatternConfig specific_pattern;
