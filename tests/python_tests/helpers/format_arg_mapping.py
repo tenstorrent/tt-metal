@@ -26,6 +26,8 @@ class MathOpType(Enum):
 
     SFPU_UNARY = auto()
     SFPU_BINARY = auto()
+    SFPU_TERNARY = auto()
+
     FPU_BINARY = auto()
     REDUCE = auto()
 
@@ -83,6 +85,13 @@ class MathOperation(Enum):
     SfpuElwRightShift = OpSpec("RSHFT", MathOpType.SFPU_BINARY)
     SfpuElwsub = OpSpec("SUB", MathOpType.SFPU_BINARY)
     SfpuXlogy = OpSpec("XLOGY", MathOpType.SFPU_BINARY)
+
+    # =============================================================================
+    # SFPU TERNARY OPERATIONS
+    # =============================================================================
+    SfpuWhere = OpSpec("WHERE", MathOpType.SFPU_TERNARY)
+    # Alias maintained for backward compatibility with older test cases
+    TTNNWhere = SfpuWhere
 
     # =============================================================================
     # REDUCE OPERATIONS

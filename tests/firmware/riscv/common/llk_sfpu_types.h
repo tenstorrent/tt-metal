@@ -97,4 +97,5 @@ enum class SfpuType
     prelu,
     reshuffle_rows,
     hardsigmoid,
+    where,
 };
