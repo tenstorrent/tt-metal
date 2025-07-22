@@ -377,6 +377,8 @@ class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixt
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
+class UnitMeshCQMultiDeviceBufferFixture : public UnitMeshCQMultiDeviceFixture {};
+
 class DISABLED_CQMultiDeviceOnFabricFixture
     : public UnitMeshCQMultiDeviceFixture,
       public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
