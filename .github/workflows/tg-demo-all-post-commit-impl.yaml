@@ -12,7 +12,7 @@ on:
       build-artifact-name:
         required: true
         type: string
-      extra-tag:
+      runner-label:
         required: false
         type: string
         default: "in-service"
@@ -41,6 +41,7 @@ jobs:
       - ${{ inputs.topology }}
       - bare-metal
       - pipeline-functional
+      - ${{ inputs.runner-label }}
     container:
         image: ${{ inputs.docker-image }}
         env:
