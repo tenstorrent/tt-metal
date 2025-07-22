@@ -106,8 +106,6 @@ def test_rms_norm_inference(
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
 
-    tt_ccl.close()
-
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
 
