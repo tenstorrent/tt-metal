@@ -144,19 +144,27 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         num_sticks_written += num_sticks_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, src0_cb_index, output_cb_index](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
-            UpdateDynamicCircularBufferAddress(program, src0_cb_index, *src_buffer);
-            UpdateDynamicCircularBufferAddress(program, output_cb_index, *dst_buffer);
-        };
+        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            {
+                auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
+            }
+            {
+                auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
