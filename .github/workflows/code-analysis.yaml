@@ -189,18 +189,17 @@ jobs:
           COMMITS_TABLE_CONTENT+="|--------|---------|---------|-----|"$'\n'
 
           if [ "$COMMIT_COUNT" -gt 0 ]; then
-            git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA} | while IFS='|' read -r short_hash message author full_hash; do
+            # Use process substitution to avoid subshell issues with piped while loop
+            while IFS='|' read -r short_hash message author full_hash; do
               pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
               clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
 
               if [ -n "$pr_number" ]; then
-                echo "| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"
+                COMMITS_TABLE_CONTENT+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
               else
-                echo "| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"
+                COMMITS_TABLE_CONTENT+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"$'\n'
               fi
-            done >> /tmp/commits_table.txt
-
-            COMMITS_TABLE_CONTENT+=$(cat /tmp/commits_table.txt)
+            done < <(git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
           else
             COMMITS_TABLE_CONTENT+="| (No commits found) | - | - | - |"$'\n'
           fi
