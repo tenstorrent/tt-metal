@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "where_device_operation.hpp"
+#include "where_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <cmath>
@@ -31,6 +32,8 @@ void set_or_update_runtime_arguments(
     F handle_args) {
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
+    WhereVariant variant = operation_attributes.where_variant;
+
     const auto [aN, aC, aHt, aWt] = extract_shape_dims(predicate_tensor);  // Considering all are of same shape
 
     uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
@@ -44,9 +47,12 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-    constexpr size_t num_reader_args = 5;
     constexpr size_t num_writer_args = 3;
     constexpr size_t num_kernel_args = 1;
+
+    // Reader args count depends on variant
+    size_t num_reader_args = (variant == WhereVariant::TTS || variant == WhereVariant::TST) ? 4 : 5;
+
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
@@ -56,20 +62,46 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, num_reader_args>{0});
+            if (variant == WhereVariant::TTS || variant == WhereVariant::TST) {
+                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 4>{0});
+            } else {
+                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 5>{0});
+            }
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, num_writer_args>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, num_kernel_args>{0});
             continue;
         }
 
-        std::array reader_runtime_args = {
-            predicate_tensor.buffer()->address(),
-            value_true_tensor.buffer()->address(),
-            value_false_tensor.buffer()->address(),
-            num_tiles_per_core,
-            start_tile_id,
-        };
-        handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        // Set reader runtime arguments based on variant
+        if (variant == WhereVariant::TTS) {
+            // TTS: predicate (arg 0) + value_true tensor (arg 1)
+            std::array reader_runtime_args = {
+                predicate_tensor.buffer()->address(),
+                value_true_tensor.value().buffer()->address(),
+                num_tiles_per_core,
+                start_tile_id,
+            };
+            handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        } else if (variant == WhereVariant::TST) {
+            // TST: predicate (arg 0) + value_false tensor (arg 1, maps to c_1)
+            std::array reader_runtime_args = {
+                predicate_tensor.buffer()->address(),
+                value_false_tensor.value().buffer()->address(),
+                num_tiles_per_core,
+                start_tile_id,
+            };
+            handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        } else {
+            // TTT: predicate (arg 0) + value_true (arg 1) + value_false (arg 2)
+            std::array reader_runtime_args = {
+                predicate_tensor.buffer()->address(),
+                value_true_tensor.value().buffer()->address(),
+                value_false_tensor.value().buffer()->address(),
+                num_tiles_per_core,
+                start_tile_id,
+            };
+            handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        }
 
         std::array writer_runtime_args = {
             output.buffer()->address(),
@@ -78,8 +110,21 @@ void set_or_update_runtime_arguments(
         };
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-        std::array compute_runtime_args = {num_tiles_per_core};
-        handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        // All variants use same compute runtime args now
+        if (variant == WhereVariant::TTS) {
+            auto bit_cast_scalar =
+                pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype(), false);
+            std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar};
+            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        } else if (variant == WhereVariant::TST) {
+            auto bit_cast_scalar =
+                pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype(), false);
+            std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar};
+            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        } else {
+            std::array compute_runtime_args = {num_tiles_per_core};
+            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        }
 
         start_tile_id += num_tiles_per_core;
     }
@@ -98,21 +143,44 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
+    WhereVariant variant = operation_attributes.where_variant;
+
+    // Use WhereKernelConfig to get the appropriate kernel names
+    WhereKernelConfig kernel_config(variant);
+
     auto program = CreateProgram();
 
     auto* device = predicate_tensor.device();
 
-    // auto predicate_data_format = datatype_to_dataformat_converter(predicate_tensor.dtype());
-    // auto value_true_data_format = datatype_to_dataformat_converter(value_true_tensor.dtype());
-    // auto value_false_data_format = datatype_to_dataformat_converter(value_false_tensor.dtype());
-    // auto output_data_format = datatype_to_dataformat_converter(output.dtype());
-
     auto predicate_data_format = datatype_to_dataformat_converter(
         (predicate_tensor.dtype() == DataType::BFLOAT16) ? DataType::UINT16 : predicate_tensor.dtype());
-    auto value_true_data_format = datatype_to_dataformat_converter(
-        (value_true_tensor.dtype() == DataType::BFLOAT16) ? DataType::UINT16 : value_true_tensor.dtype());
-    auto value_false_data_format = datatype_to_dataformat_converter(
-        (value_false_tensor.dtype() == DataType::BFLOAT16) ? DataType::UINT16 : value_false_tensor.dtype());
+
+    // Handle data formats based on variant and tensor availability
+    DataFormat value_true_data_format, value_false_data_format;
+    if (variant == WhereVariant::TTS) {
+        // TTS: only value_true tensor exists
+        value_true_data_format = datatype_to_dataformat_converter(
+            (value_true_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
+                                                                      : value_true_tensor.value().dtype());
+        // Use predicate format as fallback for value_false
+        value_false_data_format = predicate_data_format;
+    } else if (variant == WhereVariant::TST) {
+        // TST: only value_false tensor exists
+        value_false_data_format = datatype_to_dataformat_converter(
+            (value_false_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
+                                                                       : value_false_tensor.value().dtype());
+        // Use predicate format as fallback for value_true
+        value_true_data_format = predicate_data_format;
+    } else {
+        // TTT: both tensors exist
+        value_true_data_format = datatype_to_dataformat_converter(
+            (value_true_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
+                                                                      : value_true_tensor.value().dtype());
+        value_false_data_format = datatype_to_dataformat_converter(
+            (value_false_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
+                                                                       : value_false_tensor.value().dtype());
+    }
+
     auto output_data_format =
         datatype_to_dataformat_converter((output.dtype() == DataType::BFLOAT16) ? DataType::UINT16 : output.dtype());
 
@@ -133,7 +201,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     // Number of tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
 
-    // Input buffers
+    // Input buffers - Create predicate CB (always c_0)
     auto [predicate_tensor_cb, predicate_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_0,
         program,
@@ -141,20 +209,57 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         predicate_single_tile_size,
         num_tiles_per_cb,
         predicate_data_format);  // predicate_tensor
-    auto [value_true_tensor_cb, value_true_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_1,
-        program,
-        all_device_cores,
-        value_true_single_tile_size,
-        num_tiles_per_cb,
-        value_true_data_format);  // value_true_tensor
-    auto [value_false_tensor_cb, value_false_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_2,
-        program,
-        all_device_cores,
-        value_false_single_tile_size,
-        num_tiles_per_cb,
-        value_false_data_format);  // value_false_tensor
+
+    // Create c_1 based on variant - this is the primary tensor CB
+    uint32_t value_true_tensor_cb = 0;
+    tt::tt_metal::CBHandle value_true_tensor_cb_handle;
+    uint32_t value_false_tensor_cb = 0;
+    tt::tt_metal::CBHandle value_false_tensor_cb_handle;
+
+    if (variant == WhereVariant::TTS) {
+        // TTS: c_1 = value_true tensor (value_false is scalar)
+        auto [cb, cb_handle] = create_cb(
+            tt::CBIndex::c_1,
+            program,
+            all_device_cores,
+            value_true_single_tile_size,
+            num_tiles_per_cb,
+            value_true_data_format);
+        value_true_tensor_cb = cb;
+        value_true_tensor_cb_handle = cb_handle;
+    } else if (variant == WhereVariant::TST) {
+        // TST: c_1 = value_false tensor (value_true is scalar)
+        auto [cb, cb_handle] = create_cb(
+            tt::CBIndex::c_1,
+            program,
+            all_device_cores,
+            value_false_single_tile_size,
+            num_tiles_per_cb,
+            value_false_data_format);
+        value_false_tensor_cb = cb;
+        value_false_tensor_cb_handle = cb_handle;
+    } else {
+        // TTT: c_1 = value_true tensor, c_2 = value_false tensor
+        auto [cb1, cb1_handle] = create_cb(
+            tt::CBIndex::c_1,
+            program,
+            all_device_cores,
+            value_true_single_tile_size,
+            num_tiles_per_cb,
+            value_true_data_format);
+        value_true_tensor_cb = cb1;
+        value_true_tensor_cb_handle = cb1_handle;
+
+        auto [cb2, cb2_handle] = create_cb(
+            tt::CBIndex::c_2,
+            program,
+            all_device_cores,
+            value_false_single_tile_size,
+            num_tiles_per_cb,
+            value_false_data_format);
+        value_false_tensor_cb = cb2;
+        value_false_tensor_cb_handle = cb2_handle;
+    }
 
     // Output buffer
     auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
@@ -167,67 +272,125 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     auto predicate_is_dram =
         static_cast<uint32_t>(predicate_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto value_true_is_dram =
-        static_cast<uint32_t>(value_true_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto value_false_is_dram =
-        static_cast<uint32_t>(value_false_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+
+    // Handle DRAM flags based on variant and tensor availability
+    uint32_t value_true_is_dram = 0, value_false_is_dram = 0;
+    if (variant == WhereVariant::TTS) {
+        value_true_is_dram =
+            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    } else if (variant == WhereVariant::TST) {
+        value_false_is_dram =
+            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    } else {
+        value_true_is_dram =
+            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+        value_false_is_dram =
+            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    }
+
     auto output_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
 
-    // READER KERNEL
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/ternary_reader_nobcast_ttt.cpp",
-        all_device_cores,
-        tt_metal::ReaderDataMovementConfig(
+    // READER KERNEL - Use kernel path from utils
+    tt_metal::ReaderDataMovementConfig reader_config;
+    if (variant == WhereVariant::TTS) {
+        // TTS: c_0 = predicate, c_1 = value_true tensor
+        reader_config = tt_metal::ReaderDataMovementConfig(
+            {predicate_is_dram, predicate_tensor_cb, value_true_is_dram, value_true_tensor_cb});
+    } else if (variant == WhereVariant::TST) {
+        // TST: c_0 = predicate, c_1 = value_false tensor
+        reader_config = tt_metal::ReaderDataMovementConfig(
+            {predicate_is_dram, predicate_tensor_cb, value_false_is_dram, value_false_tensor_cb});
+    } else {
+        // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
+        reader_config = tt_metal::ReaderDataMovementConfig(
             {predicate_is_dram,
              predicate_tensor_cb,
              value_true_is_dram,
              value_true_tensor_cb,
              value_false_is_dram,
-             value_false_tensor_cb}));
+             value_false_tensor_cb});
+    }
 
-    // WRITER KERNEL
+    auto reader_kernel_id = tt_metal::CreateKernel(
+        program, get_kernel_file_path(kernel_config.reader_kernel), all_device_cores, reader_config);
+
+    // WRITER KERNEL - Use kernel path from utils
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        get_kernel_file_path(kernel_config.writer_kernel),
         all_device_cores,
         tt_metal::WriterDataMovementConfig({output_tensor_cb, output_is_dram}));
 
-    // COMPUTE KERNEL
+    // COMPUTE KERNEL - Use kernel path from utils
     bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||
                             output_data_format == tt::DataFormat::Int32 ||
                             output_data_format == tt::DataFormat::Float32;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+
+    // c_0 is always predicate
     unpack_to_dest_mode[tt::CBIndex::c_0] = (predicate_tensor.dtype() == DataType::FLOAT32)
                                                 ? UnpackToDestMode::UnpackToDestFp32
                                                 : UnpackToDestMode::Default;
-    unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.dtype() == DataType::FLOAT32)
-                                                ? UnpackToDestMode::UnpackToDestFp32
-                                                : UnpackToDestMode::Default;
-    unpack_to_dest_mode[tt::CBIndex::c_2] = (value_false_tensor.dtype() == DataType::FLOAT32)
-                                                ? UnpackToDestMode::UnpackToDestFp32
-                                                : UnpackToDestMode::Default;
+
+    // c_1 assignment depends on variant
+    if (variant == WhereVariant::TTS) {
+        // TTS: c_1 = value_true tensor
+        unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
+                                                    ? UnpackToDestMode::UnpackToDestFp32
+                                                    : UnpackToDestMode::Default;
+    } else if (variant == WhereVariant::TST) {
+        // TST: c_1 = value_false tensor
+        unpack_to_dest_mode[tt::CBIndex::c_1] = (value_false_tensor.value().dtype() == DataType::FLOAT32)
+                                                    ? UnpackToDestMode::UnpackToDestFp32
+                                                    : UnpackToDestMode::Default;
+    } else {
+        // TTT: c_1 = value_true tensor, c_2 = value_false tensor
+        unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
+                                                    ? UnpackToDestMode::UnpackToDestFp32
+                                                    : UnpackToDestMode::Default;
+        unpack_to_dest_mode[tt::CBIndex::c_2] = (value_false_tensor.value().dtype() == DataType::FLOAT32)
+                                                    ? UnpackToDestMode::UnpackToDestFp32
+                                                    : UnpackToDestMode::Default;
+    }
+
+    // c_3 is always output
     unpack_to_dest_mode[tt::CBIndex::c_3] =
         (output.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
 
     constexpr uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    std::vector<uint32_t> compute_kernel_args = {
-        num_tiles_per_cycle,
-    };
+
+    // All variants use the same compile args now
+    std::vector<uint32_t> compute_kernel_args;
+    if (variant == WhereVariant::TTS) {
+        auto bit_cast_scalar =
+            pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype(), false);
+        compute_kernel_args = {num_tiles_per_cycle, bit_cast_scalar};
+    } else if (variant == WhereVariant::TST) {
+        auto bit_cast_scalar =
+            pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype(), false);
+        compute_kernel_args = {num_tiles_per_cycle, bit_cast_scalar};
+    } else {
+        compute_kernel_args = {num_tiles_per_cycle};
+    }
 
     std::map<std::string, std::string> kernel_defines;
     kernel_defines["WHERE_LLK"] = "where_tile";
-
+    kernel_defines["FILL_LLK"] = "fill_tile";
     if (predicate_tensor.dtype() == DataType::FLOAT32) {
         kernel_defines["WHERE_LLK"] = "where_fp32_tile";
-    } else if (predicate_tensor.dtype() == DataType::INT32) {
+    }
+    if (predicate_tensor.dtype() == DataType::INT32) {
         kernel_defines["WHERE_LLK"] = "where_int32_tile";
+        kernel_defines["FILL_LLK"] = "fill_tile_int";
+        kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+    } else {
+        kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
     }
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_no_bcast_ttt.cpp",
+        get_kernel_file_path(kernel_config.compute_kernel),
         all_device_cores,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,

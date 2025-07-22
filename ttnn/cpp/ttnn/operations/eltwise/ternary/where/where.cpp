@@ -79,25 +79,62 @@ Tensor WhereOperation::invoke(
         (memory_config.has_value() ? memory_config.value().is_sharded() : false) ||
         (output.has_value() ? output.value().memory_config().is_sharded() : false);
 
-    // Check if both are Tensors and no sharding is present and involves no broadcast
-    if (is_value_true_Tensor && is_value_false_Tensor && !has_shard_spec) {
-        const auto& t_true = std::get<Tensor>(value_true);
-        const auto& t_false = std::get<Tensor>(value_false);
-
-        if (ternary_utils::have_same_shape(t_true, predicate) && ternary_utils::have_same_shape(predicate, t_false)) {
-            std::cout << "ternary LLK where op" << std::endl;
-
-            std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
-                                                                      : std::optional<DataType>(predicate.dtype());
-            return ttnn::prim::where(
-                queue_id,
-                predicate,
-                t_true,
-                t_false,
-                output_dtype,
-                memory_config.value_or(predicate.memory_config()),
-                output);
+    // Check if we can use fast ternary LLK path (TTT, TTS, TST cases)
+    if (!has_shard_spec) {
+        if (is_value_true_Tensor && is_value_false_Tensor) {
+            // TTT case: tensor-tensor-tensor
+            const auto& t_true = std::get<Tensor>(value_true);
+            const auto& t_false = std::get<Tensor>(value_false);
+            if (ternary_utils::have_same_shape(t_true, predicate) &&
+                ternary_utils::have_same_shape(predicate, t_false)) {
+                std::cout << "ternary LLK where op (TTT)" << std::endl;
+                std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
+                                                                          : std::optional<DataType>(predicate.dtype());
+                return ttnn::prim::where(
+                    queue_id,
+                    predicate,
+                    t_true,
+                    t_false,
+                    output_dtype,
+                    memory_config.value_or(predicate.memory_config()),
+                    output);
+            }
+        } else if (is_value_true_Tensor && !is_value_false_Tensor) {
+            // TTS case: tensor-tensor-scalar
+            const auto& t_true = std::get<Tensor>(value_true);
+            if (ternary_utils::have_same_shape(t_true, predicate)) {
+                std::cout << "ternary LLK where op (TTS)" << std::endl;
+                float scalar_false = std::get<float>(value_false);
+                std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
+                                                                          : std::optional<DataType>(predicate.dtype());
+                return ttnn::prim::where(
+                    queue_id,
+                    predicate,
+                    t_true,
+                    scalar_false,
+                    output_dtype,
+                    memory_config.value_or(predicate.memory_config()),
+                    output);
+            }
+        } else if (!is_value_true_Tensor && is_value_false_Tensor) {
+            // TST case: tensor-scalar-tensor
+            const auto& t_false = std::get<Tensor>(value_false);
+            if (ternary_utils::have_same_shape(predicate, t_false)) {
+                std::cout << "ternary LLK where op (TST)" << std::endl;
+                float scalar_true = std::get<float>(value_true);
+                std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
+                                                                          : std::optional<DataType>(predicate.dtype());
+                return ttnn::prim::where(
+                    queue_id,
+                    predicate,
+                    scalar_true,
+                    t_false,
+                    output_dtype,
+                    memory_config.value_or(predicate.memory_config()),
+                    output);
+            }
         }
+        // TSS case: tensor-scalar-scalar will fall through to legacy implementation
     }
 
     std::cout << "Legacy where op" << std::endl;

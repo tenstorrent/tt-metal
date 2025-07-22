@@ -11,10 +11,10 @@
 namespace ttnn::operations::ternary {
 
 enum class WhereVariant {
-    TTT,
-    TTS,
-    TST,
-    TSS,
+    TTT,  // tensor-tensor-tensor
+    TTS,  // tensor-tensor-scalar
+    TST,  // tensor-scalar-tensor
+    TSS,  // tensor-scalar-scalar
 };
 
 struct WhereDeviceOperation {
@@ -28,13 +28,17 @@ struct WhereDeviceOperation {
         std::optional<DataType> dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
+        // Scalar values for TTS/TST/TSS variants
+        std::optional<float> value_true_scalar;
+        std::optional<float> value_false_scalar;
+
         DataType get_dtype() const;
     };
 
     struct tensor_args_t {
         const Tensor& predicate;
-        const Tensor& value_true;
-        const Tensor& value_false;
+        std::optional<Tensor> value_true;
+        std::optional<Tensor> value_false;
         std::optional<Tensor> optional_output_tensor;
     };
 
@@ -70,10 +74,28 @@ struct WhereDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
-    // tensor-tensor-tensor invocation
+    // tensor-tensor-tensor invocation (TTT)
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& predicate,
         const Tensor& value_true,
+        const Tensor& value_false,
+        const std::optional<const DataType>& output_dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& optional_output_tensor);
+
+    // tensor-tensor-scalar invocation (TTS)
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& predicate,
+        const Tensor& value_true,
+        float value_false_scalar,
+        const std::optional<const DataType>& output_dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& optional_output_tensor);
+
+    // tensor-scalar-tensor invocation (TST)
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& predicate,
+        float value_true_scalar,
         const Tensor& value_false,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
