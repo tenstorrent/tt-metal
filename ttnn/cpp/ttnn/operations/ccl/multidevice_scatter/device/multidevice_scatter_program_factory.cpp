@@ -18,8 +18,19 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::ccl {
+namespace detail {
+uint32_t get_cluster_axis_index(
+    const ttnn::MeshDeviceView& mesh_view,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const MultiDeviceScatterDeviceOperation::operation_attributes_t& operation_attributes) {
+    return operation_attributes.cluster_axis.has_value()
+               ? ((operation_attributes.cluster_axis.value() == 0) ? mesh_coordinate[0] : mesh_coordinate[1])
+               : common::get_linearized_index(mesh_coordinate, mesh_view);
+}
+}  // namespace detail
 
 MultiDeviceScatterDeviceOperation::MultiDeviceScatter::cached_mesh_workload_t
 MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_mesh_workload(
@@ -44,17 +55,15 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto mesh_device = input_tensor.mesh_device();
-    const auto& mesh_view = mesh_device->get_view();
-    const uint32_t cluster_axis_size =
-        (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes);
 
-    uint32_t cluster_index = operation_attributes.cluster_axis == 0 ? mesh_coordinate[0] : mesh_coordinate[1];
+    uint32_t cluster_index =
+        detail::get_cluster_axis_index(input_tensor.mesh_device()->get_view(), mesh_coordinate, operation_attributes);
     auto input_shape = input_tensor.logical_shape();
     uint32_t dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
 
-    auto scattered_dim_size = input_shape[dim] / cluster_axis_size;
+    auto scattered_dim_size = input_shape[dim] / cluster_size;
 
     auto begins = ttnn::Shape(std::vector<uint32_t>(rank, 0));
     auto ends = input_shape;

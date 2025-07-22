@@ -12,6 +12,18 @@
 
 namespace ttnn::operations::ccl {
 
+namespace detail {
+uint32_t get_cluster_axis_size(
+    const ttnn::Tensor& input_tensor,
+    const MultiDeviceScatterDeviceOperation::operation_attributes_t& operation_attributes) {
+    auto mesh_device = input_tensor.mesh_device();
+    const auto& mesh_view = mesh_device->get_view();
+    return operation_attributes.cluster_axis.has_value()
+               ? ((operation_attributes.cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols())
+               : mesh_view.num_devices();
+}
+}  // namespace detail
+
 MultiDeviceScatterDeviceOperation::program_factory_t MultiDeviceScatterDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return MultiDeviceScatter{};
@@ -27,10 +39,7 @@ void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(operation_attributes.dim < rank, "dim must be less than the rank of the input tensor");
 
-    auto mesh_device = input_tensor.mesh_device();
-    const auto& mesh_view = mesh_device->get_view();
-    const uint32_t cluster_axis_size =
-        (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t cluster_axis_size = detail::get_cluster_axis_size(input_tensor, operation_attributes);
 
     TT_FATAL(
         cluster_axis_size > 1,
@@ -58,11 +67,10 @@ MultiDeviceScatterDeviceOperation::spec_return_value_t MultiDeviceScatterDeviceO
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto output_shape = input_tensor.logical_shape();
-    const auto& mesh_view = input_tensor.mesh_device()->get_view();
 
-    const uint32_t num_devices = (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t cluster_axis_size = detail::get_cluster_axis_size(input_tensor, operation_attributes);
 
-    output_shape[operation_attributes.dim] = output_shape[operation_attributes.dim] / num_devices;
+    output_shape[operation_attributes.dim] = output_shape[operation_attributes.dim] / cluster_axis_size;
     return {TensorSpec(
         Shape(output_shape),
         tt::tt_metal::TensorLayout(
@@ -81,7 +89,10 @@ MultiDeviceScatterDeviceOperation::tensor_return_value_t MultiDeviceScatterDevic
 
 std::tuple<MultiDeviceScatterDeviceOperation::operation_attributes_t, MultiDeviceScatterDeviceOperation::tensor_args_t>
 MultiDeviceScatterDeviceOperation::invoke(
-    const ttnn::Tensor& input_tensor, int32_t dim, uint32_t cluster_axis, const ttnn::MemoryConfig& memory_config) {
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const ttnn::MemoryConfig& memory_config) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),

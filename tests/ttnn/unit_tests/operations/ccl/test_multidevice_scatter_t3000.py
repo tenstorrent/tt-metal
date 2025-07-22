@@ -16,6 +16,54 @@ from tracy import signpost
 
 def gen_tensor(dim, per_device_output_shape, mesh_axes, mesh_shape, cluster_axis, scheme="random"):
     factor = 0
+
+    if cluster_axis is None:
+        # Linearized grid case - treat all devices as a single linear sequence
+        total_devices = mesh_shape[0] * mesh_shape[1]
+
+        # Create output tensors for each device in the linearized grid
+        single_device_output_tensors = []
+        for device_idx in range(total_devices):
+            if scheme == "random":
+                single_device_output_tensors.append(torch.rand(per_device_output_shape))
+            elif scheme == "sequential":
+                single_device_output_tensors.append(torch.ones(per_device_output_shape) * factor)
+                factor += 1
+            else:
+                raise ValueError(f"Invalid scheme: {scheme}")
+
+        # Create input tensor by concatenating all slices along dim
+        torch_input_tensor = torch.cat(single_device_output_tensors, dim=dim)
+
+        # For output tensor, we need to arrange slices according to mesh layout
+        # First, arrange them in rows and columns according to mesh_shape
+        output_tensors_2d = []
+        device_idx = 0
+        for row in range(mesh_shape[0]):
+            row_tensors = []
+            for col in range(mesh_shape[1]):
+                row_tensors.append(single_device_output_tensors[device_idx])
+                device_idx += 1
+            # Concatenate along mesh_axes[1] (column dimension)
+            row_tensor = torch.cat(row_tensors, dim=mesh_axes[1])
+            output_tensors_2d.append(row_tensor)
+
+        # Concatenate rows along mesh_axes[0] (row dimension)
+        torch_output_tensor = torch.cat(output_tensors_2d, dim=mesh_axes[0])
+
+        # Create input tensor with same structure as output for mesh mapping
+        input_tensors_2d = []
+        for row in range(mesh_shape[0]):
+            row_tensors = []
+            for col in range(mesh_shape[1]):
+                row_tensors.append(torch_input_tensor)
+            row_tensor = torch.cat(row_tensors, dim=mesh_axes[1])
+            input_tensors_2d.append(row_tensor)
+        torch_input_tensor = torch.cat(input_tensors_2d, dim=mesh_axes[0])
+
+        return torch_input_tensor, torch_output_tensor
+
+    # Original logic for when cluster_axis is specified
     non_cluster_axes = [i for i in range(len(mesh_axes)) if i != cluster_axis]
 
     torch_input_tensor = None
@@ -210,7 +258,7 @@ def run_multidevice_scatter_test(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
-@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [0, 1, None])
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
@@ -265,7 +313,7 @@ def test_multidevice_scatter(
 @pytest.mark.parametrize("per_device_output_shape, dim", [((16, 1, 1, 7168), 0), ((1, 1, 8, 7168), 2)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [0, 1, None])
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG])

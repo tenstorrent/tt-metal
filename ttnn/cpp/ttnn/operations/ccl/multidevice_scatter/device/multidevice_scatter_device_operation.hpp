@@ -23,7 +23,7 @@ namespace ttnn::operations::ccl {
 struct MultiDeviceScatterDeviceOperation {
     struct operation_attributes_t {
         uint32_t dim;
-        uint32_t cluster_axis;
+        std::optional<uint32_t> cluster_axis;
         const MemoryConfig output_mem_config;
     };
     struct tensor_args_t {
@@ -88,8 +88,18 @@ struct MultiDeviceScatterDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor, int32_t dim, uint32_t cluster_axis, const ttnn::MemoryConfig& memory_config);
+        const ttnn::Tensor& input_tensor,
+        int32_t dim,
+        std::optional<uint32_t> cluster_axis,
+        const ttnn::MemoryConfig& memory_config);
 };
+
+namespace detail {
+uint32_t get_cluster_axis_size(
+    const ttnn::Tensor& input_tensor,
+    const MultiDeviceScatterDeviceOperation::operation_attributes_t& operation_attributes);
+}
+
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {
