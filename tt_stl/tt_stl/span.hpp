@@ -4,34 +4,32 @@
 
 #pragma once
 
-#include <boost/core/span.hpp>
+#include <span>
 
 namespace ttsl {
-
-using boost::dynamic_extent;
 
 namespace detail {
 
 template <class T, std::size_t Extent>
-class SpanBase : public boost::span<T, Extent> {
+class SpanBase : public std::span<T, Extent> {
 public:
-    using boost::span<T, Extent>::span;
+    using std::span<T, Extent>::span;
 };
 
 template <class T, std::size_t Extent>
-class SpanBase<const T, Extent> : public boost::span<const T, Extent> {
+class SpanBase<const T, Extent> : public std::span<const T, Extent> {
 public:
-    using boost::span<const T, Extent>::span;
+    using std::span<const T, Extent>::span;
 
     // expose constructor from initializer_list for const-qualified element_type
-    explicit(Extent != dynamic_extent) constexpr SpanBase(std::initializer_list<T> ilist) noexcept :
-        boost::span<const T, Extent>(ilist.begin(), ilist.size()) {}
+    explicit(Extent != std::dynamic_extent) constexpr SpanBase(std::initializer_list<T> ilist) noexcept :
+        std::span<const T, Extent>(ilist.begin(), ilist.size()) {}
 };
 
 }  // namespace detail
 
-template <class T, std::size_t Extent = dynamic_extent>
-class Span : detail::SpanBase<T, Extent> {
+template <class T, std::size_t Extent = std::dynamic_extent>
+class Span final : private detail::SpanBase<T, Extent> {
     using base = detail::SpanBase<T, Extent>;
 
 public:
@@ -90,7 +88,7 @@ template <class T, std::size_t N>
 Span(const std::array<T, N>&) -> Span<const T, N>;
 
 template <class R>
-Span(R&&) -> Span<std::remove_reference_t<decltype(*std::begin(std::declval<R&>()))>>;
+Span(R&&) -> Span<std::remove_reference_t<decltype(*std::begin(std::declval<R&&>()))>>;
 
 template <class Container>
 auto make_const_span(const Container& vec) {
@@ -121,3 +119,15 @@ namespace [[deprecated("Use ttsl namespace instead")]] stl {
 using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
+
+#if __cplusplus >= 202002L
+namespace std::ranges {
+
+template <typename T>
+inline constexpr bool enable_view<ttsl::Span<T>> = true;
+
+template <typename T>
+inline constexpr bool enable_borrowed_range<ttsl::Span<T>> = true;
+
+}  // namespace std::ranges
+#endif

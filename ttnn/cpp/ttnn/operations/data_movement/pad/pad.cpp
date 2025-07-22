@@ -31,8 +31,8 @@ ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::S
 ttnn::Tensor pad_impl(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    std::span<const uint32_t> output_padded_shape,
-    std::span<const uint32_t> input_tensor_start,
+    tt::stl::Span<const uint32_t> output_padded_shape,
+    tt::stl::Span<const uint32_t> input_tensor_start,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
