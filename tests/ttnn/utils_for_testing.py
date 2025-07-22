@@ -144,9 +144,19 @@ def assert_with_ulp(
         ulp_threshold (float, optional): Maximum tolerated ULP distance. Defaults to 10.
         allow_nonfinite (bool, optional): If disabled, any non-finite value (NaN, +inf, -inf) will trigger an assertion. If enabled, differences between non-finite values at the same positions will trigger an assertion.
 
-    Note:
+    Notes:
         The length of a single ULP is measured using the difference between two consecutive floating point numbers.
 
+        ULP should be preferred when errors between `calculated` and `golden` outputs are known to be small (difference < 10s of ULPs).
+        This is typically the case for element-wise operations that approximate common numerical functions (e.g. exp, pow, log, ...).
+
+        For more significant differences, where `calculated` and `golden` differs by orders of magnitude, ULPs may be harder to compare
+        Indeed, with current definition, on bfloat16:
+        - ULP-Delta(4, 0) = 128
+        - ULP-Delta(0, 4) = 4.36e+40
+
+        Generally, if the ULP errors exceeds the 2**(#mantissa bits) (128-ULP for bfloat16, 8388608 for float32), then it means that both outputs are different by more than an order of magnitude.
+        For these cases, functions such as `assert_allclose(golden, calculated, rtol, atol)` should be used instead.
     Returns:
         tuple: A tuple containing:
             - ulp_passed (bool): True if ulp check passed, False otherwise
@@ -155,10 +165,22 @@ def assert_with_ulp(
     Raises:
         AssertionError: If the tensor shapes don't match or if tensor difference is greater than ulp_threshold.
     """
+
+    def tt_dtype_to_torch_dtype_for_ulp(tt_dtype):
+        # By default, ttnn converts ttnn.bfloat8_b to torch.float
+        # However, the resolution of a bfloat8_b value is the same as bfloat16
+        # (assuming all elements within the block share the same exponent)
+        # Thus, for ULP measurement, we convert bfloat8_b to bfloat16 instead of float32
+        if tt_dtype == ttnn.bfloat8_b:
+            return torch.bfloat16
+        if tt_dtype not in tt_dtype_to_torch_dtype:
+            raise ValueError(f"Trying to measure ULP on unknown dtype: {tt_dtype}")
+        return tt_dtype_to_torch_dtype[tt_dtype]
+
     if isinstance(expected_result, ttnn.Tensor):
-        expected_result = ttnn.to_torch(expected_result)
+        expected_result = ttnn.to_torch(expected_result, dtype=tt_dtype_to_torch_dtype_for_ulp(expected_result.dtype))
     if isinstance(actual_result, ttnn.Tensor):
-        actual_result = ttnn.to_torch(actual_result)
+        actual_result = ttnn.to_torch(actual_result, dtype=tt_dtype_to_torch_dtype_for_ulp(actual_result.dtype))
 
     assert list(expected_result.shape) == list(
         actual_result.shape
