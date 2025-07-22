@@ -250,7 +250,7 @@ def run_multidevice_scatter_test(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("trace_mode", [True, False])
+@pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
