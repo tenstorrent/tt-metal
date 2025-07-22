@@ -92,8 +92,8 @@ def run_multidevice_scatter_test(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=mesh_axes, mesh_shape=mesh_shape),
         )
         if it == 0:
-            logger.info(f"input with shape {input.shape}: {input}")
-            logger.info(f"tt_input with per-device shape {tt_input.shape}: {tt_input}")
+            logger.info(f"input shape {input.shape}")
+            logger.info(f"tt_input per-device shape {tt_input.shape}")
         tt_input_tensors_list.append(tt_input)
 
     tt_out_tensor_list = []
@@ -172,10 +172,8 @@ def run_multidevice_scatter_test(
         )
         if tensor_index == 0:
             logger.info(f"tt_output per-device shape {tt_out_tensor_list[tensor_index].shape}")
-            logger.info(
-                f"golden with shape {output_tensor_goldens_list[tensor_index].shape}: {output_tensor_goldens_list[tensor_index]}"
-            )
-            logger.info(f"tt_torch_tensor with shape {tt_torch_tensor.shape}: {tt_torch_tensor}")
+            logger.info(f"golden shape {output_tensor_goldens_list[tensor_index].shape}")
+            logger.info(f"tt_torch_tensor shape {tt_torch_tensor.shape}")
         eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index], expected_pcc)
         logger.info(f"Output tensor {tensor_index} has result {output_results}")
         if not eq:

@@ -68,8 +68,8 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     begins[dim] = cluster_index * scattered_dim_size;
     ends[dim] = begins[dim] + scattered_dim_size;
 
-    log_info(
-        tt::LogAlways,
+    log_debug(
+        tt::LogOp,
         "Slice at ({}, {}) will have begins {}, ends {}, step {}",
         mesh_coordinate[0],
         mesh_coordinate[1],
