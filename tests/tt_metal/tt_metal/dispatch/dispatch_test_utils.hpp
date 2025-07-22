@@ -122,17 +122,17 @@ inline void verify_kernel_coordinates(
     const tt::tt_metal::IDevice* device,
     tt::tt_metal::SubDeviceId sub_device_id,
     uint32_t cb_addr,
-    bool idle_eth = false,
-    bool is_mesh_device = false) {
+    bool idle_eth = false) {
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-    CoreType core_type = (processor_class == tt::RISCV::ERISC0 || processor_class == tt::RISCV::ERISC1)
-                             ? CoreType::ETH
-                             : CoreType::WORKER;
-    tt::tt_metal::HalProgrammableCoreType hal_core_type = core_type == CoreType::ETH
-                                                              ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-                                                              : tt::tt_metal::HalProgrammableCoreType::TENSIX;
+    tt::tt_metal::HalProgrammableCoreType hal_core_type =
+        (processor_class == tt::RISCV::ERISC || processor_class == tt::RISCV::ERISC1)
+            ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+            : tt::tt_metal::HalProgrammableCoreType::TENSIX;
     hal_core_type = idle_eth ? tt::tt_metal::HalProgrammableCoreType::IDLE_ETH : hal_core_type;
 
+    CoreType core_type = (processor_class == tt::RISCV::ERISC || processor_class == tt::RISCV::ERISC1)
+                             ? CoreType::ETH
+                             : CoreType::WORKER;
     core_type = idle_eth ? CoreType::IDLE_ETH : core_type;
 
     const auto& sub_device_origin = device->worker_cores(hal_core_type, sub_device_id).bounding_box().start_coord;
@@ -149,11 +149,8 @@ inline void verify_kernel_coordinates(
             EXPECT_EQ(read_coords->my_logical_x, logical_coord.x) << "Logical X";
             EXPECT_EQ(read_coords->my_logical_y, logical_coord.y) << "Logical Y";
 
-            // This feature is not supported on mesh devices. Do not verify it
-            if (!is_mesh_device) {
-                EXPECT_EQ(read_coords->my_sub_device_x, (relative_coord).x) << "SubDevice Logical X";
-                EXPECT_EQ(read_coords->my_sub_device_y, (relative_coord).y) << "SubDevice Logical Y";
-            }
+            EXPECT_EQ(read_coords->my_sub_device_x, (relative_coord).x) << "SubDevice Logical X";
+            EXPECT_EQ(read_coords->my_sub_device_y, (relative_coord).y) << "SubDevice Logical Y";
         }
     }
 }

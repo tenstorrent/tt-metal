@@ -114,18 +114,7 @@ void send_msg_to_eth_mailbox(
     tt_metal::FWMailboxMsg msg_type,
     std::vector<uint32_t> args,
     bool wait_for_ack = true,
-    int timeout_ms = 10000);
-
-// Wait for a heartbeat from the active ethernet core, if supported
-// Used to check if the base firmware is running and ready to service the eth mailbox
-void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
-
-// Read the retrain count from the ethernet firmware mailbox, if supported
-uint32_t get_retrain_count(chip_id_t device_id, const CoreCoord& virtual_core);
-
-// Set the enable flag for Metal Firmware on Ethernet cores. Enable flag needs to be set to
-// 1 before launching active ethernet firmware on devices with ethernet mailbox. Throws if no ethernet mailbox.
-void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_core, bool enable);
+    int timeout_ms = 30000);
 
 }  // namespace internal_
 

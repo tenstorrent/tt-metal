@@ -125,6 +125,8 @@
 #error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
+// Read-only reserved memory boundary for watcher checks
+#define MEM_MAP_READ_ONLY_END MEM_TENSIX_FABRIC_CONNECTIONS_BASE
 #define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
