@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
+#include "ckernel_sfpu_bitwise_xor.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
