@@ -1365,6 +1365,11 @@ public:
         return master_seed;
     }
 
+    void barrier() const override {
+        auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        distributed_context->barrier();
+    }
+
 private:
     ControlPlane* control_plane_ptr_;
     Topology topology_;

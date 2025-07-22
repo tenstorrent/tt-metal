@@ -161,7 +161,8 @@ int main(int argc, char** argv) {
             if (test_context.get_benchmark_mode()) {
                 test_context.profile_results(built_test);
             }
-
+            // Synchronize across all hosts after running the current test variant
+            fixture->barrier();
             test_context.reset_devices();
         }
     }
