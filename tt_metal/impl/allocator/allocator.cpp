@@ -4,7 +4,7 @@
 
 #include <allocator.hpp>
 #include <buffer.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -220,7 +220,7 @@ const std::vector<uint32_t>& Allocator::get_bank_ids_from_logical_core(
     BufferType buffer_type, const CoreCoord& logical_core) const {
     if (logical_core_to_bank_ids_.at(buffer_type).find(logical_core) ==
         logical_core_to_bank_ids_.at(buffer_type).end()) {
-        TT_THROW("No {} bank exists for core {}", magic_enum::enum_name(buffer_type), logical_core.str());
+        TT_THROW("No {} bank exists for core {}", enchantum::to_string(buffer_type), logical_core.str());
     }
     return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
 }
@@ -244,7 +244,7 @@ DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const 
         case HalMemType::DRAM: return config_.dram_unreserved_base;
         case HalMemType::L1: return config_.l1_unreserved_base;
         default: {
-            TT_THROW("Allocator does not support allocating in {}", magic_enum::enum_name(mem_type));
+            TT_THROW("Allocator does not support allocating in {}", enchantum::to_string(mem_type));
         }
     }
     return 0;

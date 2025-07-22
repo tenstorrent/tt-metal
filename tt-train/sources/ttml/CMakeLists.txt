@@ -199,7 +199,7 @@ target_link_libraries(
         Metalium::TTNNCPP
         Python3::Python
         fmt::fmt-header-only
-        magic_enum::magic_enum
+        enchantum::enchantum
         yaml-cpp::yaml-cpp
         xtensor
         xtensor-blas

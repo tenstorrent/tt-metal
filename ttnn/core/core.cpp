@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/core.hpp"
-
-#include <magic_enum/magic_enum.hpp>
+#include <tt_stl/caseless_comparison.hpp>
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::core {
 
@@ -21,9 +21,7 @@ std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor) 
 
 void set_printoptions(const std::string& profile) {
     tt::tt_metal::tensor_impl::TTNN_TENSOR_PRINT_PROFILE =
-        magic_enum::enum_cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, [](char lhs, char rhs) {
-            return std::tolower(lhs) == std::tolower(rhs);
-        }).value();
+        enchantum::cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile,ttsl::ascii_caseless_comp).value();
 }
 
 void segfault_handler(int sig) {

@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
@@ -68,7 +68,7 @@ void update_sfpu_op_to_hlk_op() {
         } else if (unary_op_name == "RECIPROCAL") {
             unary_op_name = "RECIP";
         }
-        auto unary_op_type = magic_enum::enum_cast<UnaryOpType>(unary_op_name).value();
+        auto unary_op_type = enchantum::cast<UnaryOpType>(unary_op_name).value();
         if (ttnn::operations::unary::utils::is_parametrized_type(unary_op_type)) {
             if (unary_op_type == UnaryOpType::EXP) {
                 sfpu_op_to_hlk_op_name[sfpu_op_name] =

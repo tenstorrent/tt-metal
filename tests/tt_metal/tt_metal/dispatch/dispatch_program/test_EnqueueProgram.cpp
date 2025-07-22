@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <string.h>
 #include <tt-metalium/allocator.hpp>
@@ -143,7 +143,7 @@ KernelHandle create_kernel(
                     .noc = NOC::NOC_0,
                     .compile_args = compile_args,
                 });
-        default: TT_THROW("Unsupported {} processor in test.", magic_enum::enum_name(processor_class));
+        default: TT_THROW("Unsupported {} processor in test.", enchantum::to_string(processor_class));
     }
 }
 
@@ -1002,7 +1002,15 @@ bool test_increment_runtime_args_sanity(
         idle_eth);
 }
 
-void test_my_coordinates(
+tt::RISCV datamovement_processor_to_riscv(DataMovementProcessor processor) {
+    switch (processor) {
+        case DataMovementProcessor::RISCV_0: return tt::RISCV::ERISC0;
+        case DataMovementProcessor::RISCV_1: return tt::RISCV::ERISC1;
+        default: TT_THROW("Unsupported processor {}", enchantum::to_string(processor));
+    }
+}
+
+static void test_my_coordinates(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     tt::RISCV processor_class,
     size_t cq_id = 0,

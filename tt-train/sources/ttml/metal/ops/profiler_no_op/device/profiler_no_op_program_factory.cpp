@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "profiler_no_op_program_factory.hpp"
+#include <enchantum/enchantum.hpp>
 
 #include <core/ttnn_all_includes.hpp>
 
@@ -180,13 +181,13 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* output_buffer = output.buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        magic_enum::enum_name(output_buffer->buffer_type()));
+        enchantum::to_string(output_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;

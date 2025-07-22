@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
@@ -1275,8 +1275,8 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) 
                 config.page_shape.width(),
                 config.tensor2d_shape_in_pages.height(),
                 config.tensor2d_shape_in_pages.width(),
-                magic_enum::enum_name(config.layout).data(),
-                magic_enum::enum_name(config.orientation).data(),
+                enchantum::to_string(config.layout).data(),
+                enchantum::to_string(config.orientation).data(),
                 config.cores.str());
 
             ShardSpecBuffer shard_spec = ShardSpecBuffer(
@@ -1883,7 +1883,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::L1, false);
@@ -1943,7 +1943,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::DRAM, false);
@@ -1995,7 +1995,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::L1, true);
@@ -2047,7 +2047,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::DRAM, true);

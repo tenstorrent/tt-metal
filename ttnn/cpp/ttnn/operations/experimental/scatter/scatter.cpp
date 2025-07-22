@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "scatter.hpp"
 
@@ -77,17 +77,17 @@ void check_support(
     TT_FATAL(
         !(is_i32(input_dtype) && !is_last_dim(input_shape, dim)),
         "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - input tensor is {}.",
-        magic_enum::enum_name(input_dtype)
+        enchantum::to_string(input_dtype)
     );
     TT_FATAL(
         !(is_i32(index_dtype) && !is_last_dim(index_shape, dim)),
         "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - index tensor is {}.",
-        magic_enum::enum_name(index_dtype)
+        enchantum::to_string(index_dtype)
     );
     TT_FATAL(
         !(is_i32(source_dtype) && !is_last_dim(source_shape, dim)),
         "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - source tensor is {}.",
-        magic_enum::enum_name(source_dtype)
+        enchantum::to_string(source_dtype)
     );
     // check if to_layout fp32 tiled precision case
     TT_FATAL(
@@ -108,24 +108,24 @@ void check_support(
         !(is_i32(input_dtype) && input_layout == Layout::TILE && input_shape[dim] > to_layout_int32_scatter_axis_max_length),
         "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - input tensor is of type: {}, layout: {} and input_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
-        magic_enum::enum_name(input_dtype),
-        magic_enum::enum_name(input_layout),
+        enchantum::to_string(input_dtype),
+        enchantum::to_string(input_layout),
         input_shape[dim]
     );
     TT_FATAL(
         !(is_i32(index_dtype) && index_layout == Layout::TILE && index_shape[dim] > to_layout_int32_scatter_axis_max_length),
         "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - index tensor is of type: {}, layout: {} and index_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
-        magic_enum::enum_name(index_dtype),
-        magic_enum::enum_name(index_layout),
+        enchantum::to_string(index_dtype),
+        enchantum::to_string(index_layout),
         index_shape[dim]
     );
     TT_FATAL(
         !(is_i32(source_dtype) && source_layout == Layout::TILE && source_shape[dim] > to_layout_int32_scatter_axis_max_length),
         "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - source tensor is of type: {}, layout: {} and source_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
-        magic_enum::enum_name(source_dtype),
-        magic_enum::enum_name(source_layout),
+        enchantum::to_string(source_dtype),
+        enchantum::to_string(source_layout),
         source_shape[dim]
     );
 }

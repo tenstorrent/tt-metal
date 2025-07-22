@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <magic_enum/magic_enum.hpp>
 #include <mutex>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/fabric_host_interface.h>

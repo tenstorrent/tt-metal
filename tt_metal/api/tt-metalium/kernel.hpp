@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <magic_enum/magic_enum.hpp>
 #include <stdint.h>
 #include <tt_stl/span.hpp>
 #include <cstddef>

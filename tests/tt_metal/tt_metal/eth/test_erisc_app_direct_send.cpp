@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <iostream>
 #include <iterator>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <map>
 #include <string>
 #include <thread>
@@ -220,8 +220,8 @@ bool send_over_eth(
     std::vector<uint32_t> run_test_app_flag = {0x0};
     uint32_t active_erisc_core_type_idx = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    uint32_t dm_class_idx = magic_enum::enum_integer(tt::tt_metal::HalProcessorClassType::DM);
-    uint32_t dm0_type_idx = magic_enum::enum_integer(tt::tt_metal::DataMovementProcessor::RISCV_0);
+    uint32_t dm_class_idx = enchantum::to_underlying(tt::tt_metal::HalProcessorClassType::DM);
+    uint32_t dm0_type_idx = enchantum::to_underlying(tt::tt_metal::DataMovementProcessor::RISCV_0);
     const auto& erisc_jit_build_config = tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(
         active_erisc_core_type_idx, dm_class_idx, dm0_type_idx);
     uint32_t fw_launch_addr = erisc_jit_build_config.fw_launch_addr;

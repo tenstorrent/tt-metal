@@ -4,7 +4,7 @@
 
 #include "routing_table_generator.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <limits>
 #include <memory>
@@ -316,7 +316,7 @@ void RoutingTableGenerator::print_routing_tables() const {
                  dst_chip_or_mesh_id < this->intra_mesh_table_[mesh_id_val][src_chip_id].size();
                  dst_chip_or_mesh_id++) {
                 auto direction = this->intra_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
-                ss << dst_chip_or_mesh_id << "(" << magic_enum::enum_name(direction) << ") ";
+                ss << dst_chip_or_mesh_id << "(" << enchantum::to_string(direction) << ") ";
             }
             ss << std::endl;
         }
@@ -332,7 +332,7 @@ void RoutingTableGenerator::print_routing_tables() const {
                  dst_chip_or_mesh_id < this->inter_mesh_table_[mesh_id_val][src_chip_id].size();
                  dst_chip_or_mesh_id++) {
                 auto direction = this->inter_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
-                ss << dst_chip_or_mesh_id << "(" << magic_enum::enum_name(direction) << ") ";
+                ss << dst_chip_or_mesh_id << "(" << enchantum::to_string(direction) << ") ";
             }
             ss << std::endl;
         }

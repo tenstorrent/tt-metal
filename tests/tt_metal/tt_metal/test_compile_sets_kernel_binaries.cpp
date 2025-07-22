@@ -4,7 +4,7 @@
 
 #include <errno.h>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <sys/types.h>
 #include <tt-metalium/device_pool.hpp>
@@ -223,8 +223,8 @@ int main(int argc, char** argv) {
 
             std::vector<std::thread> ths;
             ths.reserve(num_devices);
-            uint32_t dm_class_idx = magic_enum::enum_integer(tt_metal::HalProcessorClassType::DM);
-            uint32_t compute_class_idx = magic_enum::enum_integer(tt_metal::HalProcessorClassType::COMPUTE);
+            uint32_t dm_class_idx = enchantum::to_underlying(tt_metal::HalProcessorClassType::DM);
+            uint32_t compute_class_idx = enchantum::to_underlying(tt_metal::HalProcessorClassType::COMPUTE);
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
                 auto& program = new_programs[i];

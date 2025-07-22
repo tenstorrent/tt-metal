@@ -92,7 +92,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         Reflect::Reflect
         yaml-cpp::yaml-cpp
-        magic_enum::magic_enum
+        enchantum::enchantum
         span
         TT::Metalium::Common
         tt-logger::tt-logger

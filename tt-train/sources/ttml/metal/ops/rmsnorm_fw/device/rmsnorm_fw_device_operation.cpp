@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rmsnorm_fw_device_operation.hpp"
+#include <enchantum/enchantum.hpp>
 
 #include "rmsnorm_fw_program_factory.hpp"
 
@@ -24,7 +25,7 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
             "RMSNormForward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
-            magic_enum::enum_name(tensor.device()->arch()),
+            enchantum::to_string(tensor.device()->arch()),
             name);
 
         TT_FATAL(

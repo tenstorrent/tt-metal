@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <iomanip>
 #include <map>
 #include <tuple>
@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
+#include <tt_stl/caseless_comparison.hpp>
 
 namespace tt::tt_fabric {
 namespace system_health_tests {
@@ -92,7 +93,7 @@ bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::ClusterType cluster
         log_warning(
             tt::LogTest,
             "is_chip_on_edge_of_mesh not implemented for {} cluster type",
-            magic_enum::enum_name(cluster_type));
+            enchantum::to_string(cluster_type));
         return false;
     }
 }
@@ -109,7 +110,7 @@ bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::ClusterType clust
         log_warning(
             tt::LogTest,
             "is_chip_on_corner_of_mesh not implemented for {} cluster type",
-            magic_enum::enum_name(cluster_type));
+            enchantum::to_string(cluster_type));
         return false;
     }
 }
@@ -129,8 +130,8 @@ std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t ch
         case ConnectorType::LK1:
         case ConnectorType::LK2:
         case ConnectorType::LK3:
-            str << "linking board " << magic_enum::enum_name(connector).back() << " type "
-                << magic_enum::enum_name(linking_board_types.at(connector));
+            str << "linking board " << enchantum::to_string(connector).back() << " type "
+                << enchantum::to_string(linking_board_types.at(connector));
             break;
     }
     str << ")";
@@ -290,7 +291,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         log_info(
             LogTest,
             "  --cluster-type: cluster type to check (defaults to inferred from system) Valid values: {}",
-            magic_enum::enum_names<tt::ClusterType>());
+            enchantum::names_generator<tt::ClusterType>);
         log_info(
             LogTest,
             "  --min-connections: target minimum number of connections between connected chips (default depends on "
@@ -298,7 +299,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         log_info(
             LogTest,
             "  --system-topology: system topology to check (defaults to no topology check) Valid values: {}",
-            magic_enum::enum_names<FabricType>());
+            enchantum::names_generator<FabricType>);
         return;
     }
 
@@ -312,7 +313,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         test_args::get_command_option_and_remaining_args(input_args, "--cluster-type", "");
     tt::ClusterType cluster_type = cluster.get_cluster_type();
     if (not cluster_type_str.empty()) {
-        cluster_type = magic_enum::enum_cast<tt::ClusterType>(cluster_type_str, magic_enum::case_insensitive).value();
+        cluster_type = enchantum::cast<tt::ClusterType>(cluster_type_str,ttsl::ascii_caseless_comp).value();
     }
 
     if (cluster_type == tt::ClusterType::T3K) {
@@ -328,15 +329,15 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_expected_mmio_chips = 4;
         num_connections_per_side = 4;
     } else {
-        GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
+        GTEST_SKIP() << "Mesh check not supported for system type " << enchantum::to_string(cluster_type);
     }
 
     EXPECT_EQ(eth_connections.size(), num_expected_chips)
-        << " Expected " << num_expected_chips << " chips in " << magic_enum::enum_name(cluster_type)
+        << " Expected " << num_expected_chips << " chips in " << enchantum::to_string(cluster_type)
         << " cluster but found " << eth_connections.size();
     std::uint32_t num_mmio_chips = cluster.number_of_pci_devices();
     EXPECT_EQ(num_mmio_chips, num_expected_mmio_chips)
-        << " Expected " << num_expected_mmio_chips << " MMIO chips in " << magic_enum::enum_name(cluster_type)
+        << " Expected " << num_expected_mmio_chips << " MMIO chips in " << enchantum::to_string(cluster_type)
         << " cluster but found " << num_mmio_chips;
 
     std::uint32_t num_target_connections = 0;
@@ -346,7 +347,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         log_warning(
             tt::LogTest,
             "Min connections specified is greater than expected num connections per side for {}, overriding to {}.",
-            magic_enum::enum_name(cluster_type),
+            enchantum::to_string(cluster_type),
             num_connections_per_side);
         num_target_connections = num_connections_per_side;
     }
@@ -357,7 +358,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         test_args::get_command_option_and_remaining_args(input_args, "--system-topology", "");
     if (not target_system_topology_str.empty()) {
         target_system_topology =
-            magic_enum::enum_cast<FabricType>(target_system_topology_str, magic_enum::case_insensitive);
+            enchantum::cast<FabricType>(target_system_topology_str, ttsl::ascii_caseless_comp);
         // TORUS_XY is the only topology that is supported for all cluster types
         if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_XY) {
             bool supported_topology = false;
@@ -371,8 +372,8 @@ TEST(Cluster, TestMeshFullConnectivity) {
                     tt::LogTest,
                     "System topology {} not supported for topology validation on {} cluster, skipping topology "
                     "verification",
-                    magic_enum::enum_name(*target_system_topology),
-                    magic_enum::enum_name(cluster_type));
+                    enchantum::to_string(*target_system_topology),
+                    enchantum::to_string(cluster_type));
                 target_system_topology = std::nullopt;
             }
         }
@@ -406,7 +407,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
             auto validate_num_connections = [&](uint32_t num_connections, uint32_t num_expected_chip_connections) {
                 EXPECT_EQ(num_connections, num_expected_chip_connections)
                     << chip_ss.str() << " is connected to " << num_connections << " other chips, expected "
-                    << num_expected_chip_connections << " chips for " << magic_enum::enum_name(*target_system_topology)
+                    << num_expected_chip_connections << " chips for " << enchantum::to_string(*target_system_topology)
                     << " topology";
             };
             if (*target_system_topology == FabricType::TORUS_XY) {

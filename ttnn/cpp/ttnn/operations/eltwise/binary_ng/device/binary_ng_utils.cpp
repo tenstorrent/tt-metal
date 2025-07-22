@@ -8,7 +8,7 @@
 
 #include <fmt/core.h>
 #include <fmt/format.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::binary_ng {
 
@@ -413,7 +413,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 
     if (!is_sfpu_op()) {
         auto fpu_binary_op = std::get<FpuBinaryOp>(binary_op);
-        auto binary_op_str = magic_enum::enum_name(fpu_binary_op);
+        auto binary_op_str = enchantum::to_string(fpu_binary_op);
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
         return defines;

@@ -4,7 +4,7 @@
 
 #include "reshard_op.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
@@ -95,8 +95,8 @@ void ReshardDeviceOperation::validate_with_output_tensors(
         TT_FATAL(
             input_tensor.layout() == output_tensor_spec.tensor_layout().get_layout(),
             "Input and output tensors must have the same layout. Input layout: {}, Output layout: {}",
-            magic_enum::enum_name(input_tensor.layout()),
-            magic_enum::enum_name(output_tensor_spec.tensor_layout().get_layout()));
+            enchantum::to_string(input_tensor.layout()),
+            enchantum::to_string(output_tensor_spec.tensor_layout().get_layout()));
     }
 }
 

@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <enchantum/enchantum.hpp>
+
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
@@ -249,7 +251,7 @@ void allocate_cbs(
             } else {
                 TT_THROW(
                     "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
-                    magic_enum::enum_name(cb.name));
+                    enchantum::to_string(cb.name));
             }
         }
 
@@ -258,7 +260,7 @@ void allocate_cbs(
         log_debug(
             tt::LogOp,
             "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
-            magic_enum::enum_name(cb.name),
+            enchantum::to_string(cb.name),
             cb.index,
             cb.num_pages,
             cb.page_size,

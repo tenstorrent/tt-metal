@@ -299,7 +299,7 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     std::vector<tt_metal::Program> programs(device_helper.num_devices);
 
     uint32_t measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
-    uint32_t benchmark_type_val = magic_enum::enum_integer(params.benchmark_type);
+    uint32_t benchmark_type_val = enchantum::to_underlying(params.benchmark_type);
 
     // eth core ct args
     const std::vector<uint32_t>& eth_ct_args = {
@@ -617,7 +617,7 @@ int main(int argc, char** argv) {
     std::size_t arg_idx = 1;
     uint32_t benchmark_type = (uint32_t)std::stoi(argv[arg_idx++]);
 
-    auto benchmark_type_enum = magic_enum::enum_cast<BenchmarkType>(benchmark_type);
+    auto benchmark_type_enum = enchantum::cast<BenchmarkType>(benchmark_type);
     TT_FATAL(
         benchmark_type_enum.has_value(),
         "Unsupported benchmark {} specified, check BenchmarkType enum for supported values",
@@ -656,8 +656,8 @@ int main(int argc, char** argv) {
         log_info(
             tt::LogTest,
             "benchmark type: {}, measurement type: {}, num_packets: {}, packet_size: {} B, num_buffer_slots: {}",
-            magic_enum::enum_name(benchmark_type_enum.value()),
-            magic_enum::enum_name(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
+            enchantum::to_string(benchmark_type_enum.value()),
+            enchantum::to_string(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
             num_packets,
             packet_size,
             num_buffer_slots);

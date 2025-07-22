@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -1584,7 +1584,7 @@ void ControlPlane::print_ethernet_channels() const {
     for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
         ss << fabric_node_id << ": " << std::endl;
         for (const auto& [direction, eth_chans] : fabric_eth_channels) {
-            ss << "   " << magic_enum::enum_name(direction) << ":";
+            ss << "   " << enchantum::to_string(direction) << ":";
             for (const auto& eth_chan : eth_chans) {
                 ss << " " << (std::uint16_t)eth_chan;
             }
