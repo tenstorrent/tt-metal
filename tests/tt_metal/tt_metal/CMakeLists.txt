@@ -1,3 +1,4 @@
+# force merge gate to run
 add_library(test_metal_common_libs INTERFACE)
 target_link_libraries(
     test_metal_common_libs
