@@ -35,13 +35,16 @@ namespace ttnn::distributed {
 
 struct SystemMeshDescriptor {
 private:
-    tt::tt_metal::distributed::SystemMesh& system_mesh_;
+    const MeshShape& global_shape_;
+    const MeshShape& local_shape_;
 
 public:
-    SystemMeshDescriptor() : system_mesh_(tt::tt_metal::distributed::SystemMesh::instance()) {}
+    SystemMeshDescriptor() :
+        global_shape_(tt::tt_metal::distributed::SystemMesh::instance().shape()),
+        local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()) {}
 
-    const MeshShape& shape() const { return system_mesh_.shape(); }
-    const MeshShape& local_shape() const { return system_mesh_.local_shape(); }
+    const MeshShape& shape() const { return global_shape_; }
+    const MeshShape& local_shape() const { return local_shape_; }
 };
 
 namespace py = pybind11;
@@ -215,6 +218,7 @@ void py_module(py::module& module) {
         .def(
             "create_submeshes",
             &MeshDevice::create_submeshes,
+            py::arg("submesh_shape"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
         .def(
             "get_submeshes",

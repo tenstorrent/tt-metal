@@ -114,13 +114,9 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" 
     Console().print(mesh_table)
 
 
-def print_system_mesh_shape(show_global: bool = True, show_local: bool = True):
+def visualize_system_mesh():
     """
-    Print SystemMesh global and/or local shapes.
-
-    Args:
-        show_global (bool): Whether to show SystemMesh global shape. Defaults to True.
-        show_local (bool): Whether to show SystemMesh local shape. Defaults to True.
+    Print SystemMesh global and local shapes.
     """
     from rich.console import Console
     from loguru import logger
@@ -134,12 +130,8 @@ def print_system_mesh_shape(show_global: bool = True, show_local: bool = True):
         return
 
     console = Console()
-
-    if show_global:
-        console.print(f"\n[bold blue]SystemMesh Global Shape: {global_shape}[/bold blue]")
-
-    if show_local:
-        console.print(f"\n[bold green]SystemMesh Local Shape: {local_shape}[/bold green]")
+    console.print(f"\n[bold blue]SystemMesh Global Shape: {global_shape}[/bold blue]")
+    console.print(f"\n[bold green]SystemMesh Local Shape: {local_shape}[/bold green]")
 
 
 def get_num_devices() -> List[int]:
@@ -316,7 +308,4 @@ def distribute(default: Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper
         ttnn.to_torch = _original_to_torch
 
 
-__all__ = [
-    "get_system_mesh_descriptor",
-    "visualize_system_mesh",
-]
+__all__ = []

@@ -22,6 +22,6 @@ from .distributed import (
     get_device_ids,
     create_mesh_device,
     visualize_mesh_device,
-    print_system_mesh_shape,
+    visualize_system_mesh,
     distribute,
 )
