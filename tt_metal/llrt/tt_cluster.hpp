@@ -34,6 +34,7 @@
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_types.h>
 #include <umd/device/types/harvesting.h>
 
 namespace tt {
@@ -50,10 +51,6 @@ class Hal;
 }
 }  // namespace tt
 struct tt_device_params;
-
-static constexpr std::uint32_t SW_VERSION = 0x00020000;
-
-using tt_target_dram = std::tuple<int, int, int>;
 
 namespace tt {
 
@@ -444,5 +441,3 @@ private:
 };
 
 }  // namespace tt
-
-std::ostream& operator<<(std::ostream& os, const tt_target_dram& dram);

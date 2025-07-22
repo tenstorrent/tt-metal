@@ -428,7 +428,7 @@ void RunTestIEth(
 void CheckHostSanitization(std::shared_ptr<distributed::MeshDevice> mesh_device) {
     auto device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
-    constexpr CoreCoord core = {16, 16};
+    constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
