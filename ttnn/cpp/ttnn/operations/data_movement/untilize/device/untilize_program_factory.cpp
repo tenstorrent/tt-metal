@@ -137,12 +137,13 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         (uint32_t)src0_cb_index,
         (uint32_t)output_cb_index};
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (a.dtype() == DataType::FLOAT32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -333,12 +334,13 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         (uint32_t)output_cb_index};
 
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (a.dtype() == DataType::FLOAT32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -823,11 +825,12 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
 
     // Compute kernel
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     std::string compute_kernel;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -1128,7 +1131,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Note: This condition is always true for sharded input
     KernelHandle untilize_kernel_id = 0;
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     if (full_compute_core_range.ranges().size() > 0) {
@@ -1469,12 +1472,13 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     // Compute file path
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");

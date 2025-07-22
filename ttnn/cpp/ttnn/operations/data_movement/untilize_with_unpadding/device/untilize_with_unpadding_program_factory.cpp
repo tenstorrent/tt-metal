@@ -169,12 +169,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         uint32_t(output_cb_index)};
 
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
@@ -770,12 +771,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     /** compute
      */
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
@@ -1026,7 +1028,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     };
 
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     std::string compute_kernel(
@@ -1035,7 +1037,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         // Use copy compute kernel just for a potential data type conversion.
         compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
-    } else if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+    } else if (
+        !use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
