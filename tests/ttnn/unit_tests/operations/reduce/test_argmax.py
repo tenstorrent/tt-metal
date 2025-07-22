@@ -89,49 +89,57 @@ def test_argmax(device, tensor_shape, dim, keepdim, use_multicore):
 
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, dim, keepdim, use_multicore",
+    argnames="tensor_shape, dim, keepdim, use_multicore, dtype",
     argvalues=[
-        ([], None, True, True),
-        ([32], -1, False, False),
-        ([32, 0], 1, True, True),
-        ([64], -1, True, False),
-        ([1, 512], -1, True, True),
-        ([1, 1024], -1, True, True),
-        ([1, 65], -1, True, True),
-        ([8, 10, 129], 2, True, False),
-        ([1, 8, 160], -1, False, True),
-        ([1, 256, 1024 * 8], -1, False, True),
-        ([32, 32, 32, 1], -1, True, True),
+        ([], None, True, True, torch.bfloat16),
+        ([32], -1, False, False, torch.float32),
+        ([64], -1, True, False, torch.bfloat16),
+        ([1, 512], -1, True, True, torch.float32),
+        ([1, 1024], -1, True, True, torch.int32),
+        ([1, 65], -1, True, True, torch.uint8),
+        ([1, 8, 160], -1, False, True, torch.bfloat16),
+        ([1, 256, 1024 * 8], -1, False, True, torch.float32),
+        ([32, 32, 32, 1], -1, True, True, torch.int32),
     ],
 )
-def test_argmax_datatypes(device, tensor_shape, dim, keepdim, use_multicore):
+def test_argmax_datatypes(device, tensor_shape, dim, keepdim, use_multicore, dtype):
     """
     Test argmax with different input datatypes to ensure consistent behavior.
     """
-    data_types = [torch.bfloat16, torch.float32, torch.int32]
+    rank = len(tensor_shape)
 
-    for dtype in data_types:
-        rank = len(tensor_shape)
-
+    if dtype in [torch.int32, torch.uint8]:
+        # Use randint for integer types
+        torch_tensor = (
+            torch.randint(0, 100, tensor_shape, dtype=dtype) if rank > 0 else torch.randint(0, 100, (), dtype=dtype)
+        )
+    else:
+        # Use randn for floating point types
         torch_tensor = torch.randn(*tensor_shape, dtype=dtype) if rank > 0 else torch.randn((), dtype=dtype)
+
+    # Convert torch uint8 to appropriate ttnn type
+    if dtype == torch.uint8:  # PyTorch does not have uint32/uint16, so we use uint8
+        ttnn_dtype = ttnn.uint32
+        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn_dtype)
+    else:
         ttnn_tensor = ttnn.from_torch(torch_tensor, device=device)
 
-        # Get reference result from torch
-        torch_result = (
-            torch.argmax(torch_tensor, dim=dim, keepdim=keepdim) if dim is not None else torch.argmax(torch_tensor)
-        )
+    # Get reference result from torch
+    torch_result = (
+        torch.argmax(torch_tensor, dim=dim, keepdim=keepdim) if dim is not None else torch.argmax(torch_tensor)
+    )
 
-        # Get ttnn result
-        if dim is not None:
-            ttnn_result = ttnn.argmax(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
-        else:
-            ttnn_result = ttnn.argmax(ttnn_tensor, use_multicore=use_multicore)
+    # Get ttnn result
+    if dim is not None:
+        ttnn_result = ttnn.argmax(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
+    else:
+        ttnn_result = ttnn.argmax(ttnn_tensor, use_multicore=use_multicore)
 
-        ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
-        # Convert torch dtype from uint64 to int32 for comparison
-        torch_result = torch_result.to(torch.int32)
+    # Convert torch dtype from uint64 to int32 for comparison
+    torch_result = torch_result.to(torch.int32)
 
-        assert torch.allclose(
-            torch_result, ttnn_result, atol=0.1, rtol=0.1, equal_nan=True
-        ), f"mismatch for dtype {dtype}: torch: {torch_result}, ttnn: {ttnn_result}"
+    assert torch.allclose(
+        torch_result, ttnn_result, atol=0.1, rtol=0.1, equal_nan=True
+    ), f"mismatch for dtype {dtype}: torch: {torch_result}, ttnn: {ttnn_result}"

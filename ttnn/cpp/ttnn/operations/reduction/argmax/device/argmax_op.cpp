@@ -56,8 +56,9 @@ void ArgMax::validate_with_output_tensors(
 
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32 ||
-            input_tensor_a.dtype() == DataType::INT32 || input_tensor_a.dtype() == DataType::UINT32,
-        "Only BFLOAT16, FLOAT32, INT32, and UINT32 are supported for inputs!");
+            input_tensor_a.dtype() == DataType::INT32 || input_tensor_a.dtype() == DataType::UINT32 ||
+            input_tensor_a.dtype() == DataType::UINT16,
+        "Only BFLOAT16, FLOAT32, INT32, UINT32, and UINT16 are supported for inputs!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
