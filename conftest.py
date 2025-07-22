@@ -14,7 +14,6 @@ import json
 import multiprocess
 import signal
 import time
-import ttnn
 import psutil
 import subprocess
 from datetime import datetime
@@ -291,15 +290,8 @@ def get_tt_cache_path():
 
 
 @pytest.fixture(scope="function")
-def device_params(request, galaxy_type):
-    params = getattr(request, "param", {}).copy()
-
-    if "fabric_config" in params and params["fabric_config"] == True:
-        params["fabric_config"] = (
-            ttnn.FabricConfig.FABRIC_1D_RING if galaxy_type == "6U" else ttnn.FabricConfig.FABRIC_1D
-        )
-
-    return params
+def device_params(request):
+    return getattr(request, "param", {})
 
 
 @pytest.fixture(scope="function")
