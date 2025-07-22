@@ -231,36 +231,6 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
         num_blocks_written += num_blocks_per_core;
     }
 
-            uint32_t src_kv_buffer_addr = 0;
-            if (read_from_input_tensor_kv) {
-                src_kv_buffer_addr = optional_input_tensors.at(0).value().buffer()->address();
-            }
-
-            auto dst_buffer_query = output_tensors.at(0).buffer();
-            auto dst_buffer_key = output_tensors.at(1).buffer();
-            auto dst_buffer_value = output_tensors.at(2).buffer();
-
-            for (uint32_t i = 0; i < num_cores; i++) {
-                CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_buffer->address();
-
-                    if (read_from_input_tensor_kv) {
-                        runtime_args[1] = src_kv_buffer_addr;
-                    }
-                }
-
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_buffer_query->address();
-                    runtime_args[1] = dst_buffer_key->address();
-                    runtime_args[2] = dst_buffer_value->address();
-                }
-            }
-        };
-
     return {
         std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y, read_from_input_tensor_kv}};
 }
