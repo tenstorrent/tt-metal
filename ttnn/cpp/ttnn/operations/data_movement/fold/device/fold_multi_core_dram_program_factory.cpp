@@ -45,42 +45,58 @@ static Tensor create_fold_mapping_table(
     const uint32_t output_width = input_width / stride_w;
     const uint32_t patch_size = stride_h * stride_w;
     const uint32_t input_hw = input_height * input_width;
+    const uint32_t output_hw = output_height * output_width;
 
     // Create vector to store mapping entries (src_index, dst_index)
-    const uint32_t total_entries = total_elems * 2;
-    std::vector<uint32_t> config_vector(total_entries, 0);
+    std::vector<uint32_t> config_vector(num_cores_total * 3, 0xFFFFFFFF);
     uint32_t entry_idx = 0;
-
-    for (uint32_t b = 0; b < batch_size; b++) {
-        const uint32_t b_input_offset = b * input_hw;
-        const uint32_t b_output_base = b * output_height;
-
-        for (uint32_t oh = 0; oh < output_height; oh++) {
-            const uint32_t h_base = oh * stride_h;
-            const uint32_t dst_row_base = (b_output_base + oh) * output_width;
-
-            for (uint32_t ow = 0; ow < output_width; ow++) {
-                const uint32_t dst_row = dst_row_base + ow;
-                const uint32_t w = ow * stride_w;
-                const uint32_t dst_base_index = dst_row * patch_size;
-                const uint32_t src_base_index = b_input_offset + h_base * input_width + w;
-                config_vector[entry_idx++] = src_base_index;
-                config_vector[entry_idx++] = dst_base_index;
-            }
+    uint32_t curr_elems = 0;
+    std::cout << "elems_per_core: " << elems_per_core << std::endl;
+    std::cout << "total_elems: " << total_elems << std::endl;
+    for (uint32_t i = 0; i < num_cores_total; i++) {
+        if (curr_elems >= total_elems) {
+            break;
         }
+        uint32_t output_offset = i * elems_per_core;
+        uint32_t batch_idx = output_offset / output_hw;
+        uint32_t batch_offset = output_offset % output_hw;
+        uint32_t out_height = batch_offset / output_width;
+        uint32_t out_width = batch_offset % output_width;
+
+        uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
+        uint32_t src_row_offset = out_height * stride_h * input_width;
+        uint32_t src_col_offset = out_width * stride_w;
+
+        // std::cout << "batch_idx: " << batch_idx << ", batch_offset: " << batch_offset << ", out_height: " <<
+        // out_height << ", out_width: " << out_width << std::endl; std::cout << "src_batch_offset: " <<
+        // src_batch_offset << ", src_row_offset: " << src_row_offset << ", src_col_offset: " << src_col_offset <<
+        // std::endl;
+
+        uint32_t src_idx = src_batch_offset + src_row_offset + src_col_offset;
+        uint32_t dst_idx = output_offset * patch_size;
+
+        config_vector[entry_idx++] = src_idx;
+        config_vector[entry_idx++] = dst_idx;
+        config_vector[entry_idx++] = src_col_offset;
+        // std::cout << "src_idx: " << src_idx << ", dst_idx: " << dst_idx << ", src_col_offset: " << src_col_offset <<
+        // std::endl; std::cout << std::endl;
+        curr_elems += elems_per_core;
     }
 
+    // std::cout << "config_vector size: " << config_vector.size() << std::endl;
     // repeat last entry if needed
-    if (entry_idx < (total_entries)) {
-        auto src_idx = config_vector[entry_idx - 2];
-        auto dst_idx = config_vector[entry_idx - 1];
-        for (uint32_t i = entry_idx; i < total_entries; i += 2) {
+    if (entry_idx < num_cores_total * 3) {
+        auto src_idx = config_vector[entry_idx - 3];
+        auto dst_idx = config_vector[entry_idx - 2];
+        auto src_col_offset = config_vector[entry_idx - 1];
+        for (uint32_t i = entry_idx; i < num_cores_total * 3; i += 3) {
             config_vector[i] = src_idx;
             config_vector[i + 1] = dst_idx;
+            config_vector[i + 2] = src_col_offset;
         }
     }
 
-    ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core * 2), elems_per_core * 2});
+    ttnn::Shape config_shape({tt::div_up(config_vector.size(), 3), 3});
     auto config_buffer = HostBuffer(std::move(config_vector));
     auto config_tensor = Tensor(std::move(config_buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
     auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
@@ -378,7 +394,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         input_width,
         stride_h,
         stride_w,
-        work_per_core * num_cores_total,
+        total_work,
         work_per_core,
         all_cores,
         num_cores_total);
@@ -401,8 +417,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
          src_stick_size_is_power_of_two,
          src_log2_stick_size,
          aligned_stick_nbytes,
-         stride_w,
          stride_h,
+         stride_w,
          input_width,
          work_per_core});
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
