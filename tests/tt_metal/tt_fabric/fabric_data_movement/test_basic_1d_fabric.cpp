@@ -68,7 +68,7 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
     uint32_t target_address = source_l1_buffer_address;
     uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
 
-    uint32_t packet_payload_size_bytes = (topology == Topology::Mesh) ? 2048 : 4096;
+    uint32_t packet_payload_size_bytes = 4096;
 
     return {
         packet_header_address,
@@ -614,6 +614,8 @@ void run_unicast_test_bw_chips(
     uint32_t dest_dram_addr =
         use_dram_dst ? receiver_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::DRAM) : 0;
 
+    log_info(tt::LogTest, "packet_payload_size_bytes: {}", worker_mem_map.packet_payload_size_bytes);
+
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
@@ -714,6 +716,7 @@ void run_unicast_test_bw_chips(
     uint64_t receiver_bytes =
         ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
     EXPECT_EQ(sender_bytes, receiver_bytes);
+    log_info(tt::LogTest, "Unicast test bw chips: sender_bytes {} receiver_bytes {}", sender_bytes, receiver_bytes);
 }
 
 void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction, bool use_dram_dst) {

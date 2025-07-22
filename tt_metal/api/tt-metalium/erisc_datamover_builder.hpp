@@ -341,7 +341,7 @@ public:
     static constexpr auto default_firmware_context_switch_type = FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE;
     // payload only, no header
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
-    static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 2;
+    static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
 
     FabricEriscDatamoverBuilder(
         const CoreCoord& my_eth_core_logical,

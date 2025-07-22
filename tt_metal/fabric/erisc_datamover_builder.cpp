@@ -255,8 +255,12 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
     std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots) {
+    // Define linear_buffer_slot_options based on topology
+
     static const std::vector<std::vector<std::pair<size_t, size_t>>> linear_buffer_slot_options = {
         {{8, 16}}, {{8, 16}}};
+
+    static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {{{4, 8}}};
 
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
@@ -471,6 +475,21 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                 break;
             default: break;
         }
+    } else if (topology == Topology::Mesh) {
+        size_t default_num_sender_buffer_slots;
+        size_t default_num_receiver_buffer_slots;
+        get_optimal_num_slots(
+            mesh_buffer_slot_options[0],
+            this->num_used_sender_channels,
+            this->num_used_receiver_channels,
+            default_num_sender_buffer_slots,
+            default_num_receiver_buffer_slots);
+        // set default buffer slots.
+        num_sender_buffer_slots.fill(default_num_sender_buffer_slots);
+        num_remote_sender_buffer_slots.fill(default_num_sender_buffer_slots);
+        num_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
+        num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
+        num_downstream_sender_buffer_slots.fill(default_num_sender_buffer_slots);
     } else {
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
@@ -590,7 +609,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_remote_receiver_buffer_slots,
         num_downstream_sender_buffer_slots);
 
-    log_trace(
+    log_info(
         tt::LogOp,
         "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}, is_dateline_upstream_adj_dev_upstream "
         "{}",
@@ -598,11 +617,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         is_dateline_upstream,
         is_dateline_upstream_adj_dev,
         is_dateline_upstream_adj_dev_upstream);
-    log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
-    log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
-    log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
-    log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
-    log_trace(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
+    log_info(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
+    log_info(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
+    log_info(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
+    log_info(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
+    log_info(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
         num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + this->num_used_sender_channels, size_t{0});
@@ -611,6 +630,27 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_receiver_buffer_slots.begin() + this->num_used_receiver_channels,
         size_t{0});
     std::size_t total_slot_count = total_sender_slots + total_receiver_slots;
+
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        log_info(
+            tt::LogOp,
+            "Sender Channel {}: {} buffers, {} bytes per buffer, {} total bytes",
+            i,
+            num_sender_buffer_slots[i],
+            channel_buffer_size_bytes,
+            this->sender_channels_size_bytes[i]);
+    }
+
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        log_info(
+            tt::LogOp,
+            "Receiver Channel {}: {} buffers, {} bytes per buffer, {} total bytes",
+            i,
+            num_receiver_buffer_slots[i],
+            channel_buffer_size_bytes,
+            this->receiver_channels_size_bytes[i]);
+    }
+
     TT_FATAL(
         total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
         "Total channel size of {} B exceeds available space of {} B",
