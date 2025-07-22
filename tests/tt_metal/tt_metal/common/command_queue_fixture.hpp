@@ -116,8 +116,8 @@ protected:
         }
     }
 
-    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(
-        distributed::MeshCoordinate::zero_coordinate(1), distributed::MeshCoordinate::zero_coordinate(1));
+    distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
+    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
@@ -256,6 +256,8 @@ protected:
     }
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+    distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
+    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
 
 class UnitMeshCQSingleCardProgramFixture : virtual public UnitMeshCQSingleCardFixture {};
@@ -326,6 +328,8 @@ protected:
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     size_t num_devices_;
+    distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
+    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
 
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQMultiDeviceFixtures

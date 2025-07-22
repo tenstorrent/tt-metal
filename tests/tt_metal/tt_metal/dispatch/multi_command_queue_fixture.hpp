@@ -162,8 +162,8 @@ protected:
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     uint8_t num_cqs_;
-    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(
-        distributed::MeshCoordinate::zero_coordinate(1), distributed::MeshCoordinate::zero_coordinate(1));
+    distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
+    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
 
 class UnitMeshMultiCQSingleDeviceProgramFixture : public UnitMeshMultiCQSingleDeviceFixture {};

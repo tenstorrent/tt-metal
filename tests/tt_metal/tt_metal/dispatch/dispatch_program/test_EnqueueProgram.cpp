@@ -2417,11 +2417,9 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
         this->create_kernel(program_, CoreType::WORKER, true);
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
@@ -2442,11 +2440,9 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestSimplePrograms) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
         this->create_kernel(program_, CoreType::WORKER, true);
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
@@ -2467,11 +2463,9 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
 
         bool eth_kernel_added_to_program = false;
         if (rand() % 2 == 0) {
@@ -2494,11 +2488,9 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestPrograms) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
         this->create_kernel(program_, CoreType::WORKER, true);
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
@@ -2519,11 +2511,9 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
         // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
         // and the max kernel size to ensure that the kernel can fit in the ring buffer
         KernelProperties kernel_properties;
@@ -2549,11 +2539,9 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
 
         bool eth_kernel_added_to_program = false;
         if (rand() % 2 == 0) {
@@ -2584,11 +2572,9 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms)
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
 
         KernelProperties kernel_properties;
         if (i % 2 == 0) {
@@ -2610,11 +2596,10 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramFollowedBySmallProgra
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        ;
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
 
         KernelProperties kernel_properties;
         if (i == 0) {
@@ -2636,11 +2621,9 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPro
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        auto& program_ = workload.get_programs().at(device_range_);
         KernelProperties kernel_properties;
         if (i % 6 == 0) {
             kernel_properties = this->get_large_kernel_properties();

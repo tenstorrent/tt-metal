@@ -120,13 +120,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord), *output->get_device_buffer(zero_coord));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range);
+        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
 
-    vector<uint32_t> input_data(input->get_device_buffer(zero_coord)->size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -174,13 +172,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord), *output->get_device_buffer(zero_coord));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range);
+        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
 
-    vector<uint32_t> input_data(input->get_device_buffer(zero_coord)->size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -241,13 +237,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord), *output->get_device_buffer(zero_coord));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range);
+        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
 
-    vector<uint32_t> input_data(input->get_device_buffer(zero_coord)->size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -322,18 +316,16 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     auto input = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
     auto output = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
 
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    vector<uint32_t> input_data(input->get_device_buffer(zero_coord)->size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord), *output->get_device_buffer(zero_coord));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range);
+        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
 
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
     auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
@@ -369,13 +361,11 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord), *output->get_device_buffer(zero_coord));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range);
+        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
 
-    vector<uint32_t> input_data(input->get_device_buffer(zero_coord)->size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -400,8 +390,8 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
     auto output_temp = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
     distributed::MeshWorkload temp_workload;
     Program simple_program_temp = create_simple_unary_program(
-        *input_temp->get_device_buffer(zero_coord), *output_temp->get_device_buffer(zero_coord));
-    distributed::AddProgramToMeshWorkload(temp_workload, std::move(simple_program_temp), device_range);
+        *input_temp->get_device_buffer(zero_coord_), *output_temp->get_device_buffer(zero_coord_));
+    distributed::AddProgramToMeshWorkload(temp_workload, std::move(simple_program_temp), device_range_);
     distributed::EnqueueMeshWorkload(mesh_command_queue, temp_workload, true);
 
     // Run trace that can clobber the temporary buffers created above
@@ -425,8 +415,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
     auto input = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
     auto output = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
 
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    vector<uint32_t> input_data(input->get_device_buffer(zero_coord)->size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -438,13 +427,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
 
     bool has_eager = true;
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     // EAGER MODE EXECUTION
     if (has_eager) {
-        Program simple_program =
-            create_simple_unary_program(*input->get_device_buffer(zero_coord), *output->get_device_buffer(zero_coord));
-        distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range);
+        Program simple_program = create_simple_unary_program(
+            *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+        distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
 
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, true);
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
@@ -489,21 +477,18 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     auto interm = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
     auto output = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
 
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
     // Create two programs and add to workload
     distributed::MeshWorkload workload0;
     distributed::MeshWorkload workload1;
     Program op0 =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord), *interm->get_device_buffer(zero_coord));
+        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *interm->get_device_buffer(zero_coord_));
     Program op1 =
-        create_simple_unary_program(*interm->get_device_buffer(zero_coord), *output->get_device_buffer(zero_coord));
+        create_simple_unary_program(*interm->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
 
-    distributed::AddProgramToMeshWorkload(workload0, std::move(op0), device_range);
-    distributed::AddProgramToMeshWorkload(workload1, std::move(op1), device_range);
+    distributed::AddProgramToMeshWorkload(workload0, std::move(op0), device_range_);
+    distributed::AddProgramToMeshWorkload(workload1, std::move(op1), device_range_);
 
-    vector<uint32_t> input_data(input->get_device_buffer(zero_coord)->size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -585,10 +570,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     uint32_t num_programs = parse_env<int>("TT_METAL_TRACE_PROGRAMS", 4);
     vector<std::shared_ptr<distributed::MeshBuffer>> interm_buffers;
 
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-    vector<uint32_t> input_data(input->get_device_buffer(zero_coord)->size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -601,16 +583,16 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
         Program program;
         if (i == 0) {
             program = create_simple_unary_program(
-                *input->get_device_buffer(zero_coord), *interm_buffers[i]->get_device_buffer(zero_coord));
+                *input->get_device_buffer(zero_coord_), *interm_buffers[i]->get_device_buffer(zero_coord_));
         } else if (i == (num_programs - 1)) {
             program = create_simple_unary_program(
-                *interm_buffers[i - 1]->get_device_buffer(zero_coord), *output->get_device_buffer(zero_coord));
+                *interm_buffers[i - 1]->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
         } else {
             program = create_simple_unary_program(
-                *interm_buffers[i - 1]->get_device_buffer(zero_coord),
-                *interm_buffers[i]->get_device_buffer(zero_coord));
+                *interm_buffers[i - 1]->get_device_buffer(zero_coord_),
+                *interm_buffers[i]->get_device_buffer(zero_coord_));
         }
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
         workloads.push_back(std::move(workload));
     }
 
@@ -667,9 +649,6 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -677,7 +656,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER, true);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -694,9 +673,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -704,7 +680,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::ETH, true);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -721,9 +697,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -740,7 +713,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
             this->create_kernel(program, CoreType::WORKER, true);
         }
 
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -752,9 +725,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -762,7 +732,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTrace) {
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -779,9 +749,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -794,7 +761,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
         this->create_kernel(program, CoreType::ETH, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -811,9 +778,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -839,7 +803,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
         }
         program.set_runtime_id(i);
 
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -851,9 +815,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -869,7 +830,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProg
         }
 
         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -881,9 +842,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProg
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramFollowedBySmallProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -899,7 +857,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramFollowedBySmallP
         }
 
         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -911,9 +869,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramFollowedBySmallP
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSmallProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -929,7 +884,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
         }
 
         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -941,9 +896,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     std::vector<distributed::MeshTraceId> trace_ids;
     std::unordered_map<uint64_t, distributed::MeshTraceId> program_ids_to_trace_ids;
@@ -954,7 +906,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
@@ -964,13 +916,13 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
-            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range].get_id(), trace_id);
+            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
         }
     }
     distributed::Finish(mesh_command_queue);
 
     for (auto& workload : this->workloads) {
-        const uint64_t program_id = workload.get_programs()[device_range].get_id();
+        const uint64_t program_id = workload.get_programs()[device_range_].get_id();
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
@@ -992,9 +944,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     std::vector<distributed::MeshTraceId> trace_ids;
     std::unordered_map<uint64_t, distributed::MeshTraceId> program_ids_to_trace_ids;
@@ -1010,7 +959,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
         this->create_kernel(program, CoreType::ETH, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
 
         const bool use_trace = (rand() % 2) == 0;
@@ -1022,13 +971,13 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
-            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range].get_id(), trace_id);
+            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
         }
     }
     distributed::Finish(mesh_command_queue);
 
     for (auto& workload : this->workloads) {
-        const uint64_t program_id = workload.get_programs()[device_range].get_id();
+        const uint64_t program_id = workload.get_programs()[device_range_].get_id();
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
@@ -1050,9 +999,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
-    distributed::MeshCoordinate zero_coord =
-        distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     std::vector<distributed::MeshTraceId> trace_ids;
     std::unordered_map<uint64_t, distributed::MeshTraceId> program_ids_to_trace_ids;
@@ -1080,7 +1026,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
             this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
         }
 
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range);
+        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
 
         const bool use_trace = (rand() % 2) == 0;
@@ -1092,13 +1038,13 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
-            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range].get_id(), trace_id);
+            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
         }
     }
     distributed::Finish(mesh_command_queue);
 
     for (auto& workload : this->workloads) {
-        const uint64_t program_id = workload.get_programs()[device_range].get_id();
+        const uint64_t program_id = workload.get_programs()[device_range_].get_id();
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
