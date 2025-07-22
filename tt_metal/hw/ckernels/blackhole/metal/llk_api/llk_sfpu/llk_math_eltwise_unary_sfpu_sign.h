@@ -7,12 +7,21 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_sign.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-SFPU_UNARY_ONE_PARAM_KERNEL_MODE_SECOND_DEFAULT(sign, RC, uint exponent_size_8, exponent_size_8, 1)
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_sign_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sign, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_sign(
+    uint dst_index, int vector_mode = (int)VectorMode::RC, uint exponent_size_8 = 1) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_sign<APPROXIMATE>, dst_index, vector_mode, exponent_size_8);
+}
 
 }  // namespace ckernel

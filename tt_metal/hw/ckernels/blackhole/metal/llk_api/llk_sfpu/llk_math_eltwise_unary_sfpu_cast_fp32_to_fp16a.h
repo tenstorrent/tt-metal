@@ -7,12 +7,20 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_cast_fp32_to_fp16a.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-SFPU_UNARY_KERNEL(cast_fp32_to_fp16a)
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::cast_fp32_to_fp16a, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_cast_fp32_to_fp16a<APPROXIMATE>, dst_index, vector_mode);
+}
 
 }  // namespace ckernel

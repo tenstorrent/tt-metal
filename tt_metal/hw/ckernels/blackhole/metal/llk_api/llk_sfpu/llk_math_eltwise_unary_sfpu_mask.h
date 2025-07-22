@@ -7,17 +7,32 @@
 #include "ckernel_sfpu_mask.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-SFPU_UNARY_KERNEL_INIT(mask)
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_mask_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::mask, APPROXIMATE>();
+}
 
-SFPU_DIM_DUALTYPE_SWITCH_KERNEL(
-    mask, DataFormat, Float16_b, Float16, calculate_mask, Float16, calculate_int_mask, Int32)
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_mask_posinf(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_mask_posinf<APPROXIMATE>, dst_index, vector_mode);
+}
 
-SFPU_UNARY_KERNEL_NO_INIT(mask_posinf)
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_mask(
+    uint dst_index, DataFormat data_format, int vector_mode = (int)VectorMode::RC) {
+    if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_mask<APPROXIMATE>, dst_index, vector_mode);
+    } else if (data_format == DataFormat::Int32) {
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_int_mask<APPROXIMATE>, dst_index, vector_mode);
+    }
+}
 
 }  // namespace ckernel
