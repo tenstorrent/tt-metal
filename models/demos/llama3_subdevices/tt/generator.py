@@ -362,6 +362,10 @@ class Generator:
             "kv_cache": kv_cache,
         }
         if reset_inputs and sampling_params is not None:
+            if sampling_params.temperature == 0.0:  # argmax
+                sampling_params.temperature = 1.0
+                sampling_params.top_k = 1
+                sampling_params.top_p = 0.0
             self.model.tt_sampling.reset_params(
                 k=[sampling_params.top_k] * 32,
                 p=[sampling_params.top_p] * 32,

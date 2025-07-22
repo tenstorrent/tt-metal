@@ -42,9 +42,6 @@ class TT_CCL:
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
         self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
-        self.max_top_k = model_args.max_top_k
-        self.max_batch_size = model_args.max_batch_size
-        self.cluster_shape = model_args.cluster_shape
 
         self.ring_topology = self.model_config["CCL_TOPOLOGY"] == ttnn.Topology.Ring
         self.use_ring_prefill = self.ring_topology and mode == "prefill"
