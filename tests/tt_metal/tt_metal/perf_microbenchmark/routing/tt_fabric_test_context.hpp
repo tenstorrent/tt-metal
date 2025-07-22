@@ -77,6 +77,35 @@ struct BandwidthResultSummary {
     double packets_per_second;
 };
 
+// Golden CSV comparison structures
+struct GoldenCsvEntry {
+    std::string test_name;
+    std::string ftype;
+    std::string ntype;
+    std::string topology;
+    std::string num_devices;
+    uint32_t num_links;
+    uint32_t packet_size;
+    uint64_t cycles;
+    double bandwidth_gb_s;
+    double packets_per_second;
+};
+
+struct ComparisonResult {
+    std::string test_name;
+    std::string ftype;
+    std::string ntype;
+    std::string topology;
+    std::string num_devices;
+    uint32_t num_links;
+    uint32_t packet_size;
+    double current_bandwidth_gb_s;
+    double golden_bandwidth_gb_s;
+    double difference_percent;
+    bool within_tolerance;
+    std::string status;
+};
+
 class TestContext {
 public:
     void init(std::shared_ptr<TestFixture> fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
@@ -330,6 +359,10 @@ public:
 
         // Generate CSV file with bandwidth results
         generate_bandwidth_csv(config);
+
+        // validate perf with golden csv
+        generate_comparison_csv(config);
+        validate_against_golden();
     }
 
     void initialize_csv_file() {
@@ -382,6 +415,28 @@ public:
         summary_csv_stream.close();
 
         log_info(tt::LogTest, "Initialized summary CSV file: {}", csv_summary_file_path_.string());
+
+        // Initialize diff CSV file for golden comparison
+        std::ostringstream diff_oss;
+        diff_oss << "bandwidth_summary_results_" << arch_name << "_diff.csv";
+        diff_csv_file_path_ = output_path / diff_oss.str();
+
+        // Create diff CSV file with header
+        std::ofstream diff_csv_stream(diff_csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
+        if (!diff_csv_stream.is_open()) {
+            log_error(tt::LogTest, "Failed to create diff CSV file: {}", diff_csv_file_path_.string());
+            return;
+        }
+
+        // Write diff header
+        diff_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,"
+                           "current_bandwidth_gb_s,golden_bandwidth_gb_s,difference_percent,status\n";
+        diff_csv_stream.close();
+
+        log_info(tt::LogTest, "Initialized diff CSV file: {}", diff_csv_file_path_.string());
+
+        // load golden csv based on arch and cluster type
+        load_golden_csv();
     }
 
     void close_devices() { fixture_->close_devices(); }
@@ -404,6 +459,9 @@ private:
         device_core_cycles_.clear();
         bandwidth_results_.clear();
         bandwidth_results_summary_.clear();
+        comparison_results_.clear();
+        failed_tests_.clear();
+        // Note: golden_csv_entries_ is kept loaded for reuse across tests
     }
 
     void add_traffic_config(const TestTrafficConfig& traffic_config) {
@@ -918,6 +976,214 @@ private:
         log_info(tt::LogTest, "Bandwidth summary results appended to CSV file: {}", csv_summary_file_path_.string());
     }
 
+    std::string get_golden_csv_filename() {
+        auto arch_name = tt::tt_metal::hal::get_arch_name();
+        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+
+        // Convert cluster type enum to lowercase string
+        std::string cluster_name = magic_enum::enum_name(cluster_type).data();
+        std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
+
+        std::string file_name = "golden_bandwidth_summary_" + arch_name + "_" + cluster_name + ".csv";
+        return file_name;
+    }
+
+    bool load_golden_csv() {
+        golden_csv_entries_.clear();
+
+        std::string golden_filename = get_golden_csv_filename();
+        std::filesystem::path golden_path =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            "tests/tt_metal/tt_metal/perf_microbenchmark/routing" / golden_filename;
+
+        if (!std::filesystem::exists(golden_path)) {
+            log_warning(tt::LogTest, "Golden CSV file not found: {}", golden_path.string());
+            return false;
+        }
+
+        std::ifstream golden_file(golden_path);
+        if (!golden_file.is_open()) {
+            log_error(tt::LogTest, "Failed to open golden CSV file: {}", golden_path.string());
+            return false;
+        }
+
+        std::string line;
+        bool is_header = true;
+        while (std::getline(golden_file, line)) {
+            if (is_header) {
+                is_header = false;
+                continue;  // Skip header
+            }
+
+            std::istringstream ss(line);
+            std::string token;
+            std::vector<std::string> tokens;
+
+            // Parse CSV line
+            while (std::getline(ss, token, ',')) {
+                // Handle quoted strings for num_devices
+                if (token.front() == '"' && token.back() != '"') {
+                    std::string quoted_token = token;
+                    while (std::getline(ss, token, ',') && token.back() != '"') {
+                        quoted_token += "," + token;
+                    }
+                    quoted_token += "," + token;
+                    // Remove quotes
+                    quoted_token = quoted_token.substr(1, quoted_token.length() - 2);
+                    tokens.push_back(quoted_token);
+                } else if (token.front() == '"' && token.back() == '"') {
+                    // Remove quotes from single quoted token
+                    tokens.push_back(token.substr(1, token.length() - 2));
+                } else {
+                    tokens.push_back(token);
+                }
+            }
+
+            GoldenCsvEntry entry;
+            entry.test_name = tokens[0];
+            entry.ftype = tokens[1];
+            entry.ntype = tokens[2];
+            entry.topology = tokens[3];
+            entry.num_devices = tokens[4];
+            entry.num_links = std::stoul(tokens[5]);
+            entry.packet_size = std::stoul(tokens[6]);
+            entry.cycles = std::stoull(tokens[7]);
+            entry.bandwidth_gb_s = std::stod(tokens[8]);
+            entry.packets_per_second = std::stod(tokens[9]);
+
+            golden_csv_entries_.push_back(entry);
+        }
+
+        golden_file.close();
+        log_info(tt::LogTest, "Loaded {} golden entries from: {}", golden_csv_entries_.size(), golden_path.string());
+        return true;
+    }
+
+    void generate_comparison_csv(const TestConfig& config) {
+        // Clear previous results
+        comparison_results_.clear();
+        failed_tests_.clear();
+
+        // Load golden CSV (will warn if not found)
+        if (golden_csv_entries_.empty()) {
+            log_warning(tt::LogTest, "Skipping golden CSV comparison - no golden file found");
+            return;
+        }
+
+        // Extract ftype and ntype from config
+        std::string ftype_str = "None";
+        std::string ntype_str = "None";
+        if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
+            const auto& first_pattern = config.senders[0].patterns[0];
+            if (first_pattern.ftype.has_value()) {
+                ftype_str = magic_enum::enum_name(first_pattern.ftype.value()).data();
+            }
+            if (first_pattern.ntype.has_value()) {
+                ntype_str = magic_enum::enum_name(first_pattern.ntype.value()).data();
+            }
+        }
+
+        // Compare current results with golden
+        for (const auto& summary_result : bandwidth_results_summary_) {
+            // Convert vector of num_devices to string representation
+            std::string num_devices_str = "[";
+            for (size_t i = 0; i < summary_result.num_devices.size(); ++i) {
+                if (i > 0) {
+                    num_devices_str += ",";
+                }
+                num_devices_str += std::to_string(summary_result.num_devices[i]);
+            }
+            num_devices_str += "]";
+
+            std::string topology_str = magic_enum::enum_name(config.fabric_setup.topology).data();
+
+            // Find matching golden entry
+            auto golden_it =
+                std::find_if(golden_csv_entries_.begin(), golden_csv_entries_.end(), [&](const GoldenCsvEntry& golden) {
+                    return golden.test_name == config.name && golden.ftype == ftype_str && golden.ntype == ntype_str &&
+                           golden.topology == topology_str && golden.num_devices == num_devices_str &&
+                           golden.num_links == config.fabric_setup.num_links &&
+                           golden.packet_size == summary_result.packet_size;
+                });
+
+            ComparisonResult comp_result;
+            comp_result.test_name = config.name;
+            comp_result.ftype = ftype_str;
+            comp_result.ntype = ntype_str;
+            comp_result.topology = topology_str;
+            comp_result.num_devices = num_devices_str;
+            comp_result.num_links = config.fabric_setup.num_links;
+            comp_result.packet_size = summary_result.packet_size;
+            comp_result.current_bandwidth_gb_s = summary_result.bandwidth_gb_s;
+
+            if (golden_it != golden_csv_entries_.end()) {
+                comp_result.golden_bandwidth_gb_s = golden_it->bandwidth_gb_s;
+                comp_result.difference_percent =
+                    ((comp_result.current_bandwidth_gb_s - comp_result.golden_bandwidth_gb_s) /
+                     comp_result.golden_bandwidth_gb_s) *
+                    100.0;
+                comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= tolerance_percent_;
+
+                if (comp_result.within_tolerance) {
+                    comp_result.status = "PASS";
+                } else {
+                    comp_result.status = "FAIL";
+                    failed_tests_.push_back(
+                        config.name + " (" + ftype_str + "," + ntype_str + "," + topology_str + "," + num_devices_str +
+                        ")");
+                }
+            } else {
+                comp_result.golden_bandwidth_gb_s = 0.0;
+                comp_result.difference_percent = 0.0;
+                comp_result.within_tolerance = false;
+                comp_result.status = "NO_GOLDEN";
+                failed_tests_.push_back(config.name + " (NO GOLDEN ENTRY)");
+            }
+
+            comparison_results_.push_back(comp_result);
+        }
+
+        // Open diff CSV file in append mode (header already written in initialize_csv_file)
+        std::ofstream diff_csv(diff_csv_file_path_, std::ios::out | std::ios::app);
+        if (!diff_csv.is_open()) {
+            log_error(tt::LogTest, "Failed to open diff CSV file for appending: {}", diff_csv_file_path_.string());
+            return;
+        }
+
+        // Write comparison results (header already written in initialize_csv_file)
+        for (const auto& result : comparison_results_) {
+            diff_csv << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
+                     << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size << ","
+                     << std::fixed << std::setprecision(6) << result.current_bandwidth_gb_s << ","
+                     << result.golden_bandwidth_gb_s << "," << std::setprecision(2) << result.difference_percent << ","
+                     << result.status << "\n";
+        }
+
+        diff_csv.close();
+        log_info(tt::LogTest, "Comparison diff CSV results appended to: {}", diff_csv_file_path_.string());
+    }
+
+    void validate_against_golden() {
+        if (comparison_results_.empty()) {
+            log_info(tt::LogTest, "No golden comparison performed (no golden file found)");
+            return;
+        }
+
+        if (!failed_tests_.empty()) {
+            log_error(
+                tt::LogTest, "The following tests failed golden comparison (tolerance: {}%):", tolerance_percent_);
+            for (const auto& failed_test : failed_tests_) {
+                log_error(tt::LogTest, "  - {}", failed_test);
+            }
+            TT_THROW(
+                "Golden comparison failed for {} tests. See diff CSV: {}",
+                failed_tests_.size(),
+                diff_csv_file_path_.string());
+        } else {
+            log_info(tt::LogTest, "All tests passed golden comparison within {}% tolerance", tolerance_percent_);
+        }
+    }
+
     // Track sync cores for each device
     std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;
     std::unordered_map<FabricNodeId, std::vector<CoreCoord>> device_local_sync_cores_;
@@ -943,4 +1209,11 @@ private:
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
     std::filesystem::path csv_file_path_;
     std::filesystem::path csv_summary_file_path_;
+
+    // Golden CSV comparison data
+    std::vector<GoldenCsvEntry> golden_csv_entries_;
+    std::vector<ComparisonResult> comparison_results_;
+    std::vector<std::string> failed_tests_;
+    std::filesystem::path diff_csv_file_path_;
+    static constexpr double tolerance_percent_ = 5.0;  // 5% tolerance
 };
