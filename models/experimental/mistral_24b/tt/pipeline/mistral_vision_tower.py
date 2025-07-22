@@ -5,8 +5,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
-from models.common.rmsnorm import RMSNorm as RMSNorm
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
 from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt, generate_block_attention_mask_tt
 from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
@@ -95,20 +94,14 @@ class MistralVisionTower(LightweightModule):
             bias=bias,
         )
 
-        layer_norm = RMSNorm(
+        self.ln_pre = RMSNorm(
             device=mesh_device,
             dim=self.width,
             state_dict=self.state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_dtype=dtype,
             weight_key="ln_pre",
-            is_distributed=configuration.is_distributed_norm,
-        )
-
-        self.ln_pre = DistributedNorm(
-            layer_norm,
-            configuration,
-            TG=configuration.is_galaxy,
+            is_distributed=False,
         )
 
         image_size = configuration.vision_image_size
@@ -258,6 +251,9 @@ class MistralVisionTower(LightweightModule):
 
         patch_embeds = ttnn.unsqueeze(patch_embeds, 0)
         out = self.transformer(patch_embeds, mask=attention_mask, position_embeddings=position_embeddings)
+        # deallocate position_embeddings
+        ttnn.deallocate(position_embeddings[0])
+        ttnn.deallocate(position_embeddings[1])
         passing, pcc_message = comp_pcc(ref_out.last_hidden_state, ttnn.to_torch(out).squeeze(0), pcc_required)
         logger.info(comp_allclose(ref_out.last_hidden_state, ttnn.to_torch(out).squeeze(0)))
         logger.info(f"========= Stage8 transformer out PCC: {pcc_message}")

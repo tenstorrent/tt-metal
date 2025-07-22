@@ -202,7 +202,6 @@ class TtMistralImageAttention(LightweightModule):
             v_heads_1VSD,
             is_causal=False,
             scale=self.scale,
-            attn_mask=mask,
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
         )

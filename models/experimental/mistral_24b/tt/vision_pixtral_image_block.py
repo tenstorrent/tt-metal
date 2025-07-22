@@ -4,9 +4,8 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 
@@ -27,18 +26,17 @@ class TtPixtralImageTransformerBlock(LightweightModule):
         self.num_devices = configuration.num_devices
         self.hidden_size = configuration.vision_dim
 
-        inner_rms = RMSNorm(
+        self.attention_norm = RMSNorm(
             device=mesh_device,
             dim=configuration.vision_dim,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_key="attention_norm",
             weight_dtype=dtype,
-            is_distributed=configuration.is_distributed_norm,
+            is_distributed=False,
             sharded_program_config=configuration.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
             sharded_output_config=configuration.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )
-        self.attention_norm = DistributedNorm(inner_rms, configuration, TG=configuration.is_galaxy)
 
         self.attention = TtLlamaImageAttention(
             mesh_device,
@@ -49,19 +47,17 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             configuration=configuration,
         )
 
-        ffn_rms = RMSNorm(
+        self.ffn_norm = RMSNorm(
             device=mesh_device,
             dim=configuration.vision_dim,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_key="ffn_norm",
             weight_dtype=dtype,
-            is_distributed=configuration.is_distributed_norm,
+            is_distributed=False,
             sharded_program_config=configuration.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
             sharded_output_config=configuration.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )
-
-        self.ffn_norm = DistributedNorm(ffn_rms, configuration, TG=configuration.is_galaxy)
 
         self.mlp = MLP(
             mesh_device=mesh_device,

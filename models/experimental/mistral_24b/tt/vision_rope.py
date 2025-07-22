@@ -97,4 +97,5 @@ class VisionRotarySetup(LightweightModule):
 
         if return_rot_idxs:
             return [cos, sin], rot_idxs
+        ttnn.deallocate(rot_idxs)
         return [cos, sin]

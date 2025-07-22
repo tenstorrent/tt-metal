@@ -81,4 +81,7 @@ class MistralTTVisionMLP(LightweightModule):
         # Final projection
         w2_out = ttnn.linear(w2_in, self.w2, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+        ttnn.deallocate(w2_in)
         return w2_out
