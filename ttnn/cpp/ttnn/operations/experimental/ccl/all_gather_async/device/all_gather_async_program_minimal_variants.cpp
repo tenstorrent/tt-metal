@@ -542,6 +542,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 GetRuntimeArgs(program, worker_sender_writer_backward_kernel_id);
             auto out_ready_semaphore_forward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(0);
             auto out_ready_semaphore_backward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(1);
+            auto barrier_semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->barrier_semaphore;
             for (int link = 0; link < num_links; link++) {
                 // sender reader
                 auto& worker_reader_sender_forward_runtime_args =
@@ -556,6 +557,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                                                                      [sender_worker_cores[1 + link * 2].y];
                 worker_writer_sender_forward_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_forward_runtime_args[12] = out_ready_semaphore_forward.address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_forward_runtime_args[16] = barrier_semaphore.value().address();
+                }
                 // sender reader
                 auto& worker_reader_sender_backward_runtime_args =
                     worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + link * 2].x]
@@ -569,6 +573,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                                                                       [sender_worker_cores[0 + link * 2].y];
                 worker_writer_sender_backward_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_backward_runtime_args[12] = out_ready_semaphore_backward.address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_backward_runtime_args[16] = barrier_semaphore.value().address();
+                }
             }
         };
 
