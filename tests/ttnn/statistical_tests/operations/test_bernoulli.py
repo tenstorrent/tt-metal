@@ -73,7 +73,6 @@ def run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=False, comput
 
         total_trials += num_trials_in_run
         total_successes += num_successes_in_run
-        time.sleep(1)  # Note: This sleep might not be necessary unless there's a specific hardware reason.
 
     logger.info(f"Total successes: {total_successes} out of {total_trials} total trials.")
     observed_prob = total_successes / total_trials if total_trials > 0 else 0
