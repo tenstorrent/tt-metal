@@ -28,8 +28,6 @@ public:
 
     bool hook_program(tt::tt_metal::Program* program) override;
 
-    bool hook_write_to_device(tt::tt_metal::Buffer* buffer) override;
-
     bool hook_write_to_device(const tt::tt_metal::Buffer* buffer) override;
 
     bool hook_read_from_device(tt::tt_metal::Buffer* buffer) override;

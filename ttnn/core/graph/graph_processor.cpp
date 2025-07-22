@@ -477,8 +477,6 @@ bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer) { return 
 
 bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(tt::tt_metal::Buffer* buffer) { return do_block; }
-
 bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* buffer) { return do_block; }
 
 bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* buffer) { return do_block; }
