@@ -87,8 +87,9 @@ public:
 private:
     chip_id_t device_id = 0;
     uint8_t num_hw_cqs = 0;
-    const std::function<void(uint32_t, uint32_t, uint8_t*)> fast_write_callable;
+    // const std::function<void(uint32_t, uint32_t, uint8_t*)> fast_write_callable;
     std::vector<uint32_t> completion_byte_addrs;
+    std::vector<Writer> completion_writers;
     char* cq_sysmem_start = nullptr;
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
