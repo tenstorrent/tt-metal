@@ -234,17 +234,17 @@ jobs:
         include:
           - workflow: "all-post-commit-workflows.yaml"
             name: "All Post Commit Workflows"
-            condition: ${{ needs.update-submodule.outputs.should-run-wormhole == 'true' }}
+            should-run: ${{ needs.update-submodule.outputs.should-run-wormhole }}
           - workflow: "blackhole-post-commit.yaml"
             name: "Blackhole Post Commit"
-            condition: ${{ needs.update-submodule.outputs.should-run-blackhole == 'true' }}
+            should-run: ${{ needs.update-submodule.outputs.should-run-blackhole }}
     steps:
       - name: Checkout
-        if: matrix.condition == 'true'
+        if: matrix.should-run == 'true'
         uses: actions/checkout@v4
 
       - name: Trigger and monitor workflow
-        if: matrix.condition == 'true'
+        if: matrix.should-run == 'true'
         env:
           GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
         run: |
@@ -517,7 +517,7 @@ jobs:
             if [ "${{ inputs.recheck_tests }}" = "true" ]; then
               WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
             else
-              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq --arg pr_created_at "$PR_CREATED_AT" 'map(select(.status == "completed" and .createdAt >= $pr_created_at)) | .[0] // empty' --repo "${{ github.repository }}")
+              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
             fi
 
             if [ "$WH_RUNS" != "empty" ]; then
@@ -537,7 +537,7 @@ jobs:
             if [ "${{ inputs.recheck_tests }}" = "true" ]; then
               BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
             else
-              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq --arg pr_created_at "$PR_CREATED_AT" 'map(select(.status == "completed" and .createdAt >= $pr_created_at)) | .[0] // empty' --repo "${{ github.repository }}")
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
             fi
 
             if [ "$BH_RUNS" != "empty" ]; then
