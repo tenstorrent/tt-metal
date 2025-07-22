@@ -381,6 +381,40 @@ TEST_P(NDShardingTensorSpecTests, TestTensorSpec) {
     EXPECT_EQ(tensor_spec.memory_config().nd_shard_spec().value().shard_shape, params.expected_shard_shape);
 }
 
+class NDShardingSqueezeRankStressTests : public ::testing::Test {};
+
+TEST_F(NDShardingSqueezeRankStressTests, TestSqueezeRankStress) {
+    std::function<void(const Shape&, std::vector<uint32_t>&, const std::function<void(const Shape&)>&)>
+        iterate_shapes_impl = [&](const Shape& upper_shape,
+                                  std::vector<uint32_t>& current_shape,
+                                  const std::function<void(const Shape&)>& callback) {
+            if (upper_shape.rank() == current_shape.size()) {
+                callback(Shape(current_shape));
+                return;
+            }
+
+            for (int val = 1; val <= upper_shape[current_shape.size()]; val++) {
+                current_shape.push_back(val);
+                iterate_shapes_impl(upper_shape, current_shape, callback);
+                current_shape.pop_back();
+            }
+        };
+    auto iterate_shapes = [&](const Shape& upper_shape, const std::function<void(const Shape&)>& callback) {
+        std::vector<uint32_t> tmp_shape;
+        iterate_shapes_impl(upper_shape, tmp_shape, callback);
+    };
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    iterate_shapes(Shape({4, 4, 4, 4}), [&](const Shape& tensor_shape) {
+        iterate_shapes(tensor_shape, [&](const Shape& shard_shape) {
+            BufferDistributionSpec dspec(tensor_shape, shard_shape, cores, ShardOrientation::ROW_MAJOR);
+            auto expected_page_mapping = detail::compute_page_mapping(tensor_shape, shard_shape, dspec.cores());
+            EXPECT_EQ(
+                dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
+        });
+    });
+}
+
 INSTANTIATE_TEST_SUITE_P(
     TensorShardingTests,
     NDShardingTests,
@@ -1198,6 +1232,12 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_pages = Shape({4, 4, 1, 1, 3, 2}),
             .expected_tensor_shape_pages = Shape({16, 25, 4, 6}),
             .expected_shard_shape_pages = Shape({16, 1, 3, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({5, 1, 11, 11}),
+            .shard_shape_pages = Shape({5, 1, 1}),
+            .expected_tensor_shape_pages = Shape({5, 121}),
+            .expected_shard_shape_pages = Shape({5, 1}),
         }));
 
 INSTANTIATE_TEST_SUITE_P(

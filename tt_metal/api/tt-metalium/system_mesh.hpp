@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -32,8 +33,11 @@ public:
     SystemMesh(SystemMesh&&) = delete;
     SystemMesh& operator=(SystemMesh&&) = delete;
 
-    // Returns the shape of the system mesh
-    const MeshShape& get_shape() const;
+    // Returns the shape of the system mesh; this is the global mesh shape in distributed context
+    const MeshShape& shape() const;
+
+    // Returns the local shape of the system mesh; this is the local mesh shape in distributed context
+    const MeshShape& local_shape() const;
 
     // Returns the physical device ID for a given logical coordinate
     int get_physical_device_id(const MeshCoordinate& coord) const;
@@ -45,7 +49,7 @@ public:
     MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
 
     // Returns the physical device IDs mapped to a MeshDevice
-    std::vector<int> get_mapped_physical_device_ids(
+    DistributedMeshContainer<int> get_mapped_physical_device_ids(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 

@@ -43,7 +43,8 @@ void write_socket_configs(
     const SocketPeerDescriptor& peer_descriptor,
     SocketEndpoint socket_endpoint);
 
-SocketPeerDescriptor generate_local_endpoint_descriptor(const MeshSocket& socket_endpoint);
+SocketPeerDescriptor generate_local_endpoint_descriptor(
+    const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
 
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,

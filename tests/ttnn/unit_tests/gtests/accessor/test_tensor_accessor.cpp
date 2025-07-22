@@ -30,6 +30,12 @@ template <typename T>
 constexpr T get_common_arg_val(size_t idx);
 
 constexpr uint32_t get_arg_val(int arg_idx);
+namespace tensor_accessor {
+uint64_t get_dram_bank_base_offset(uint32_t base_address, uint32_t bank_id, uint8_t noc);
+}
+
+static uint32_t my_x[1] = {0};
+static uint32_t my_y[1] = {0};
 
 #define noc_index 0
 #define ASSERT(condition, ...)
@@ -39,6 +45,8 @@ constexpr uint32_t get_arg_val(int arg_idx);
 #define DPRINT_DATA0(x) x
 #define DPRINT_DATA1(x) x
 #define DPRINT_MATH(x) x
+#define NOC_UNICAST_ADDR_X(addr) addr
+#define NOC_UNICAST_ADDR_Y(addr) addr
 #endif
 
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"

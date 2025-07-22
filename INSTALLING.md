@@ -21,10 +21,10 @@ Note the current compatibility matrix:
 | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
 | Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
-| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.15 or above      | N/A                            |
-| Wormhole             | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
-| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.2.5 or above, `mesh` config |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.18.0.0 (v80.18.0.0)             | v3.0.12 or above      | N/A                            |
+| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.6.0.fwbundle (v18.6.0)          | v3.0.20 or above      | N/A                            |
+| Wormhole             | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | N/A                            |
+| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | v1.2.5 or above, `mesh` config |
+| Blackhole            | Ubuntu 22.04    | 3.10     | v2.1.0 or above    | fw_pack-18.5.0.fwbundle (v18.5.0)          | v3.0.20 or above      | N/A                            |
 
 #### Install System-level Dependencies
 For Ubuntu users. You can use the script provided in our repo to install build and runtime dependencies along with a working copy of Clang 17.
@@ -237,9 +237,6 @@ ninja install # Installs to build directory by default, required for Python envi
 ./create_venv.sh
 source python_env/bin/activate
 ```
-
-- (optional) Software dependencies for profiling use:
-  - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
 
 - Continue to [You Are All Set!](#you-are-all-set)
 

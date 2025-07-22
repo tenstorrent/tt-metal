@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.pool.test_upsample import upsample_multicore_common
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -68,3 +69,72 @@ def test_bilinear_interleaved_memory(
     logger.info(pcc_message)
     allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
     assert allclose
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 640, 32, 32],
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("scale_h", [2])
+@pytest.mark.parametrize("scale_w", [2])
+@pytest.mark.parametrize(
+    "core_range",
+    [
+        [((0, 0), (4, 3))],
+    ],
+)
+def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_range):
+    (torch_result, output_tensor) = upsample_multicore_common(
+        device=device,
+        input_shape=input_shape,
+        scale_h=scale_h,
+        scale_w=scale_w,
+        shard_strategy=ttnn.ShardStrategy.BLOCK,
+        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        core_range=core_range,
+    )
+    ## compare the results
+    torch_result = torch_result.permute(0, 2, 3, 1)
+
+    isequal = torch.equal(output_tensor, torch_result)
+
+    assert isequal
+
+
+@pytest.mark.parametrize(
+    "input_shape, core_range, scale_h, scale_w, shard_strategy, shard_orientation",
+    [
+        [
+            [1, 1280, 32, 32],
+            [((0, 0), (4, 7))],
+            2,
+            2,
+            ttnn.ShardStrategy.BLOCK,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ],  # SDXL
+        [[1, 640, 64, 64], [((0, 0), (4, 7))], 2, 2, ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR],  # SDXL
+        [[1, 32, 8, 8], [((0, 0), (7, 7))], 1, 1, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR],
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 120}], indirect=True)
+def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, shard_strategy, shard_orientation):
+    if device.core_grid.y < 8:
+        pytest.skip("n300 does not have 8 cores on y axis")
+    (torch_result, output_tensor) = upsample_multicore_common(
+        device=device,
+        input_shape=input_shape,
+        scale_h=scale_h,
+        scale_w=scale_w,
+        shard_strategy=shard_strategy,
+        shard_orientation=shard_orientation,
+        core_range=core_range,
+    )
+    ## compare the results
+    torch_result = torch_result.permute(0, 2, 3, 1)
+
+    isequal = torch.equal(output_tensor, torch_result)
+
+    assert isequal
