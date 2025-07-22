@@ -82,6 +82,8 @@ class Generator:
 
             logger.info(f"Prefilling User {user_id + 1} up to {prefill_seq_len} tokens")
 
+            # Extracting data for the current user
+            # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
             prefill_ids = torch.cat(
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
