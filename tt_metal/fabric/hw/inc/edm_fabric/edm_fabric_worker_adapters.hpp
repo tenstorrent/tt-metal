@@ -70,7 +70,8 @@ struct WorkerToFabricEdmSenderImpl {
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
         uint8_t direction;
-        WorkerXY edm_worker_xy(0, 0);
+        uint8_t edm_worker_x;
+        uint8_t edm_worker_y;
         uint32_t edm_buffer_base_addr;
         uint8_t num_buffers_per_channel;
         uint32_t edm_l1_sem_id;
@@ -93,7 +94,8 @@ struct WorkerToFabricEdmSenderImpl {
             const auto conn = &connection_info->connections[eth_channel];
             const auto aligned_conn = &aligned_info[eth_channel];
             direction = conn->edm_direction;
-            edm_worker_xy = WorkerXY::from_uint32(conn->edm_noc_xy);
+            edm_worker_x = conn->edm_noc_x;
+            edm_worker_y = conn->edm_noc_y;
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
             edm_l1_sem_id = conn->edm_l1_sem_addr;
@@ -107,7 +109,9 @@ struct WorkerToFabricEdmSenderImpl {
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
             direction = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
-            edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+            auto edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+            edm_worker_x = edm_worker_xy.x;
+            edm_worker_y = edm_worker_xy.y;
             edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
             num_buffers_per_channel = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
@@ -131,8 +135,8 @@ struct WorkerToFabricEdmSenderImpl {
         return WorkerToFabricEdmSenderImpl(
             is_persistent_fabric,
             direction,
-            edm_worker_xy.x,
-            edm_worker_xy.y,
+            edm_worker_x,
+            edm_worker_y,
             edm_buffer_base_addr,
             num_buffers_per_channel,
             edm_l1_sem_id,

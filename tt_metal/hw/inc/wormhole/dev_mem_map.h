@@ -107,9 +107,9 @@
 
 // Tensix fabric connection metadata for workers
 #define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
-#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 720  // sizeof(tensix_fabric_connections_l1_info_t)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 688  // sizeof(tensix_fabric_connections_l1_info_t)
 #define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO \
-    464  // offsetof(tensix_fabric_connections_l1_info_t, aligned_connections)
+    432  // offsetof(tensix_fabric_connections_l1_info_t, aligned_connections)
 #if (MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 != 0) || (MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 != 0)
 #error "Tensix fabric connections base and size must be 16-byte aligned"
 #endif

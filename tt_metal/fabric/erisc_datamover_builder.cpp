@@ -809,7 +809,8 @@ void append_worker_to_fabric_edm_sender_rt_args(
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
     auto& connection_info = fabric_connections.connections[eth_channel];
     connection_info.edm_direction = connection.edm_direction;
-    connection_info.edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y).to_uint32();
+    connection_info.edm_noc_x = connection.edm_noc_x;
+    connection_info.edm_noc_y = connection.edm_noc_y;
     connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
     connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
     connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;

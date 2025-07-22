@@ -100,7 +100,8 @@ constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
 struct fabric_connection_info_t {
     uint8_t edm_direction;
-    uint32_t edm_noc_xy;  // packed x,y coordinates
+    uint8_t edm_noc_x;
+    uint8_t edm_noc_y;
     uint32_t edm_buffer_base_addr;
     uint8_t num_buffers_per_channel;
     uint32_t edm_l1_sem_addr;
@@ -110,7 +111,7 @@ struct fabric_connection_info_t {
     uint32_t buffer_index_semaphore_id;
 } __attribute__((packed));
 
-static_assert(sizeof(fabric_connection_info_t) == 28, "Struct size mismatch!");
+static_assert(sizeof(fabric_connection_info_t) == 26, "Struct size mismatch!");
 
 struct fabric_aligned_connection_info_t {
     // 16-byte aligned semaphore address for flow control
@@ -127,9 +128,9 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t aligned_connections[MAX_FABRIC_ENDPOINTS];
 };
 
-static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 720, "Struct size mismatch!");
+static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 688, "Struct size mismatch!");
 static_assert(
-    offsetof(tensix_fabric_connections_l1_info_t, aligned_connections) == 464,
+    offsetof(tensix_fabric_connections_l1_info_t, aligned_connections) == 432,
     "Aligned connections offset must be 672 bytes!");
 static_assert(sizeof(tensix_fabric_connections_l1_info_t) % 16 == 0, "Struct size must be 16-byte aligned!");
 
