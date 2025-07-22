@@ -55,6 +55,8 @@ FORCE_INLINE void read_window_with_top_left_index(
             cb_push_back(in_cb_id, 1);
         }
     } else {
+        DPRINT << "in_nbytes_leftover" << in_nbytes_leftover << ENDL();
+        DPRINT << "in_nbytes_c" << in_nbytes_c << ENDL();
         cb_reserve_back(in_cb_id, 1);
         uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
         for (uint32_t h = 0; h < window_h; ++h) {
@@ -271,12 +273,12 @@ void kernel_main() {
             in_cb_id,
             MAX_BYTES_PER_REDUCTION,
             full_dest_width,
-            in_nbytes_leftover,
+            in_aligned_nbytes_c,
             clear_value_cb_id,
             leftover_num_tiles,
             window_h,
             window_w,
             in_w_padded,
-            in_nbytes_c>(clear_value_addr, in_l1_read_base_addr, 0);
+            in_nbytes_padded_c>(clear_value_addr, in_l1_read_base_addr, 0);
     }
 }  // kernel_main()
