@@ -59,7 +59,7 @@ def test_llama_tg_ops_perf_device(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-min", measured_min)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
     expected_results = check_device_perf(post_processed_results, perf_margin, expected_perf_cols, assert_on_fail=True)
