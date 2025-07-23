@@ -8,44 +8,41 @@
 
 void __attribute__((noinline)) Application();
 
-static volatile std::jmp_buf gJumpBuf;
+__attribute__((section(".noinit"))) static std::jmp_buf gJumpBuf;
 
 [[gnu::noreturn]] static void return_to_base_fw() {
     // NOLINTNEXTLINE(cert-err52-cpp)
-    longjmp(const_cast<std::jmp_buf&>(gJumpBuf), 1);
+    longjmp(gJumpBuf, 1);
     __builtin_unreachable();
 }
 
 // Pointer to exit routine, (so it may be called from a kernel).  USED
 // attribute is needed to keep this as an symbol that kernels may
 // use. (Because we LTO the firmware, it would otherwise look
-// removable.)
+// removable.). Only valid when watcher is enabled.
 [[gnu::noreturn, gnu::used]] void (*erisc_exit)() = return_to_base_fw;
 
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 
 extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
-    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
-    for (int i = 0; i < 32; i++) {
-        debug_dump_addr[i] = 0;
-    }
     extern uint32_t __ldm_bss_start[];
     extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);
     erisc_exit = return_to_base_fw;
 
 #if defined(WATCHER_ENABLED)
-    std::jmp_buf jump_buf;
     // NOLINTNEXTLINE(cert-err52-cpp)
-    if (setjmp(jump_buf) == 0) {
-        memcpy(const_cast<std::jmp_buf&>(gJumpBuf), jump_buf, sizeof(jump_buf));
-        Application();
+    if (setjmp(gJumpBuf)) {
+        // Returned from the longjmp
+        return;
     }
+    Application();
 #else
     // Long jumps are not needed when watcher is disabled
     Application();
 #endif
 
+    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
     // Dump values to debug buffer
     // NOLINTNEXTLINE(hicpp-no-assembler)
     __asm__ volatile(
