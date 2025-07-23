@@ -199,4 +199,5 @@ TEST_F(InitTests, ModelInitBench) {
         "/home/j/worktrees/parallel_init/tt-train/configs/training_shakespeare_tinyllama.yaml", "tinyllama");
     fmt::println("nanollama: {}ms", nanollama_time);
     fmt::println("tinyllama: {}ms", tinyllama_time);
+    ttml::autograd::ctx().close_device();
 }
