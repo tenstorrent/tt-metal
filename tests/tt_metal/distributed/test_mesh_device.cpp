@@ -44,10 +44,10 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
     });
 }
 
-using MeshDeviceT3000Test = T3000MeshDeviceFixture;
+using MeshDevice2x4Test = MeshDevice2x4Fixture;
 using MeshDeviceTest = GenericMeshDeviceFixture;
 
-TEST_F(MeshDeviceT3000Test, SystemMeshTearDownWithoutClose) {
+TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
     auto& sys = SystemMesh::instance();
 
     const auto system_shape = sys.shape();
@@ -56,7 +56,7 @@ TEST_F(MeshDeviceT3000Test, SystemMeshTearDownWithoutClose) {
     EXPECT_EQ(system_shape[1], 4);
 }
 
-TEST_F(MeshDeviceT3000Test, MemoryAllocationStatistics) {
+TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
     auto stats = mesh_device_->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
     for (auto* device : mesh_device_->get_devices()) {
         auto device_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
@@ -64,7 +64,7 @@ TEST_F(MeshDeviceT3000Test, MemoryAllocationStatistics) {
     }
 }
 
-TEST_F(MeshDeviceT3000Test, ViewIs2D) {
+TEST_F(MeshDevice2x4Test, ViewIs2D) {
     std::vector<IDevice*> devices = mesh_device_->get_devices();
 
     MeshContainer<IDevice*> container_1d(MeshShape(8), devices);
@@ -80,7 +80,7 @@ TEST_F(MeshDeviceT3000Test, ViewIs2D) {
     EXPECT_FALSE(view_3d.is_mesh_2d());
 }
 
-TEST_F(MeshDeviceT3000Test, CreateSubmeshInvalidConfig) {
+TEST_F(MeshDevice2x4Test, CreateSubmeshInvalidConfig) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
 
     EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{1, 3}, MeshCoordinate{1}));
@@ -89,7 +89,7 @@ TEST_F(MeshDeviceT3000Test, CreateSubmeshInvalidConfig) {
     EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{2, 4, 1}, MeshCoordinate{0, 0}));
 }
 
-TEST_F(MeshDeviceT3000Test, CreateSubmesh) {
+TEST_F(MeshDevice2x4Test, CreateSubmesh) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
     EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
     EXPECT_TRUE(mesh_device_->is_parent_mesh());
@@ -108,12 +108,12 @@ TEST_F(MeshDeviceT3000Test, CreateSubmesh) {
     EXPECT_EQ(submesh->get_device(MeshCoordinate{1, 1}), nullptr);
 }
 
-TEST_F(MeshDeviceT3000Test, CreateSubmeshesNonDivisibleSubshape) {
+TEST_F(MeshDevice2x4Test, CreateSubmeshesNonDivisibleSubshape) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
     EXPECT_ANY_THROW(mesh_device_->create_submeshes(MeshShape{1, 3}));
 }
 
-TEST_F(MeshDeviceT3000Test, CreateSubmeshes) {
+TEST_F(MeshDevice2x4Test, CreateSubmeshes) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
 
     auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 2});
