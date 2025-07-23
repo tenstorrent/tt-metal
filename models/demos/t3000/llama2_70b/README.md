@@ -12,6 +12,7 @@ Read more about llama2_70b at [llama.com/llama2](https://www.llama.com/llama2/).
 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- The host machine must have at least 512 GB of memory.
 
 ## How to Run
 
@@ -84,7 +85,6 @@ Supported context lengths and batch sizes for the Llama2-70B demo are as follows
 
 - **Input File:** Uses `./demo/data/multi_prompt.json`.
 - **Model Configuration:** Utilizes a pretrained model.
-- **Hardware Requirements:** Runs on an 8-chip T3000 machine using tensor parallelism. The host machine must have at least 512 GB of memory.
 - **Demo arguments:**
     - `context: [short_context, long_context]`: Select between short context (batch 32, sequence_length 2k) and long context (batch 16, sequence length 8k)
     - `ground_truth: [check_disabled, check_enabled]`: Enable or disable ground truth checking, used for testing
