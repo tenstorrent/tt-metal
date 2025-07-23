@@ -3207,6 +3207,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
 
+    mm_kernel_defines["FUSE_ACTIVATION"] = "0";
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
@@ -3298,7 +3299,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     // bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/sparse_bmm_large_block_zm_fused_mul.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores_with_work,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
