@@ -7,7 +7,7 @@ import torch
 import transformers
 from datasets import load_dataset
 from loguru import logger
-from transformers import AutoFeatureExtractor, WhisperConfig, WhisperModel
+from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
@@ -57,6 +57,8 @@ def test_whisper_attention(
         num_heads=config.encoder_attention_heads,
         dropout=config.attention_dropout,
         is_decoder=is_decode,
+        layer_idx=0,
+        config=config,
     ).eval()
 
     if use_encoder_states:
@@ -83,6 +85,7 @@ def test_whisper_attention(
 
     past_key_values = None
     if use_kv_cache:
+        past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
         kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512, n_layers=1)[0]
         current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
         generation_length = 5
@@ -105,15 +108,15 @@ def test_whisper_attention(
             torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        torch_output, _, past_key_values = model(
+        torch_output, _, present_key_values = model(
             torch_hidden_states,
             attention_mask=torch_attention_mask,
             key_value_states=torch_encoder_states,
             past_key_value=past_key_values,
         )
         if is_decode and use_kv_cache:
-            past_keys = past_key_values[0]
-            past_values = past_key_values[1]
+            past_keys = present_key_values.key_cache
+            past_values = present_key_values.value_cache
 
         output = ttnn_model.whisper_attention(
             config,
@@ -137,13 +140,13 @@ def test_whisper_attention(
             k_cache = ttnn.to_torch(kv_cache[0])[:, :, : (i + 1), :]
             v_cache = ttnn.to_torch(kv_cache[1])[:, :, : (i + 1), :]
 
-            pcc_passed, k_cache_pcc = comp_pcc(past_keys, k_cache, expec_k_cache_pcc)
+            pcc_passed, k_cache_pcc = comp_pcc(past_keys[0], k_cache, expec_k_cache_pcc)
             logger.info(f"[pos={i}] K Cache PCC: {k_cache_pcc}")
             if not pcc_passed:
                 does_pass = False
                 logger.warning(f"[pos={i}] K Cache PCC {k_cache_pcc} is lower than {expec_k_cache_pcc}")
 
-            pcc_passed, v_cache_pcc = comp_pcc(past_values, v_cache, expec_v_cache_pcc)
+            pcc_passed, v_cache_pcc = comp_pcc(past_values[0], v_cache, expec_v_cache_pcc)
             logger.info(f"[pos={i}] V Cache PCC: {v_cache_pcc}")
             if not pcc_passed:
                 does_pass = False
