@@ -18,6 +18,7 @@ void disable_erisc_app();
 
 // Pointer to exit routine, (so it may be called from a kernel).
 [[gnu::noreturn]] extern void (*erisc_exit)();
+
 #endif
 
 inline uint32_t debug_get_which_riscv() {
@@ -25,16 +26,10 @@ inline uint32_t debug_get_which_riscv() {
     return DebugBrisc;
 #elif defined(COMPILE_FOR_NCRISC)
     return DebugNCrisc;
-#elif (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0)
-    return DebugErisc;
-#elif (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1)
-    return DebugSubordinateErisc;
-#elif (defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0)
-    return DebugIErisc;
-#elif (defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1)
-    return DebugSubordinateIErisc;
 #elif defined(COMPILE_FOR_ERISC)
     return DebugErisc;
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+    return DebugIErisc;
 #else
     return DebugTrisc0 + COMPILE_FOR_TRISC;
 #endif

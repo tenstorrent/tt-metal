@@ -106,19 +106,12 @@ TEST_F(DPrintFixture, ActiveEthTestPrint) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
-            log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
-            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
-            this->RunTestOnDevice(
-                [=](DPrintFixture *fixture, IDevice* device){
-                    CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true, dm_processor);
-                },
-                device
-            );
-        }
+        this->RunTestOnDevice(
+            [](DPrintFixture *fixture, IDevice* device){
+                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true);
+            },
+            device
+        );
     }
 }
 TEST_F(DPrintFixture, IdleEthTestPrint) {
@@ -132,15 +125,13 @@ TEST_F(DPrintFixture, IdleEthTestPrint) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-            tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
-        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
-            log_info(tt::LogTest, "Test idle ethernet DM{}", erisc_idx);
-            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
-
+        this->RunTestOnDevice(
+            [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false); },
+            device);
+        if (device->arch() == ARCH::BLACKHOLE) {
             this->RunTestOnDevice(
-                [=](DPrintFixture* fixture, IDevice* device) {
-                    CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false, dm_processor);
+                [](DPrintFixture* fixture, IDevice* device) {
+                    CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false, DataMovementProcessor::RISCV_1);
                 },
                 device);
         }

@@ -190,7 +190,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150-viommu",
+          "N150",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
@@ -212,7 +212,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150-viommu",
+          "N150",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
