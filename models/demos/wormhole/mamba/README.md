@@ -1,10 +1,19 @@
-# Mamba
+# Mamba-2.8b
 
-## Inference Demo
+## Platforms:
+    Wormhole (n150, n300)
 
-This demo is designed to run Mamba-2.8b on  a `wormhole_b0` card and generate outputs for a set of prompts. We used finetuned version [state-spaces/mamba-2.8b-slimpj](https://huggingface.co/state-spaces/mamba-2.8b-slimpj) for quality outputs. Follow the instructions below to run the demo successfully.
+## Introduction
 
-### How to Run
+This demo is designed to run Mamba-2.8b and generate outputs for a set of prompts. It uses the finetuned version [state-spaces/mamba-2.8b-slimpj](https://huggingface.co/state-spaces/mamba-2.8b-slimpj) for quality outputs.
+
+## Prerequisites
+
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+
+
+## How to Run
 
 To get the best performance during decode we can use the 8x8 core grid. To enable it run the following command:
 
@@ -30,7 +39,9 @@ The prefill graph is not currently integrated into the demo. Therefore we curren
 
 ---
 
-## Unit Tests
+## Testing
+
+### Unit Tests
 
 These unit tests are designed to test the Mamba model and its components. The tests are written using the `pytest` framework.
 
@@ -39,25 +50,25 @@ These unit tests are designed to test the Mamba model and its components. The te
 cd tt-metal
 ```
 
-### SSM Block
+#### SSM Block
 
 ```
 pytest -svv models/demos/wormhole/mamba/tests/test_mamba_ssm.py
 ```
 
-### Mamba Block
+#### Mamba Block
 
 ```
 pytest -svv models/demos/wormhole/mamba/tests/test_mamba_block.py
 ```
 
-### Residual Block
+#### Residual Block
 
 ```
 pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py
 ```
 
-### Full Model
+#### Full Model
 
 Note : input embedding layer and TopK are on CPU
 
@@ -65,18 +76,18 @@ Note : input embedding layer and TopK are on CPU
 pytest -svv models/demos/wormhole/mamba/tests/test_mamba_model.py::test_inference
 ```
 
-## Performance Tests
+### Performance Tests
 
 These tests are designed to evaluate device-side and host performance of Mamba model. The tests are written using the `pytest` framework.
 **Navigate to the `tt-metal` directory**
 
-### End-to-End Model Performance
+#### End-to-End Model Performance
 
 ```bash
 pytest -svv models/demos/wormhole/mamba/tests/test_mamba_perf.py -m models_performance_bare_metal
 ```
 
-### Device-Side Performance
+#### Device-Side Performance
 
 Build with profiler support enabled (use the build script `./build_metal.sh --enable-profiler`) and run the following command to test device-side performance:
 
