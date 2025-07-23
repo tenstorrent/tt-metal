@@ -32,7 +32,6 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& src_shape{src_tensor.logical_shape()};
     const uint32_t input_rank{input_shape.rank()};
     const uint32_t index_rank{index_shape.rank()};
-    const uint32_t src_rank{src_shape.rank()};
 
     TT_FATAL(
         index_shape == src_shape,
@@ -75,8 +74,8 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
     return TensorSpec{
-        tensor_args.input_tensor.get_logical_shape(),
-        TensorLayout{tensor_args.input_tensor.get_dtype(), PageConfig{Layout::ROW_MAJOR}, args.output_memory_config}};
+        tensor_args.input_tensor.logical_shape(),
+        TensorLayout{tensor_args.input_tensor.dtype(), PageConfig{Layout::ROW_MAJOR}, args.output_memory_config}};
 }
 
 ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_output_tensors(

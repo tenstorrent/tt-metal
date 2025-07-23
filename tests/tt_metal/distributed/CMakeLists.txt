@@ -6,6 +6,7 @@ target_sources(
         test_control_plane_local_mesh_binding.cpp
         test_end_to_end_eltwise.cpp
         test_distributed_host_buffer.cpp
+        test_maybe_remote.cpp
         test_mesh_buffer.cpp
         test_mesh_coord.cpp
         test_mesh_device.cpp

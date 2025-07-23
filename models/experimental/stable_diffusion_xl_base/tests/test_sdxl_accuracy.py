@@ -13,9 +13,11 @@ import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 import json
+from models.utility_functions import profiler
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
+OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -44,30 +46,18 @@ def test_accuracy_sdxl(
 ):
     start_from, num_prompts = evaluation_range
 
-    assert (
-        0 <= start_from < 5000 and start_from + num_prompts <= 5000
-    ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
-
-    prompts = []
-
-    if not os.path.isfile(captions_path):
-        logger.info(f"File {captions_path} not found. Downloading...")
-        os.makedirs(os.path.dirname(captions_path), exist_ok=True)
-        urllib.request.urlretrieve(COCO_CAPTIONS_DOWNLOAD_PATH, captions_path)
-        logger.info("Download complete.")
-
-    with open(captions_path, "r") as tsv_file:
-        reader = csv.reader(tsv_file, delimiter="\t")
-        next(reader)
-        for row in reader:
-            prompts.append(row[2])
+    prompts = sdxl_get_prompts(
+        captions_path,
+        start_from,
+        num_prompts,
+    )
 
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     images = test_demo(
         mesh_device,
         is_ci_env,
-        prompts[start_from : start_from + num_prompts],
+        prompts,
         num_inference_steps,
         vae_on_device,
         evaluation_range,
@@ -108,6 +98,15 @@ def test_accuracy_sdxl(
             {
                 "device": "N150",
                 "model": "sdxl",
+                "average_denoising_time": profiler.get("denoising_loop"),
+                "average_vae_time": profiler.get("vae_decode"),
+                "average_inference_time": profiler.get("denoising_loop") + profiler.get("vae_decode"),
+                "min_inference_time": min(
+                    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
+                ),
+                "max_inference_time": max(
+                    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
+                ),
                 "average_clip": average_clip_score,
                 "deviation_clip": deviation_clip_score,
                 "fid_score": fid_score,
@@ -115,10 +114,39 @@ def test_accuracy_sdxl(
         ],
     }
 
-    out_root, file_name = "test_reports", "sdxl_test_results.json"
-    os.makedirs(out_root, exist_ok=True)
+    os.makedirs(OUT_ROOT, exist_ok=True)
 
-    with open(f"{out_root}/{file_name}", "w") as f:
+    with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:
         json.dump(data, f, indent=4)
 
-    logger.info(f"Test results saved to {out_root}/{file_name}")
+    logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
+
+
+def sdxl_get_prompts(
+    captions_path,
+    start_from,
+    num_prompts,
+):
+    assert (
+        0 <= start_from < 5000 and start_from + num_prompts <= 5000
+    ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
+
+    prompts = []
+
+    if not os.path.isfile(captions_path):
+        logger.info(f"File {captions_path} not found. Downloading...")
+        os.makedirs(os.path.dirname(captions_path), exist_ok=True)
+        urllib.request.urlretrieve(COCO_CAPTIONS_DOWNLOAD_PATH, captions_path)
+        logger.info("Download complete.")
+
+    with open(captions_path, "r") as tsv_file:
+        reader = csv.reader(tsv_file, delimiter="\t")
+        next(reader)
+        for index, row in enumerate(reader):
+            if index < start_from:
+                continue
+            if index >= start_from + num_prompts:
+                break
+            prompts.append(row[2])
+
+    return prompts

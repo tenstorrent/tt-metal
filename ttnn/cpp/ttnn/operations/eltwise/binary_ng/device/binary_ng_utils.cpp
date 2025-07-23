@@ -166,8 +166,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             break;
         case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
         case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
-        case BinaryOpType::GTE: postprocess = unary::UnaryOpType::GEZ; break;
-        case BinaryOpType::LTE: postprocess = unary::UnaryOpType::LEZ; break;
+        case BinaryOpType::GE: postprocess = unary::UnaryOpType::GEZ; break;
+        case BinaryOpType::LE: postprocess = unary::UnaryOpType::LEZ; break;
         case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
         case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
         // (a-b)**2
@@ -242,6 +242,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
         case BinaryOpType::RIGHT_SHIFT:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::RIGHT_SHIFT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::LOGICAL_RIGHT_SHIFT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGICAL_RIGHT_SHIFT;
             } else {
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
@@ -353,6 +360,14 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"binary_shift_tile_init();", "binary_right_shift_int32_tile"};
             } else {
                 return {"binary_shift_tile_init();", "binary_right_shift_tile"};
+            }
+        case LOGICAL_RIGHT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_tile"};
             }
         case BITWISE_AND:
             if (dtype == DataType::UINT16) {

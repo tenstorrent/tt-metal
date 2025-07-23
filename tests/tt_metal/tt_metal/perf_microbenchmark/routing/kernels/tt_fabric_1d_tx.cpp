@@ -24,10 +24,11 @@ constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
 uint32_t target_address = get_compile_time_arg_val(2);
-constexpr bool is_2d_fabric = get_compile_time_arg_val(3);
-constexpr bool use_dynamic_routing = get_compile_time_arg_val(4);
-constexpr bool is_chip_multicast = get_compile_time_arg_val(5);
-constexpr bool additional_dir = get_compile_time_arg_val(6);
+constexpr bool use_dram_dst = get_compile_time_arg_val(3);
+constexpr bool is_2d_fabric = get_compile_time_arg_val(4);
+constexpr bool use_dynamic_routing = get_compile_time_arg_val(5);
+constexpr bool is_chip_multicast = get_compile_time_arg_val(6);
+constexpr bool additional_dir = get_compile_time_arg_val(7);
 
 inline void setup_header_routing_1d(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, uint32_t start_distance, uint32_t range) {
@@ -106,6 +107,37 @@ inline void setup_header_noc_unicast_write(
         NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, dest_addr)}, packet_payload_size_bytes);
 }
 
+inline void setup_header_noc_unicast_write_dram(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t packet_payload_size_bytes,
+    uint32_t dest_addr,
+    uint32_t dest_bank_id) {
+    packet_header->to_noc_unicast_write(
+        NocUnicastCommandHeader{get_noc_addr_from_bank_id<true>(dest_bank_id, dest_addr)}, packet_payload_size_bytes);
+}
+
+inline void setup_header_noc_unicast_atomic_inc(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t notification_mailbox_address,
+    uint8_t noc_x_start,
+    uint8_t noc_y_start) {
+    packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+        get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+        1 /* increment value */,
+        std::numeric_limits<uint16_t>::max(),
+        true /*flush*/});
+}
+
+inline void send_notification(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, tt::tt_fabric::WorkerToFabricEdmSender& connection) {
+    // Notify mailbox that the packets have been sent
+    connection.wait_for_empty_write_slot();
+#ifdef TEST_ENABLE_FABRIC_TRACING
+    RECORD_FABRIC_HEADER(packet_header);
+#endif
+    connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+
 inline void send_packet(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t source_l1_buffer_address,
@@ -150,10 +182,22 @@ void kernel_main() {
     // routing info
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t fwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++); // for 1d only
-    uint32_t fwd_range = get_arg_val<uint32_t>(rt_args_idx++);  // for multicast only
-    uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);   // for 2d unicast only
-    uint32_t fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);  // for 2d unicast only
+    uint32_t fwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++);  // for 1d only
+    uint32_t fwd_range = get_arg_val<uint32_t>(rt_args_idx++);           // for multicast only
+    uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);          // for 2d unicast only
+    uint32_t fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);         // for 2d unicast only
+
+    // DRAM destination args
+    uint32_t dest_bank_id;
+    uint32_t dest_dram_addr;
+    uint32_t notification_mailbox_address;
+
+    if constexpr (use_dram_dst) {
+        dest_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
+        dest_dram_addr = get_arg_val<uint32_t>(rt_args_idx++);
+        notification_mailbox_address = get_arg_val<uint32_t>(rt_args_idx++);
+    }
+
     uint32_t bwd_start_distance;
     uint32_t bwd_range;
     uint32_t bwd_dev_id;
@@ -191,10 +235,10 @@ void kernel_main() {
     /***************** setup bawkward dir *****************/
     if constexpr (additional_dir) {
         // routing info for additional direction
-        bwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++); // for 1d only
-        bwd_range = get_arg_val<uint32_t>(rt_args_idx++);  // for multicast only
-        bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);   // for 2d unicast only
-        bwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);  // for 2d unicast only
+        bwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++);  // for 1d only
+        bwd_range = get_arg_val<uint32_t>(rt_args_idx++);           // for multicast only
+        bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);          // for 2d unicast only
+        bwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);         // for 2d unicast only
 
         bwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -231,12 +275,26 @@ void kernel_main() {
 #ifndef BENCHMARK_MODE
         time_seed = prng_next(time_seed);
 
-        setup_header_noc_unicast_write(
-            fwd_packet_header, packet_payload_size_bytes, target_address, noc_x_start, noc_y_start);
+        if constexpr (use_dram_dst) {
+            // Calculate current DRAM destination address for this packet
+            uint32_t current_dram_addr = dest_dram_addr + (i * packet_payload_size_bytes);
 
-        if constexpr (additional_dir) {
+            setup_header_noc_unicast_write_dram(
+                fwd_packet_header, packet_payload_size_bytes, current_dram_addr, dest_bank_id);
+
+            if constexpr (additional_dir) {
+                setup_header_noc_unicast_write_dram(
+                    bwd_packet_header, packet_payload_size_bytes, current_dram_addr, dest_bank_id);
+            }
+        } else {
             setup_header_noc_unicast_write(
-                bwd_packet_header, packet_payload_size_bytes, target_address, noc_x_start, noc_y_start);
+                fwd_packet_header, packet_payload_size_bytes, target_address, noc_x_start, noc_y_start);
+
+            if constexpr (additional_dir) {
+                setup_header_noc_unicast_write(
+                    bwd_packet_header, packet_payload_size_bytes, target_address, noc_x_start, noc_y_start);
+            }
+            target_address += packet_payload_size_bytes;
         }
 #endif
 
@@ -253,13 +311,26 @@ void kernel_main() {
                 time_seed,
                 bwd_fabric_connection);
         }
-#ifndef BENCHMARK_MODE
-        target_address += packet_payload_size_bytes;
-#endif
+    }
+
+    /* Use atomic increment to flush writes for simplicity*/
+    if constexpr (use_dram_dst) {
+        // Ensure all DRAM packets are written before sending notification
+        noc_async_write_barrier();
+
+        // Send notification that packets have been sent
+        setup_header_noc_unicast_atomic_inc(fwd_packet_header, notification_mailbox_address, noc_x_start, noc_y_start);
+        if constexpr (additional_dir) {
+            setup_header_noc_unicast_atomic_inc(
+                bwd_packet_header, notification_mailbox_address, noc_x_start, noc_y_start);
+        }
+        send_notification(fwd_packet_header, fwd_fabric_connection);
+        if constexpr (additional_dir) {
+            send_notification(bwd_packet_header, bwd_fabric_connection);
+        }
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-
     teardown_connection(fwd_fabric_connection);
     if constexpr (additional_dir) {
         teardown_connection(bwd_fabric_connection);

@@ -7,8 +7,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -34,25 +36,6 @@ using namespace tt::constants;
 namespace ttnn {
 
 using namespace ccl;
-
-void append_fabric_connection_rt_args(
-    const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& connection,
-    const CoreCoord& core,
-    tt::tt_metal::Program& program,
-    std::vector<uint32_t>& writer_rt_args) {
-    writer_rt_args.push_back(connection.has_value());
-    if (connection.has_value()) {
-        auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
-        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
-        auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
-        append_worker_to_fabric_edm_sender_rt_args(
-            connection.value(),
-            sender_worker_flow_control_semaphore_id,
-            sender_worker_teardown_semaphore_id,
-            sender_worker_buffer_index_semaphore_id,
-            writer_rt_args);
-    }
-}
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved(
     const Tensor& input_tensor,
@@ -110,8 +93,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_layout = output_tensor.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor.layout();
-    const auto& input_tensor_shape = input_tensor.get_padded_shape();
-    const auto& output_tensor_shape = output_tensor.get_padded_shape();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
+    const auto& output_tensor_shape = output_tensor.padded_shape();
 
     auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
@@ -166,14 +149,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
 
-    // scatter-write currently only supports 2 distinct noc addresses
-    uint32_t max_target_noc_addresses_per_packet = 2;
+    // scatter-write currently only supports 2 distinct noc addresses, and is only supported for wormhole
+    uint32_t max_target_noc_addresses_per_packet = 1;
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0) {
+        max_target_noc_addresses_per_packet = 2;
+    }
 
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t cb_num_pages = 3 * num_tiles_to_write_per_packet;  // triple buffering
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
     uint32_t sender_forward_cb_index = tt::CB::c_in0;
@@ -542,7 +528,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool use_optimal_ccl_for_llama = false) {
     tt::tt_metal::Program program{};
 
     IDevice* mesh_device = input_tensor.mesh_device();
@@ -571,7 +558,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
+        use_optimal_ccl_for_llama ? llama_specific::get_custom_worker_core_placement(num_links * num_workers_per_link)
+                                  : choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();

@@ -29,7 +29,6 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     uint32_t seq_len = input_tensor.padded_shape()[-2];
-    uint32_t B = input_tensor.padded_shape()[0];
     uint32_t X = input_tensor.padded_shape()[-1];
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin dims must match");

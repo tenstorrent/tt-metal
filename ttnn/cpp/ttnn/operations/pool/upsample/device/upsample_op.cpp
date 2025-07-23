@@ -89,13 +89,16 @@ operation::ProgramWithCallbacks UpSample::create_program(
             } else if (mode_ == "nearest") {
                 return upsample_multi_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
             } else {
-                TT_THROW("Unsupported mode");
+                TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
             }
         case UpSampleParallelizationStrategy::SINGLE_CORE:
             if (mode_ == "nearest") {
                 return upsample_single_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            } else if (mode_ == "bilinear") {
+                // With autosharding added this case should never be entered
+                TT_THROW("Unsupported mode: Bilinear mode is only supported on multi core");
             } else {
-                TT_THROW("Unsupported mode");
+                TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
             }
     };
     return upsample_single_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);

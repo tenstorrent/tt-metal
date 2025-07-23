@@ -1,4 +1,4 @@
-name: Uplift LLK Submodule (Simplified)
+name: Uplift LLK Submodule
 
 on:
   workflow_dispatch:

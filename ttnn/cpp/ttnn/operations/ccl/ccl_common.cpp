@@ -202,6 +202,13 @@ RingTopology::RingTopology(
         if (!is_linear || ring_index != ring_size - 1) {
             uint32_t receiver_device = receiver_device_id.value();
             auto const& sockets = device->get_ethernet_sockets(receiver_device);
+            TT_FATAL(
+                sender_socket_idx < sockets.size(),
+                "Sender socket index out of bounds. Device {} has {} ethernet cores but tried to access core at "
+                "index {}",
+                device->id(),
+                sockets.size(),
+                sender_socket_idx);
             auto eth_sender_core = sockets.at(sender_socket_idx);
             eth_sender_cores.push_back(eth_sender_core);
             log_trace(tt::LogOp, "\teth_sender_core on link {}: (x={},y={})", l, eth_sender_core.x, eth_sender_core.y);
@@ -209,6 +216,13 @@ RingTopology::RingTopology(
         if (!is_linear || ring_index != 0) {
             uint32_t sender_device = sender_device_id.value();
             auto const& sockets = device->get_ethernet_sockets(sender_device);
+            TT_FATAL(
+                receiver_socket_idx < sockets.size(),
+                "Receiver socket index out of bounds. Device {} has {} ethernet cores but tried to access core at "
+                "index {}",
+                device->id(),
+                sockets.size(),
+                receiver_socket_idx);
             auto eth_receiver_core = sockets.at(receiver_socket_idx);
             eth_receiver_cores.push_back(eth_receiver_core);
             log_trace(

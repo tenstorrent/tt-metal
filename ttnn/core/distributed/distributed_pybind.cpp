@@ -643,18 +643,22 @@ void py_module(py::module& module) {
                 Tensor: The aggregated tensor.
             )doc");
     module.def(
-        "aggregate_as_tensor",
-        [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
+        "from_host_shards",
+        [](const std::vector<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
+            return from_host_shards(tensors, mesh_shape);
+        },
         py::arg("tensors"),
+        py::arg("mesh_shape"),
         py::kw_only(),
         R"doc(
-            Aggregates a set of shards into one tensor. Device shards will remain on device and be packed into a multidevice storage object.
+            Creates a multi-device host tensor from a set of individual host shards.
 
             Args:
-                tensor (Tensor): The tensor to aggregate.
+                tensors (List[Tensor]): The tensor shards to aggregate.
+                mesh_shape (MeshShape): The shape of the mesh to aggregate the shards over.
 
             Returns:
-                Tensor: The aggregated tensor.
+                Tensor: The multi-device host tensor.
             )doc");
     module.def(
         "combine_device_tensors",

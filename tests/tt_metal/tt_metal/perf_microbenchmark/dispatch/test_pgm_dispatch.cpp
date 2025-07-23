@@ -12,15 +12,18 @@
 #include <tt-metalium/host_api.hpp>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <map>
 #include <optional>
 #include <random>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
+#include <array>
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -38,6 +41,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "umd/device/types/xy_pair.h"
+#include <tt-metalium/math.hpp>
+#include "tt_metal/impl/dispatch/device_command.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -81,6 +86,7 @@ struct TestInfo {
     bool use_trace{false};
     bool dispatch_from_eth{false};
     bool use_all_cores{false};
+    bool load_prefetcher{false};
 };
 
 std::tuple<uint32_t, uint32_t> get_core_count() {
@@ -141,6 +147,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
             " -ac: use all viable worker cores (default {}x{})",
             std::get<0>(core_count),
             std::get<1>(core_count));
+        log_info(LogTest, " -pfl: test prefetcher cache load performance (default disabled)");
         exit(0);
     }
 
@@ -167,6 +174,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     info.nfast_kernels = test_args::get_command_option_uint32(input_args, "-nf", 0);
     info.use_trace = test_args::has_command_option(input_args, "-tr");
     info.dispatch_from_eth = test_args::has_command_option(input_args, "-de");
+    info.load_prefetcher = test_args::has_command_option(input_args, "-pfl");
     if (info.kernel_size < MIN_KERNEL_SIZE_BYTES) {
         log_fatal(tt::LogTest, "Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
@@ -219,6 +227,23 @@ void set_runtime_args(
             tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
         }
     }
+}
+
+uint32_t get_num_kernels(const TestInfo& info) {
+    uint32_t num_kernels = 0;
+    if (info.brisc_enabled) {
+        num_kernels++;
+    }
+    if (info.ncrisc_enabled) {
+        num_kernels++;
+    }
+    if (info.trisc_enabled) {
+        num_kernels += 3;  // 3 compute kernels when enabled
+    }
+    if (info.erisc_enabled) {
+        num_kernels++;
+    }
+    return num_kernels;
 }
 
 bool initialize_program(
@@ -334,40 +359,142 @@ struct FakeBenchmarkState {
     std::vector<int> range{1};
 };
 
-template <typename T>
-static int pgm_dispatch(T& state, TestInfo info) {
-    if constexpr (std::is_same_v<T, benchmark::State>) {
-        log_info(LogTest, "Running {}", state.name());
+// Helper structure to encapsulate program execution logic
+struct ProgramExecutor {
+    std::function<void()> execute_programs;
+    std::function<void()> warmup_programs;
+    uint32_t total_program_iterations;
+
+    ProgramExecutor(std::function<void()> exec, std::function<void()> warm, uint32_t total_iters) :
+        execute_programs(exec), warmup_programs(warm), total_program_iterations(total_iters) {}
+};
+
+// Helper function to create program executor for standard test
+ProgramExecutor create_standard_executor(
+    const TestInfo& info,
+    std::vector<MeshWorkload>& mesh_workloads,
+    std::array<tt_metal::Program, 2>& programs,
+    MeshCommandQueue& mesh_cq) {
+    // Create mesh workloads
+    mesh_workloads.resize(programs.size());
+    for (auto i = 0; i < programs.size(); i++) {
+        AddProgramToMeshWorkload(
+            mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     }
-    if (info.use_all_cores) {
-        auto core_count = get_core_count();
-        info.workers = CoreRange({0, 0}, {std::get<0>(core_count), std::get<1>(core_count)});
+    std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
+        for (int i = 0; i < info.warmup_iterations; i++) {
+            EnqueueMeshWorkload(mesh_cq, mesh_workloads[0], false);
+            for (int j = 0; j < info.nfast_kernels; j++) {
+                EnqueueMeshWorkload(mesh_cq, mesh_workloads[1], false);
+            }
+        }
+    }};
+
+    std::function execute_func{[&info, &mesh_cq, &mesh_workloads]() {
+        for (int i = 0; i < info.iterations; i++) {
+            EnqueueMeshWorkload(mesh_cq, mesh_workloads[0], false);
+            for (int j = 0; j < info.nfast_kernels; j++) {
+                EnqueueMeshWorkload(mesh_cq, mesh_workloads[1], false);
+            }
+        }
+    }};
+
+    return ProgramExecutor(execute_func, warmup_func, info.iterations);
+}
+
+// Helper function to create program executor for prefetcher cache load test
+ProgramExecutor create_load_prefetcher_executor(
+    const TestInfo& info,
+    std::vector<MeshWorkload>& mesh_workloads,
+    std::vector<tt_metal::Program>& programs,
+    MeshCommandQueue& mesh_cq) {
+    // Create mesh workload
+    mesh_workloads.resize(programs.size());
+    for (auto i = 0; i < programs.size(); i++) {
+        AddProgramToMeshWorkload(
+            mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     }
 
+    std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
+        for (int i = 0; i < info.warmup_iterations; i++) {
+            for (auto& mesh_workload : mesh_workloads) {
+                EnqueueMeshWorkload(mesh_cq, mesh_workload, false);
+            }
+        }
+    }};
+
+    std::function execute_func{[&info, &mesh_cq, &mesh_workloads]() {
+        for (int i = 0; i < info.iterations; i++) {
+            for (auto& mesh_workload : mesh_workloads) {
+                EnqueueMeshWorkload(mesh_cq, mesh_workload, false);
+            }
+        }
+    }};
+
+    return ProgramExecutor(execute_func, warmup_func, info.iterations * programs.size());
+}
+
+// Helper function to setup trace if enabled
+template <typename T>
+MeshTraceId setup_trace_if_enabled(
+    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, ProgramExecutor& executor) {
+    MeshTraceId tid;
     if (info.use_trace) {
-        log_info(LogTest, "Running with trace enabled");
+        const std::size_t cq_id = 0;
+        tid = BeginTraceCapture(mesh_device.get(), cq_id);
+        executor.execute_programs();
+        EndTraceCapture(mesh_device.get(), cq_id, tid);
+        Finish(mesh_device->mesh_command_queue(cq_id));
     }
-    log_info(LogTest, "Warmup iterations: {}", info.warmup_iterations);
-    log_info(LogTest, "Iterations: {}", info.iterations);
-    log_info(
-        LogTest,
-        "Grid: ({}-{}) ({} cores)",
-        info.workers.start_coord.str(),
-        info.workers.end_coord.str(),
-        info.workers.size());
-    log_info(LogTest, "Kernel size: {}", info.kernel_size);
-    if (info.nfast_kernels != 0) {
-        log_info(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
-        log_info(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
-        log_info(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
-    } else {
-        log_info(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
+    return tid;
+}
+
+// Helper function to run the benchmark timing loop
+template <typename T>
+void run_benchmark_timing_loop(
+    T& state,
+    const TestInfo& info,
+    MeshCommandQueue& mesh_cq,
+    ProgramExecutor& executor,
+    MeshTraceId tid,
+    std::shared_ptr<MeshDevice> mesh_device) {
+    constexpr std::size_t cq_id = 0;
+    auto execute_func = executor.execute_programs;
+    for (auto _ : state) {
+        auto start = std::chrono::system_clock::now();
+        if (info.use_trace) {
+            ReplayTrace(mesh_device.get(), cq_id, tid, false);
+        } else {
+            execute_func();
+        }
+        if (info.time_just_finish) {
+            start = std::chrono::system_clock::now();
+        }
+        Finish(mesh_cq);
+        auto end = std::chrono::system_clock::now();
+
+        if constexpr (std::is_same_v<T, benchmark::State>) {
+            auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
+            state.SetIterationTime(elapsed_seconds.count());
+        } else {
+            std::chrono::duration<double> elapsed_seconds = (end - start);
+            log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
+            log_info(
+                LogTest,
+                "Ran in {}us per iteration",
+                elapsed_seconds.count() * 1000 * 1000 / executor.total_program_iterations);
+        }
     }
-    log_info(LogTest, "KGs: {}", info.n_kgs);
-    log_info(LogTest, "CBs: {}", info.n_cbs);
-    log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
-    log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
-    log_info(LogTest, "Sems: {}", info.n_sems);
+}
+
+// Helper function to set benchmark counters
+template <typename T>
+void set_benchmark_counters(
+    T& state,
+    const TestInfo& info,
+    tt_metal::IDevice* device,
+    uint32_t total_iterations,
+    const std::unordered_map<std::string, uint32_t>& extra_counters = {}) {
     if constexpr (std::is_same_v<T, benchmark::State>) {
         if (dump_test_info) {
             state.counters["cores"] = benchmark::Counter(info.workers.size(), benchmark::Counter::kDefaults);
@@ -386,98 +513,170 @@ static int pgm_dispatch(T& state, TestInfo info) {
             state.counters["trisc_enabled"] = benchmark::Counter(info.trisc_enabled, benchmark::Counter::kDefaults);
             state.counters["erisc_enabled"] = benchmark::Counter(info.erisc_enabled, benchmark::Counter::kDefaults);
             state.counters["cb_gs"] = benchmark::Counter(info.n_cb_gs, benchmark::Counter::kDefaults);
+
+            // Add extra counters
+            for (const auto& [key, value] : extra_counters) {
+                state.counters[key] = benchmark::Counter(value, benchmark::Counter::kDefaults);
+            }
+        }
+
+        state.counters["IterationTime"] = benchmark::Counter(
+            total_iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+        state.counters["Clock"] = benchmark::Counter(get_tt_npu_clock(device), benchmark::Counter::kDefaults);
+    }
+}
+
+// Helper function to convert from DispatchCoreType to CoreType
+CoreType dispatch_core_type_to_core_type(DispatchCoreType dispatch_core_type) {
+    switch (dispatch_core_type) {
+        case DispatchCoreType::WORKER: return CoreType::WORKER;
+        case DispatchCoreType::ETH: return CoreType::ETH;
+        default: TT_THROW("invalid dispatch core type");
+    }
+}
+
+// Helper function to create standard programs
+std::array<tt_metal::Program, 2> create_standard_programs(
+    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, DispatchCoreType dispatch_core_type) {
+    std::array<tt_metal::Program, 2> programs;
+    if (!initialize_program(info, mesh_device, programs[0], info.slow_kernel_cycles) ||
+        !initialize_program(info, mesh_device, programs[1], info.fast_kernel_cycles)) {
+        throw std::runtime_error("Standard program creation failed");
+    }
+    return programs;
+}
+// Helper function to create prefetcher cache load programs
+std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32_t>> create_load_prefetcher_programs(
+    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, DispatchCoreType dispatch_core_type) {
+    uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance()
+                                         .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
+                                         .ringbuffer_size();
+    uint32_t target_total_size = (3 * prefetcher_cache_size) / 2;
+    uint32_t num_kernels = get_num_kernels(info);
+    uint32_t estimated_program_size =
+        tt::align(info.kernel_size * num_kernels, tt::tt_metal::HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
+    uint32_t num_programs = tt::div_up(target_total_size, estimated_program_size);
+
+    log_info(LogTest, "Prefetcher cache load test: prefetcher cache size = {} bytes", prefetcher_cache_size);
+    log_info(
+        LogTest,
+        "Estimated program size = {} bytes, target total program size = {} bytes (1.5x cache)",
+        estimated_program_size,
+        target_total_size);
+    log_info(LogTest, "Creating {} programs for cache overflow test", num_programs);
+
+    std::vector<tt_metal::Program> programs(num_programs);
+    uint32_t kernel_runtime = 2000;  // cycles - short enough to focus on dispatch time
+
+    for (auto& program : programs) {
+        if (!initialize_program(info, mesh_device, program, kernel_runtime)) {
+            throw std::runtime_error("Program creation failed for prefetcher cache load test");
         }
     }
+
+    std::unordered_map<std::string, uint32_t> extra_counters = {
+        {"num_programs", num_programs},
+        {"prefetcher_cache_size", prefetcher_cache_size},
+        {"target_program_size", target_total_size}};
+
+    return {std::move(programs), extra_counters};
+}
+
+// Helper function to log test configuration
+void log_test_configuration(const TestInfo& info) {
+    if (info.use_trace) {
+        log_info(LogTest, "Running with trace enabled");
+    }
+    log_info(LogTest, "Warmup iterations: {}", info.warmup_iterations);
+    log_info(LogTest, "Iterations: {}", info.iterations);
+    log_info(
+        LogTest,
+        "Grid: ({}-{}) ({} cores)",
+        info.workers.start_coord.str(),
+        info.workers.end_coord.str(),
+        info.workers.size());
+    log_info(LogTest, "Kernel size: {}", info.kernel_size);
+
+    if (info.nfast_kernels != 0) {
+        log_info(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
+        log_info(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
+        log_info(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
+    } else {
+        log_info(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
+    }
+
+    log_info(LogTest, "KGs: {}", info.n_kgs);
+    log_info(LogTest, "CBs: {}", info.n_cbs);
+    log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
+    log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
+    log_info(LogTest, "Sems: {}", info.n_sems);
+
+    if (info.load_prefetcher) {
+        log_info(LogTest, "Prefetcher cache load test: ENABLED");
+    }
+}
+
+template <typename T>
+static int pgm_dispatch(T& state, TestInfo info) {
+    if constexpr (std::is_same_v<T, benchmark::State>) {
+        log_info(LogTest, "Running {}", state.name());
+    }
+
+    // Apply configuration adjustments
+    if (info.use_all_cores) {
+        auto core_count = get_core_count();
+        info.workers = CoreRange({0, 0}, {std::get<0>(core_count), std::get<1>(core_count)});
+    }
+
+    log_test_configuration(info);
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
     bool pass = true;
+    std::shared_ptr<MeshDevice> mesh_device;
     try {
         const chip_id_t device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        auto mesh_device = MeshDevice::create_unit_mesh(
-            device_id, DEFAULT_L1_SMALL_SIZE, 900000000, 1, DispatchCoreConfig{dispatch_core_type});
+        mesh_device = MeshDevice::create_unit_mesh(
+            device_id, DEFAULT_L1_SMALL_SIZE, 900 * 1024 * 1024, 1, DispatchCoreConfig{dispatch_core_type});
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
 
-        tt_metal::Program program[2];
-        if (!initialize_program(info, mesh_device, program[0], info.slow_kernel_cycles)) {
+        // Declare program storage at function scope to ensure proper lifetime
+        ProgramExecutor executor([]() {}, []() {}, 0);  // Initialize with placeholder
+        std::vector<MeshWorkload> mesh_workloads;
+        if (info.load_prefetcher) {
+            auto [programs, extra_counters] = create_load_prefetcher_programs(info, mesh_device, dispatch_core_type);
+            executor = create_load_prefetcher_executor(info, mesh_workloads, programs, mesh_cq);
+            // Store extra counters for later use
             if constexpr (std::is_same_v<T, benchmark::State>) {
-                state.SkipWithError("Program creation failed");
-            }
-            mesh_device->close();
-            return 1;
-        }
-        if (!initialize_program(info, mesh_device, program[1], info.fast_kernel_cycles)) {
-            if constexpr (std::is_same_v<T, benchmark::State>) {
-                state.SkipWithError("Program creation failed");
-            }
-            mesh_device->close();
-            return 1;
-        }
-
-        // Cache stuff
-        MeshWorkload mesh_workload[2];
-        AddProgramToMeshWorkload(
-            mesh_workload[0], std::move(program[0]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-        AddProgramToMeshWorkload(
-            mesh_workload[1], std::move(program[1]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-        for (int i = 0; i < info.warmup_iterations; i++) {
-            EnqueueMeshWorkload(mesh_cq, mesh_workload[0], false);
-            for (int j = 0; j < info.nfast_kernels; j++) {
-                EnqueueMeshWorkload(mesh_cq, mesh_workload[1], false);
-            }
-        }
-
-        auto main_program_loop = [&]() {
-            for (int i = 0; i < info.iterations; i++) {
-                EnqueueMeshWorkload(mesh_cq, mesh_workload[0], false);
-                for (int j = 0; j < info.nfast_kernels; j++) {
-                    EnqueueMeshWorkload(mesh_cq, mesh_workload[1], false);
+                if (dump_test_info) {
+                    for (const auto& [key, value] : extra_counters) {
+                        state.counters[key] = benchmark::Counter(value, benchmark::Counter::kDefaults);
+                    }
                 }
             }
-        };
-        MeshTraceId tid;
-        if (info.use_trace) {
-            tid = BeginTraceCapture(mesh_device.get(), cq_id);
-            main_program_loop();
-            EndTraceCapture(mesh_device.get(), cq_id, tid);
-            Finish(mesh_cq);
+        } else {
+            auto programs = create_standard_programs(info, mesh_device, dispatch_core_type);
+            executor = create_standard_executor(info, mesh_workloads, programs, mesh_cq);
         }
 
-        for (auto _ : state) {
-            auto start = std::chrono::system_clock::now();
-            if (info.use_trace) {
-                ReplayTrace(mesh_device.get(), cq_id, tid, false);
-            } else {
-                main_program_loop();
-            }
-            if (info.time_just_finish) {
-                start = std::chrono::system_clock::now();
-            }
-            Finish(mesh_cq);
-            auto end = std::chrono::system_clock::now();
+        // Set benchmark counters before timing (all values are known at this point)
+        set_benchmark_counters(state, info, mesh_device->get_device(0, 0), executor.total_program_iterations);
 
-            if constexpr (std::is_same_v<T, benchmark::State>) {
-                auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
-                state.SetIterationTime(elapsed_seconds.count());
-            } else {
-                std::chrono::duration<double> elapsed_seconds = (end - start);
-                log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
-                log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / info.iterations);
-            }
-        }
+        // Run warmup
+        executor.warmup_programs();
 
-        if constexpr (std::is_same_v<T, benchmark::State>) {
-            state.counters["IterationTime"] = benchmark::Counter(
-                info.iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
-            state.counters["Clock"] =
-                benchmark::Counter(get_tt_npu_clock(mesh_device->get_device(0, 0)), benchmark::Counter::kDefaults);
-        }
+        // Setup trace if enabled
+        MeshTraceId tid = setup_trace_if_enabled<T>(info, mesh_device, executor);
+
+        // Run benchmark timing loop
+        run_benchmark_timing_loop(state, info, mesh_cq, executor, tid, mesh_device);
 
         pass &= mesh_device->close();
     } catch (const std::exception& e) {
         pass = false;
+        mesh_device->close();
         log_fatal(tt::LogTest, "{}", e.what());
     }
 
@@ -514,6 +713,9 @@ static void Max12288Args(benchmark::internal::Benchmark* b) {
 
 static void Max8192Args(benchmark::internal::Benchmark* b) {
     b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
+}
+static void Range512To12KArgs(benchmark::internal::Benchmark* b) {
+    b->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
 }
 
 static void KernelCycleArgs(benchmark::internal::Benchmark* b) {
@@ -737,6 +939,15 @@ BENCHMARK_CAPTURE(
     TestInfo{.warmup_iterations = 5000, .kernel_size = 256, .ncrisc_enabled = false, .trisc_enabled = false, .use_trace = true, .use_all_cores = true})
     ->Apply(KernelCycleArgs)
     ->UseManualTime();
+
+// Prefetcher cache load performance test - measures dispatch time with programs 2x cache size
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    load_prefetcher_test,
+    TestInfo{.iterations = 5000, .warmup_iterations = 1000, .use_trace = true, .load_prefetcher = true})
+    ->Apply(Range512To12KArgs)
+    ->UseManualTime();
+
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "--custom")) {

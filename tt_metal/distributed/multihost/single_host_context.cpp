@@ -11,7 +11,7 @@ namespace tt::tt_metal::distributed::multihost {
 // ---------------------------------------------------------------------
 //                           Context implementation
 // ---------------------------------------------------------------------
-SingleHostContext::SingleHostContext() : rank_(0), size_(1) {}
+SingleHostContext::SingleHostContext() : rank_(0), size_(1) { id_ = DistributedContext::generate_unique_id(); }
 
 void SingleHostContext::create(int argc, char** argv) { current_world_ = std::make_shared<SingleHostContext>(); }
 
@@ -46,6 +46,10 @@ void SingleHostContext::barrier() const {
 
 void SingleHostContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     TT_THROW("method send is unsupported for single-host distributed contexts.");
+}
+
+void SingleHostContext::ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+    TT_THROW("method ssend is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::recv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const {

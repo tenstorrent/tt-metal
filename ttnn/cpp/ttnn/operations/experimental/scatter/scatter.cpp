@@ -23,12 +23,8 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // validate dimension constraints before sending down to device operation working on the last dimension
 void validate_inputs(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
-    const auto& input_dtype{input_tensor.dtype()};
-    const auto& index_dtype{index_tensor.dtype()};
-    const auto& src_dtype{source_tensor.dtype()};
     const auto& input_shape{input_tensor.logical_shape()};
     const auto& index_shape{index_tensor.logical_shape()};
-    const auto& src_shape{source_tensor.logical_shape()};
     const int32_t input_rank{input_shape.rank()};
     const int32_t normalized_dim{(dim < 0) ? (dim + input_rank) : dim};
 
@@ -74,9 +70,9 @@ void check_support(
     const auto& input_layout = input_tensor.layout();
     const auto& index_layout = index_tensor.layout();
     const auto& source_layout = source_tensor.layout();
-    const auto& input_shape = input_tensor.get_logical_shape();
-    const auto& index_shape = index_tensor.get_logical_shape();
-    const auto& source_shape = source_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto& index_shape = index_tensor.logical_shape();
+    const auto& source_shape = source_tensor.logical_shape();
     // check if transpose int garbage case
     TT_FATAL(
         !(is_i32(input_dtype) && !is_last_dim(input_shape, dim)),
@@ -198,9 +194,9 @@ Tensor post_scatter_transform_tensor(
     }
 
     TT_FATAL(
-        output_tensor.get_logical_shape() == original_logical_shape,
+        output_tensor.logical_shape() == original_logical_shape,
         "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-        output_tensor.get_logical_shape(),
+        output_tensor.logical_shape(),
         original_logical_shape);
 
     // if the output tensor's original layout is not row-major, convert the output tensor back

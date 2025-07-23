@@ -20,15 +20,15 @@ public:
     static constexpr auto routing_directions = {
         RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
-    explicit FabricContext(tt::tt_metal::FabricConfig fabric_config);
+    explicit FabricContext(tt::tt_fabric::FabricConfig fabric_config);
     ~FabricContext() = default;
 
     bool is_wrap_around_mesh(MeshId mesh_id) const;
 
-    static tt::tt_fabric::Topology get_topology_from_config(tt::tt_metal::FabricConfig fabric_config);
+    static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
 
     tt::tt_fabric::Topology get_fabric_topology() const;
-    tt::tt_metal::FabricConfig get_fabric_config() const { return fabric_config_; }
+    tt::tt_fabric::FabricConfig get_fabric_config() const { return fabric_config_; }
 
     size_t get_fabric_packet_header_size_bytes() const;
     size_t get_fabric_max_payload_size_bytes() const;
@@ -61,7 +61,7 @@ private:
         tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis);
 
     bool initialized_ = false;
-    tt::tt_metal::FabricConfig fabric_config_{};
+    tt::tt_fabric::FabricConfig fabric_config_{};
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_{};
     tt::tt_fabric::Topology topology_{};

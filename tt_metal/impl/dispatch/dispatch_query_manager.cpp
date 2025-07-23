@@ -90,8 +90,6 @@ std::vector<CoreCoord> populate_all_logical_dispatch_cores(
     return get_consistent_logical_cores(num_hw_cqs, dispatch_core_config, tt::get_logical_dispatch_cores);
 }
 
-tt::tt_metal::DispatchQueryManager* inst = nullptr;
-
 }  // namespace
 
 namespace tt::tt_metal {

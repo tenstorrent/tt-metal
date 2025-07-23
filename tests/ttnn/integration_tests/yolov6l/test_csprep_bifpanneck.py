@@ -2,33 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
 import pytest
-import sys
-from models.experimental.yolov6l.reference.yolov6l_utils import fuse_model
-from models.experimental.yolov6l.tt.model_preprocessing import create_yolov6l_model_parameters
+
+import torch
+
+import ttnn
+from models.experimental.yolov6l.tt.model_preprocessing import create_yolov6l_model_parameters, load_torch_model_yolov6l
 from models.experimental.yolov6l.tt.ttnn_csprep_bifpanneck import TtCSPRepBiFPANNeck
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import comp_pcc
-
-sys.path.append("models/experimental/yolov6l/reference/")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_yolov6l_csprep_bifpanneck(device, reset_seeds):
-    weights = "tests/ttnn/integration_tests/yolov6l/yolov6l.pt"
-    ckpt = torch.load(weights, map_location=torch.device("cpu"), weights_only=False)
-    model = ckpt["ema" if ckpt.get("ema") else "model"].float()
-    model = fuse_model(model).eval()
-    stride = int(model.stride.max())
+    model = load_torch_model_yolov6l()
 
     model = model.neck
 
-    torch_input_0 = torch.randn(1, 128, 160, 120)
-    torch_input_1 = torch.randn(1, 256, 80, 60)
-    torch_input_2 = torch.randn(1, 512, 40, 30)
-    torch_input_3 = torch.randn(1, 1024, 20, 15)
+    torch_input_0 = torch.randn(1, 128, 160, 160)
+    torch_input_1 = torch.randn(1, 256, 80, 80)
+    torch_input_2 = torch.randn(1, 512, 40, 40)
+    torch_input_3 = torch.randn(1, 1024, 20, 20)
 
     parameters = create_yolov6l_model_parameters(
         model, [torch_input_0, torch_input_1, torch_input_2, torch_input_3], device

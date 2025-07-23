@@ -27,9 +27,9 @@ using ccl::EriscDatamoverBuilder;
 
 struct ReduceScatterMinimalAsync {
     std::vector<IDevice*> devices;
-    const uint32_t dim;
-    const uint32_t num_links;
-    const uint32_t ring_size;
+    uint32_t dim;
+    uint32_t num_links;
+    uint32_t ring_size;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const std::vector<GlobalSemaphore> semaphore;
@@ -107,7 +107,43 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* target_device,
+    IDevice* sender_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
+
+tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    IDevice* sender_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
+
+tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -127,8 +163,7 @@ namespace ccl {
 
 Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
-    Tensor& persistent_output_buffer,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links = 1,

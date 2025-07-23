@@ -164,6 +164,9 @@ private:
     // XORe'd 16-bit FNV-1a hashing functions
     uint16_t hash16CT(const std::string& str);
 
+    void populateZoneSrcLocations(
+        const std::string& new_log_name, const std::string& log_name = "", bool push_new = false);
+
     // Iterate through all zone source locations and generate hash
     void generateZoneSourceLocationsHashes();
 
@@ -332,6 +335,8 @@ public:
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
+    void dumpRoutingInfo();
+
     // Push device results to tracy
     void pushTracyDeviceResults();
 
@@ -350,8 +355,6 @@ void writeToCoreControlBuffer(
 bool onlyProfileDispatchCores(ProfilerDumpState state);
 
 bool isGalaxyMMIODevice(const IDevice* device);
-
-void waitForDeviceCommandsToFinish(IDevice* device);
 
 }  // namespace tt_metal
 

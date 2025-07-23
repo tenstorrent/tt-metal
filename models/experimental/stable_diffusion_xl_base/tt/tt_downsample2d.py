@@ -21,6 +21,7 @@ class TtDownsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv_config = model_config.get_conv_config(conv_path=module_path)
         self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
             device,
@@ -54,6 +55,7 @@ class TtDownsample2D(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
 

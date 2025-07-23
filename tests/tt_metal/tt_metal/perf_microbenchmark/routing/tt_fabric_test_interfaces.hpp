@@ -30,18 +30,31 @@ public:
     virtual ~IDeviceInfoProvider() = default;
     virtual FabricNodeId get_fabric_node_id(chip_id_t physical_chip_id) const = 0;
     virtual FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const = 0;
+    virtual FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const = 0;
     virtual MeshCoordinate get_device_coord(const FabricNodeId& node_id) const = 0;
     virtual uint32_t get_worker_noc_encoding(const MeshCoordinate& device_coord, CoreCoord logical_core) const = 0;
     virtual uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual CoreCoord get_worker_grid_size() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_all_node_ids() const = 0;
-    virtual uint32_t get_l1_unreserved_base(const FabricNodeId& node_id) const = 0;
-    virtual uint32_t get_l1_unreserved_size(const FabricNodeId& node_id) const = 0;
+    virtual uint32_t get_l1_unreserved_base() const = 0;
+    virtual uint32_t get_l1_unreserved_size() const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
     virtual bool is_2d_fabric() const = 0;
     virtual bool use_dynamic_routing() const = 0;
+
+    // Data reading helpers
+    virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const = 0;
+    virtual void zero_out_buffer_on_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const = 0;
 };
 
 class IRouteManager {
@@ -65,6 +78,7 @@ public:
         const FabricNodeId& src_node_id, uint32_t dim) const = 0;
     virtual std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const = 0;
+    virtual uint32_t get_num_sync_devices() const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
@@ -79,6 +93,9 @@ public:
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
+
+    virtual std::pair<std::unordered_map<RoutingDirection, uint32_t>, uint32_t> get_sync_hops_and_val(
+        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_neighbor_node_id(

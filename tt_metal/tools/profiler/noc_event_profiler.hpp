@@ -41,7 +41,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> decode_noc_addr_to_multicast_
     // bits like normal noc address; Start coordinate is in higher bits
     auto [xend, yend] = decode_noc_coord_reg_to_coord(noc_addr >> NOC_ADDR_LOCAL_BITS);
     auto [xstart, ystart] =
-        decode_noc_coord_reg_to_coord((noc_addr >> NOC_ADDR_LOCAL_BITS) + (2 * NOC_ADDR_NODE_ID_BITS));
+        decode_noc_coord_reg_to_coord(noc_addr >> (NOC_ADDR_LOCAL_BITS + 2 * NOC_ADDR_NODE_ID_BITS));
 
     return {xstart, ystart, xend, yend};
 }
@@ -119,6 +119,7 @@ void recordNocEventWithAddr(
     recordNocEvent(noc_event_type, decoded_x, decoded_y, num_bytes, vc);
 }
 
+// For Unicasts
 template <typename NocAddrU64, uint32_t STATIC_ID = 12345>
 FORCE_INLINE void recordFabricNocEvent(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
@@ -183,33 +184,35 @@ FORCE_INLINE void recordFabricNocEventMulticast(
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
 }
 
-// Overload for multiple noc addresses (for scatter write operations)
-template <typename NocAddrU64>
-FORCE_INLINE void recordFabricNocEvent(
+template <uint32_t STATIC_ID = 12345>
+FORCE_INLINE void recordFabricScatterEvent(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     KernelProfilerNocEventMetadata::FabricPacketType packet_type,
-    const NocAddrU64* noc_addr_array,
-    uint32_t num_addresses,
+    const volatile uint64_t* noc_addr_array,
+    const volatile uint16_t* chunk_sizes,
+    uint32_t num_chunks,
     uint32_t routing_fields) {
-    static_assert(std::is_same_v<std::remove_volatile_t<NocAddrU64>, uint64_t>);
-
     // Record each address as a separate event
-    for (uint32_t i = 0; i < num_addresses; i++) {
+    for (uint32_t i = 0; i < num_chunks; i++) {
         auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr_array[i]);
 
         // profiler packet stores XY address data as well as packet type tag and address index
         KernelProfilerNocEventMetadata ev_md;
         ev_md.noc_xfer_type = noc_event_type;
 
-        auto& fabric_noc_event = ev_md.data.fabric_event;
-        fabric_noc_event.dst_x = decoded_x;
-        fabric_noc_event.dst_y = decoded_y;
-        fabric_noc_event.mcast_end_dst_x = i;              // Use mcast_end_dst_x to store address index
-        fabric_noc_event.mcast_end_dst_y = num_addresses;  // Use mcast_end_dst_y to store total count
-        fabric_noc_event.routing_fields_type = packet_type;
+        auto& fabric_scatter_event = ev_md.data.fabric_scatter_event;
+        fabric_scatter_event.dst_x = decoded_x;
+        fabric_scatter_event.dst_y = decoded_y;
+        if (i < num_chunks - 1) {
+            fabric_scatter_event.chunk_size = chunk_sizes[i];
+        } else {
+            fabric_scatter_event.chunk_size = 0;
+        }
+        fabric_scatter_event.num_chunks = num_chunks;
+        fabric_scatter_event.routing_fields_type = packet_type;
 
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-        kernel_profiler::timeStampedData<12345, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
     }
 
     // Store routing fields only once after all addresses
@@ -218,7 +221,7 @@ FORCE_INLINE void recordFabricNocEvent(
     event_routing_fields.data.fabric_routing_fields.routing_fields_value = routing_fields;
 
     kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<12345, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
+    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
 }
 }  // namespace noc_event_profiler
 

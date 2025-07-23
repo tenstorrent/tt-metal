@@ -13,11 +13,31 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::core {
 
 void py_module_types(py::module& module) {
+    py::enum_<ttnn::operations::compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
+        Enum for controlling compute throttling.
+
+        Higher levels insert NOP instructions to reduce compute throughput:
+        - LEVEL_1: Throttle to 73% of max performance
+        - LEVEL_2: Throttle to 67% of max performance
+        - LEVEL_3: Throttle to 50% of max performance
+        - LEVEL_4: Throttle to 40% of max performance
+        - LEVEL_5: Throttle to 33% of max performance
+
+        Used to prevent di/dt (power supply current) issues on large core counts.
+    )doc")
+        .value("NO_THROTTLE", ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
+        .value("LEVEL_1", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_1)
+        .value("LEVEL_2", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_2)
+        .value("LEVEL_3", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_3)
+        .value("LEVEL_4", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_4)
+        .value("LEVEL_5", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_5);
+
     py::class_<DeviceComputeKernelConfig>(module, "DeviceComputeKernelConfig");
 
     py::class_<GrayskullComputeKernelConfig>(module, "GrayskullComputeKernelConfig")
@@ -33,18 +53,20 @@ void py_module_types(py::module& module) {
 
     py::class_<WormholeComputeKernelConfig>(module, "WormholeComputeKernelConfig")
         .def(
-            py::init<MathFidelity, bool, bool, bool, bool>(),
+            py::init<MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::Invalid,
             py::arg("math_approx_mode") = true,
             py::arg("fp32_dest_acc_en") = false,
             py::arg("packer_l1_acc") = false,
-            py::arg("dst_full_sync_en") = false)
+            py::arg("dst_full_sync_en") = false,
+            py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
         .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
         .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
         .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc)
-        .def_readwrite("dst_full_sync_en", &WormholeComputeKernelConfig::dst_full_sync_en);
+        .def_readwrite("dst_full_sync_en", &WormholeComputeKernelConfig::dst_full_sync_en)
+        .def_readwrite("throttle_level", &WormholeComputeKernelConfig::throttle_level);
 }
 
 void py_module(py::module& module) {
@@ -58,7 +80,8 @@ void py_module(py::module& module) {
         py::arg("math_approx_mode") = true,
         py::arg("fp32_dest_acc_en") = false,
         py::arg("packer_l1_acc") = false,
-        py::arg("dst_full_sync_en") = false);
+        py::arg("dst_full_sync_en") = false,
+        py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
     module.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, py::arg("tensor"));
 
     module.def(
@@ -211,43 +234,82 @@ void py_module(py::module& module) {
         )doc",
         ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("dtype")});
 
-    module.def(
-        "allocate_tensor_on_device",
-        [](const ttnn::TensorSpec& spec, MeshDevice* device) {
-            return tt::tt_metal::allocate_tensor_on_mesh(spec, device);
-        },
-        py::arg("tensor_spec"),
-        py::arg("mesh_device"));
+    module
+        .def(
+            "allocate_tensor_on_device",
+            [](const ttnn::TensorSpec& spec, MeshDevice* device) {
+                return tt::tt_metal::allocate_tensor_on_device(spec, device);
+            },
+            py::arg("tensor_spec"),
+            py::arg("mesh_device"))
+        .def(
+            "allocate_tensor_on_host",
+            [](const ttnn::TensorSpec& spec, MeshDevice* device) {
+                return tt::tt_metal::allocate_tensor_on_host(spec, device);
+            },
+            py::arg("tensor_spec"),
+            py::arg("mesh_device"));
 
-    module.def(
-        "allocate_tensor_on_device",
-        [](const ttnn::Shape& shape,
-           ttnn::DataType dtype,
-           ttnn::Layout layout,
-           MeshDevice* device,
-           const std::optional<ttnn::MemoryConfig>& mem_config) {
-            return tt::tt_metal::allocate_tensor_on_mesh(
-                TensorSpec(
-                    shape,
-                    tt::tt_metal::TensorLayout(
-                        dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
-                device);
-        },
-        py::arg("shape"),
-        py::arg("dtype"),
-        py::arg("layout"),
-        py::arg("mesh_device"),
-        py::arg("memory_config") = std::nullopt);
+    module
+        .def(
+            "allocate_tensor_on_device",
+            [](const ttnn::Shape& shape,
+               ttnn::DataType dtype,
+               ttnn::Layout layout,
+               MeshDevice* device,
+               const std::optional<ttnn::MemoryConfig>& mem_config) {
+                return tt::tt_metal::allocate_tensor_on_device(
+                    TensorSpec(
+                        shape,
+                        tt::tt_metal::TensorLayout(
+                            dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
+                    device);
+            },
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("mesh_device"),
+            py::arg("memory_config") = std::nullopt)
+        .def(
+            "allocate_tensor_on_host",
+            [](const ttnn::Shape& shape,
+               ttnn::DataType dtype,
+               ttnn::Layout layout,
+               MeshDevice* device,
+               const std::optional<ttnn::MemoryConfig>& mem_config) {
+                return tt::tt_metal::allocate_tensor_on_host(
+                    TensorSpec(
+                        shape,
+                        tt::tt_metal::TensorLayout(
+                            dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
+                    device);
+            },
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("mesh_device"),
+            py::arg("memory_config") = std::nullopt);
 
     module.def(
         "copy_host_to_device_tensor",
-        [](const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
-            // Copies `device_tensor`, to be able to asynchronously populate metadata in tensor attributes, stored as a
-            // shared pointer.
-            tt::tt_metal::write_tensor(host_tensor, std::move(device_tensor), cq_id);
+        [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
+            tt::tt_metal::write_tensor(host_tensor, device_tensor, /*blocking=*/false, cq_id);
         },
         py::arg("host_tensor"),
         py::arg("device_tensor"),
+        py::arg("cq_id") = ttnn::DefaultQueueId);
+
+    module.def(
+        "copy_device_to_host_tensor",
+        [](const ttnn::Tensor& device_tensor,
+           ttnn::Tensor& host_tensor,
+           bool blocking = true,
+           QueueId cq_id = ttnn::DefaultQueueId) {
+            tt::tt_metal::write_tensor(device_tensor, host_tensor, blocking, cq_id);
+        },
+        py::arg("device_tensor"),
+        py::arg("host_tensor"),
+        py::arg("blocking") = true,
         py::arg("cq_id") = ttnn::DefaultQueueId);
 
     bind_registered_operation(

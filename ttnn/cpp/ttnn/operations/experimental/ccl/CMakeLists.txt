@@ -7,6 +7,7 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 target_sources(
     ttnn_op_experimental_ccl
     PRIVATE
+        llama_common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
@@ -52,6 +53,12 @@ target_sources(
         all_broadcast_async/all_broadcast_async.cpp
         all_broadcast_async/device/all_broadcast_async_op.cpp
         all_broadcast_async/device/all_broadcast_async_program.cpp
+        send_recv_async/send_async/send_async.cpp
+        send_recv_async/send_async/device/send_async_op.cpp
+        send_recv_async/send_async/device/send_async_program.cpp
+        send_recv_async/recv_async/recv_async.cpp
+        send_recv_async/recv_async/device/recv_async_op.cpp
+        send_recv_async/recv_async/device/recv_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

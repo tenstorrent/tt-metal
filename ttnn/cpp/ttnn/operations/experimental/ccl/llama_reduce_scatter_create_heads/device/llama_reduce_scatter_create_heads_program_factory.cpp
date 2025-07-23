@@ -6,6 +6,7 @@
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -450,8 +451,12 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
 
-    auto sender_core_grid = detail::rs_heads_fusion::get_worker_cores(
-        available_cores, num_workers_per_link * num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto sender_core_grid = operation_attributes.use_optimal_ccl_for_llama
+                                ? llama_specific::get_custom_cores(num_workers_per_link * num_links)
+                                : detail::rs_heads_fusion::get_worker_cores(
+                                      available_cores,
+                                      num_workers_per_link * num_links,
+                                      input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
 
     auto schedule = detail::rs_heads_fusion::distribute_work_evenly(

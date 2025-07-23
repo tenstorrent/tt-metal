@@ -90,6 +90,7 @@ class TtResnetBlock2D(nn.Module):
             self.device, norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
         )
 
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
         if self.split_conv:
             (
@@ -212,6 +213,7 @@ class TtResnetBlock2D(nn.Module):
                 compute_config=self.compute1_config,
                 conv_config=self.conv1_config,
                 conv_params=self.conv1_params,
+                conv_dtype=self.conv_output_dtype,
                 stride=self.stride,
                 padding=self.padding,
                 dilation=self.dilation,
@@ -238,6 +240,7 @@ class TtResnetBlock2D(nn.Module):
                 memory_config=None,
                 return_output_dim=True,
                 return_weights_and_bias=True,
+                dtype=self.conv_output_dtype,
             )
             C = self.conv1_params["output_channels"]
 
@@ -252,7 +255,8 @@ class TtResnetBlock2D(nn.Module):
         )
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.add(hidden_states, temb)
+        # Note: moving this add to NG has perf impact, to be investigated
+        hidden_states = ttnn.add(hidden_states, temb, use_legacy=True)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         grid_coord = ttnn.CoreCoord(self.norm_core_grid_2.x - 1, self.norm_core_grid_2.y - 1)
@@ -298,6 +302,7 @@ class TtResnetBlock2D(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
 
@@ -321,7 +326,8 @@ class TtResnetBlock2D(nn.Module):
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        ttnn.add_(hidden_states, input_tensor)
+        # Note: Moving this to NG results in error caused by shard shape, to be investigated
+        ttnn.add_(hidden_states, input_tensor, use_legacy=True)
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states, [C, H, W]

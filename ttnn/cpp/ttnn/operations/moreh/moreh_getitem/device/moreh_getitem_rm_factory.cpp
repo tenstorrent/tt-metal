@@ -66,7 +66,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
-        auto index = index_tensors[i];
+        const auto& index = index_tensors[i];
 
         index_info[dim].is_defined = true;
         index_info[dim].address = index_tensors[i].buffer()->address();
@@ -123,8 +123,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     auto src_is_dram = is_dram(input_5d);
     auto dst_is_dram = is_dram(output);
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
         program,
@@ -254,7 +254,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
 
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
-        auto index_buffer = index_tensors[i];
+        const auto& index_buffer = index_tensors[i];
 
         index_info[dim].address = index_buffer.buffer()->address();
     }

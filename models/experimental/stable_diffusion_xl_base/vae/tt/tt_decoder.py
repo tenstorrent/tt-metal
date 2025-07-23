@@ -17,7 +17,7 @@ from loguru import logger
 
 
 class TtDecoder(nn.Module):
-    def __init__(self, device, state_dict, model_config, batch_size=1, gn_fallback=False):
+    def __init__(self, device, state_dict, model_config, batch_size=1):
         super().__init__()
 
         self.device = device
@@ -33,9 +33,7 @@ class TtDecoder(nn.Module):
 
         num_up_blocks = 4
 
-        self.mid_block = TtUNetMidBlock2D(
-            device, state_dict, "decoder.mid_block", model_config, gn_fallback=gn_fallback
-        )
+        self.mid_block = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block", model_config)
         self.up_blocks = []
         for block_id in range(num_up_blocks):
             self.up_blocks.append(
@@ -46,7 +44,6 @@ class TtDecoder(nn.Module):
                     model_config,
                     has_upsample=block_id < 3,
                     conv_shortcut=block_id > 1,
-                    gn_fallback=gn_fallback,
                 )
             )
 
@@ -100,14 +97,12 @@ class TtDecoder(nn.Module):
         )
         self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
         self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
         B, C, H, W = input_shape
         hidden_states = sample
 
-        if self.conv_in_slice_config is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
         [hidden_states, [H, W], [self.tt_conv_in_weights, self.tt_conv_in_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_in_weights,
@@ -129,19 +124,15 @@ class TtDecoder(nn.Module):
             slice_config=self.conv_in_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_in_params["output_channels"]
-
-        if self.conv_in_slice_config is not None:
-            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         logger.info("Starting mid-block")
         hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W])
 
         for idx, up_block in enumerate(self.up_blocks):
             logger.info(f"Starting {idx}. up-block")
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
             hidden_states, [C, H, W] = up_block.forward(hidden_states, [B, C, H, W])
 
         logger.info("Executing out ops")
@@ -159,12 +150,8 @@ class TtDecoder(nn.Module):
             num_out_blocks=self.norm_blocks,
         )
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
 
-        if self.conv_out_slice_config is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
         [hidden_states, [H, W], [self.tt_conv_out_weights, self.tt_conv_out_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_out_weights,
@@ -186,6 +173,7 @@ class TtDecoder(nn.Module):
             slice_config=self.conv_out_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_out_params["output_channels"]
 

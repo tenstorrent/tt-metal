@@ -376,7 +376,8 @@ class Generator:
             tt_tok = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            tt_tok = self.read_decode_output(tt_tok, tokens.shape[0])
+            tt_tok, read_event = self.read_decode_output(tt_tok, tokens.shape[0])
+            return tt_tok, read_event
 
         return tt_tok
 
@@ -485,8 +486,8 @@ class Generator:
         return trace_tok_rm
 
     def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True):
-        logits = self.model.process_output_decode(tt_logits)
-        return logits
+        logits, read_event = self.model.process_output_decode(tt_logits)
+        return logits, read_event
 
     def chat_completion(
         self,

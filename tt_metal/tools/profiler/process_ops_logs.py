@@ -302,7 +302,6 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
         setup.deviceInputLog = deviceTimesLog
         deviceData = import_log_run_stats(setup)
         freq = deviceData["deviceInfo"]["freq"]
-        arch = deviceData["deviceInfo"]["arch"]  # passed to NPE later
         for device in devicesOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
@@ -427,7 +426,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
     # if enabled, analyze noc trace files present in log folder and add
     # relevant statistics to 'ops' dict
     if analyze_noc_traces:
-        npe_stats = analyzeNoCTraces(logFolder, arch)
+        npe_stats = analyzeNoCTraces(logFolder)
         if npe_stats is not None:
             ops_found = 0
             for op_id in ops:
@@ -906,7 +905,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 
 
-def analyzeNoCTraces(logFolder, arch):
+def analyzeNoCTraces(logFolder):
     """Attempts to import tt-npe from $PYTHONPATH and process noc traces to
     obtain per-operation DRAM BW and NoC utilization statistics and create
     visualizer timeline files"""
@@ -915,7 +914,10 @@ def analyzeNoCTraces(logFolder, arch):
 
         logger.info(f"tt-npe module imported successfully; analyzing noc traces ... ")
         return analyze_noc_traces_in_dir(
-            noc_trace_dir=logFolder, device_name=arch, emit_viz_timeline_files=True, quiet=True
+            noc_trace_dir=logFolder,
+            emit_viz_timeline_files=True,
+            quiet=True,
+            compress_timeline_files=True,
         )
     except ImportError:
         logger.warning("Could not import tt-npe module. Ensure tt-npe is built, then source 'tt-npe/ENV_SETUP'")
