@@ -74,8 +74,8 @@ int main() {
         // `loopback_dram_copy.cpp` file for the actual implementation). The kernel is created on the Tensix core
         // {0, 0} and uses the default NoC.
         std::vector<uint32_t> dram_copy_compile_time_args;
-        TensorAccessorArgs(*input_dram_buffer).append_args(dram_copy_compile_time_args);
-        TensorAccessorArgs(*output_dram_buffer).append_args(dram_copy_compile_time_args);
+        TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
+        TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
         KernelHandle dram_copy_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",

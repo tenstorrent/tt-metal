@@ -71,7 +71,7 @@ int main() {
 
         // Create the 2 data movement kernels and the compute kernel.
         std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_dram_buffer).append_args(reader_compile_time_args);
+        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
         KernelHandle unary_reader_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
@@ -82,7 +82,7 @@ int main() {
                 .compile_args = reader_compile_time_args});
 
         std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*dst_dram_buffer).append_args(writer_compile_time_args);
+        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
         KernelHandle unary_writer_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",

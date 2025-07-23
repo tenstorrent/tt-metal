@@ -189,8 +189,8 @@ void matmul_multi_core(
     // All kernels run across all cores to enable parallel execution
     MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_args(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
@@ -201,7 +201,7 @@ void matmul_multi_core(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",

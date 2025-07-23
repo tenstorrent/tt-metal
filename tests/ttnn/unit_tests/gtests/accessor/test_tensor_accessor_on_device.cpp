@@ -156,8 +156,8 @@ static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distrib
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
     std::vector<uint32_t> compile_time_args{aligned_page_size};
-    input_accessor_args.append_args(compile_time_args);
-    output_accessor_args.append_args(compile_time_args);
+    input_accessor_args.append_to(compile_time_args);
+    output_accessor_args.append_to(compile_time_args);
 
     KernelHandle kernel_id = CreateKernel(
         program,

@@ -126,15 +126,15 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
 .. code-block:: cpp
 
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_args(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_args(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader = CreateKernel(
         program,
         "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_args(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer = CreateKernel(
         program,
         "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp",

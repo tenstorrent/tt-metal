@@ -266,11 +266,11 @@ void matmul_multicore_reuse_mcast(
      * Compile time arguments
      */
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_args(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
 
     /*
      * Create Kernels (Reader, Writer, Compute)

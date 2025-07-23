@@ -133,8 +133,8 @@ void matmul_single_core(
 
     // Create the data movement kernels and the compute kernel
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_args(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
@@ -145,7 +145,7 @@ void matmul_single_core(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",

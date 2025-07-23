@@ -97,10 +97,10 @@ int main() {
 
     // specify compile time args
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
-    TensorAccessorArgs(*pad_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*pad_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // create kernels
     KernelHandle reader_id = CreateKernel(

@@ -148,10 +148,10 @@ Since each of these rows will be padded to match the size of the output tensor\'
 
 ``` cpp
 std::vector<uint32_t> reader_compile_time_args;
-TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
-TensorAccessorArgs(*pad_buffer).append_args(reader_compile_time_args);
+TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+TensorAccessorArgs(*pad_buffer).append_to(reader_compile_time_args);
 std::vector<uint32_t> writer_compile_time_args;
-TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 ```
 
 We set the compile-time arguments of the respective kernel functions to be the buffer types, in order to generate the correct addresses for manipulating the data stored inside of the DRAM buffers.

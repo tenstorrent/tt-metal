@@ -165,8 +165,8 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 
     // Reader kernel - reads tiles from DRAM into circular buffers
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_args(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_args(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
@@ -175,7 +175,7 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 
     // Writer kernel - writes result tiles from circular buffer to DRAM
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_args(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",

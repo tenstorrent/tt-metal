@@ -331,8 +331,8 @@ With the work distribution calculated, you can now create the kernels and set up
 
     MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_args(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_args(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
@@ -341,7 +341,7 @@ With the work distribution calculated, you can now create the kernels and set up
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_args(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",

@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
         ////////// DATA MOVEMENT CONFIG SETUP //////////
         DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
         std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*output_dram_buffer).append_args(writer_compile_time_args);
+        TensorAccessorArgs(*output_dram_buffer).append_to(writer_compile_time_args);
         DataMovementConfig DataMovementConfigOut = {
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,

@@ -369,15 +369,15 @@ Then, we compile the kernels for data movement and computation. For simplicity, 
 
 ```c++
 std::vector<uint32_t> reader_args;
-TensorAccessorArgs(*a).append_args(reader_args);
-TensorAccessorArgs(*b).append_args(reader_args);
+TensorAccessorArgs(*a).append_to(reader_args);
+TensorAccessorArgs(*b).append_to(reader_args);
 auto reader = CreateKernel(
     program,
     "path/to/reader_kernel.cpp",
     core,
     DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
 std::vector<uint32_t> writer_args;
-TensorAccessorArgs(*c).append_args(writer_args);
+TensorAccessorArgs(*c).append_to(writer_args);
 auto writer = CreateKernel(
     program,
     "path/to/writer_kernel.cpp",

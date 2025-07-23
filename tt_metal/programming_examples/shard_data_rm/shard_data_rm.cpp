@@ -72,7 +72,7 @@ int main() {
 
     // create data movement kernel to shard data
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index};
-    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "shard_data_rm/kernels/reader_sharded_rm.cpp",

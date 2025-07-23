@@ -143,8 +143,8 @@ int main(int argc, char** argv) {
     // into a third circular buffer. `tile_write` reads tiles from the third circular buffer and writes them to the
     // output buffer C.
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*a).append_args(reader_compile_time_args);
-    TensorAccessorArgs(*b).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*a).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*b).append_to(reader_compile_time_args);
     auto reader = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/interleaved_tile_read.cpp",
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
             .noc = NOC::RISCV_0_default,
             .compile_args = reader_compile_time_args});
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*c).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*c).append_to(writer_compile_time_args);
     auto writer = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/tile_write.cpp",

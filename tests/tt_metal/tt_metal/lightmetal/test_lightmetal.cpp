@@ -154,8 +154,8 @@ Program create_simple_datamovement_program(
     constexpr CoreCoord core = {0, 0};
 
     std::vector<uint32_t> compile_time_args;
-    TensorAccessorArgs(input).append_args(compile_time_args);
-    TensorAccessorArgs(output).append_args(compile_time_args);
+    TensorAccessorArgs(input).append_to(compile_time_args);
+    TensorAccessorArgs(output).append_to(compile_time_args);
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
         "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",

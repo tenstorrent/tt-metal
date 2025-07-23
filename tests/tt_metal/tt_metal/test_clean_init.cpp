@@ -111,8 +111,8 @@ int main(int argc, char** argv) {
             constexpr CoreCoord core = {0, 0};
 
             std::vector<uint32_t> compile_time_args;
-            TensorAccessorArgs(*input_dram_buffer).append_args(compile_time_args);
-            TensorAccessorArgs(*output_dram_buffer).append_args(compile_time_args);
+            TensorAccessorArgs(*input_dram_buffer).append_to(compile_time_args);
+            TensorAccessorArgs(*output_dram_buffer).append_to(compile_time_args);
             KernelHandle dram_copy_kernel_id = CreateKernel(
                 program,
                 "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
