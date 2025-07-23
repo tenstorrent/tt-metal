@@ -11,8 +11,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "init/cpu_initializers.hpp"
 #include "ops/losses.hpp"
 
 class RMSNormOpTest : public ::testing::Test {
@@ -70,7 +70,8 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Kernel_Composite) {
     for (const auto& shape : shapes) {
         for (uint32_t iter = 0; iter < iterations; ++iter) {
             xt::xarray<float> x_data = xt::empty<float>(shape);
-            ttml::init::parallel_generate(x_data, []() { return std::uniform_real_distribution<float>(0.F, 1.F); }, 42);
+            ttml::core::random::parallel_generate(
+                x_data, []() { return std::uniform_real_distribution<float>(0.F, 1.F); }, 42);
             auto x = ttml::autograd::create_tensor(ttml::core::from_xtensor(x_data, device));
             auto gamma =
                 ttml::autograd::create_tensor(ttml::core::ones(ttml::core::create_shape({1, 1, 1, shape[3]}), device));

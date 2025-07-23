@@ -37,7 +37,8 @@ void uniform_init(std::vector<float>& vec, UniformRange range) {
     std::function<std::uniform_real_distribution<float>(void)> dist_factory = [&]() {
         return std::uniform_real_distribution<float>(a, b);
     };
-    parallel_generate(vec, dist_factory);
+    uint32_t seed = autograd::ctx().get_seed();
+    core::random::parallel_generate(vec, dist_factory, seed);
 }
 
 void normal_init(std::vector<float>& vec, NormalParams params) {
@@ -45,7 +46,8 @@ void normal_init(std::vector<float>& vec, NormalParams params) {
     std::function<std::normal_distribution<float>(void)> dist_factory = [&]() {
         return std::normal_distribution<float>(mean, stddev);
     };
-    parallel_generate(vec, dist_factory);
+    uint32_t seed = autograd::ctx().get_seed();
+    core::random::parallel_generate(vec, dist_factory, seed);
 }
 
 void constant_init(std::vector<float>& vec, float value) {

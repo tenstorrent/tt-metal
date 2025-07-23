@@ -13,8 +13,8 @@
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "init/cpu_initializers.hpp"
 #include "metal/operations.hpp"
 
 class CrossEntropyForwardTest : public ::testing::Test {
@@ -122,7 +122,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
@@ -167,7 +167,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
@@ -211,7 +211,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
@@ -255,7 +255,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Huge_Forward) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 

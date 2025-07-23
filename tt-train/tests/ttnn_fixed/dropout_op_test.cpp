@@ -9,8 +9,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "init/cpu_initializers.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class DropoutTest : public ::testing::Test {
@@ -35,7 +35,7 @@ TEST_F(DropoutTest, TestSeed) {
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);
         xt::xarray<float> xtensor_a = xt::empty<float>(shape);
-        ttml::init::parallel_generate(
+        ttml::core::random::parallel_generate(
             xtensor_a, []() { return std::uniform_real_distribution<float>(-0.5f, 0.5f); }, 42);
 
         auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
@@ -87,7 +87,8 @@ xt::xarray<float> golden_dropout(
     std::mt19937_64 rng(seed);
 
     auto rand_vals = xt::empty<float>(input.shape());
-    ttml::init::parallel_generate(rand_vals, []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); }, seed);
+    ttml::core::random::parallel_generate(
+        rand_vals, []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); }, seed);
     auto mask = xt::cast<float>(rand_vals >= p);
 
     float scale_factor = (scale && (1.0f - p) > 1e-7f) ? (1.0f / (1.0f - p)) : 1.0f;
