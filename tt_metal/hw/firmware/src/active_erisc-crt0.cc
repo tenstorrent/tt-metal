@@ -24,26 +24,29 @@ static volatile std::jmp_buf gJumpBuf;
 
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 
-extern "C" [[gnu::section(".start")]] void _start(void) {
-    std::jmp_buf jump_buf;
+extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
     for (int i = 0; i < 32; i++) {
         debug_dump_addr[i] = 0;
     }
+    extern uint32_t __ldm_bss_start[];
+    extern uint32_t __ldm_bss_end[];
+    wzerorange(__ldm_bss_start, __ldm_bss_end);
+    erisc_exit = return_to_base_fw;
 
+#if defined(WATCHER_ENABLED)
+    std::jmp_buf jump_buf;
     // NOLINTNEXTLINE(cert-err52-cpp)
     if (setjmp(jump_buf) == 0) {
-        extern uint32_t __ldm_bss_start[];
-        extern uint32_t __ldm_bss_end[];
-        wzerorange(__ldm_bss_start, __ldm_bss_end);
-
         memcpy(const_cast<std::jmp_buf&>(gJumpBuf), jump_buf, sizeof(jump_buf));
-        erisc_exit = return_to_base_fw;
-
-        debug_dump_addr[15]++;
         Application();
     }
+#else
+    // Long jumps are not needed when watcher is disabled
+    Application();
+#endif
 
+    // Dump values to debug buffer
     // NOLINTNEXTLINE(hicpp-no-assembler)
     __asm__ volatile(
         "sw ra, 0 * 4(%0)\n\t"
@@ -59,6 +62,7 @@ extern "C" [[gnu::section(".start")]] void _start(void) {
         "sw s9, 10 * 4(%0)\n\t"
         "sw s10, 11 * 4(%0)\n\t"
         "sw s11, 12 * 4(%0)\n\t"
+        "nop"
         : /* no output */
         : "r"(debug_dump_addr)
         : "memory");

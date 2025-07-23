@@ -429,7 +429,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                     device_id,
                     virtual_core.str(),
                     run_flag_val,
-                    fmt::to_string(fmt::join(return_registers, ", ")));
+                    fmt::format("{:#x}", fmt::join(return_registers, ", ")));
             }
         }
     }
