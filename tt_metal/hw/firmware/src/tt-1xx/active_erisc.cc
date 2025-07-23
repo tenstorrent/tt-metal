@@ -80,12 +80,13 @@ inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
 }
 
 inline void service_base_fw() {
-    reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
-    if (is_port_up()) {
-        // Write to MEM_AERISC_LIVE_LINK_STATUS_BASE for debug
-        reinterpret_cast<void (*)(uint32_t)>(
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
-    }
+    // Not needed yet
+    // reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+    // if (is_port_up()) {
+    //     // Write to MEM_AERISC_LIVE_LINK_STATUS_BASE for debug
+    //     reinterpret_cast<void (*)(uint32_t)>(
+    //         (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    // }
 }
 
 inline void wait_subordinate_eriscs() {
@@ -107,21 +108,7 @@ inline void initialize_local_memory() {
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
 }
 
-#if 0
-extern "C" [[gnu::section(".start")]]
-int _start() {
-#endif
 void Application() {
-#if 0
-    // Enable GPREL optimizations.
-    asm(R"ASM(
-	.option push
-	.option norelax
-	lui gp,%hi(__global_pointer$)
-	addi gp,gp,%lo(__global_pointer$)
-	.option pop
-	)ASM");
-#endif
     WAYPOINT("I");
     configure_csr();
     initialize_local_memory();
@@ -165,6 +152,8 @@ void Application() {
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
+    // volatile uint32_t dummy[42] = { 0 };
+
     while (1) {
         // Wait...
         WAYPOINT("GW");
@@ -184,7 +173,6 @@ void Application() {
                     internal_::notify_dispatch_core_done(dispatch_addr);
                 }
             } else if (gEnableFwFlag[0] != 1) {
-                internal_::disable_erisc_app();
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 return;
             } else {
