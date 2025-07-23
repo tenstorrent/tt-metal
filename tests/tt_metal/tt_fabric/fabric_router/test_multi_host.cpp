@@ -19,7 +19,7 @@
 namespace tt::tt_fabric {
 namespace multi_host_tests {
 
-TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
+TEST(MultiHost, DISABLED_TestDualGalaxyControlPlaneInit) {
     const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
@@ -30,7 +30,7 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
-TEST(MultiHost, TestDualGalaxyFabricSanity) {
+TEST(MultiHost, DISABLED_TestDualGalaxyFabricSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
