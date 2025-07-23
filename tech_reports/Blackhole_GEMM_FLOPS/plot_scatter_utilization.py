@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ arrow_label_config = {
     "enable_flipping": True,  # Enable alternating left/right labels
     "first_label_right": False,  # First label goes on the right
     "force_right": False,  # Force all labels to the right
-    "force_left": False   # Force all labels to the left
+    "force_left": False,  # Force all labels to the left
 }
 
 # Filter by dtype - set to None to include all, or specify list of dtypes to include
@@ -33,7 +33,9 @@ dataframes = [df1, df2]
 df = pd.concat(dataframes, ignore_index=True)
 
 # Convert utilization values from strings to floats when loading the dataframe
-df["Utilization (vs 8x8 full grid)"] = df["Utilization (vs 8x8 full grid)"].apply(lambda x: float(str(x).rstrip('%')) if isinstance(x, str) else float(x))
+df["Utilization (vs 8x8 full grid)"] = df["Utilization (vs 8x8 full grid)"].apply(
+    lambda x: float(str(x).rstrip("%")) if isinstance(x, str) else float(x)
+)
 
 # Create short dtype string without "DataType." prefix
 df["dtype_short"] = df["dtype"].str.replace("DataType.", "", regex=False)
@@ -86,9 +88,9 @@ for dtype_fidelity in unique_dtype_fidelity:
         subg = group_p150[group_p150["matrix_elements"] == matrix_elements]
         for storage in storage_orders:
             match = subg[
-                (subg["in0_storage_type"] == storage[0]) &
-                (subg["in1_storage_type"] == storage[1]) &
-                (subg["out_storage_type"] == storage[2])
+                (subg["in0_storage_type"] == storage[0])
+                & (subg["in1_storage_type"] == storage[1])
+                & (subg["out_storage_type"] == storage[2])
             ]
             if not match.empty:
                 selected_rows_p150.append(match.iloc[0])
@@ -108,9 +110,9 @@ for dtype_fidelity in unique_dtype_fidelity:
         subg = group_n150[group_n150["matrix_elements"] == matrix_elements]
         for storage in storage_orders:
             match = subg[
-                (subg["in0_storage_type"] == storage[0]) &
-                (subg["in1_storage_type"] == storage[1]) &
-                (subg["out_storage_type"] == storage[2])
+                (subg["in0_storage_type"] == storage[0])
+                & (subg["in1_storage_type"] == storage[1])
+                & (subg["out_storage_type"] == storage[2])
             ]
             if not match.empty:
                 selected_rows_n150.append(match.iloc[0])
@@ -124,7 +126,7 @@ for dtype_fidelity in unique_dtype_fidelity:
         alpha=0.7,
         linewidth=1.5,
         marker=source_markers["p150"],
-        label=f"{dtype_fidelity} (p150)"
+        label=f"{dtype_fidelity} (p150)",
     )
     plt.scatter(
         selected_df_p150["matrix_elements"],
@@ -133,7 +135,7 @@ for dtype_fidelity in unique_dtype_fidelity:
         marker=source_markers["p150"],
         s=60,
         alpha=0.8,
-        zorder=10
+        zorder=10,
     )
 
     # Plot n150 (cut off at p150's max x) - Now using Utilization metric
@@ -146,7 +148,7 @@ for dtype_fidelity in unique_dtype_fidelity:
             alpha=0.7,
             linewidth=1.5,
             marker=source_markers["n150"],
-            label=f"{dtype_fidelity} (n150)"
+            label=f"{dtype_fidelity} (n150)",
         )
         plt.scatter(
             selected_df_n150["matrix_elements"],
@@ -155,7 +157,7 @@ for dtype_fidelity in unique_dtype_fidelity:
             marker=source_markers["n150"],
             s=60,
             alpha=0.8,
-            zorder=10
+            zorder=10,
         )
 
 plt.xscale("log")
@@ -166,11 +168,13 @@ plt.title("Grid Utilization vs Matrix Size (n150 vs p150) - HiFi Comparison")  #
 # Move legend to the bottom of the plot and make it wider
 plt.legend(
     title="DType_Fidelity (Source)",
-    loc='upper center',
+    loc="upper center",
     bbox_to_anchor=(0.5, -0.15),  # Position below the plot
     ncol=3,  # Use 3 columns to make it more horizontal
-    fontsize=9
+    fontsize=9,
 )
 plt.tight_layout()
-plt.savefig("tech_reports/GEMM_FLOPS/utilization_vs_matrix_elements_comparison.png", bbox_inches="tight")  # Updated filename
+plt.savefig(
+    "tech_reports/GEMM_FLOPS/utilization_vs_matrix_elements_comparison.png", bbox_inches="tight"
+)  # Updated filename
 plt.close()

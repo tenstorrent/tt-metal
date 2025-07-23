@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ arrow_label_config = {
     "enable_flipping": True,  # Enable alternating left/right labels
     "first_label_right": False,  # First label goes on the right
     "force_right": False,  # Force all labels to the right
-    "force_left": False   # Force all labels to the left
+    "force_left": False,  # Force all labels to the left
 }
 
 # Filter by dtype - set to None to include all, or specify list of dtypes to include
@@ -82,9 +82,9 @@ for dtype_fidelity in unique_dtype_fidelity:
         subg = group_p150[group_p150["matrix_elements"] == matrix_elements]
         for storage in storage_orders:
             match = subg[
-                (subg["in0_storage_type"] == storage[0]) &
-                (subg["in1_storage_type"] == storage[1]) &
-                (subg["out_storage_type"] == storage[2])
+                (subg["in0_storage_type"] == storage[0])
+                & (subg["in1_storage_type"] == storage[1])
+                & (subg["out_storage_type"] == storage[2])
             ]
             if not match.empty:
                 selected_rows_p150.append(match.iloc[0])
@@ -104,9 +104,9 @@ for dtype_fidelity in unique_dtype_fidelity:
         subg = group_n150[group_n150["matrix_elements"] == matrix_elements]
         for storage in storage_orders:
             match = subg[
-                (subg["in0_storage_type"] == storage[0]) &
-                (subg["in1_storage_type"] == storage[1]) &
-                (subg["out_storage_type"] == storage[2])
+                (subg["in0_storage_type"] == storage[0])
+                & (subg["in1_storage_type"] == storage[1])
+                & (subg["out_storage_type"] == storage[2])
             ]
             if not match.empty:
                 selected_rows_n150.append(match.iloc[0])
@@ -120,7 +120,7 @@ for dtype_fidelity in unique_dtype_fidelity:
         alpha=0.7,
         linewidth=1.5,
         marker=source_markers["p150"],
-        label=f"{dtype_fidelity} (p150)"
+        label=f"{dtype_fidelity} (p150)",
     )
     plt.scatter(
         selected_df_p150["matrix_elements"],
@@ -129,7 +129,7 @@ for dtype_fidelity in unique_dtype_fidelity:
         marker=source_markers["p150"],
         s=60,
         alpha=0.8,
-        zorder=10
+        zorder=10,
     )
 
     # Plot n150 (cut off at p150's max x)
@@ -142,7 +142,7 @@ for dtype_fidelity in unique_dtype_fidelity:
             alpha=0.7,
             linewidth=1.5,
             marker=source_markers["n150"],
-            label=f"{dtype_fidelity} (n150)"
+            label=f"{dtype_fidelity} (n150)",
         )
         plt.scatter(
             selected_df_n150["matrix_elements"],
@@ -151,48 +151,48 @@ for dtype_fidelity in unique_dtype_fidelity:
             marker=source_markers["n150"],
             s=60,
             alpha=0.8,
-            zorder=10
+            zorder=10,
         )
 
         # Draw arrow and multiplier from n150 to p150 at the rightmost point (vertical arrow)
         # Use the rightmost x value (p150_x_cutoff)
         p150_rightmost = selected_df_p150[selected_df_p150["matrix_elements"] == p150_x_cutoff]
         n150_at_rightmost_x = selected_df_n150[selected_df_n150["matrix_elements"] <= p150_x_cutoff]
-        
+
         if not p150_rightmost.empty and not n150_at_rightmost_x.empty:
             # Get the closest n150 point to the rightmost p150 point
             n150_rightmost = n150_at_rightmost_x.iloc[-1]
             p150_rightmost_point = p150_rightmost.iloc[0]
-            
+
             # Create a vertical arrow
             x_pos = n150_rightmost["matrix_elements"]
             arrow_start = (x_pos, n150_rightmost["TFLOPs (avg)"])
             arrow_end = (x_pos, p150_rightmost_point["TFLOPs (avg)"])
             ratio = p150_rightmost_point["TFLOPs (avg)"] / n150_rightmost["TFLOPs (avg)"]
-            
+
             # Draw the arrow with thicker linewidth
             plt.annotate(
                 "",  # No text on the arrow itself
                 xy=arrow_end,
                 xytext=arrow_start,
-                arrowprops=dict(facecolor='black', arrowstyle="->", linewidth=2.5),
+                arrowprops=dict(facecolor="black", arrowstyle="->", linewidth=2.5),
                 fontsize=12,
-                color="black"
+                color="black",
             )
-            
+
             # Determine label position based on configuration
             if arrow_label_config["force_right"]:
                 label_on_right = True
             elif arrow_label_config["force_left"]:
                 label_on_right = False
-            
+
             # Position for the multiplier text
             text_x_pos = x_pos * (1.2 if label_on_right else 0.85)
             text_y_pos = (arrow_start[1] + arrow_end[1]) / 2  # Middle of arrow (vertically)
-            
+
             # Text alignment
             ha_align = "left" if label_on_right else "right"
-            
+
             # Create boxed and bold text
             bbox_props = dict(boxstyle="round,pad=0.5", fc="white", ec="black", lw=2)
             plt.text(
@@ -200,17 +200,17 @@ for dtype_fidelity in unique_dtype_fidelity:
                 text_y_pos,  # This should already be the middle of the arrow vertically
                 f"×{ratio:.2f}",
                 fontsize=14,
-                fontweight='bold',
+                fontweight="bold",
                 color="black",
                 ha=ha_align,
                 va="center",  # Ensure vertical centering
-                bbox=bbox_props
+                bbox=bbox_props,
             )
-            
+
             # Update label side for next arrow if flipping is enabled
             if arrow_label_config["enable_flipping"]:
                 label_on_right = not label_on_right
-            
+
             arrow_count += 1
 
 plt.xscale("log")
@@ -221,10 +221,10 @@ plt.title("TFLOPs vs Matrix Size (n150 vs p150) - LoFi Comparison")
 # Move legend to the bottom of the plot and make it wider
 plt.legend(
     title="DType_Fidelity (Source)",
-    loc='upper center',
+    loc="upper center",
     bbox_to_anchor=(0.5, -0.15),  # Position below the plot
     ncol=3,  # Use 3 columns to make it more horizontal
-    fontsize=9
+    fontsize=9,
 )
 plt.tight_layout()
 plt.savefig("tech_reports/GEMM_FLOPS/flops_vs_matrix_elements_bfloat8b_fidelity_comparison.png", bbox_inches="tight")

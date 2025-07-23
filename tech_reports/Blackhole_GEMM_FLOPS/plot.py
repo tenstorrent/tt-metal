@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ square_matrices_only = False  # Set to False to include all matrices (not just s
 
 # Filter by dtype - set to None to include all, or specify list of dtypes to include
 # Example: ["BFLOAT8_B", "BFLOAT16"] or None
-#filter_dtypes = None  # Set to None to include all dtypes
+# filter_dtypes = None  # Set to None to include all dtypes
 filter_dtypes = ["BFLOAT4_B", "BFLOAT8_B", "BFLOAT16"]  # Uncomment and modify to filter specific dtypes
 
 # Read CSV files and add a 'source' column to each
@@ -56,17 +56,17 @@ if square_matrices_only:
 
 # Create a combined dtype+fidelity+source label for legend and color
 df["legend_label"] = (
-    df["dtype_short"] + "_" +
-    df["math_fidelity"].str.replace("MathFidelity.", "", regex=False) +
-    " (" + df["source"] + ")"
+    df["dtype_short"]
+    + "_"
+    + df["math_fidelity"].str.replace("MathFidelity.", "", regex=False)
+    + " ("
+    + df["source"]
+    + ")"
 )
 df["dtype_source"] = df["legend_label"]  # for compatibility below
 
 # Create a column without source for pairing
-df["dtype_fidelity"] = (
-    df["dtype_short"] + "_" +
-    df["math_fidelity"].str.replace("MathFidelity.", "", regex=False)
-)
+df["dtype_fidelity"] = df["dtype_short"] + "_" + df["math_fidelity"].str.replace("MathFidelity.", "", regex=False)
 
 # Get unique values for dtype_fidelity and sources
 unique_dtype_fidelity = df["dtype_fidelity"].unique()
@@ -88,18 +88,10 @@ n150_combinations = df[df["source"] == "n150"][["matrix_size", "dtype_fidelity"]
 p150_combinations = df[df["source"] == "p150"][["matrix_size", "dtype_fidelity"]].drop_duplicates()
 
 # Merge to find common combinations
-common_combinations = pd.merge(
-    n150_combinations, p150_combinations, 
-    on=["matrix_size", "dtype_fidelity"], 
-    how="inner"
-)
+common_combinations = pd.merge(n150_combinations, p150_combinations, on=["matrix_size", "dtype_fidelity"], how="inner")
 
 # Filter dataset to only include matching combinations BEFORE creating df_best
-df = pd.merge(
-    df, common_combinations, 
-    on=["matrix_size", "dtype_fidelity"], 
-    how="inner"
-)
+df = pd.merge(df, common_combinations, on=["matrix_size", "dtype_fidelity"], how="inner")
 
 # If dataframe is empty after filtering, raise an error
 if len(df) == 0:
@@ -128,7 +120,7 @@ for matrix_size in matrix_sizes:
     if not group.empty:
         total_elements = group["total_elements"].iloc[0]
         matrix_elements_dict[matrix_size] = total_elements
-        
+
 # Sort matrix sizes by their total elements
 matrix_sizes_sorted = sorted(matrix_elements_dict.keys(), key=lambda x: matrix_elements_dict[x])
 
@@ -148,10 +140,10 @@ for matrix_size in matrix_sizes_sorted:
     group = df_best[df_best["matrix_size"] == matrix_size]
     dtype_count = 0
     cluster_start = current_pos
-    
+
     # Get unique dtype_fidelity combos for this matrix size
     combos = group["dtype_fidelity"].unique()
-    
+
     # Sort combos based on n150 TFLOPs (or p150 if n150 doesn't exist)
     def get_sort_value(combo):
         n150_entry = group[(group["dtype_fidelity"] == combo) & (group["source"] == "n150")]
@@ -161,46 +153,46 @@ for matrix_size in matrix_sizes_sorted:
         if not p150_entry.empty:
             return p150_entry["TFLOPs (avg)"].values[0]
         return 0
-    
+
     sorted_combos = sorted(combos, key=get_sort_value)
-    
+
     # Dictionary to store n150 values for ratio calculation
     n150_values = {}
-    
+
     # Process each dtype_fidelity combo, placing all sources side by side
     for combo in sorted_combos:
         # Process each source for this combo
         for source in unique_sources:
             source_entry = group[(group["dtype_fidelity"] == combo) & (group["source"] == source)]
-            
+
             if not source_entry.empty:
                 entry = source_entry.iloc[0]
                 pos = current_pos
                 height = entry["TFLOPs (avg)"]
                 positions.append(pos)
                 heights.append(height)
-                
+
                 # Get base color for this dtype_fidelity and adjust for source
                 base_color = dtype_fidelity_colors[combo]
                 adjusted_color = mcolors.to_rgba(base_color, alpha=source_shade[source])
                 dtype_colors.append(adjusted_color)
-                
+
                 # Store n150 values for ratio calculation
                 if source == "n150":
                     n150_values[combo] = height
-                
+
                 # Calculate ratio if n150 exists for this combo
                 elif source != "n150" and combo in n150_values:
                     n150_val = n150_values[combo]
-                    ratio = height / n150_val if n150_val > 0 else float('inf')
+                    ratio = height / n150_val if n150_val > 0 else float("inf")
                     multipliers.append((pos, height, f"{ratio:.2f}x"))
-                
+
                 dtype_count += 1
                 current_pos += bar_width
-        
+
         # Add gap between different dtype_fidelity combos within the cluster
         current_pos += 0.02  # Reduce spacing to minimum
-            
+
     if dtype_count > 0:
         # Center label under the cluster
         cluster_center = cluster_start + (dtype_count - 1) * bar_width / 2
@@ -219,7 +211,9 @@ if filter_dtypes is not None:
     dtype_text = f" - {', '.join(filter_dtypes)}"
 
 # Create figure with wider aspect ratio
-plt.figure(figsize=(max(14, len(positions) * 0.4), 14))  # Increased width from 0.3 to 0.4 multiplier and minimum from 10 to 14
+plt.figure(
+    figsize=(max(14, len(positions) * 0.4), 14)
+)  # Increased width from 0.3 to 0.4 multiplier and minimum from 10 to 14
 bars = plt.bar(positions, heights, width=bar_width, color=dtype_colors)
 
 # Calculate maximum height needed for y-axis to fit all annotations
@@ -236,14 +230,14 @@ for pos, height, text in multipliers:
     plt.annotate(
         text,
         xy=(pos, y_pos),
-        ha='center',
-        va='bottom',
+        ha="center",
+        va="bottom",
         fontsize=10,
-        fontweight='bold',
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8)
+        fontweight="bold",
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
     )
 
-plt.xticks(cluster_centers, labels, rotation=45, ha='right')
+plt.xticks(cluster_centers, labels, rotation=45, ha="right")
 plt.ylabel("TFLOPs (avg)")
 plt.xlabel("Matrix Size")
 plt.title(f"TFLOPs by Matrix Size and Data Type 8x8 Compute Grid ({sources_text}){dtype_text}")
@@ -255,12 +249,11 @@ legend_labels = []
 # Create a custom legend that shows the different shades by source
 for dtype_fidelity in unique_dtype_fidelity:
     base_color = dtype_fidelity_colors[dtype_fidelity]
-    
+
     for source in unique_sources:
-        legend_handles.append(plt.Rectangle(
-            (0, 0), 1, 1, 
-            color=mcolors.to_rgba(base_color, alpha=source_shade[source])
-        ))
+        legend_handles.append(
+            plt.Rectangle((0, 0), 1, 1, color=mcolors.to_rgba(base_color, alpha=source_shade[source]))
+        )
         legend_labels.append(f"{dtype_fidelity} ({source})")
 
 # Tighten the plot boundaries to minimize whitespace
@@ -274,10 +267,12 @@ if positions:
 plt.subplots_adjust(left=0.03, right=0.97, bottom=0.25)  # Increased bottom margin for legend
 
 plt.legend(
-    legend_handles, legend_labels, title="DType_Fidelity (Source)",
-    loc='upper center',  # Move legend to bottom center
+    legend_handles,
+    legend_labels,
+    title="DType_Fidelity (Source)",
+    loc="upper center",  # Move legend to bottom center
     bbox_to_anchor=(0.5, -0.12),  # Position just below the plot
-    ncol=min(len(legend_labels), 6)  # Increase number of columns from 4 to 6
+    ncol=min(len(legend_labels), 6),  # Increase number of columns from 4 to 6
 )
 
 # Create filename with appropriate tags
@@ -294,4 +289,3 @@ filename += ".png"
 # Use tight bounding box when saving
 plt.savefig(filename, bbox_inches="tight")
 plt.close()
-
