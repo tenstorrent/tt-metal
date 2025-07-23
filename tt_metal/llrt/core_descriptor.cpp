@@ -70,6 +70,15 @@ inline std::string get_core_descriptor_file(
                                             ? "wormhole_b0_80_arch_eth_dispatch.yaml"
                                             : "wormhole_b0_80_arch.yaml");
             case tt::ARCH::BLACKHOLE:
+                if (getenv("BH_ARCH_YAML")) {
+                    if (!std::filesystem::exists(core_desc_dir + getenv("BH_ARCH_YAML"))) {
+                        TT_THROW(
+                            "Blackhole core descriptor variant {} does not exist in {}",
+                            getenv("BH_ARCH_YAML"),
+                            core_desc_dir);
+                    }
+                    return core_desc_dir + getenv("BH_ARCH_YAML");
+                }
                 return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
                                             ? "blackhole_140_arch_eth_dispatch.yaml"
                                             : "blackhole_140_arch.yaml");
