@@ -54,17 +54,29 @@ BINARY_MULT_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(
 
 def run_all_gather_replicate_impl(
     mesh_device,
+    # shape params shared by AG and MM
     B_in,
     M_in,
     K_in,
     N_in,
     cluster_axis,
-    input_dtype,
+    in0_dtype,
+    # MM params for in1
+    in1_dtype,
     num_links,
     input_num_cores,
     input_core_range_set,
     output_num_cores,
     output_core_range_set,
+    # rest of mm params
+    output_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    grid,
+    in1_is_dram_interleaved,
+    # common params
     num_iters=1,
     trace_mode=False,
     validate_all=True,
@@ -73,6 +85,11 @@ def run_all_gather_replicate_impl(
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
+
+    # Only run these tests on unharvested TG
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
 
     ##################################
     ##### Set up fabric stuff
@@ -170,7 +187,7 @@ def run_all_gather_replicate_impl(
         input_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=input_dtype,
+        dtype=in0_dtype,
         memory_config=input_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
@@ -182,7 +199,7 @@ def run_all_gather_replicate_impl(
             intermediate_tensor,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=input_dtype,
+            dtype=in0_dtype,
             memory_config=intermediate_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
@@ -194,7 +211,7 @@ def run_all_gather_replicate_impl(
         aggregated_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=input_dtype,
+        dtype=in0_dtype,
         memory_config=aggregated_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
@@ -279,7 +296,7 @@ def run_all_gather_replicate_impl(
 
             tt_output_tensor = t.cpu().to_torch()
 
-            if input_dtype == ttnn.bfloat16:
+            if in0_dtype == ttnn.bfloat16:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
             else:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)

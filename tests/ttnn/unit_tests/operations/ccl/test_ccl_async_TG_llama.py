@@ -397,17 +397,29 @@ def test_all_gather_replicate_tg_llama(
 ):
     run_all_gather_replicate_impl(
         mesh_device,
+        # shape params shared by AG and MM
         B,
         M,
         K,
         N,
         cluster_axis,
         in0_dtype,
+        # MM params for in1
+        in1_dtype,
         num_links,
         input_num_cores,
         input_core_range_set,
         output_num_cores,
         output_core_range_set,
+        # rest of mm params
+        output_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        grid,
+        in1_is_dram_interleaved,
+        # common params
         num_iters=num_iters,
         trace_mode=trace_mode,
         validate_all=False,
