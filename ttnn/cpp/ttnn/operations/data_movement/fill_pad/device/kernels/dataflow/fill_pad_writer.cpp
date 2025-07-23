@@ -8,19 +8,19 @@
 
 void kernel_main() {
     constexpr uint32_t cb_id_0 = get_compile_time_arg_val(0);
-    constexpr bool tensor_in_dram = get_compile_time_arg_val(1) == 1;
-    const uint32_t fill_value = get_compile_time_arg_val(2);
-    const uint32_t element_size_bytes = get_compile_time_arg_val(3);
-    uint32_t logical_height = get_compile_time_arg_val(4);
-    uint32_t logical_width = get_compile_time_arg_val(5);
-    uint32_t padded_height = get_compile_time_arg_val(6);
-    uint32_t padded_width = get_compile_time_arg_val(7);
-    uint32_t tiles_per_2d_tensor = get_compile_time_arg_val(8);
-    uint32_t tiles_per_tile_row = get_compile_time_arg_val(9);
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
+    const uint32_t fill_value = get_compile_time_arg_val(1 + tensor_args.compile_time_args_skip());
+    const uint32_t element_size_bytes = get_compile_time_arg_val(2 + tensor_args.compile_time_args_skip());
+    uint32_t logical_height = get_compile_time_arg_val(3 + tensor_args.compile_time_args_skip());
+    uint32_t logical_width = get_compile_time_arg_val(4 + tensor_args.compile_time_args_skip());
+    uint32_t padded_height = get_compile_time_arg_val(5 + tensor_args.compile_time_args_skip());
+    uint32_t padded_width = get_compile_time_arg_val(6 + tensor_args.compile_time_args_skip());
+    uint32_t tiles_per_2d_tensor = get_compile_time_arg_val(7 + tensor_args.compile_time_args_skip());
+    uint32_t tiles_per_tile_row = get_compile_time_arg_val(8 + tensor_args.compile_time_args_skip());
     // hardware constraints
-    constexpr uint32_t tile_size = get_compile_time_arg_val(10);
+    constexpr uint32_t tile_size = get_compile_time_arg_val(9 + tensor_args.compile_time_args_skip());
     constexpr uint32_t tile_hw = tile_size * tile_size;
-    constexpr uint32_t face_size = get_compile_time_arg_val(11);
+    constexpr uint32_t face_size = get_compile_time_arg_val(10 + tensor_args.compile_time_args_skip());
     constexpr uint32_t face_hw = face_size * face_size;
     constexpr uint32_t alignment_adjustor = 16;
 
@@ -32,24 +32,22 @@ void kernel_main() {
 
 #ifdef SHARDED
     using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(12),   // Memory layout
-        get_compile_time_arg_val(13),   // The number of sharding cores
-        get_compile_time_arg_val(14),   // The page size we offset each write to
-        get_compile_time_arg_val(15),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(16),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(17),   // pages_per_shard_x
-        get_compile_time_arg_val(18)>;  // pages_per_shard_y
+        get_compile_time_arg_val(11 + tensor_args.compile_time_args_skip()),   // Memory layout
+        get_compile_time_arg_val(12 + tensor_args.compile_time_args_skip()),   // The number of sharding cores
+        get_compile_time_arg_val(13 + tensor_args.compile_time_args_skip()),   // The page size we offset each write to
+        get_compile_time_arg_val(14 + tensor_args.compile_time_args_skip()),   // The number of pages in each sharding
+                                                                               // row not including padding pages
+        get_compile_time_arg_val(15 + tensor_args.compile_time_args_skip()),   // This defines times when contiguous
+                                                                               // pages can't be calculated
+        get_compile_time_arg_val(16 + tensor_args.compile_time_args_skip()),   // pages_per_shard_x
+        get_compile_time_arg_val(17 + tensor_args.compile_time_args_skip())>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
     const DataFormat data_format = get_dataformat(cb_id_0);
-    const InterleavedAddrGenFast<tensor_in_dram> s0 = {
-        .bank_base_address = dst_addr,
-        .page_size = tile_hw * element_size_bytes,
-        .data_format = data_format  // page_size needs to be tile_size_bytes
-    };
+    const auto s0 = TensorAccessor(tensor_args, dst_addr, tile_hw * element_size_bytes);
 #endif
 
     // Reserve and push the fill value into the circular buffer

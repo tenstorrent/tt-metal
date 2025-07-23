@@ -25,30 +25,30 @@ void kernel_main() {
     // 1) Compile-time Arguments
     //--------------------------------------------------------------------------
 
-    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
-    constexpr uint32_t RANK = get_compile_time_arg_val(1);
-    // constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t element_size = get_compile_time_arg_val(3);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(4);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(5);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(6);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(7);
-    constexpr uint32_t x_dim_in_input = get_compile_time_arg_val(8);
-    constexpr uint32_t X = get_compile_time_arg_val(9);
-    constexpr uint32_t W = get_compile_time_arg_val(10);
-    constexpr uint32_t Y = get_compile_time_arg_val(11);
-    constexpr uint32_t X_p = get_compile_time_arg_val(12);
-    constexpr uint32_t W_p = get_compile_time_arg_val(13);
-    constexpr uint32_t rows_per_x = get_compile_time_arg_val(14);
-    // 15 is Y_t, see below
-    constexpr uint32_t W_t = get_compile_time_arg_val(16);
-    constexpr uint32_t final_tile_real_x = get_compile_time_arg_val(17);
-    constexpr uint32_t final_tile_real_faces_x = get_compile_time_arg_val(18);
-    constexpr uint32_t xw_blocks = get_compile_time_arg_val(19);
-    constexpr uint32_t x_blocks = get_compile_time_arg_val(20);
-    constexpr uint32_t w_blocks = get_compile_time_arg_val(21);
-    constexpr bool needs_y_padding = (bool)get_compile_time_arg_val(22);
-    constexpr uint32_t permuted_w_dim = get_compile_time_arg_val(23);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t RANK = get_compile_time_arg_val(0 + tensor_args.compile_time_args_skip());
+    // constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(1 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t element_size = get_compile_time_arg_val(2 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(3 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(4 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(5 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(6 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t x_dim_in_input = get_compile_time_arg_val(7 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t X = get_compile_time_arg_val(8 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t W = get_compile_time_arg_val(9 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t Y = get_compile_time_arg_val(10 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t X_p = get_compile_time_arg_val(11 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t W_p = get_compile_time_arg_val(12 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t rows_per_x = get_compile_time_arg_val(13 + tensor_args.compile_time_args_skip());
+    // 14 is Y_t, see below
+    constexpr uint32_t W_t = get_compile_time_arg_val(15 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t final_tile_real_x = get_compile_time_arg_val(16 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t final_tile_real_faces_x = get_compile_time_arg_val(17 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t xw_blocks = get_compile_time_arg_val(18 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t x_blocks = get_compile_time_arg_val(19 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t w_blocks = get_compile_time_arg_val(20 + tensor_args.compile_time_args_skip());
+    constexpr bool needs_y_padding = (bool)get_compile_time_arg_val(21 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t permuted_w_dim = get_compile_time_arg_val(22 + tensor_args.compile_time_args_skip());
 
     //--------------------------------------------------------------------------
     // 2) Derived Constants (all constexpr)
@@ -124,8 +124,7 @@ void kernel_main() {
     uint32_t W_stride_tile = dest_tiled_strides[permuted_w_dim];
 
     constexpr auto data_format = get_dataformat(tt::CBIndex::c_0);
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(tensor_args, dst_addr, tile_bytes);
 
     uint32_t idxs[RANK];
     idxs[RANK - 1] = 0;

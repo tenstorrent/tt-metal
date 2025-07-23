@@ -18,19 +18,21 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t batch_cb_id = get_compile_time_arg_val(1);
-    constexpr bool batch_ids_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool src0_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(5) == 1;
-    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(6);
+    constexpr auto batch_tensor_args = TensorAccessorArgs<2>();
+    constexpr auto src0_tensor_args = TensorAccessorArgs<2 + batch_tensor_args.compile_time_args_skip()>();
+    constexpr auto src1_tensor_args = TensorAccessorArgs<
+        2 + batch_tensor_args.compile_time_args_skip() + src0_tensor_args.compile_time_args_skip()>();
+    constexpr bool src_stick_size_is_pow2 =
+        get_compile_time_arg_val(
+            2 + batch_tensor_args.compile_time_args_skip() + src0_tensor_args.compile_time_args_skip() +
+            src1_tensor_args.compile_time_args_skip()) == 1;
+    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(
+        3 + batch_tensor_args.compile_time_args_skip() + src0_tensor_args.compile_time_args_skip() +
+        src1_tensor_args.compile_time_args_skip());
 
-    const auto s0 = get_interleaved_addr_gen<src0_is_dram, src_stick_size_is_pow2>(
-        input_addr_a, stick_size, src_log_base_2_of_page_size);
-    const auto s1 = get_interleaved_addr_gen<src1_is_dram, src_stick_size_is_pow2>(
-        input_addr_b, stick_size, src_log_base_2_of_page_size);
-
-    const InterleavedAddrGen<batch_ids_is_dram> batchAddr = {
-        .bank_base_address = batch_ids_addr, .page_size = batch_id_size << 2};
+    const auto s0 = TensorAccessor(src0_tensor_args, input_addr_a, stick_size);
+    const auto s1 = TensorAccessor(src1_tensor_args, input_addr_b, stick_size);
+    const auto batchAddr = TensorAccessor(batch_tensor_args, batch_ids_addr, batch_id_size << 2);
 
     bool replace_batch = false;
     uint32_t batch_to_replace_id = 0;

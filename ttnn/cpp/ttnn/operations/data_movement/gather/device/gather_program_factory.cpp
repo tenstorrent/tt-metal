@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 namespace ttnn::operations::data_movement::gather::program {
 // Single row - single core
@@ -360,17 +361,15 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
     tt::tt_metal::CreateCircularBuffer(program, core_range, output_tensor_cb_config);
 
     // Kernels
-    const std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor_cb_index,
-        input_index_tensor_cb_index,
-        output_tensor_cb_index,
-        static_cast<uint32_t>(input_index_tensor_is_dram),
-        Ht,
-        Wt_input,
-        Wt_index,
-        total_number_of_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y};
+    std::vector<uint32_t> reader_compile_time_args = {
+        input_tensor_cb_index, input_index_tensor_cb_index, output_tensor_cb_index};
+    TensorAccessorArgs(*input_index_tensor_buffer).append_args(reader_compile_time_args);
+    reader_compile_time_args.push_back(Ht);
+    reader_compile_time_args.push_back(Wt_input);
+    reader_compile_time_args.push_back(Wt_index);
+    reader_compile_time_args.push_back(total_number_of_cores);
+    reader_compile_time_args.push_back(compute_with_storage_grid_size.x);
+    reader_compile_time_args.push_back(compute_with_storage_grid_size.y);
     const std::string gather_reader_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -387,17 +386,15 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
          tile_width,
          tile_height});
 
-    const std::vector<uint32_t> writer_compile_time_args = {
-        input_tensor_cb_index,
-        output_tensor_cb_index,
-        static_cast<uint32_t>(input_tensor_is_dram),
-        static_cast<uint32_t>(output_tensor_is_dram),
-        Ht,
-        Wt_input,
-        Wt_index,
-        total_number_of_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y};
+    std::vector<uint32_t> writer_compile_time_args = {input_tensor_cb_index, output_tensor_cb_index};
+    TensorAccessorArgs(*input_tensor_buffer).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*output_tensor_buffer).append_args(writer_compile_time_args);
+    writer_compile_time_args.push_back(Ht);
+    writer_compile_time_args.push_back(Wt_input);
+    writer_compile_time_args.push_back(Wt_index);
+    writer_compile_time_args.push_back(total_number_of_cores);
+    writer_compile_time_args.push_back(compute_with_storage_grid_size.x);
+    writer_compile_time_args.push_back(compute_with_storage_grid_size.y);
     const std::string gather_writer_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(

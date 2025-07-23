@@ -14,6 +14,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -372,13 +373,22 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     std::map<std::string, std::string> reader_defines = {
         {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
 
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+    reader_compile_time_args.push_back(total_num_rows);
+    reader_compile_time_args.push_back(third_dim);
+    reader_compile_time_args.push_back(tile_height);
+    reader_compile_time_args.push_back(a.element_size());
+    if (stick_size_is_power_of_two) {
+        reader_compile_time_args.push_back(log2_stick_size);
+    }
+
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "reader_unary_pad_multicore_both_dims.cpp",
         all_cores,
-        ReaderDataMovementConfig(
-            {src0_is_dram, log2_stick_size, total_num_rows, third_dim, tile_height, a.element_size()}, reader_defines));
+        ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     // writer
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -577,7 +587,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     /** reader
      */
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
@@ -586,12 +595,18 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     // log2(TILE_WIDTH * data_format_size_in_bytes)
     uint32_t shift_bits = (a.dtype() == DataType::BFLOAT16) ? 6 : 7;
 
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+    reader_compile_time_args.push_back(stick_size_is_power_of_two);
+    reader_compile_time_args.push_back(log2_stick_size);
+    reader_compile_time_args.push_back(shift_bits);
+
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "reader_unary_pad_dims_split_rows_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram, stick_size_is_power_of_two, log2_stick_size, shift_bits}));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     /** writer
      */

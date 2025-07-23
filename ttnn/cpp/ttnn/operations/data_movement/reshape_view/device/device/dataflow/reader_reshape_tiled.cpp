@@ -19,12 +19,12 @@ void kernel_main() {
     uint32_t start_output_page_idx = get_arg_val<uint32_t>(2);
     uint32_t end_output_page_idx = get_arg_val<uint32_t>(3);
 
-    constexpr bool input_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t Max_Map_Size_Bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t Tile_Size_Bytes = get_compile_time_arg_val(2);
+    constexpr auto input_tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t Max_Map_Size_Bytes = get_compile_time_arg_val(0 + input_tensor_args.compile_time_args_skip());
+    constexpr uint32_t Tile_Size_Bytes = get_compile_time_arg_val(1 + input_tensor_args.compile_time_args_skip());
 
-    constexpr uint32_t mapping_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t mapping_cb_id = get_compile_time_arg_val(2 + input_tensor_args.compile_time_args_skip());
+    constexpr uint32_t input_cb_id = get_compile_time_arg_val(3 + input_tensor_args.compile_time_args_skip());
 
     constexpr uint32_t Max_Map_Entries = Max_Map_Size_Bytes / sizeof(SegmentMapData);
     constexpr uint32_t Max_Map_Elements = Max_Map_Entries * SegmentMapData::size;
@@ -32,10 +32,10 @@ void kernel_main() {
     const DataFormat input_data_format = get_dataformat(input_cb_id);
     const DataFormat map_data_format = get_dataformat(mapping_cb_id);
 
-    const InterleavedAddrGenFast<input_is_dram> input_addr_gen = {
-        .bank_base_address = input_addr, .page_size = Tile_Size_Bytes, .data_format = input_data_format};
+    const auto input_addr_gen = TensorAccessor(input_tensor_args, input_addr, Tile_Size_Bytes);
 
-    const InterleavedAddrGen<true> map_addr_gen = {.bank_base_address = map_addr, .page_size = Max_Map_Size_Bytes};
+    constexpr auto map_tensor_args = TensorAccessorArgs<4 + input_tensor_args.compile_time_args_skip()>();
+    const auto map_addr_gen = TensorAccessor(map_tensor_args, map_addr, Max_Map_Size_Bytes);
 
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {

@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include <tt-metalium/hal.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -103,7 +104,9 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
 
     uint32_t log2_page_size = 0;
-    std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};
+    std::vector<uint32_t> compile_time_args = {cb_index};
+    TensorAccessorArgs(*src_buffer).append_args(compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_args(compile_time_args);
     if (!tilized) {
         bool page_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
         log2_page_size = page_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;

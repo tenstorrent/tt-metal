@@ -30,7 +30,8 @@ void kernel_main() {
     // dump(stick_nbytes);
 
     // Initialize DRAM address generator
-    const InterleavedAddrGen<true> d = {.bank_base_address = dst_addr, .page_size = stick_nbytes};
+    constexpr auto tensor_args = TensorAccessorArgs<9>();
+    const auto d = TensorAccessor(tensor_args, dst_addr, stick_nbytes);
 
     // Pre-calculate output dimensions and patch size - moved outside loops
     const uint32_t OH = input_height / stride_height;                   // Output height

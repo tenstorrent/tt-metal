@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "slice_op.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -907,13 +908,10 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index),
-        static_cast<uint32_t>(num_dims),
-        static_cast<uint32_t>(src0_is_dram),
-    };
+        static_cast<uint32_t>(src0_cb_index), static_cast<uint32_t>(num_dims)};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(src0_cb_index), static_cast<uint32_t>(dst_is_dram)};
 

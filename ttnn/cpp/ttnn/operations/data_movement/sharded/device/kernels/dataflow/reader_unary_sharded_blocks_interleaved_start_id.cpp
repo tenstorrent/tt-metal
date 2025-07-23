@@ -27,14 +27,13 @@ void kernel_main() {
     const uint32_t start_id = start_id_base + start_id_offset;
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t num_readers = get_compile_time_arg_val(2);
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
+    constexpr uint32_t num_readers = get_compile_time_arg_val(1 + tensor_args.compile_time_args_skip());
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
     constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_readers>();
     uint32_t barrier_count = 0;

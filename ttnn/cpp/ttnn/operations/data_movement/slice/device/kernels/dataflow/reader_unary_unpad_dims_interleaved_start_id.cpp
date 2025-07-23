@@ -21,10 +21,9 @@ void kernel_main() {
     constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
     constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr auto src_tensor_args = TensorAccessorArgs<2>();
     // In and out are assumed to be same dataformat
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src_addr, .page_size = tile_size, .data_format = data_format};
+    const auto s0 = TensorAccessor(src_tensor_args, src_addr, tile_size);
 
     uint32_t src_tile_id = start_id;
 

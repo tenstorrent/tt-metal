@@ -6,13 +6,13 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr bool dst0_is_dram = (bool)get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t page_size = get_compile_time_arg_val(0 + tensor_args.compile_time_args_skip());
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
 
-    const InterleavedAddrGen<dst0_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = page_size};
+    const auto s0 = TensorAccessor(tensor_args, dst_addr, page_size);
 
     constexpr uint32_t cb_id_out0 = 24;
     const uint32_t start_id = 0;

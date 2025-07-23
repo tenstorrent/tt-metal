@@ -21,30 +21,33 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr uint32_t out_is_dram = get_compile_time_arg_val(1);
+    constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
+    constexpr auto out0_tensor_args = TensorAccessorArgs<1>();
+    constexpr auto out1_tensor_args = TensorAccessorArgs<1 + out0_tensor_args.compile_time_args_skip()>();
     // WRITER COMPILE TIME ARGS
     // constexpr uint32_t out_num_tiles_per_tensor = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(3);
-    constexpr uint32_t z = get_compile_time_arg_val(4);
-    constexpr uint32_t z_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t y_stride = get_compile_time_arg_val(6);
+    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(
+        1 + out0_tensor_args.compile_time_args_skip() + out1_tensor_args.compile_time_args_skip());
+    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(
+        2 + out0_tensor_args.compile_time_args_skip() + out1_tensor_args.compile_time_args_skip());
+    constexpr uint32_t z = get_compile_time_arg_val(
+        3 + out0_tensor_args.compile_time_args_skip() + out1_tensor_args.compile_time_args_skip());
+    constexpr uint32_t z_stride = get_compile_time_arg_val(
+        4 + out0_tensor_args.compile_time_args_skip() + out1_tensor_args.compile_time_args_skip());
+    constexpr uint32_t y_stride = get_compile_time_arg_val(
+        5 + out0_tensor_args.compile_time_args_skip() + out1_tensor_args.compile_time_args_skip());
 
     constexpr uint32_t cb_id_out0 = 0;  // same as cb_id_in0
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
-    constexpr bool out_is_dram_bool = out_is_dram == 1;
     constexpr uint32_t onetile = 1;
 
-    constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
     constexpr DataFormat data_format = (tile_dtype_is_bfloat16) ? DataFormat::Float16 : DataFormat::Bfp8_b;
 
-    const InterleavedAddrGenFast<out_is_dram_bool> s0 = {
-        .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
-    const InterleavedAddrGenFast<out_is_dram_bool> s1 = {
-        .bank_base_address = out1_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
+    const auto s0 = TensorAccessor(out0_tensor_args, out0_tensor_addr, single_tile_size_bytes);
+    const auto s1 = TensorAccessor(out1_tensor_args, out1_tensor_addr, single_tile_size_bytes);
 
-    std::array<InterleavedAddrGenFast<out_is_dram_bool>, 2> output_banks{s0, s1};
+    std::array<decltype(s0), 2> output_banks{s0, s1};
     uint32_t out_split_tensor_tile_id;
     //    uint32_t out_num_tiles_read = out_num_tiles_per_tensor;
 

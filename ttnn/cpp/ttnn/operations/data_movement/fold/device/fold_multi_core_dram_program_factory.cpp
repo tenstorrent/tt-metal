@@ -18,6 +18,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include "fold_device_op.hpp"
 namespace ttnn::operations::data_movement {
@@ -91,10 +92,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // Configure compile-time arguments for reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {
-        ntiles_per_row,
-        src0_cb_index,
-    };
+    std::vector<uint32_t> reader_compile_time_args = {ntiles_per_row, src0_cb_index};
+    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
 
     // Configure compile-time arguments for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {
@@ -106,8 +105,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         stick_nbytes,
         ntiles_per_row,
         datum_size(cb_data_format),
-        src1_cb_index,
-    };
+        src1_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
 
     // Create reader kernel for DRAM to circular buffer data movement
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

@@ -19,34 +19,27 @@ void kernel_main() {
     // ublocks size defined in pages
     constexpr uint32_t ublock_size_pages = 1;
 
-    uint8_t l1_src_addr_gens_memblk[sizeof(InterleavedAddrGen<false>) * num_tensors];
-    uint8_t dram_src_addr_gens_memblk[sizeof(InterleavedAddrGen<true>) * num_tensors];
+    // Since we have multiple tensors, we need to store multiple TensorAccessorArgs
+    // Each tensor will have its own args starting at different offsets
+    constexpr uint32_t tensor_accessor_args_size = 2;  // Each TensorAccessorArgs uses 2 compile-time args
 
-    InterleavedAddrGen<false>* l1_src_addr_gens = reinterpret_cast<InterleavedAddrGen<false>*>(l1_src_addr_gens_memblk);
-    InterleavedAddrGen<true>* dram_src_addr_gens =
-        reinterpret_cast<InterleavedAddrGen<true>*>(dram_src_addr_gens_memblk);
-
-    bool is_dram[num_tensors];
     uint32_t num_pages_per_block[num_tensors];
     uint32_t page_id_per_tensor[num_tensors];
+    uint32_t src_addr[num_tensors];
+    uint32_t page_size[num_tensors];
     constexpr uint32_t src_addr_base_idx = 3;
-    constexpr uint32_t is_dram_base_offset = num_tensors;
-    constexpr uint32_t num_pages_per_block_base_offset = is_dram_base_offset + num_tensors;
+    constexpr uint32_t num_pages_per_block_base_offset = num_tensors;
     constexpr uint32_t page_size_per_tensor_offset = num_pages_per_block_base_offset + num_tensors;
     constexpr uint32_t page_id_per_tensor_offset = page_size_per_tensor_offset + num_tensors;
     tt_l1_ptr uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)get_arg_addr(src_addr_base_idx);
+
+    // Parse runtime arguments for all tensors
     for (uint32_t i = 0; i < num_tensors; ++i) {
-        uint32_t src_addr = arg_ptr[i];
-        is_dram[i] = (bool)arg_ptr[is_dram_base_offset + i];
+        src_addr[i] = arg_ptr[i];
+        // Skip is_dram since TensorAccessor handles this automatically
         num_pages_per_block[i] = arg_ptr[num_pages_per_block_base_offset + i];
         page_id_per_tensor[i] = arg_ptr[page_id_per_tensor_offset + i];
-        if (is_dram[i]) {
-            new (&dram_src_addr_gens[i]) InterleavedAddrGen<true>{
-                .bank_base_address = src_addr, .page_size = arg_ptr[page_size_per_tensor_offset + i]};
-        } else {
-            new (&l1_src_addr_gens[i]) InterleavedAddrGen<false>{
-                .bank_base_address = src_addr, .page_size = arg_ptr[page_size_per_tensor_offset + i]};
-        }
+        page_size[i] = arg_ptr[page_size_per_tensor_offset + i];
     }
 
     uint32_t curr_tensor = start_tensor;
@@ -59,23 +52,24 @@ void kernel_main() {
         // For width concat we know we start at curr_tensor=0
         // num_pages_per_block[curr_tensor] is always one for width concat
         for (uint32_t j = 0; j < num_tensors; ++j) {
-            if (is_dram[curr_tensor]) {
-                noc_async_read_page(page_id_per_tensor[curr_tensor], dram_src_addr_gens[curr_tensor], l1_write_addr);
-                l1_write_addr += dram_src_addr_gens[curr_tensor].page_size;
-            } else {
-                noc_async_read_page(page_id_per_tensor[curr_tensor], l1_src_addr_gens[curr_tensor], l1_write_addr);
-                l1_write_addr += l1_src_addr_gens[curr_tensor].page_size;
-            }
+            // Create TensorAccessorArgs for the current tensor
+            // Each tensor's args start at offset: curr_tensor * tensor_accessor_args_size
+            const auto tensor_args = TensorAccessorArgs<2>(curr_tensor * tensor_accessor_args_size);
+            const auto s = TensorAccessor(tensor_args, src_addr[curr_tensor], page_size[curr_tensor]);
+
+            noc_async_read_page(page_id_per_tensor[curr_tensor], s, l1_write_addr);
+            l1_write_addr += page_size[curr_tensor];
             page_id_per_tensor[curr_tensor]++;
             curr_tensor++;
         }
         curr_tensor = 0;
 #else
-        if (is_dram[curr_tensor]) {
-            noc_async_read_page(page_id_per_tensor[curr_tensor], dram_src_addr_gens[curr_tensor], l1_write_addr);
-        } else {
-            noc_async_read_page(page_id_per_tensor[curr_tensor], l1_src_addr_gens[curr_tensor], l1_write_addr);
-        }
+        // Create TensorAccessorArgs for the current tensor
+        // Each tensor's args start at offset: curr_tensor * tensor_accessor_args_size
+        const auto tensor_args = TensorAccessorArgs<2>(curr_tensor * tensor_accessor_args_size);
+        const auto s = TensorAccessor(tensor_args, src_addr[curr_tensor], page_size[curr_tensor]);
+
+        noc_async_read_page(page_id_per_tensor[curr_tensor], s, l1_write_addr);
 
         page_id_per_tensor[curr_tensor]++;
         curr_tensor_id++;
