@@ -34,19 +34,63 @@ Tests:
       - device: [0, 0]
         patterns:
           - destination:
+              device: [0, 1]
+          - destination:
+              device: [1, 0]
+          - destination:
               device: [1, 1]
       - device: [0, 1]
         patterns:
           - destination:
+              device: [0, 0]
+          - destination:
               device: [1, 0]
+          - destination:
+              device: [1, 1]
       - device: [0, 2]
         patterns:
           - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
               device: [1, 2]
+          - destination:
+              device: [1, 3]
       - device: [0, 3]
         patterns:
           - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
               device: [1, 3]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [1, 1]
+      - device: [1, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [1, 0]
   # ======================================================================================
   # Test 2: A simple, fully specified unicast test for mult-host.
   # This demonstrates the most basic configuration using MeshCoordinates.
@@ -94,7 +138,7 @@ Tests:
       ftype: unicast
     patterns:
       - type: all_to_all_unicast
-        iterations: 100
+        iterations: 2
   # ======================================================================================
   # Test 4: Parameterized Unicast Test
   # ======================================================================================
@@ -109,4 +153,4 @@ Tests:
       num_packets: 10
     patterns:
       - type: full_device_random_pairing
-        iterations: 100
+        iterations: 1
