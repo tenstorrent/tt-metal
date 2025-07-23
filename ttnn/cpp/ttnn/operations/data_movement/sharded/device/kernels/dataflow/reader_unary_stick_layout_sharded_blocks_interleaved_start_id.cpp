@@ -21,12 +21,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
 
-    constexpr bool src0_is_dram          = get_compile_time_arg_val(2) == 1;
-    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(4);
+    constexpr auto tensor_args = TensorAccessorArgs<2>();
+    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(2 + tensor_args.compile_time_args_skip()) == 1;
+    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3 + tensor_args.compile_time_args_skip());
 
-    const auto s0 = get_interleaved_addr_gen<src0_is_dram, src_stick_size_is_pow2>(
-        src_addr + aligned_input_width_offset_bytes, stick_size, src_log_base_2_of_page_size);
+    const auto s0 = TensorAccessor(tensor_args, src_addr + aligned_input_width_offset_bytes,
+                                  src_stick_size_is_pow2 ? (1 << src_log_base_2_of_page_size) : stick_size);
 
     uint32_t stick_id = start_id;
     cb_reserve_back(cb_id_in0, block_height);

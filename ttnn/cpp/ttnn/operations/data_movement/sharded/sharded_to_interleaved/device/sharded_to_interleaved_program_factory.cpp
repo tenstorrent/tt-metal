@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 #include <tt-metalium/hal.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -118,7 +119,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     tt_metal::KernelHandle unary_writer_kernel_id;
     if (input.layout() == Layout::TILE) {
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)dst_is_dram};
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index};
+        TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -129,10 +131,10 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
         uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(num_units_per_row) : 0;
         std::vector<uint32_t> writer_compile_time_args = {
-            (std::uint32_t)out_cb_index,
-            (std::uint32_t)dst_is_dram,
-            (std::uint32_t)dst_stick_size_is_power_of_two,
-            (std::uint32_t)dst_log2_stick_size};
+            (std::uint32_t)out_cb_index};
+        TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+        writer_compile_time_args.push_back((std::uint32_t)dst_stick_size_is_power_of_two);
+        writer_compile_time_args.push_back((std::uint32_t)dst_log2_stick_size);
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
