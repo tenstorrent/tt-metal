@@ -22,6 +22,7 @@
 namespace tt::tt_metal::distributed {
 
 void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
+    std::cout << "HERE: write_sharded_buffer - Writing sharded buffer data from host to mesh devices" << std::endl;
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
 
     auto shard_shape = buffer.physical_shard_shape();
@@ -106,6 +107,7 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
 }
 
 void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
+    std::cout << "HERE: read_sharded_buffer - Reading sharded buffer data from mesh devices to host" << std::endl;
     const auto& [height_replicated, width_replicated] = buffer.replicated_dims();
     TT_FATAL(
         not(height_replicated or width_replicated), "Cannot read a MeshBuffer that is replicated along any dimension.");
@@ -167,7 +169,10 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     const MeshCoordinateRange& device_range,
     bool blocking,
     std::optional<BufferRegion> region) {
+    std::cout << "HERE: enqueue_write_shard_to_sub_grid - Enqueueing write operation to specified device range"
+              << std::endl;
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
+        std::cout << "Enqueueing write to replicated buffer" << std::endl;
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
@@ -180,6 +185,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
         }
         dispatch_thread_pool_->wait();
     } else {
+        std::cout << "Enqueueing write to sharded buffer" << std::endl;
         this->write_sharded_buffer(buffer, host_data);
     }
 
@@ -190,12 +196,14 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
 
 void MeshCommandQueueBase::enqueue_write_mesh_buffer(
     const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
+    std::cout << "HERE: enqueue_write_mesh_buffer - Enqueueing write to entire mesh buffer" << std::endl;
     MeshCoordinateRange mesh_device_extent(buffer->device()->shape());
     this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
 }
 
 void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
+    std::cout << "HERE: enqueue_read_mesh_buffer - Enqueueing read from entire mesh buffer" << std::endl;
     TT_FATAL(
         buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
     TT_FATAL(
@@ -207,6 +215,7 @@ void MeshCommandQueueBase::enqueue_write_shards(
     const std::shared_ptr<MeshBuffer>& buffer,
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
+    std::cout << "HERE: enqueue_write_shards - Enqueueing write operation for multiple shards" << std::endl;
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
@@ -229,6 +238,7 @@ void MeshCommandQueueBase::enqueue_write_shards(
 
 void MeshCommandQueueBase::enqueue_write(
     const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
+    std::cout << "HERE: enqueue_write - Enqueueing write from distributed host buffer to mesh buffer" << std::endl;
     // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
     std::vector<ShardDataTransfer> shard_data_transfers;
     for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
@@ -240,7 +250,7 @@ void MeshCommandQueueBase::enqueue_write(
                  .region = BufferRegion(0, buf->view_bytes().size())});
         }
     }
-
+    std::cout << "Enqueueing write to shards " << shard_data_transfers.size() << " shards" << std::endl;
     this->enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
 }
 
@@ -248,6 +258,7 @@ void MeshCommandQueueBase::enqueue_read_shards(
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& buffer,
     bool blocking) {
+    std::cout << "HERE: enqueue_read_shards - Enqueueing read operation for multiple shards" << std::endl;
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
@@ -267,6 +278,7 @@ void MeshCommandQueueBase::enqueue_read(
     DistributedHostBuffer& host_buffer,
     const std::optional<std::set<MeshCoordinate>>& shards,
     bool blocking) {
+    std::cout << "HERE: enqueue_read - Enqueueing read from mesh buffer to distributed host buffer" << std::endl;
     std::vector<ShardDataTransfer> shard_data_transfers;
     for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
         if (shards.has_value() && !shards->contains(coord)) {

@@ -122,6 +122,9 @@ public:
     uint32_t page_size() const { return device_local_config_.page_size; }
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
+    // Prints the details of the buffer configuration
+    void print_config_details() const;
+
 private:
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(
