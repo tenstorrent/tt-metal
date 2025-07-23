@@ -288,6 +288,8 @@ protected:
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
+class UnitMeshMultiCQMultDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
+
 class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
