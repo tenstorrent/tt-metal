@@ -73,7 +73,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const uint32_t num_heads,
     bool use_noc1_only) {
     tt::tt_metal::Program program{};
-    ttnn::MeshDevice* mesh_device = input_tensor.device();
+    ttnn::MeshDevice* mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
 
     const TensorSpec& output_intermediate_tensor_spec = temp_tensor.tensor_spec();

@@ -211,7 +211,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto mesh_device = tensor_args.input_tensor.mesh_device();
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords);
@@ -238,7 +238,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
-    auto mesh_device = input_tensor.device();
+    auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
     auto src_device = mesh_device->get_device(mesh_coordinate);
     auto src_physical_device_id = src_device->id();

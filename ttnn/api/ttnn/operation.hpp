@@ -138,7 +138,7 @@ struct OpPerformanceModelGeneral {
 
     OpPerformanceModelGeneral(Tensors input_tensors, OutputTensors output_tensors, int ideal_compute_cycles) {
         const auto& t = input_tensors.at(0);
-        const auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
+        const auto arch = t.storage_type() == StorageType::DEVICE ? t.mesh_device()->arch() : ARCH::WORMHOLE_B0;
 
         this->ideal_compute_cycles = ideal_compute_cycles;
 
@@ -464,7 +464,7 @@ auto default_create_output_tensors(
         }
         return output_tensors;
     }
-    const auto& device = input_tensors.at(0).device();
+    const auto& device = input_tensors.at(0).mesh_device();
     const auto& output_specs = operation.compute_output_specs(input_tensors);
     output_tensors.reserve(output_specs.size());
     for (const auto& output_spec : output_specs) {

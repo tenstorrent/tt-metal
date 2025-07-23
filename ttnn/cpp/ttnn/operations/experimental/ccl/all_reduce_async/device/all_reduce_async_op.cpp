@@ -94,7 +94,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
 
     IDevice* target_device =
-        input_tensors[0].device() ? input_tensors[0].device()->get_device(coord) : input_tensors[0].device();
+        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
@@ -233,7 +233,7 @@ Tensor all_reduce_async(
         input_tensor,
         buffer_tensor,
         cluster_axis,
-        *(input_tensor.device()),
+        *(input_tensor.mesh_device()),
         topology,
         multi_device_global_semaphore,
         dtype,

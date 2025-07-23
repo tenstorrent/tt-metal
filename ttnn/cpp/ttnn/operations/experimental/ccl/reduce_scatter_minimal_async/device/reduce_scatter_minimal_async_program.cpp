@@ -89,7 +89,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
-    auto mesh_device = input_tensor.device();
+    auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;

@@ -95,7 +95,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto& input_tensor_shape = input_tensor.get_padded_shape();
     const auto& output_tensor_shape = output_tensor.get_padded_shape();
 
-    auto mesh_device = input_tensor.device();
+    auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
@@ -528,7 +528,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     bool use_optimal_ccl_for_llama = false) {
     tt::tt_metal::Program program{};
 
-    IDevice* mesh_device = input_tensor.device();
+    IDevice* mesh_device = input_tensor.mesh_device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }

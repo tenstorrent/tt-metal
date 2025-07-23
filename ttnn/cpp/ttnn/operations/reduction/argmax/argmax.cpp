@@ -35,7 +35,7 @@ static Tensor zero_volume_argmax(
         NAN,
         tt::tt_metal::DataType::UINT32,
         input_tensor.layout(),
-        *input_tensor.device(),
+        *input_tensor.mesh_device(),
         memory_config);
 }
 
@@ -64,7 +64,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
             /*fill_value=*/0,
             tt::tt_metal::DataType::UINT32,
             input_tensor.layout(),
-            *input_tensor.device(),
+            *input_tensor.mesh_device(),
             output_memory_config);
     }
 

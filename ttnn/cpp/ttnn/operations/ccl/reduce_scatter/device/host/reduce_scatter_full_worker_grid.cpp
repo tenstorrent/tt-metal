@@ -433,7 +433,7 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
     const ttnn::ccl::RingTopology& topology_config,
     const std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_per_link_edm_builders,
     const std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_per_link_edm_builders,
-    const std::size_t num_edm_channels) {
+    std::const size_t num_edm_channels) {
     const uint32_t page_size_in_bytes = op_config.get_page_size();
     TT_ASSERT(num_edm_channels > 0);
     TT_ASSERT(topology_config.num_links > 0);
@@ -688,7 +688,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     TT_ASSERT(num_edm_channels_per_link > 0);
 
     const auto& device =
-        input_tensor.device() ? input_tensor.device()->get_device(target_device_id) : input_tensor.device();
+        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
     const auto& topology_config = ttnn::ccl::RingTopology(
         device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
     bool is_linear = topology_config.is_linear;

@@ -302,7 +302,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
         num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
     }
 
-    const auto& device = input_tensor.device()->get_device(target_device_id);
+    const auto& device = input_tensor.mesh_device()->get_device(target_device_id);
 
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
@@ -428,7 +428,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
             ccl::EriscDataMoverBufferSharingMode::NOT_SHARED,
             ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
             all_gather_config.get_num_buffers_per_channel(),
-            input_tensor.device()->id());
+            input_tensor.mesh_device()->id());
         counter_clockwise_edm_builders.emplace_back(
             all_gather_config.get_eth_buffer_size(),
             all_gather_config.get_erisc_handshake_address(),
@@ -437,7 +437,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
             ccl::EriscDataMoverBufferSharingMode::NOT_SHARED,
             ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
             all_gather_config.get_num_buffers_per_channel(),
-            input_tensor.device()->id());
+            input_tensor.mesh_device()->id());
     }
 
     // KERNEL CREATION
@@ -449,7 +449,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
         is_linear,
         ring_size,
         ring_index,
-        input_tensor.device()->compute_with_storage_grid_size());
+        input_tensor.mesh_device()->compute_with_storage_grid_size());
     auto all_sender_worker_cores = corerange_to_cores(all_sender_workers, std::nullopt, true);
     auto all_receiver_worker_cores = corerange_to_cores(all_receiver_workers, std::nullopt, true);
 

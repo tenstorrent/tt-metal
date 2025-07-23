@@ -109,7 +109,7 @@ Tensor full_impl(
     MeshDevice* device = nullptr,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
-    MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->device() : device;
+    MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->mesh_device() : device;
 
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
@@ -193,7 +193,7 @@ Tensor full_like_impl(
         optional_output_tensor.has_value() ? optional_output_tensor.value().layout() : layout.value_or(tensor.layout());
     DataType dtype_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
-    auto arch = tensor.device()->arch();
+    auto arch = tensor.mesh_device()->arch();
     const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (tt::tt_metal::is_device_tensor(tensor)) {
         // requires reference tensor to be in TILE for device operation fill - this will be changed later
@@ -209,7 +209,7 @@ Tensor full_like_impl(
                 fill_value,
                 dtype_value,
                 layout_value,
-                device ? device : tensor.device(),
+                device ? device : tensor.mesh_device(),
                 memory_config.value_or(tensor.memory_config()),
                 optional_output_tensor);
         }
@@ -220,7 +220,7 @@ Tensor full_like_impl(
             fill_value,
             dtype_value,
             layout_value,
-            device ? device : tensor.device(),
+            device ? device : tensor.mesh_device(),
             memory_config,
             optional_output_tensor);
     }
@@ -288,7 +288,7 @@ struct EmptyLike {
         if (device.has_value()) {
             target_device = &device->get();
         } else if (tensor.storage_type() == StorageType::DEVICE) {
-            target_device = tensor.device();
+            target_device = tensor.mesh_device();
         } else {
             TT_THROW("Tensor must be allocated on device when no device parameter is provided");
         }

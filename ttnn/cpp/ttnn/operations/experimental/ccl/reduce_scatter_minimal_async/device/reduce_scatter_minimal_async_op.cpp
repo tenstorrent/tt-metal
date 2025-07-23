@@ -127,10 +127,10 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterMinimalAsync::cr
 tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
+    auto mesh_device = input_tensors[0].mesh_device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = input_tensors[0].device()->get_view();
+    const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
     if (this->cluster_axis.has_value()) {
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.

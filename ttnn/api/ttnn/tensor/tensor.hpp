@@ -246,7 +246,7 @@ public:
 
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
-    distributed::MeshDevice* device() const;
+    distributed::MeshDevice* mesh_device() const;
 
     bool is_sharded() const;
 

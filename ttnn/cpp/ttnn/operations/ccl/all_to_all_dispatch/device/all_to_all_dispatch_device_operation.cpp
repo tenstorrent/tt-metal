@@ -90,7 +90,7 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     auto indices_shape = tensor_args.expert_indices_tensor.get_tensor_spec().logical_shape();
     auto mapping_shape = tensor_args.expert_mapping_tensor.get_tensor_spec().logical_shape();
 
-    auto mesh_device = input_tensor.device();
+    auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
 
     // experts are expert parallel across devices
