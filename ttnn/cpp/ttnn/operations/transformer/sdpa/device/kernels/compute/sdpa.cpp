@@ -265,8 +265,7 @@ void MAIN {
                  * Apply constant offset correction: multiply by exp(44.25 - curr_max) * scale
                  * This corrects for using constant offset instead of actual max during computation
                  */
-                compute_exp_correction_factor<scale_fp32>(
-                    cb_constant_offset_in, alias_prev_max, cb_exp_max_diff, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(cb_constant_offset_in, alias_prev_max, cb_exp_max_diff, Sq_chunk_t, true);
                 mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                 mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_mm2_prev_out, cb_exp_max_diff);
 
