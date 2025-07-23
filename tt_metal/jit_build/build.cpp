@@ -511,9 +511,9 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
     this->defines_ = env_.defines_;
     uint32_t l1_cache_disable_mask = rtoptions.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
     uint32_t erisc_mask = (tt::llrt::DebugHartFlags::RISCV_ER0 | tt::llrt::DebugHartFlags::RISCV_ER1);
-    if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
-        this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
-    }
+    // if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
+    this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
+    // }
 
     // 0: core_id = 0 and not cooperative
     // 1: core_id = 0 and cooperative
@@ -606,7 +606,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
             if (this->is_fw_) {
                 // Yes. Using same firmware as idle subordinate erisc
-                this->srcs_.push_back("tt_metal/hw/firmware/src/subordinate_erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc");
                 this->defines_ += fmt::format("-DPROCESSOR_TYPE_INDEX={} ", 1);  // Hardcoded to 1 for DM1
                 this->defines_ += fmt::format(
                     "-DPROGRAMMABLE_CORE_TYPE={} ",
@@ -614,7 +614,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                         HalProgrammableCoreType::ACTIVE_ETH)));
                 this->defines_ += fmt::format("-DDISPATCH_CLASS_INDEX={} ", static_cast<int>(DISPATCH_CLASS_ETH_DM1));
             } else {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
             }
             if (this->is_fw_) {
                 this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) +

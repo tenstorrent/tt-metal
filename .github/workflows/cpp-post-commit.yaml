@@ -95,6 +95,13 @@ jobs:
           # https://github.com/tenstorrent/tt-metal/issues/20166
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+
+      # - name: Install TT-Lens Debug tool
+      #   run: |
+      #     echo "Installing TT-Lens Debug tool"
+      #     pip3 install git+https://github.com/tenstorrent/tt-exalens
+      #   shell: bash
+
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
@@ -102,6 +109,11 @@ jobs:
         run: |
             mkdir -p generated/test_reports
             ${{ matrix.test-group.cmd }}
+      - name: Install TT-Lens Debug tool
+        run: |
+          echo "Installing TT-Lens Debug tool"
+          pip3 install git+https://github.com/tenstorrent/tt-exalens
+        shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
