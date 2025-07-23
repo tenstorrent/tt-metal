@@ -71,23 +71,23 @@ TEST(BigMeshDualRankTest2x4, SystemMeshShape) {
     const MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids(
         MeshShape(2, 4), std::move(mapped_devices.fabric_node_ids));
     if (rank == HostRankId{0}) {
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 0)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 1)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 0)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 1)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 2)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 3)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 2)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 3)).is_remote());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 0)).device_id.is_local());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 1)).device_id.is_local());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 0)).device_id.is_local());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 1)).device_id.is_local());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 2)).device_id.is_remote());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 3)).device_id.is_remote());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 2)).device_id.is_remote());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 3)).device_id.is_remote());
     } else {
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 0)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 1)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 0)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 1)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 2)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 3)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 2)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 3)).is_local());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 0)).device_id.is_remote());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 1)).device_id.is_remote());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 0)).device_id.is_remote());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 1)).device_id.is_remote());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 2)).device_id.is_local());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 3)).device_id.is_local());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 2)).device_id.is_local());
+        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 3)).device_id.is_local());
     }
 
     // Check fabric node IDs are set for all devices, globally.
