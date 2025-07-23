@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -37,8 +37,9 @@ struct LoopbackConfig {
 /// @brief Does L1 Sender Core --> L1 Receiver Cores
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
+/// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
+bool run_dm(IDevice* device, const LoopbackConfig& test_config, DispatchFixture* fixture) {
     // Program
     Program program = CreateProgram();
 
@@ -126,7 +127,8 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
     // Launch program and record outputs
     detail::WriteToBuffer(master_l1_buffer, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     vector<uint32_t> packed_output;
     detail::ReadFromBuffer(subordinate_l1_buffer, packed_output);
@@ -145,7 +147,7 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
 }  // namespace unit_tests::dm::core_loopback
 
 /* ========== Test case for loopback data movement; ========== */
-TEST_F(DeviceFixture, TensixDataMovementLoopbackPacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementLoopbackPacketSizes) {
     // Parameters
     uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages =
@@ -169,8 +171,8 @@ TEST_F(DeviceFixture, TensixDataMovementLoopbackPacketSizes) {
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            for (unsigned int id = 0; id < NumDevices(); id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
             }
         }
     }

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -32,7 +32,7 @@ struct ConvConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const ConvConfig& test_config) {
+bool run_dm(IDevice* device, const ConvConfig& test_config, DispatchFixture* fixture) {
     // Program
     Program program = CreateProgram();
 
@@ -55,13 +55,14 @@ bool run_dm(IDevice* device, const ConvConfig& test_config) {
 
     // Launch program
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     return true;
 }
 }  // namespace unit_tests::dm::conv_hardcoded
 
-TEST_F(DeviceFixture, TensixDataMovementConvActHalo3x3) {
+TEST_F(DispatchFixture, TensixDataMovementConvActHalo3x3) {
     if (arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
@@ -127,12 +128,12 @@ TEST_F(DeviceFixture, TensixDataMovementConvActHalo3x3) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementConvActHalo3x3Smaller) {
+TEST_F(DispatchFixture, TensixDataMovementConvActHalo3x3Smaller) {
     if (arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
@@ -198,12 +199,12 @@ TEST_F(DeviceFixture, TensixDataMovementConvActHalo3x3Smaller) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementConvHaloGather) {
+TEST_F(DispatchFixture, TensixDataMovementConvHaloGather) {
     if (arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
@@ -262,8 +263,8 @@ TEST_F(DeviceFixture, TensixDataMovementConvHaloGather) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 

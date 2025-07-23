@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -31,7 +31,7 @@ struct DeinterleaveConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
+bool run_dm(IDevice* device, const DeinterleaveConfig& test_config, DispatchFixture* fixture) {
     // Program
     Program program = CreateProgram();
 
@@ -56,13 +56,14 @@ bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
 
     // Launch program
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     return true;
 }
 }  // namespace unit_tests::dm::deinterleave_hardcoded
 
-TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
+TEST_F(DispatchFixture, TensixDataMovementDeinterleaveSingleCore) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -126,13 +127,13 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
             .noc_id = noc_id};
 
         // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        for (unsigned int id = 0; id < NumDevices(); id++) {
+            EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
         }
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
+TEST_F(DispatchFixture, TensixDataMovementDeinterleaveMultiCore) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -220,8 +221,8 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
             .noc_id = noc_id};
 
         // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        for (unsigned int id = 0; id < NumDevices(); id++) {
+            EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
         }
     }
 }

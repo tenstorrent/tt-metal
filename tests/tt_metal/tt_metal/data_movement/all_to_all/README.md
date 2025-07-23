@@ -22,6 +22,17 @@ A pcc check is performed by cross-checking the data of all the master cores piec
 
 Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
+## Running the Tests
+**Fast Dispatch Mode (Recommended):**
+```
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*AllToAll*"
+```
+
+**Slow Dispatch Mode:**
+```
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*AllToAll*"
+```
+
 ## Test Parameters
 | Parameter                         | Data Type             | Description                                                               |
 | --------------------------------- | --------------------- | ------------------------------------------------------------------------- |

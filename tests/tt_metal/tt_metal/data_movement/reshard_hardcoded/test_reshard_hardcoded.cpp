@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -31,7 +31,7 @@ struct ReshardConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const ReshardConfig& test_config) {
+bool run_dm(IDevice* device, const ReshardConfig& test_config, DispatchFixture* fixture) {
     // Program
     Program program = CreateProgram();
 
@@ -54,13 +54,14 @@ bool run_dm(IDevice* device, const ReshardConfig& test_config) {
 
     // Launch program
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     return true;
 }
 }  // namespace unit_tests::dm::reshard_hardcoded
 
-TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketSmallSizes) {
+TEST_F(DispatchFixture, TensixDataMovementReshardHardcodedPacketSmallSizes) {
     if (arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
@@ -126,12 +127,12 @@ TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketSmallSizes) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketMedSizes) {
+TEST_F(DispatchFixture, TensixDataMovementReshardHardcodedPacketMedSizes) {
     if (arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
@@ -217,12 +218,12 @@ TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketMedSizes) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketManyCoresSizes) {
+TEST_F(DispatchFixture, TensixDataMovementReshardHardcodedPacketManyCoresSizes) {
     if (arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
@@ -306,12 +307,12 @@ TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketManyCoresSizes) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketSmallCoresToManyCoresSizes) {
+TEST_F(DispatchFixture, TensixDataMovementReshardHardcodedPacketSmallCoresToManyCoresSizes) {
     if (arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
@@ -392,8 +393,8 @@ TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketSmallCoresToManyCo
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 
