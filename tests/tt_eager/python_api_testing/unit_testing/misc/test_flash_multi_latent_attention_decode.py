@@ -182,7 +182,7 @@ def run_flash_mla_decode_impl(
 
     # Page-related setup
     tt_k_torch = k
-    page_table = None
+    tt_page_table = None
     if paged_attention_cfg:
         page_table = page_table_setup(batch, paged_attention_cfg)
         tt_k_torch = to_paged_cache(
@@ -196,6 +196,13 @@ def run_flash_mla_decode_impl(
             paged_attention_cfg,
         )
         assert torch.all(tt_k_torch_og == k), "Paged cache conversion for K failed."
+
+        tt_page_table = ttnn.from_torch(
+            page_table,
+            device=device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
     q_chunk_size = 0  # Not used in decode
     k_chunk_size = 128
@@ -291,16 +298,29 @@ def run_flash_mla_decode_impl(
     )
 
     def run_op():
-        tt_out = ttnn.transformer.flash_multi_latent_attention_decode(
-            tt_q,
-            tt_k,
-            head_dim_v=kv_lora_rank,
-            cur_pos_tensor=tt_start_indices,
-            scale=scale,
-            program_config=sdpa_program_config,
-            compute_kernel_config=compute_kernel_config,
-            memory_config=out_mem_config,
-        )
+        if tt_page_table:
+            tt_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+                tt_q,
+                tt_k,
+                head_dim_v=kv_lora_rank,
+                page_table_tensor=tt_page_table,
+                cur_pos_tensor=tt_start_indices,
+                scale=scale,
+                program_config=sdpa_program_config,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=out_mem_config,
+            )
+        else:
+            tt_out = ttnn.transformer.flash_multi_latent_attention_decode(
+                tt_q,
+                tt_k,
+                head_dim_v=kv_lora_rank,
+                cur_pos_tensor=tt_start_indices,
+                scale=scale,
+                program_config=sdpa_program_config,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=out_mem_config,
+            )
 
         return tt_out
 
@@ -382,7 +402,7 @@ def run_flash_mla_decode_impl(
     "use_paged_attention",
     [
         False,
-        # True,
+        True,
     ],
 )
 def test_flash_mla_decode(

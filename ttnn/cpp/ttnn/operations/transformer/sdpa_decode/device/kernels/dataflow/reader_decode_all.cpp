@@ -206,7 +206,7 @@ void kernel_main() {
             .bank_base_address = page_table_addr, .page_size = page_table_page_size};
         cb_reserve_back(cb_id_page_table, 1);
         uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-        uint64_t page_table_noc_addr = get_noc_addr(cur_batch, page_table_gen);
+        uint64_t page_table_noc_addr = get_noc_addr((cur_batch / q_heads_parallel_factor), page_table_gen);
         noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
         noc_async_read_barrier();
         cb_push_back(cb_id_page_table, 1);
@@ -275,6 +275,7 @@ void kernel_main() {
                                 barrier_count = 0;
                             }
                         }
+                        physical_v_tile_id += (DHt - vDHt);
                     }
                     noc_async_read_barrier();
                     cb_push_back(cb_v_in, v_chunk_tiles);
