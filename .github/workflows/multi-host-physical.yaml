@@ -39,6 +39,7 @@ jobs:
         timeout-minutes: 120
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!'}}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME="/work"
             -e PYTHONPATH="/work"
