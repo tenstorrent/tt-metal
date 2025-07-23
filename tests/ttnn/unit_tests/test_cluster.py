@@ -33,14 +33,6 @@ def test_cluster_get_cluster_type():
         print(f"Detected cluster type: {cluster_type}")
 
 
-def test_cluster_number_of_user_devices():
-    """Test getting number of user devices"""
-    num_devices = ttnn.cluster.number_of_user_devices()
-
-    # Should have at least 1 device
-    assert num_devices >= 1, f"Expected at least 1 device, got {num_devices}"
-
-
 def test_cluster_serialize_descriptor():
     """Test cluster descriptor serialization"""
     try:
@@ -166,14 +158,6 @@ def test_cluster_type_architecture_detection():
     else:
         print(f"Unrecognized cluster type: {cluster_type}")
 
-    # Test multi-device detection
-    is_multi_device = cluster_type in multi_device_types
-    num_devices = ttnn.cluster.number_of_user_devices()
-
-    if is_multi_device:
-        assert num_devices > 1, f"Multi-device cluster type {cluster_type} but only {num_devices} devices"
-    print(f"Cluster type {cluster_type}: {num_devices} devices, multi-device: {is_multi_device}")
-
 
 @pytest.mark.parametrize(
     "cluster_type_name",
@@ -207,7 +191,7 @@ def test_cluster_functions_integration():
     """Test integration between different cluster functions"""
     # Get all cluster information
     cluster_type = ttnn.cluster.get_cluster_type()
-    num_devices = ttnn.cluster.number_of_user_devices()
+    num_devices = ttnn.GetNumAvailableDevices()
 
     print(f"Cluster Information:")
     print(f"  Type: {cluster_type}")
