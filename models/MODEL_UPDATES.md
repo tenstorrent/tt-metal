@@ -4,6 +4,17 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## July 21, 2025
+
+### [Llama 3.1-70B - Galaxy](demos/llama3_subdevices)
+- Achieved 65 t/s/u (and still working on further improvements) on Wormhole Galaxy for decode mode with our [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal), with batch size 32 and 128 input sequence length.
+
+### [Qwen 2.5-32B](tt_transformers)
+- Added Qwen 2.5-32B and Qwen 2.5-Coder-32B to the list of supported models in [models/tt_transformers](tt_transformers).
+
+### [Llama 3.1-70B](tt_transformers)
+- Added support for Llama 3.1 70B on Blackhole QuietBox.
+
 ## June 9, 2025
 
 ### [Qwen 3](tt_transformers)

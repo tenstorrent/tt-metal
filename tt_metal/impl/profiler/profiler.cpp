@@ -1321,7 +1321,7 @@ CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, con
                 tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
             // disable linting here; slicing is __intended__
             // NOLINTBEGIN
-            return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+            return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::NOC0);
             // NOLINTEND
         } else {
             return c;
