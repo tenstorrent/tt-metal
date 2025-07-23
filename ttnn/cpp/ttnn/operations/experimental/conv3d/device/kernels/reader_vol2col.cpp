@@ -82,30 +82,32 @@ void kernel_main() {
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;
 
-    constexpr uint32_t T_strided_block_size = T_block_size * stride_t;
-    constexpr uint32_t H_strided_block_size = H_block_size * stride_h;
-    constexpr uint32_t W_strided_block_size = W_block_size * stride_w;
-
     for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
         const uint32_t c_in_offset_bytes = c_in_block * C_in_block_bytes;
         // Iterate only over assigned C_out blocks
         for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
             // 3D blocking loops over assigned ranges:
-            for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_strided_block_size) {
-                const uint32_t t_block_end = std::min(t_block + T_strided_block_size, t_out_end);
+            for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
+                const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
+                const uint32_t t_block_s_start = t_block * stride_t;
+                const uint32_t t_block_end_s = t_block_end * stride_t;
 
-                for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_strided_block_size) {
-                    const uint32_t h_block_end = std::min(h_block + H_strided_block_size, h_out_end);
+                for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
+                    const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
+                    const uint32_t h_block_s_start = h_block * stride_h;
+                    const uint32_t h_block_end_s = h_block_end * stride_h;
 
-                    for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_strided_block_size) {
-                        const uint32_t w_block_end = std::min(w_block + W_strided_block_size, w_out_end);
+                    for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
+                        const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
+                        const uint32_t w_block_s_start = w_block * stride_w;
+                        const uint32_t w_block_end_s = w_block_end * stride_w;
                         // Now iterate through the sub-tile
                         cb_reserve_back(cb_vol2col, num_patches);
                         const uint32_t cb_write_ptr = get_write_ptr(cb_vol2col);
                         uint32_t cb_write_addr = cb_write_ptr;
-                        for (uint32_t t = t_block; t < t_block_end; t += stride_t) {
-                            for (uint32_t h = h_block; h < h_block_end; h += stride_h) {
-                                for (uint32_t w = w_block; w < w_block_end; w += stride_w) {
+                        for (uint32_t t = t_block_s_start; t < t_block_end_s; t += stride_t) {
+                            for (uint32_t h = h_block_s_start; h < h_block_end_s; h += stride_h) {
+                                for (uint32_t w = w_block_s_start; w < w_block_end_s; w += stride_w) {
                                     // For each output coordinate (t, h, w),
                                     // gather the kT*kH*kW patch around (t,h,w).
                                     for (uint32_t kt = 0; kt < kT; kt++) {
