@@ -24,46 +24,26 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.param_config import (
-    clean_params,
-    generate_param_ids,
-    generate_params,
     input_output_formats,
+    parametrize,
 )
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
-# SUPPORTED FORMATS FOR TEST
-supported_formats = [
-    DataFormat.Float16,
-    DataFormat.Float16_b,
-    DataFormat.Float32,
-    DataFormat.Bfp8_b,
-]
-#   INPUT-OUTPUT FORMAT SWEEP
-#   input_output_formats(supported_formats)
 
-#   FULL FORMAT SWEEP
-#   format_combination_sweep(formats=supported_formats, all_same=False, same_src_reg_format=True)
-
-#   SPECIFIC FORMAT COMBINATION
-#   generate_combination(
-#       [(DataFormat.Float16_b,  # index 0 is for unpack_A_src
-#         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
-#         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
-#         DataFormat.Bfp8_b,  # index 3 is for pack_dst
-#         DataFormat.Float16_b,  # index 4 is for math format)])
-
-#   SPECIFIC INPUT-OUTPUT COMBINATION
-#   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
-
-test_formats = input_output_formats(supported_formats, same=True)
-all_params = generate_params(
-    ["matmul_and_unary_sfpu_test"],
-    test_formats,
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
+@parametrize(
+    test_name="matmul_and_unary_sfpu_test",
+    formats=input_output_formats(
+        [
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+            DataFormat.Bfp8_b,
+        ],
+        same=True,
+    ),
     mathop=[
         MathOperation.Abs,
         MathOperation.Celu,
@@ -77,6 +57,8 @@ all_params = generate_params(
         MathOperation.Sqrt,
         MathOperation.Square,
     ],
+    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     math_fidelity=[
         MathFidelity.LoFi,
         # MathFidelity.HiFi2, TODO: FIND OUT WHY
@@ -84,18 +66,9 @@ all_params = generate_params(
         MathFidelity.HiFi4,
     ],
 )
-param_ids = generate_param_ids(all_params)
-
-
-@pytest.mark.parametrize(
-    "testname, formats, dest_acc, approx_mode, mathop, math_fidelity",
-    clean_params(all_params),
-    ids=param_ids,
-)
 def test_matmul_and_unary_sfpu(
-    testname, formats, dest_acc, approx_mode, mathop, math_fidelity
+    test_name, formats, mathop, approx_mode, dest_acc, math_fidelity
 ):
-
     input_dimensions = [32, 32]
 
     if mathop in [MathOperation.Cos, MathOperation.Sin]:
@@ -140,7 +113,7 @@ def test_matmul_and_unary_sfpu(
 
     test_config = {
         "formats": formats,
-        "testname": testname,
+        "testname": test_name,
         "dest_acc": dest_acc,
         "math_fidelity": math_fidelity,
         "approx_mode": approx_mode,

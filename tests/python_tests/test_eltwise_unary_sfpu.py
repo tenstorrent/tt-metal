@@ -19,92 +19,46 @@ from helpers.format_arg_mapping import (
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.param_config import (
-    clean_params,
-    generate_param_ids,
-    generate_params,
     input_output_formats,
+    parametrize,
 )
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.utils import passed_test
 
-# SUPPORTED FORMATS FOR TEST
-supported_float_formats = [
-    DataFormat.Float32,
-    DataFormat.Float16,
-    DataFormat.Float16_b,
-    DataFormat.Bfp8_b,
-]
-supported_int_formats = [DataFormat.Int32]
 
-#   INPUT-OUTPUT FORMAT SWEEP
-#   input_output_formats(supported_formats)
-
-#   FULL FORMAT SWEEP
-#   format_combination_sweep(formats=supported_formats, all_same=False, same_src_reg_format=True)
-
-#   SPECIFIC FORMAT COMBINATION
-#   generate_combination(
-#       [(DataFormat.Float16_b,  # index 0 is for unpack_A_src
-#         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
-#         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
-#         DataFormat.Bfp8_b,  # index 3 is for pack_dst
-#         DataFormat.Float16_b,  # index 4 is for math format)])
-
-#   SPECIFIC INPUT-OUTPUT COMBINATION
-#   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
-
-float_ops = [
-    MathOperation.Abs,
-    MathOperation.Cos,
-    MathOperation.Log,
-    MathOperation.Reciprocal,
-    MathOperation.Sin,
-    MathOperation.Sqrt,
-    MathOperation.Square,
-    MathOperation.Celu,
-    MathOperation.Silu,
-    MathOperation.Gelu,
-    MathOperation.Neg,
-    MathOperation.Fill,
-    MathOperation.Elu,
-    MathOperation.Exp,
-    MathOperation.Exp2,
-    MathOperation.Hardsigmoid,
-]
-
-int_ops = [
-    MathOperation.Neg,
-    MathOperation.Fill,
-]
-
-float_params = generate_params(
-    ["eltwise_unary_sfpu_test"],
-    input_output_formats(supported_float_formats),
+@parametrize(
+    test_name="eltwise_unary_sfpu_test",
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+        ]
+    ),
+    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
+    mathop=[
+        MathOperation.Abs,
+        MathOperation.Cos,
+        MathOperation.Log,
+        MathOperation.Reciprocal,
+        MathOperation.Sin,
+        MathOperation.Sqrt,
+        MathOperation.Square,
+        MathOperation.Celu,
+        MathOperation.Silu,
+        MathOperation.Gelu,
+        MathOperation.Neg,
+        MathOperation.Fill,
+        MathOperation.Elu,
+        MathOperation.Exp,
+        MathOperation.Exp2,
+        MathOperation.Hardsigmoid,
+    ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    mathop=float_ops,
 )
-
-int_params = generate_params(
-    ["eltwise_unary_sfpu_test"],
-    input_output_formats(supported_int_formats),
-    dest_acc=[DestAccumulation.Yes],
-    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    mathop=int_ops,
-)
-
-all_params = float_params + int_params
-
-param_ids = generate_param_ids(all_params)
-
-
-@pytest.mark.parametrize(
-    "testname, formats, dest_acc, approx_mode, mathop",
-    clean_params(all_params),
-    ids=param_ids,
-)
-def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
+def test_eltwise_unary_sfpu_float(test_name, formats, approx_mode, mathop, dest_acc):
     arch = get_chip_architecture()
 
     if dest_acc == DestAccumulation.No and arch == ChipArchitecture.BLACKHOLE:
@@ -112,9 +66,6 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
             DataFormat.Float32, DataFormat.Float16
         ):
             pytest.skip(reason="This combination is not supported on BH architecture")
-
-    if formats.input_format == DataFormat.Int32:
-        pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
 
     if (
         approx_mode == ApproximationMode.Yes
@@ -128,6 +79,27 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
             reason="Exp-related operations are not supported for bf8_b format in approximation mode."
         )
 
+    eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop)
+
+
+@parametrize(
+    test_name="eltwise_unary_sfpu_int",
+    formats=input_output_formats([DataFormat.Int32]),
+    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
+    mathop=[
+        MathOperation.Neg,
+        MathOperation.Fill,
+    ],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_unary_sfpu_int(test_name, formats, approx_mode, mathop, dest_acc):
+    if formats.input_format == DataFormat.Int32:
+        pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
+
+    eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop)
+
+
+def eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop):
     input_dimensions = [64, 64]
 
     src_A, src_B, tile_cnt = generate_stimuli(
@@ -148,7 +120,7 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
     )
     test_config = {
         "formats": formats,
-        "testname": testname,
+        "testname": test_name,
         "dest_acc": dest_acc,
         "mathop": mathop,
         "approx_mode": approx_mode,

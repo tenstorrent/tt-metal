@@ -10,10 +10,8 @@ from helpers.format_arg_mapping import (
 )
 from helpers.format_config import DataFormat
 from helpers.param_config import (
-    clean_params,
-    generate_param_ids,
-    generate_params,
     input_output_formats,
+    parametrize,
 )
 from helpers.perf import (
     ALL_RUN_TYPES,
@@ -27,22 +25,6 @@ from helpers.perf import (
 
 TEST_NAME = "eltwise_binary_fpu_perf"
 
-all_params = generate_params(
-    [TEST_NAME],
-    format_combos=input_output_formats(
-        [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
-    ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
-)
-param_ids = generate_param_ids(all_params)
-
 report = PerfReport()
 
 
@@ -55,13 +37,23 @@ def report_fixture():
 
 
 @pytest.mark.perf
-@pytest.mark.parametrize(
-    "testname, formats, dest_acc, mathop, math_fidelity",
-    clean_params(all_params),
-    ids=param_ids,
+@parametrize(
+    test_name=TEST_NAME,
+    formats=input_output_formats(
+        [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
+    ),
+    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    tile_count=16,
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_perf_eltwise_binary_fpu(
-    report_fixture, testname, formats, dest_acc, mathop, math_fidelity
+    report_fixture, test_name, formats, mathop, tile_count, math_fidelity, dest_acc
 ):
 
     # MathFidelity is only used for Elwmul
@@ -69,11 +61,11 @@ def test_perf_eltwise_binary_fpu(
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
     test_config = {
-        "testname": testname,
+        "testname": test_name,
         "mathop": mathop,
         "formats": formats,
         "math_fidelity": math_fidelity,
-        "tile_cnt": 16,
+        "tile_cnt": tile_count,
         "dest_acc": dest_acc,
     }
 

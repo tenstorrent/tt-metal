@@ -17,64 +17,36 @@ from helpers.format_arg_mapping import (
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 from helpers.param_config import (
-    clean_params,
-    generate_param_ids,
-    generate_params,
     input_output_formats,
+    parametrize,
 )
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.utils import passed_test
 
-# SUPPORTED FORMATS FOR TEST
-supported_formats = [
-    DataFormat.Bfp8_b,
-    DataFormat.Float16,
-    DataFormat.Float16_b,
-    DataFormat.Float32,
-]
 
-#   INPUT-OUTPUT FORMAT SWEEP
-#   input_output_formats(supported_formats)
-
-#   FULL FORMAT SWEEP
-#   format_combination_sweep(formats=supported_formats, all_same=False, same_src_reg_format=True)
-
-#   SPECIFIC FORMAT COMBINATION
-#   generate_combination(
-#       [(DataFormat.Float16_b,  # index 0 is for unpack_A_src
-#         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
-#         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
-#         DataFormat.Bfp8_b,  # index 3 is for pack_dst
-#         DataFormat.Float16_b,  # index 4 is for math format)])
-
-#   SPECIFIC INPUT-OUTPUT COMBINATION
-#   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
-
-test_formats = input_output_formats(supported_formats)
-all_params = generate_params(
-    ["multiple_tiles_eltwise_test"],
-    test_formats,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+@parametrize(
+    test_name="multiple_tiles_eltwise_test",
+    formats=input_output_formats(
+        [
+            DataFormat.Bfp8_b,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        ]
+    ),
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     math_fidelity=[
         MathFidelity.LoFi,
         MathFidelity.HiFi2,
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
-)
-param_ids = generate_param_ids(all_params)
-
-
-@pytest.mark.parametrize("input_dimensions", [[32, 32], [32, 64], [64, 64]])
-@pytest.mark.parametrize(
-    "testname, formats, dest_acc, mathop, math_fidelity",
-    clean_params(all_params),
-    ids=param_ids,
+    input_dimensions=[[32, 32], [32, 64], [64, 64]],
 )
 def test_multiple_tiles(
-    testname, formats, dest_acc, mathop, math_fidelity, input_dimensions
+    test_name, formats, mathop, dest_acc, math_fidelity, input_dimensions
 ):
 
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
@@ -99,7 +71,7 @@ def test_multiple_tiles(
 
     test_config = {
         "formats": formats,
-        "testname": testname,
+        "testname": test_name,
         "dest_acc": dest_acc,
         "mathop": mathop,
         "math_fidelity": math_fidelity,

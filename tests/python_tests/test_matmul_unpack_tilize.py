@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 
 from helpers.device import (
@@ -12,46 +11,25 @@ from helpers.format_arg_mapping import DestAccumulation, MathFidelity, format_di
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.param_config import (
-    clean_params,
-    generate_param_ids,
-    generate_params,
     input_output_formats,
+    parametrize,
 )
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
-# SUPPORTED FORMATS FOR TEST
-supported_formats = [
-    DataFormat.Float16_b,
-    DataFormat.Float16,
-    DataFormat.Float32,
-]  #  Add DataFormat.Bfp8_b only as input when Data format Inference Model 2.0 supports format conversions for > 1 pipeline run with different inputs and outputs.
-#  Now tests run by requiring input format to be same as output format.
-#  We cannot unpack tilize on Bfp8_b format, so it will be included only as input format.
 
-#   INPUT-OUTPUT FORMAT SWEEP
-#   input_output_formats(supported_formats)
-
-#   FULL FORMAT SWEEP
-#   format_combination_sweep(formats=supported_formats, all_same=False, same_src_reg_format=True)
-
-#   SPECIFIC FORMAT COMBINATION
-#   generate_combination(
-#       [(DataFormat.Float16_b,  # index 0 is for unpack_A_src
-#         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
-#         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
-#         DataFormat.Float16_b,  # index 3 is for pack_dst
-#         DataFormat.Float16_b,  # index 4 is for math format)])
-
-#   SPECIFIC INPUT-OUTPUT COMBINATION
-#   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
-
-test_formats = input_output_formats(supported_formats, same=True)
-all_params = generate_params(
-    ["matmul_unpack_tilize_test"],
-    test_formats,
+@parametrize(
+    test_name="matmul_unpack_tilize_test",
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+        ],  #  Add DataFormat.Bfp8_b only as input when Data format Inference Model 2.0 supports format conversions for > 1 pipeline run with different inputs and outputs.
+        same=True,
+    ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     math_fidelity=[
         MathFidelity.LoFi,
@@ -60,15 +38,7 @@ all_params = generate_params(
         MathFidelity.HiFi4,
     ],
 )
-param_ids = generate_param_ids(all_params)
-
-
-@pytest.mark.parametrize(
-    "testname, formats, dest_acc, math_fidelity",
-    clean_params(all_params),
-    ids=param_ids,
-)
-def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
+def test_matmul_unpack_tilize(test_name, formats, dest_acc, math_fidelity):
 
     torch_format = format_dict[formats.output_format]
 
@@ -91,7 +61,7 @@ def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
     buffer_dest_address = 0x1E000
     test_config = {
         "formats": formats,
-        "testname": testname,
+        "testname": test_name,
         "dest_acc": dest_acc,
         "math_fidelity": math_fidelity,
         "L1_to_L1_iterations": 2,

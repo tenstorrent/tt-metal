@@ -10,13 +10,12 @@ from helpers.device import (
     write_stimuli_to_l1,
 )
 from helpers.format_arg_mapping import DestAccumulation, format_dict
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
+from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.utils import passed_test
-
-TEST_NAME = "fast_tilize_test"
 
 
 def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
@@ -53,35 +52,40 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
 
 
 @skip_for_blackhole
-@pytest.mark.parametrize("input_format", [DataFormat.Float32, DataFormat.Float16_b])
-@pytest.mark.parametrize(
-    "output_format", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
+@parametrize(
+    test_name="fast_tilize_test",
+    formats=input_output_formats(
+        [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
+    ),
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    dimensions=generate_input_dimensions(25),
 )
-@pytest.mark.parametrize("fp32_dest", [DestAccumulation.Yes, DestAccumulation.No])
-@pytest.mark.parametrize("input_width, input_height", generate_input_dimensions(25))
-def test_fast_tilize(input_format, output_format, fp32_dest, input_width, input_height):
+def test_fast_tilize(test_name, formats, dest_acc, dimensions):
+
+    input_width, input_height = dimensions
+
+    if formats.input == DataFormat.Bfp8_b:
+        pytest.skip("Bfp8_b input format is not supported for fast tilize")
 
     input_dimensions = [input_height * 32, input_width * 32]
 
     src_A, src_B, tile_cnt = generate_stimuli(
-        input_format, input_format, input_dimensions=input_dimensions
+        formats.input, formats.input, input_dimensions=input_dimensions
     )
 
     generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(src_A, input_dimensions, output_format)
+    golden_tensor = generate_golden(src_A, input_dimensions, formats.output)
 
     res_address = write_stimuli_to_l1(
-        src_A, src_B, input_format, input_format, tile_count=tile_cnt
+        src_A, src_B, formats.input, formats.input, tile_count=tile_cnt
     )
-
-    formats = InputOutputFormat(input_format, output_format)
 
     test_config = {
         "formats": formats,
-        "testname": TEST_NAME,
+        "testname": test_name,
         "tile_cnt": tile_cnt,
         "input_dimensions": input_dimensions,
-        "dest_acc": fp32_dest,
+        "dest_acc": dest_acc,
     }
 
     run_test(test_config)
@@ -89,6 +93,6 @@ def test_fast_tilize(input_format, output_format, fp32_dest, input_width, input_
     res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
     assert len(res_from_L1) == len(golden_tensor)
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[output_format])
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output])
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
