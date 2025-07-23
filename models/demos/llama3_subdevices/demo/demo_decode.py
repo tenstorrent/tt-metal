@@ -464,9 +464,6 @@ def run_llama3_demo(
             )
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
             profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
-            if not is_ci_env:
-                # Print out generated outputs for each user at the end of every iteration
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
             iteration_time_ends = time()
             iteration_time = iteration_time_ends - iteration_time_start
@@ -493,9 +490,6 @@ def run_llama3_demo(
                 all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
 
                 profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
-                if not is_ci_env:
-                    # Print out generated outputs for each user at the end of every iteration
-                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
                 iteration_time_ends = time()
                 iteration_time = iteration_time_ends - iteration_time_start
@@ -537,6 +531,10 @@ def run_llama3_demo(
 
     # Release trace
     ttnn.release_trace(mesh_device, trace_id)
+
+    # Print out generated outputs for each user at the end of every iteration
+    if not is_ci_env:
+        logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
     # Finish profiling at the end of all batches inference
     profiler.end(profiler_step_name)
