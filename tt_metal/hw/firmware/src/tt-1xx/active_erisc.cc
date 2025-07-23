@@ -108,7 +108,7 @@ inline void initialize_local_memory() {
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
 }
 
-void Application() {
+void __attribute__((noinline)) Application() {
     WAYPOINT("I");
     configure_csr();
     initialize_local_memory();
@@ -151,8 +151,6 @@ void Application() {
     wait_subordinate_eriscs();
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
-
-    // volatile uint32_t dummy[42] = { 0 };
 
     while (1) {
         // Wait...

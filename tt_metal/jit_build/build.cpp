@@ -536,6 +536,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
             }
