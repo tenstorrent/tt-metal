@@ -40,19 +40,19 @@ on:
           - "24.04"
       tests-to-run:
         description: |
-          Comma-separated list of test job names to run, or 'all' to run everything.\n
-          Possible values:\n
-            - sd-unit-tests\n
-            - fast-dispatch-unit-tests\n
-            - fabric-unit-tests\n
-            - ttnn-unit-tests\n
-            - models-unit-tests\n
-            - cpp-unit-tests\n
-            - tt-train-cpp-unit-tests\n
-            - run-profiler-regression\n
-            - t3000-fast-tests\n
-            - build-docs\n
-            - build\n
+          Comma-separated list of test job names to run, or 'all' to run everything.
+          Possible values:
+            - sd-unit-tests
+            - fast-dispatch-unit-tests
+            - fabric-unit-tests
+            - ttnn-unit-tests
+            - models-unit-tests
+            - cpp-unit-tests
+            - tt-train-cpp-unit-tests
+            - run-profiler-regression
+            - t3000-fast-tests
+            - build-docs
+            - build
           Example: 'sd-unit-tests,ttnn-unit-tests'
         required: false
         type: string
