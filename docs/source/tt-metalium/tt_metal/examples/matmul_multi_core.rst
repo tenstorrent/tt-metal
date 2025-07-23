@@ -207,7 +207,6 @@ To support work distribution, the kernel is updated so that each core processes 
         constexpr uint32_t cb_id_out = tt::CBIndex::c_16;
 
         const uint32_t tile_bytes = get_tile_size(cb_id_out);
-        const DataFormat data_format = get_dataformat(cb_id_out);
 
         constexpr auto c_args = TensorAccessorArgs<0>();
         const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
@@ -279,9 +278,7 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
         constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
         const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
         const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-        const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
         constexpr auto a_args = TensorAccessorArgs<0>();
         const auto a = TensorAccessor(a_args, src0_addr, in0_tile_bytes);

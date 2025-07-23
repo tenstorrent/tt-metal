@@ -13,7 +13,6 @@ void kernel_main() {
     ////////// BUFFER SETUP //////////
     constexpr uint32_t cb_id_out0 = tt::CB::c_out0;  // CBIndex::c_16
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
-    const DataFormat data_format = get_dataformat(cb_id_out0);
     constexpr auto dram_writer_args = TensorAccessorArgs<0>();
     const auto dram_writer = TensorAccessor(dram_writer_args, dst_addr, tile_bytes);
 
