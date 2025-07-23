@@ -39,18 +39,18 @@ void kernel_main() {
     uint8_t local_sync_iter = 0, global_sync_iter = 0;
     sync_config->global_sync(global_sync_iter++);
 
-    // // Perform local sync for start of sync
-    // sync_config->local_sync(local_sync_iter++);
+    // Perform local sync for start of sync
+    sync_config->local_sync(local_sync_iter++);
 
-    // // Perform local sync for end of sync
-    // // first sync tells sync core to start global sync, second sync is waiting for global sync done
-    // sync_config->local_sync(local_sync_iter++);
+    // Perform local sync for end of sync
+    // first sync tells sync core to start global sync, second sync is waiting for global sync done
+    sync_config->local_sync(local_sync_iter++);
 
-    // // Perform global sync (master sync core) for end of sync
-    // sync_config->global_sync(global_sync_iter++);
+    // Perform global sync (master sync core) for end of sync
+    sync_config->global_sync(global_sync_iter++);
 
-    // // Perform local sync for end of sync
-    // sync_config->local_sync(local_sync_iter++);
+    // Perform local sync for end of sync
+    sync_config->local_sync(local_sync_iter++);
 
     // Mark test as passed. TODO: might need a local sync after all test done (TBD).
     write_test_status(sync_config->get_result_buffer_address(), TT_FABRIC_STATUS_PASS);

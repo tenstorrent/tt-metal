@@ -45,9 +45,9 @@ void kernel_main() {
 
     // Local sync (as participant, not master)
     uint8_t sync_iter = 0;
-    // if constexpr (LINE_SYNC) {
-    //     sender_config->local_sync(sync_iter++);
-    // }
+    if constexpr (LINE_SYNC) {
+        sender_config->local_sync(sync_iter++);
+    }
 
     sender_config->open_connections();
 
@@ -78,10 +78,10 @@ void kernel_main() {
 
     // Local sync (as participant, not master) for end of sync, first sync tells sync core to start global sync, second
     // sync is waiting for global sync done
-    // if constexpr (LINE_SYNC) {
-    //     sender_config->local_sync(sync_iter++);
-    //     sender_config->local_sync(sync_iter++);
-    // }
+    if constexpr (LINE_SYNC) {
+        sender_config->local_sync(sync_iter++);
+        sender_config->local_sync(sync_iter++);
+    }
 
     uint64_t total_elapsed_cycles_outer_loop = get_timestamp() - start_timestamp;
 
