@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-
+global mesh_device
 import hashlib
 import json
 import os
@@ -36,7 +36,7 @@ class TokenAccuracy:
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
         self.reference_tokens = reference_data["reference_tokens"]
-        split_point = self.reference_tokens.shape[-1] // 2 + 1
+        split_point = self.reference_tokens.shape[-1] // 2  # + 1
         self.input_prompt = self.reference_tokens[0, :split_point]
         self.gt_tokens = self.reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
@@ -463,6 +463,21 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
         ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            500,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            True,  # token_accuracy
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -481,6 +496,7 @@ def prepare_generator_args(
         "ci-b1-DP-16",  # CI DP 16 batch 1
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
+        "ci-token-matching",  # CI token matching accuracy test batch=1
     ],
 )
 @pytest.mark.parametrize(
@@ -638,7 +654,7 @@ def test_demo_text(
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     if token_accuracy:
-        input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
+        input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)[18:]
         instruct = False
 
     repeat_batch_prompts = []
@@ -1024,7 +1040,24 @@ def test_demo_text(
             step_warm_up_num_iterations=None,
             target=None,
         )
-
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "top1_token_accuracy",
+            "top1_token_accuracy",
+            acc[0] * 100,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "top5_token_accuracy",
+            "top5_token_accuracy",
+            acc[1] * 100,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
