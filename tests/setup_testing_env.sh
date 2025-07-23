@@ -12,6 +12,72 @@ cleanup() {
     fi
 }
 
+# --- Globals ---
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+
+# Function to get chip architecture using tt-smi
+get_chip_architecture() {
+    local smi_output
+    if ! smi_output=$(tt-smi -ls 2>/dev/null); then
+        echo "ERROR: tt-smi command failed or not found. Please ensure tt-smi is installed and in your PATH." >&2
+        exit 1
+    fi
+
+    if echo "$smi_output" | grep -q "Blackhole"; then
+        echo "blackhole"
+    elif echo "$smi_output" | grep -q "Wormhole"; then
+        echo "wormhole"
+    else
+        echo "ERROR: Unable to determine chip architecture from tt-smi output." >&2
+        echo "tt-smi output:" >&2
+        echo "$smi_output" >&2
+        exit 1
+    fi
+}
+
+# Function to download headers
+download_headers() {
+    local chip_arch=$1
+    local header_dir="${SCRIPT_DIR}/hw_specific/${chip_arch}/inc"
+    local stamp_file="${header_dir}/.headers_downloaded"
+
+    if [[ -f "$stamp_file" ]]; then
+        echo "Headers for ${chip_arch} already downloaded."
+        return
+    fi
+
+    echo "Downloading headers for ${chip_arch}..."
+    mkdir -p "$header_dir"
+
+    local base_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/${chip_arch}"
+    local headers=("cfg_defines.h" "dev_mem_map.h" "tensix.h" "tensix_dev_map.h" "tensix_types.h")
+
+    local specific_url=""
+    if [[ "$chip_arch" == "wormhole" ]]; then
+        specific_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/${chip_arch}/wormhole_b0_defines"
+    fi
+
+    for header in "${headers[@]}"; do
+        local download_url="${base_url}/${header}"
+        if ! wget -O "${header_dir}/${header}" --waitretry=5 --retry-connrefused "$download_url" > /dev/null; then
+            if [[ -n "$specific_url" ]]; then
+                local fallback_url="${specific_url}/${header}"
+                echo "Could not find ${header} at ${download_url}, trying ${fallback_url}..."
+                if ! wget -O "${header_dir}/${header}" --waitretry=5 --retry-connrefused "$fallback_url" > /dev/null; then
+                    echo "ERROR: Failed to download ${header} from both primary and fallback URLs." >&2
+                    exit 1
+                fi
+            else
+                echo "ERROR: Failed to download ${header} from ${download_url}" >&2
+                exit 1
+            fi
+        fi
+    done
+
+    touch "$stamp_file"
+    echo "Headers for ${chip_arch} downloaded successfully."
+}
+
 # --- Main Script ---
 
 main() {
@@ -19,9 +85,7 @@ main() {
     trap cleanup EXIT
 
     # Get script directory and version file
-    local script_dir
-    script_dir="$(dirname "$0")"
-    local version_file="$script_dir/sfpi-version.sh"
+    local version_file="$SCRIPT_DIR/sfpi-version.sh"
 
     # Check if version file exists and is readable
     if [[ ! -r "$version_file" ]]; then
@@ -32,6 +96,13 @@ main() {
     # Source the version file to load variables
     # shellcheck source=/dev/null
     source "$version_file"
+
+    # Get chip architecture
+    local chip_arch
+    chip_arch=$(get_chip_architecture)
+
+    # Download headers
+    download_headers "$chip_arch"
 
     # Determine architecture, OS, file extension, and extraction flags
     local arch_os
@@ -62,8 +133,8 @@ main() {
 
     # Check if SFPI is already installed and up to date
     local current_version=""
-    if [[ -f "sfpi/sfpi.version" ]]; then
-        current_version="$(cat "sfpi/sfpi.version")"
+    if [[ -f "${SCRIPT_DIR}/sfpi/sfpi.version" ]]; then
+        current_version="$(cat "${SCRIPT_DIR}/sfpi/sfpi.version")"
     fi
 
     if [[ "$current_version" == "$sfpi_version" ]]; then
@@ -97,16 +168,16 @@ main() {
 
     # Remove old installation and extract the new one
     echo "Extracting SFPI release..."
-    rm -rf sfpi
+    rm -rf "${SCRIPT_DIR}/sfpi"
     # The -f flag is already included in the $tar_flags variable.
     # Passing it again was causing the error.
-    if ! tar "$tar_flags" "$download_file"; then
+    if ! tar "${tar_flags}" "$download_file" -C "${SCRIPT_DIR}"; then
         echo "ERROR: Failed to extract SFPI release from $download_file" >&2
         exit 1
     fi
 
     # Write the new version file
-    echo "$sfpi_version" > sfpi/sfpi.version
+    echo "$sfpi_version" > "${SCRIPT_DIR}/sfpi/sfpi.version"
     echo "SFPI successfully installed version $sfpi_version"
     echo "Setup complete. You can now run your tests."
 }
