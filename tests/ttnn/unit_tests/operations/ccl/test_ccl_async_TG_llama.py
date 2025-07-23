@@ -305,9 +305,17 @@ def test_all_reduce_tg_llama(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "input_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype",
+    "input_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 960], 1, 3, 30, BINARY_MULT_CRS, 24, RING_CRS, ttnn.bfloat8_b),
+        (
+            [1, 1, 32, 960],
+            1,
+            3,
+            30,
+            BINARY_MULT_CRS,
+            24,
+            RING_CRS,
+        ),
     ],
     ids=[
         "binary_mult",
@@ -338,11 +346,46 @@ def test_all_reduce_tg_llama(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved",
+    [
+        (
+            1,
+            32,
+            3584,
+            2048,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+        ),
+    ],
+    ids=[
+        "ff2",
+    ],
+)
 def test_all_gather_replicate_tg_llama(
     mesh_device,
     input_shape,
     cluster_axis,
-    input_dtype,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    grid,
+    in1_is_dram_interleaved,
     num_links,
     input_num_cores,
     input_core_range_set,
@@ -358,7 +401,7 @@ def test_all_gather_replicate_tg_llama(
         mesh_device,
         input_shape,
         cluster_axis,
-        input_dtype,
+        in0_dtype,
         num_links,
         input_num_cores,
         input_core_range_set,
