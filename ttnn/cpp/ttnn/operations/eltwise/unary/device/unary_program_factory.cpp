@@ -151,8 +151,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 .compile_args = compute_kernel_args_group_2,
                 .defines = unary_defines});
     }
-    const auto packed_scalar1 = binary_ng::pack_scalar_runtime_arg(value1, input.dtype(), false);
-    const auto packed_scalar2 = binary_ng::pack_scalar_runtime_arg(value2, input.dtype(), false);
+    const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
+    const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

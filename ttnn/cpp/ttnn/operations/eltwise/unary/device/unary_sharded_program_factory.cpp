@@ -150,8 +150,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         }
     }
     auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root_sharded, input.dtype());
-    const auto packed_scalar1 = binary_ng::pack_scalar_runtime_arg(value1, input.dtype(), false);
-    const auto packed_scalar2 = binary_ng::pack_scalar_runtime_arg(value2, input.dtype(), false);
+    const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
+    const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,

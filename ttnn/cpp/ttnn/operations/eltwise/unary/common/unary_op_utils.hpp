@@ -89,4 +89,6 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
 
+uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
+
 }  // namespace ttnn::operations::unary::utils

@@ -699,5 +699,10 @@ std::string get_compute_kernel_path(
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }
-
+uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype) {
+    if (dtype == DataType::INT32) {
+        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+    return std::bit_cast<uint32_t>(scalar);
+}
 }  // namespace ttnn::operations::unary::utils
