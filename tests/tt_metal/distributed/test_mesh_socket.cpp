@@ -22,9 +22,9 @@
 
 namespace tt::tt_metal::distributed {
 
-using MeshSocketTest = T3000MeshDeviceFixture;
-using MeshSocketTest1DFabric = T3000MeshDevice1DFabricFixture;
-using MeshSocketTest2DFabric = T3000MeshDevice2DFabricFixture;
+using MeshSocketTest = MeshDevice2x4Fixture;
+using MeshSocketTest1DFabric = MeshDevice2x4Fabric1DFixture;
+using MeshSocketTest2DFabric = MeshDevice2x4Fabric2DFixture;
 
 struct SocketCoreMapping {
     CoreCoord sender_core;
