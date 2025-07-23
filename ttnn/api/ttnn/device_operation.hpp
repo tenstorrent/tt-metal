@@ -557,7 +557,7 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
         launch_operation_with_adapter<MeshCompatibleOp>(
             cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
     } else {
-        auto device = first_tensor.mesh_device();
+        auto device = first_tensor.device();
         launch_on_worker_thread<device_operation_t>(
             cq_id, operation_attributes, tensor_args, tensor_return_value, device);
     }

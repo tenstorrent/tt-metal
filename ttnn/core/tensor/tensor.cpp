@@ -604,7 +604,7 @@ void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& reg
     if (auto mesh_device = src.mesh_device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
     } else {
-        memcpy(src.mesh_device()->command_queue(), dst, src, region, blocking);
+        memcpy(src.device()->command_queue(), dst, src, region, blocking);
     }
 }
 
@@ -642,7 +642,7 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
     if (auto mesh_device = dst.mesh_device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
-        memcpy(dst.mesh_device()->command_queue(), dst, src, region);
+        memcpy(dst.device()->command_queue(), dst, src, region);
     }
 }
 
@@ -690,13 +690,13 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
         if (auto mesh_device = src.mesh_device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
-            memcpy(src.mesh_device()->command_queue(), dst, src, region);
+            memcpy(src.device()->command_queue(), dst, src, region);
         }
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
         if (auto mesh_device = dst.mesh_device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
-            memcpy(dst.mesh_device()->command_queue(), dst, src, region);
+            memcpy(dst.device()->command_queue(), dst, src, region);
         }
     } else {
         TT_THROW("Unsupported memcpy");
@@ -764,7 +764,7 @@ const DeviceStorage& Tensor::device_storage() const {
     return std::get<DeviceStorage>(this->storage());
 }
 
-distributed::MeshDevice* Tensor::mesh_device() const {
+distributed::MeshDevice* Tensor::device() const {
     if (this->mesh_device_.has_value()) {
         return this->mesh_device_.value();
     }

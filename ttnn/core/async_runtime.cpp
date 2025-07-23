@@ -21,7 +21,7 @@ void write_buffer(
             tt::tt_metal::memcpy(cq, device_tensors[i], src.at(i).get(), region);
         }
     } else {
-        auto* dst_device = dst.mesh_device();
+        auto* dst_device = dst.device();
         auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(dst_device->id());
         tt::tt_metal::memcpy(dst_device->command_queue(*cq_id), dst, src_for_device.get(), region);
     }
@@ -42,7 +42,7 @@ void read_buffer(
             tt::tt_metal::memcpy(cq, dst.at(i).get(), device_tensors[i], region);
         }
     } else {
-        auto* src_device = src.mesh_device();
+        auto* src_device = src.device();
         auto dst_for_device = (dst.size() == 1) ? dst.at(0) : dst.at(src_device->id());
         tt::tt_metal::memcpy(src_device->command_queue(*cq_id), dst_for_device.get(), src, region, blocking);
     }

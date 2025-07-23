@@ -43,8 +43,8 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    const auto* target_device = input_tensor.mesh_device()->get_device(mesh_coord);
+    const auto* target_device =
+        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(mesh_coord) : input_tensor.device();
     const auto& devices_to_use = input_tensor.mesh_device() ? input_tensor.mesh_device()->get_devices() : this->devices;
 
     ccl::SenderRecieverConfig config =
