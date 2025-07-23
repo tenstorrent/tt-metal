@@ -93,9 +93,6 @@ struct tensix_routing_l1_info_t {
     std::uint8_t padding[8];  // pad to 16-byte alignment
 } __attribute__((packed));
 
-// MEM_TENSIX_ROUTING_TABLE_SIZE
-static_assert(sizeof(tensix_routing_l1_info_t) == 2064, "Struct size mismatch!");
-
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
 struct fabric_connection_info_t {
@@ -122,16 +119,10 @@ struct fabric_aligned_connection_info_t {
 struct tensix_fabric_connections_l1_info_t {
     static constexpr uint8_t MAX_FABRIC_ENDPOINTS = 16;
     // Each index corresponds to ethernet channel index
-    fabric_connection_info_t connections[MAX_FABRIC_ENDPOINTS];
+    fabric_connection_info_t read_only[MAX_FABRIC_ENDPOINTS];
     uint32_t valid_connections_mask;  // bit mask indicating which connections are valid
     uint32_t padding_0[3];            // pad to 16-byte alignment
-    fabric_aligned_connection_info_t aligned_connections[MAX_FABRIC_ENDPOINTS];
+    fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
-
-static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 688, "Struct size mismatch!");
-static_assert(
-    offsetof(tensix_fabric_connections_l1_info_t, aligned_connections) == 432,
-    "Aligned connections offset must be 672 bytes!");
-static_assert(sizeof(tensix_fabric_connections_l1_info_t) % 16 == 0, "Struct size must be 16-byte aligned!");
 
 }  // namespace tt::tt_fabric

@@ -86,13 +86,9 @@ struct WorkerToFabricEdmSenderImpl {
         if constexpr (my_core_type == ProgrammableCoreType::TENSIX) {
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
                 reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
-            tt_l1_ptr fabric_aligned_connection_info_t* aligned_info =
-                reinterpret_cast<tt_l1_ptr fabric_aligned_connection_info_t*>(
-                    MEM_TENSIX_FABRIC_CONNECTIONS_BASE +
-                    offsetof(tensix_fabric_connections_l1_info_t, aligned_connections));
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
-            const auto conn = &connection_info->connections[eth_channel];
-            const auto aligned_conn = &aligned_info[eth_channel];
+            const auto conn = &connection_info->read_only[eth_channel];
+            const auto aligned_conn = &connection_info->read_write[eth_channel];
             direction = conn->edm_direction;
             edm_worker_x = conn->edm_noc_x;
             edm_worker_y = conn->edm_noc_y;
