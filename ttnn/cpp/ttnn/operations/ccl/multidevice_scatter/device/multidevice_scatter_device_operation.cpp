@@ -37,6 +37,10 @@ void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& output_shape = output_spec.logical_shape();
     const auto& input_shape = input_tensor.logical_shape();
 
+    TT_FATAL(
+        !(operation_attributes.cluster_axis.has_value() && operation_attributes.cluster_axis.value() > 1),
+        "Only support cluster axis of None, 0 or 1");
+
     TT_FATAL(operation_attributes.dim < rank, "dim must be less than the rank of the input tensor");
 
     const uint32_t cluster_axis_size = detail::get_cluster_axis_size(input_tensor, operation_attributes);

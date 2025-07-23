@@ -55,22 +55,42 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
-    const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes);
 
+    const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes);
     uint32_t cluster_index =
         detail::get_cluster_axis_index(input_tensor.mesh_device()->get_view(), mesh_coordinate, operation_attributes);
+    TT_FATAL(
+        cluster_index < cluster_size,
+        "cluster_index ({}) must be less than cluster_size ({})",
+        cluster_index,
+        cluster_size);
+
     auto input_shape = input_tensor.logical_shape();
     uint32_t dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
-
     auto scattered_dim_size = input_shape[dim] / cluster_size;
+    uint64_t begin_pos = static_cast<uint64_t>(cluster_index) * scattered_dim_size;
+    TT_FATAL(
+        begin_pos <= std::numeric_limits<uint32_t>::max() - scattered_dim_size,
+        "Integer overflow: cluster_index ({}) * scattered_dim_size ({}) = {} exceeds uint32_t max",
+        cluster_index,
+        scattered_dim_size,
+        begin_pos);
 
     auto begins = ttnn::Shape(std::vector<uint32_t>(rank, 0));
     auto ends = input_shape;
     auto strides = ttnn::Shape(std::vector<uint32_t>(rank, 1));
 
-    begins[dim] = cluster_index * scattered_dim_size;
+    begins[dim] = static_cast<uint32_t>(begin_pos);
     ends[dim] = begins[dim] + scattered_dim_size;
+
+    TT_FATAL(
+        ends[dim] <= input_shape[dim],
+        "Slice bounds error: ends[{}] ({}) exceeds input_shape[{}] ({})",
+        dim,
+        ends[dim],
+        dim,
+        input_shape[dim]);
 
     log_debug(
         tt::LogOp,
