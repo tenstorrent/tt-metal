@@ -43,6 +43,11 @@ RING_CRS = ttnn.CoreRangeSet(
         for x, y in PREFETCHER_NOC1_GRID
     ]
 )
+HOP_GRID = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(3, 6), ttnn.CoreCoord(3, 6)),
+    ]
+)
 FF1_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 28, SUB_DEVICE_CRS, row_wise=True)
 FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 30, SUB_DEVICE_CRS, row_wise=True)
 NORM_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7))])
@@ -51,6 +56,23 @@ BINARY_MULT_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(
     ttnn.CoreCoord(1, 0), 30, SUB_DEVICE_CRS, row_wise=True
 )
 MAX_DST_TILES = 8
+
+
+def num_cores_to_rectangle_grid(num_cores, device):
+    """
+    Find a rectangular core grid size, given an number of cores.
+
+    Return None if rectangle grid is not possible.
+    """
+    x = device.compute_with_storage_grid_size().x
+    while x > 0 and num_cores % x != 0:
+        x -= 1
+
+    if x == 0:
+        return None
+
+    y = num_cores // x
+    return (x, y)
 
 
 def run_all_gather_replicate_impl(
@@ -94,6 +116,10 @@ def run_all_gather_replicate_impl(
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
+
+    storage_grid = num_cores_to_rectangle_grid(output_num_cores, mesh_device)
+    if storage_grid is None:
+        pytest.skip(f"Could not find a rectangle grid for num_cores: {output_num_cores}")
 
     ##################################
     ##### Set up fabric stuff
@@ -166,6 +192,21 @@ def run_all_gather_replicate_impl(
     logger.debug("in1 block h w " + str(in0_block_w) + " " + str(out_block_w))
     logger.debug("out block h w " + str(out_block_h) + " " + str(out_block_w))
     logger.debug("out subblock h w " + str(out_subblock_h) + " " + str(out_subblock_w))
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=storage_grid,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=HOP_GRID,
+        untilize_out=False,
+    )
 
     # Intermediate shapes
     intermediate_num_cores = cluster_shape[cluster_axis]
@@ -361,8 +402,7 @@ def run_all_gather_replicate_impl(
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
             else:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
-            # assert eq, f"{i} FAILED: {output}"
-            assert True, f"{i} FAILED: {output}"
+            assert eq, f"{i} FAILED: {output}"
         logger.info(f"PCC output is: {output}")
 
     if validate_all:
