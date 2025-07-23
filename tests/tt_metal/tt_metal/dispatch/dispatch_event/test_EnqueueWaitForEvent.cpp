@@ -202,8 +202,7 @@ TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsReadWriteWithWaitForEven
                 auto event = sync_events[i][buf_idx];
                 distributed::EnqueueWaitForEvent(cqs[i], event);
                 vector<uint32_t> result;
-                distributed::ReadShard(
-                    cqs[i], result, buffers[i], distributed::MeshCoordinate(0, 0), true);  // Blocking.
+                distributed::ReadShard(cqs[i], result, buffers[i], zero_coord_, true);  // Blocking.
                 bool local_pass = (srcs[i] == result);
                 log_debug(
                     tt::LogTest,
@@ -277,10 +276,10 @@ TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsReadWriteWithWaitForEven
                     config.num_pages,
                     cq_write.get().id());
 
-                distributed::WriteShard(cq_write, buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
+                distributed::WriteShard(cq_write, buffers[i], srcs[i], zero_coord_, false);
                 auto event = distributed::EnqueueRecordEvent(cq_write);
                 distributed::EnqueueWaitForEvent(cq_read, event);
-                distributed::ReadShard(cq_read, result, buffers[i], distributed::MeshCoordinate(0, 0), true);
+                distributed::ReadShard(cq_read, result, buffers[i], zero_coord_, true);
                 bool local_pass = (srcs[i] == result);
                 log_debug(
                     tt::LogTest,
@@ -363,16 +362,14 @@ TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsReadWriteWithWaitForEven
                         cq_write.get().id(),
                         write_data.back());
 
-                    distributed::WriteShard(
-                        cq_write, buffers.back(), write_data.back(), distributed::MeshCoordinate(0, 0), false);
+                    distributed::WriteShard(cq_write, buffers.back(), write_data.back(), zero_coord_, false);
                     if (use_events) {
                         distributed::MeshEvent event_sync_read_after_write = distributed::EnqueueRecordEvent(cq_write);
 
                         // Issue wait for write to complete, and non-blocking read from the second CQ.
                         distributed::EnqueueWaitForEvent(cq_read, event_sync_read_after_write);
                     }
-                    distributed::ReadShard(
-                        cq_read, read_results.back(), buffers.back(), distributed::MeshCoordinate(0, 0), false);
+                    distributed::ReadShard(cq_read, read_results.back(), buffers.back(), zero_coord_, false);
                     log_debug(
                         tt::LogTest,
                         "cq_idx: {} Issued Read for j: {} to cq_id: {} got data: {}",
