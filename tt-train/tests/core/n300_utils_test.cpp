@@ -125,7 +125,9 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
 
     xt::xarray<float> xtensor_data = xt::empty<float>({32 * 32});
     ttml::core::random::parallel_generate(
-        xtensor_data, []() { return std::uniform_real_distribution<float>(-0.05, 0.05); }, 42);
+        std::span{xtensor_data.data(), xtensor_data.size()},
+        []() { return std::uniform_real_distribution<float>(-0.05, 0.05); },
+        42);
     xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 32, 32});
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
@@ -151,7 +153,9 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
 
     xt::xarray<float> xtensor_data = xt::empty<float>({32});
     ttml::core::random::parallel_generate(
-        xtensor_data, []() { return std::uniform_real_distribution<float>(-1.F, 1.F); }, 42);
+        std::span{xtensor_data.data(), xtensor_data.size()},
+        []() { return std::uniform_real_distribution<float>(-1.F, 1.F); },
+        42);
     xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 4, 8});
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
@@ -194,12 +198,16 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
 
     xt::xarray<float> xtensor_a_data = xt::empty<float>({128 * 64});
     ttml::core::random::parallel_generate(
-        xtensor_a_data, []() { return std::uniform_real_distribution<float>(-0.005, 0.005); }, 42);
+        std::span{xtensor_a_data.data(), xtensor_a_data.size()},
+        []() { return std::uniform_real_distribution<float>(-0.005, 0.005); },
+        42);
     xt::xarray<float> xtensor_a = xtensor_a_data.reshape({1, 1, 128, 64});
 
     xt::xarray<float> xtensor_b_data = xt::empty<float>({256 * 64});
     ttml::core::random::parallel_generate(
-        xtensor_b_data, []() { return std::uniform_real_distribution<float>(-0.005, 0.005); }, 42);
+        std::span{xtensor_b_data.data(), xtensor_b_data.size()},
+        []() { return std::uniform_real_distribution<float>(-0.005, 0.005); },
+        42);
     xt::xarray<float> xtensor_b = xtensor_b_data.reshape({1, 1, 64, 256});
 
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);

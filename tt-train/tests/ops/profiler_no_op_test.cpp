@@ -36,7 +36,9 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     ttml::core::random::parallel_generate(
-        input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        42);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
@@ -59,7 +61,9 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Huge_Batch) {
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     ttml::core::random::parallel_generate(
-        input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        42);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";

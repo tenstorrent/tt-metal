@@ -10,35 +10,28 @@
 #include <thread>
 #include <vector>
 
-#include "autograd/auto_context.hpp"
-
 namespace ttml::core::random {
 
 template <typename T, typename DistGenFunc>
 void sequential_generate(std::span<T> seq, DistGenFunc&& dist_factory, uint32_t seed) {
     auto rng = std::mt19937{seed};
-    auto dist = dist_factory();
+    auto dist = std::forward<DistGenFunc>(dist_factory)();
     for (auto& it : seq) {
         it = dist(rng);
     }
 }
 
-template <typename TSeq>
-concept Spannable = requires(TSeq seq) {
-    typename TSeq::value_type;
-    { seq.data() };
-    { seq.size() } -> std::convertible_to<std::size_t>;
-};
-
-template <Spannable TSeq, typename DistGenFunc>
+template <typename T, typename DistGenFunc>
 void parallel_generate(
-    TSeq& seq, DistGenFunc dist_factory, uint32_t seed, uint32_t max_threads = std::thread::hardware_concurrency()) {
-    using T = typename TSeq::value_type;
+    std::span<T> seq,
+    DistGenFunc dist_factory,
+    uint32_t seed,
+    uint32_t max_threads = std::thread::hardware_concurrency()) {
     auto rng = std::mt19937{seed};
     constexpr size_t min_size = 1 << 16;  // determined empirically on loudbox that this is about where we start seeing
                                           // gains; need to improve and measure it as a function of the processors too.
     if (seq.size() < min_size) {
-        sequential_generate(std::span<T>{seq.data(), seq.size()}, dist_factory, seed);
+        sequential_generate(seq, dist_factory, seed);
         return;
     }
 
