@@ -55,6 +55,11 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const = 0;
+    virtual void write_data_to_core(
+        const MeshCoordinate& device_coord,
+        const CoreCoord& cores,
+        uint32_t local_args_address,
+        const std::vector<uint32_t>& args) const = 0;
 };
 
 class IRouteManager {
@@ -62,6 +67,7 @@ public:
     virtual ~IRouteManager() = default;
     virtual MeshShape get_mesh_shape() const = 0;
     virtual uint32_t get_num_mesh_dims() const = 0;
+    virtual bool wrap_around_mesh(FabricNodeId node) const = 0;
     virtual std::vector<FabricNodeId> get_dst_node_ids_from_hops(
         FabricNodeId src_node_id,
         std::unordered_map<RoutingDirection, uint32_t>& hops,
@@ -78,12 +84,13 @@ public:
         const FabricNodeId& src_node_id, uint32_t dim) const = 0;
     virtual std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const = 0;
-    virtual uint32_t get_num_sync_devices() const = 0;
-    virtual std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_wrap_around_mesh_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
         const FabricNodeId& dst_node_backward_id,
         HighLevelTrafficPattern pattern_type) const = 0;
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
+        const FabricNodeId& src_node_id, HighLevelTrafficPattern pattern_type, uint32_t dim) const = 0;
     virtual std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_multicast_hops(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const = 0;
@@ -100,6 +107,7 @@ public:
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
+    virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
 };
 
 }  // namespace fabric_tests
