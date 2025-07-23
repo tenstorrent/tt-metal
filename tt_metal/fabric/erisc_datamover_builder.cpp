@@ -473,26 +473,11 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                 break;
             default: break;
         }
-    } else if (topology == Topology::Mesh) {
-        size_t default_num_sender_buffer_slots;
-        size_t default_num_receiver_buffer_slots;
-        get_optimal_num_slots(
-            mesh_buffer_slot_options[0],
-            this->num_used_sender_channels,
-            this->num_used_receiver_channels,
-            default_num_sender_buffer_slots,
-            default_num_receiver_buffer_slots);
-        // set default buffer slots.
-        num_sender_buffer_slots.fill(default_num_sender_buffer_slots);
-        num_remote_sender_buffer_slots.fill(default_num_sender_buffer_slots);
-        num_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
-        num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
-        num_downstream_sender_buffer_slots.fill(default_num_sender_buffer_slots);
     } else {
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            linear_buffer_slot_options[arch_index],
+            (topology == Topology::Mesh ? mesh_buffer_slot_options[0] : linear_buffer_slot_options[arch_index]),
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
@@ -628,7 +613,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_receiver_buffer_slots.begin() + this->num_used_receiver_channels,
         size_t{0});
     std::size_t total_slot_count = total_sender_slots + total_receiver_slots;
-
     TT_FATAL(
         total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
         "Total channel size of {} B exceeds available space of {} B",
