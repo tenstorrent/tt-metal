@@ -540,7 +540,7 @@ def create_custom_preprocessor(device):
 
 
 def load_weights(model, weights_path):
-    ckpt = torch.load(weights_path, map_location="cpu")
+    ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
     state_dict = ckpt["model"].float().state_dict()
     model.load_state_dict(state_dict, strict=False)
     model.eval()
