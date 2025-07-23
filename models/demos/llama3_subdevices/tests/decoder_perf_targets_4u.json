@@ -4,7 +4,7 @@
             "op_name": "AllGatherAsync_Binary_Mult",
             "kernel_duration": 9380.868055555555,
             "op_to_op": 906.2979797979798,
-            "first_to_last_start": 95.9040404040404,
+            "first_to_last_start": 175.77777777777777,
             "non-overlapped-dispatch-time": 4273.311111111111,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.3,
@@ -14,7 +14,7 @@
         "AllGatherConcat_0": {
             "op_name": "AllGatherConcat",
             "kernel_duration": 10079.010416666666 ,
-            "op_to_op": 909.3484848484849,
+            "op_to_op": 723.1111111111111,
             "first_to_last_start": 262.77777777777777,
             "non-overlapped-dispatch-time": 12462.644444444442,
             "kernel_duration_relative_margin": 0.05,
@@ -353,7 +353,7 @@
         },
         "TopK_0": {
             "op_name": "TopK_0",
-            "kernel_duration": 615934.5340909091,
+            "kernel_duration": 325436,
             "op_to_op": 733.0,
             "non-overlapped-dispatch-time": 5187.35,
             "kernel_duration_relative_margin": 0.2,
