@@ -136,8 +136,11 @@ struct DeviceProfilerDataPoint {
 
 class DeviceProfiler {
 private:
-    // Device corresponding to this profiler object
-    const IDevice* device = nullptr;
+    // Device architecture
+    tt::ARCH device_arch;
+
+    // Device ID
+    chip_id_t device_id;
 
     // Device frequency
     int device_core_frequency;
@@ -302,7 +305,9 @@ public:
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
-    void dumpRoutingInfo();
+    void dumpRoutingInfo() const;
+
+    void dumpClusterCoordinates() const;
 
     // Push device results to tracy
     void pushTracyDeviceResults();
