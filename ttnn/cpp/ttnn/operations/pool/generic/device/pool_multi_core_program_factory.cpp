@@ -248,7 +248,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::optional<int32_t> divisor_override,
     uint32_t memory_used) {
     // This should allocate a DRAM buffer on the device
-    IDevice* device = input.device();
+    distributed::MeshDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
