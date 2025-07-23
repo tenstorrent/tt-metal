@@ -60,8 +60,8 @@ class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
-        if (params.is_fw && params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
-            // active eth has it's own crt0
+        if (params.is_fw && !(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0)) {
+            // active eth0 being shared with base fw has it's own crt0
             objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
@@ -203,7 +203,7 @@ public:
             // build.cpp used to distinguish "active_erisc" and "erisc" and use
             // that to determine what object files to link.
             // This is no longer necessary, but only to keep the target names unchanged.
-            return "active_erisc";
+            return params.processor_id == 0 ? "active_erisc" : "subordinate_active_erisc";
         }
         return HalJitBuildQueryBase::target_name(params);
     }
@@ -258,13 +258,13 @@ void Hal::initialize_bh() {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool local_mem_offset) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             // For firmware with base fw, __ldm_data is already offset by base fw.
             // So we need to undo that offset here to get the correct relocation address
             // for copying by the kernel to local memory.
-            if (local_init_addr == MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH) {
+            if (local_mem_offset) {
                 addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
             }
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
@@ -285,7 +285,8 @@ void Hal::initialize_bh() {
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC));  // used to program start addr for eth FW
+            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC) ||
+            (addr == AERISC_RESET_PC || addr == SUBORDINATE_AERISC_RESET_PC));  // used to program start addr for eth FW
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
@@ -300,18 +301,19 @@ void Hal::initialize_bh() {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t {
-        return get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) +
+    this->eth_fw_arg_addr_func_ = [&](int mailbox_index, uint32_t arg_index) -> uint32_t {
+        // +1 because of the message
+        uint32_t mailbox_base = MEM_SYSENG_ETH_MAILBOX_ADDR + (mailbox_index * (MEM_SYSENG_ETH_MAILBOX_NUM_ARGS + 1) * sizeof(uint32_t));
+        return mailbox_base +
                offsetof(blackhole::EthFwMailbox, arg) + (arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]));
     };
 
-    this->device_features_func_ = [](DeviceFeature feature) -> bool {
+    this->device_features_func_ = [](DispatchFeature feature) -> bool {
         switch (feature) {
-            case DeviceFeature::ETH_FW_API: return true;
-            case DeviceFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return true;
-            case DeviceFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
-            case DeviceFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
-            case DeviceFeature::ETH_LINKS_INTERMESH_ROUTING: return false;
+            case DispatchFeature::ETH_FW_API: return true;
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Blackhole device feature {}", static_cast<int>(feature));
         }
     };
@@ -333,6 +335,7 @@ void Hal::initialize_bh() {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
+    this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Blackhole
     this->virtualized_core_types_ = {
         AddressableCoreType::TENSIX, AddressableCoreType::ETH, AddressableCoreType::PCIE, AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);

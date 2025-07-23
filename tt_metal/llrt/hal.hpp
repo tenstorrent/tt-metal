@@ -61,9 +61,9 @@ struct HalJitBuildConfig {
     ll_api::memory::Loading memory_load;
 };
 
-// Features that are enabled on a given device. Enablement of the feature
+// Dispatch related features depending on the arch. Enablement of the feature
 // can be queried using the Hal::get_device_feature_enabled function.
-enum class DeviceFeature {
+enum class DispatchFeature : uint8_t {
     // Ethernet Firmware supports the usage of the mailbox API
     ETH_FW_API,
     // Dispatch to Active ethernet cores utilize a kernel config buffer
@@ -72,8 +72,6 @@ enum class DeviceFeature {
     DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER,
     // Dispatch to Tensix cores utilize a kernel config buffer
     DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER,
-    // Intermesh routing
-    ETH_LINKS_INTERMESH_ROUTING,
 };
 
 // Ethernet Firmware mailbox messages
@@ -205,15 +203,15 @@ public:
 
 class Hal {
 public:
-    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
     using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
     using NOCAddrFunc = std::function<uint64_t(uint64_t)>;
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
-    using EthFwArgAddrFunc = std::function<uint32_t(uint32_t)>;
-    using DeviceFeatureListFunc = std::function<bool(DeviceFeature)>;
+    using EthFwArgAddrFunc = std::function<uint32_t(int, uint32_t)>;
+    using DispatchFeatureListFunc = std::function<bool(DispatchFeature)>;
     using EthLiveLinkStatusFunc = std::function<EthLiveLinkStatus(std::span<uint32_t>)>;
 
 private:
@@ -243,6 +241,7 @@ private:
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
+    bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
 
@@ -268,7 +267,7 @@ private:
     NOCAddrFunc noc_local_addr_func_;
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
     std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
-    DeviceFeatureListFunc device_features_func_;
+    DispatchFeatureListFunc device_features_func_;
     EthLiveLinkStatusFunc eth_live_link_status_func_;
 
 public:
@@ -324,13 +323,15 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
+    bool intermesh_eth_links_enabled() const { return this->intermesh_eth_links_enabled_; }
     const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
 
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
-    uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
+    uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
+    uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
@@ -340,7 +341,7 @@ public:
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
     // Query device features. Returns true if the feature is enabled.
-    bool get_device_feature_enabled(DeviceFeature feature) const { return this->device_features_func_(feature); }
+    bool get_dispatch_feature_enabled(DispatchFeature feature) const { return this->device_features_func_(feature); }
     // Returns true if the core has a kernel config buffer.
     bool get_core_has_kernel_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
@@ -373,8 +374,8 @@ public:
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
-    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) const {
-        return relocate_func_(addr, local_init_addr);
+    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool local_mem_offset = false) const {
+        return relocate_func_(addr, local_init_addr, local_mem_offset);
     }
 
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
@@ -534,8 +535,8 @@ inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     return this->core_info_[index].eth_fw_mailbox_msgs_[utils::underlying_type<FWMailboxMsg>(msg)];
 }
 
-inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const {
-    return this->eth_fw_arg_addr_func_(arg_index);
+inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
+    return this->eth_fw_arg_addr_func_(mailbox_index, arg_index);
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
@@ -545,14 +546,20 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
     return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
 }
 
+inline uint32_t Hal::get_eth_fw_mailbox_address(int mailbox_index) const {
+    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return get_eth_fw_mailbox_arg_addr(mailbox_index, 0) - sizeof(uint32_t);
+}
+
 inline bool Hal::get_core_has_kernel_config_buffer(HalProgrammableCoreType programmable_core_type) const {
     switch (programmable_core_type) {
         case HalProgrammableCoreType::TENSIX:
-            return get_device_feature_enabled(DeviceFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER);
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER);
         case HalProgrammableCoreType::ACTIVE_ETH:
-            return get_device_feature_enabled(DeviceFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER);
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER);
         case HalProgrammableCoreType::IDLE_ETH:
-            return get_device_feature_enabled(DeviceFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
     }
 }

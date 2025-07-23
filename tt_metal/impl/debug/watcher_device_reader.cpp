@@ -197,6 +197,8 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
+    num_erisc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 WatcherDeviceReader::~WatcherDeviceReader() {
@@ -253,9 +255,6 @@ void WatcherDeviceReader::Dump(FILE* file) {
     paused_cores.clear();
     highest_stack_usage.clear();
     used_kernel_names.clear();
-
-    // Ensure any L1 writes are flushed
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     // Ignore storage-only cores
     std::unordered_set<CoreCoord> storage_only_cores;
@@ -1062,10 +1061,12 @@ void WatcherDeviceReader::LogRunningKernels(CoreDescriptor& core, const launch_m
             tt::LogMetal,
             " erisc : {}",
             kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
-        log_info(
-            tt::LogMetal,
-            " erisc : {}",
-            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+        if (num_erisc_cores > 1) {
+            log_info(
+                tt::LogMetal,
+                " erisc : {}",
+                kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]]);
+        }
     } else {
         log_info(
             tt::LogMetal,
