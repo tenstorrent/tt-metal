@@ -28,11 +28,7 @@ const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_
 };
 
 int main(int argc, char** argv) {
-<<<<<<< HEAD
     log_info(tt::LogTest, "Starting Test");
-
-=======
->>>>>>> 830a7cc9e8 (Pr 2)
     std::vector<std::string> input_args(argv, argv + argc);
 
     auto fixture = std::make_shared<TestFixture>();

@@ -76,32 +76,6 @@ public:
             initialize_and_validate_custom_physical_config(physical_mesh_config.value());
         }
 
-        control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
-        const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
-        TT_FATAL(
-            user_meshes.size() == 1,
-            "Only expected a single user mesh for a single host, but got: {}",
-            user_meshes.size());
-
-        local_mesh_id_ = user_meshes[0];
-
-        available_mesh_ids_.insert(local_mesh_id_);
-        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(local_mesh_id_, MeshScope::GLOBAL);
-
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
-
-        for (auto mesh_id : mesh_graph.get_mesh_ids()) {
-            if (mesh_id == local_mesh_id_) {  // Populate all nodes available locally. Note the use of host rank to
-                                              // ensure compatibility with big mesh
-                for (auto chip : mesh_graph.get_chip_ids(mesh_id, local_host_rank_)) {
-                    local_available_node_ids_.emplace_back(FabricNodeId(MeshId{mesh_id}, chip.value()));
-                }
-            }  // Populate Ids across all hosts and meshes
-            for (auto chip : mesh_graph.get_chip_ids(mesh_id)) {
-                global_available_node_ids_.emplace_back(FabricNodeId(MeshId{mesh_id}, chip.value()));
-            }
-        }
-
         // to ensure fabric config is set first, which affects mesh graph descriptor selection
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
     }
@@ -154,10 +128,8 @@ public:
 
         // Clear all class members
         control_plane_ptr_ = nullptr;
-        mesh_coordinate_to_node_id_.clear();
-        node_id_to_mesh_coordinate_.clear();
-        available_device_coordinates_.clear();
-        available_node_ids_.clear();
+        local_available_node_ids_.clear();
+        global_available_node_ids_.clear();
         available_mesh_ids_.clear();
         mesh_device_.reset();
         mesh_workload_.reset();
@@ -436,12 +408,12 @@ public:
             return true;
         }
 
-        auto first_coord = node_id_to_mesh_coordinate_.at(node_ids[0]);
+        auto first_coord = get_device_coord(node_ids[0]);
         bool all_same_row = true;
         bool all_same_col = true;
 
         for (size_t i = 1; i < node_ids.size(); ++i) {
-            auto next_coord = node_id_to_mesh_coordinate_.at(node_ids[i]);
+            auto next_coord = get_device_coord(node_ids[i]);
             if (next_coord[COL_DIM] != first_coord[COL_DIM]) {
                 all_same_col = false;
             }
@@ -1291,7 +1263,7 @@ public:
         const auto num_pci_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
         const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
 
-        std::vector<FabricNodeId> devices = get_all_node_ids();
+        std::vector<FabricNodeId> devices = get_local_node_ids();
         for (const auto& device : devices) {
             uint32_t max_routing_planes = get_max_routing_planes_for_device(device);
             // TODO: remove this once we have correct
@@ -1378,8 +1350,6 @@ private:
     std::vector<FabricNodeId> local_available_node_ids_;
     std::vector<FabricNodeId> global_available_node_ids_;
     std::shared_ptr<MeshDevice> mesh_device_;
-    std::unordered_map<MeshCoordinate, FabricNodeId> mesh_coordinate_to_node_id_;
-    std::unordered_map<FabricNodeId, MeshCoordinate> node_id_to_mesh_coordinate_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
     std::optional<HostRankId> local_host_rank_;
@@ -1436,18 +1406,23 @@ private:
             "Only expected a single user mesh for a single host, but got: {}",
             user_meshes.size());
 
-        // TODO: for now we are just dealing with user mesh 0 here
-        available_mesh_ids_.insert(user_meshes[0]);
-        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
-        const auto coordinates = MeshCoordinateRange(mesh_shape_);
-        for (const auto& coord : coordinates) {
-            available_device_coordinates_.push_back(coord);
-        }
+        local_mesh_id_ = user_meshes[0];
 
-        // TODO: available node ids should be able to capture the node ids for other meshes as well
-        const auto mesh_id = user_meshes[0];
-        for (auto i = 0; i < available_device_coordinates_.size(); i++) {
-            available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
+        available_mesh_ids_.insert(local_mesh_id_);
+        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(local_mesh_id_, MeshScope::GLOBAL);
+
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+
+        for (auto mesh_id : mesh_graph.get_mesh_ids()) {
+            if (mesh_id == local_mesh_id_) {  // Populate all nodes available locally. Note the use of host rank to
+                                              // ensure compatibility with big mesh
+                for (auto chip : mesh_graph.get_chip_ids(mesh_id, local_host_rank_)) {
+                    local_available_node_ids_.emplace_back(FabricNodeId(MeshId{mesh_id}, chip.value()));
+                }
+            }  // Populate Ids across all hosts and meshes
+            for (auto chip : mesh_graph.get_chip_ids(mesh_id)) {
+                global_available_node_ids_.emplace_back(FabricNodeId(MeshId{mesh_id}, chip.value()));
+            }
         }
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
@@ -1456,32 +1431,6 @@ private:
         wrap_around_mesh_ = control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(user_meshes[0]);
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
-
-        for (const auto& coord : get_host_local_device_coordinates()) {
-            TT_FATAL(
-                coord.dims() == mesh_shape_.dims(),
-                "Device coordinate {} has different dimensions than mesh shape {}",
-                coord,
-                mesh_shape_);
-
-            // Validate coordinate bounds
-            for (size_t i = 0; i < coord.dims(); ++i) {
-                TT_FATAL(
-                    coord[i] < mesh_shape_[i],
-                    "Device coordinate {} is out of bounds for mesh shape {} (dimension {} >= {})",
-                    coord,
-                    mesh_shape_,
-                    i,
-                    mesh_shape_[i]);
-            }
-
-            auto* device = mesh_device_->get_device(coord);
-            TT_FATAL(device != nullptr, "Failed to get device at coordinate {}", coord);
-
-            const auto fabric_node_id = control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(device->id());
-            mesh_coordinate_to_node_id_.emplace(coord, fabric_node_id);
-            node_id_to_mesh_coordinate_.emplace(fabric_node_id, coord);
-        }
 
         current_fabric_config_ = fabric_config;
         are_devices_open_ = true;
