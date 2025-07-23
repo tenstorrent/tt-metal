@@ -93,7 +93,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     // Configure compile-time arguments for reader kernel
     std::vector<uint32_t> reader_compile_time_args = {ntiles_per_row, src0_cb_index};
-    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
 
     // Configure compile-time arguments for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {

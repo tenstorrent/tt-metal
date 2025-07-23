@@ -591,8 +591,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     writer_compile_time_args.push_back(tile_shape[0]);
     writer_compile_time_args.push_back(tile_shape[1]);
     writer_compile_time_args.push_back(face_shape[0]);
-    face_shape[1], (uint32_t)needs_padding
-};
+    writer_compile_time_args.push_back(face_shape[1]);
+    writer_compile_time_args.push_back((uint32_t)needs_padding);
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -607,7 +607,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     auto override_runtime_args_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size](
             const void* operation,
-            const Program& program,
+            Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {

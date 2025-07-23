@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     uint32_t dst_log2_stick_size =
         dst_stick_size_is_power_of_two ? (std::uint32_t)std::log2(padded_row_size_nbytes) : 0;
     std::vector<uint32_t> reader_ct_args;
-    TensorAccessorArgs(*input.buffer()).append_args(reader_ct_args);
+    TensorAccessorArgs(*a.buffer()).append_args(reader_ct_args);
     reader_ct_args.push_back((std::uint32_t)dst_is_dram);
     reader_ct_args.push_back((std::uint32_t)src_stick_size_is_power_of_two);
     reader_ct_args.push_back((std::uint32_t)src_log2_stick_size);
