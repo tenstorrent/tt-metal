@@ -8,6 +8,11 @@
 
 Read more about llama2_70b at [llama.com/llama2](https://www.llama.com/llama2/).
 
+## Prerequisites
+
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+
 ## How to Run
 
 1. Download the Llama2-70B weights from [Meta](https://llama.meta.com/llama2/):
