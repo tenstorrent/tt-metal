@@ -108,7 +108,7 @@ void kernel_main() {
     constexpr auto args_a = TensorAccessorArgs<0>();
     const auto a = TensorAccessor(args_a, a_addr, tile_size_bytes);
 
-    constexpr auto args_b = TensorAccessorArgs<args_a.compile_time_args_skip()>();
+    constexpr auto args_b = TensorAccessorArgs<args_a.next_compile_time_args_offset()>();
     const auto b = TensorAccessor(args_b, b_addr, tile_size_bytes);
 
     // Read inputs from DRAM into circular buffers

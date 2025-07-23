@@ -18,7 +18,7 @@ void kernel_main() {
 
     constexpr auto s0_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(s0_args, src_addr, data_size_bytes);
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.compile_time_args_skip()>();
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     const auto s1 = TensorAccessor(s1_args, pad_addr, data_size_bytes);
 
     // pad based on page

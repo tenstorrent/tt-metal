@@ -45,7 +45,7 @@ void kernel_main() {
 
     constexpr auto s0_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(s0_args, src0_addr, in0_tile_bytes);
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.compile_time_args_skip()>();
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     const auto s1 = TensorAccessor(s1_args, src1_addr, in1_tile_bytes);
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {

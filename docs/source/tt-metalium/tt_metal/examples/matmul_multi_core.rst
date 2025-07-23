@@ -283,7 +283,7 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
         constexpr auto a_args = TensorAccessorArgs<0>();
         const auto a = TensorAccessor(a_args, src0_addr, in0_tile_bytes);
 
-        constexpr auto b_args = TensorAccessorArgs<a_args.compile_time_args_skip()>();
+        constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
         const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
 
         // Loop through the output tiles assigned to this core

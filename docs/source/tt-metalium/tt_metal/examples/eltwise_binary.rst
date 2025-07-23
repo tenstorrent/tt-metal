@@ -169,7 +169,7 @@ To do so, the reader creates 2 interleaved address generators. Unlike on most pr
         constexpr auto in0_args = TensorAccessorArgs<0>();
         const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
 
-        constexpr auto in1_args = TensorAccessorArgs<in0_args.compile_time_args_skip()>();
+        constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
         const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
 
         for (uint32_t i = 0; i < n_tiles; i++) {

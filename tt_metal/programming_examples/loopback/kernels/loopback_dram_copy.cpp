@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<0>();
     const auto in0 = TensorAccessor(in0_args, dram_buffer_src_addr, tile_size_bytes);
 
-    constexpr auto out0_args = TensorAccessorArgs<in0_args.compile_time_args_skip()>();
+    constexpr auto out0_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out0 = TensorAccessor(out0_args, dram_buffer_dst_addr, tile_size_bytes);
 
     for (uint32_t i = 0; i < num_tiles; i++) {

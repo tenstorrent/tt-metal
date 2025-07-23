@@ -26,7 +26,7 @@ void kernel_main() {
     // easy. But may not be the most efficient way to do it in all cases.
     constexpr auto a_args = TensorAccessorArgs<0>();
     const auto a = TensorAccessor(a_args, a_addr, tile_size_bytes);
-    constexpr auto b_args = TensorAccessorArgs<a_args.compile_time_args_skip()>();
+    constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     const auto b = TensorAccessor(b_args, b_addr, tile_size_bytes);
 
     // Now we loop over all the tiles and read them into the circular buffers

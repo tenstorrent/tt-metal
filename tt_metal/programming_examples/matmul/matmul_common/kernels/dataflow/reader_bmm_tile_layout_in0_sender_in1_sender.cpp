@@ -94,7 +94,7 @@ void kernel_main() {
 
     constexpr auto s0_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(s0_args, in0_tensor_addr, single_tile_size_bytes);
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.compile_time_args_skip()>();
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     const auto s1 = TensorAccessor(s1_args, in1_tensor_addr, single_tile_size_bytes);
 
     for (uint32_t b = 0; b < batch; b++) {
