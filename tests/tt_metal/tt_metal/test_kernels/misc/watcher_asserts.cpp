@@ -67,6 +67,11 @@ void MAIN {
     ASSERT(a != b, static_cast<debug_assert_type_t>(assert_type));
 #endif
 
+    // Long jump failure
+    while (a == b) {
+        ;
+    }
+
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
 }
 #else

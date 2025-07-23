@@ -31,8 +31,7 @@ extern "C" [[gnu::section(".start")]] void _start(void) {
     // function calls.
     std::jmp_buf jump_buf;
     // NOLINTNEXTLINE(cert-err52-cpp)
-    int return_value = setjmp(jump_buf);
-    if (return_value == 0) {
+    if (setjmp(jump_buf) == 0) {
         volatile uint32_t* const reg_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
         for (int i = 0; i < 13; i++) {
             reg_dump_addr[i] = 0;
@@ -41,27 +40,29 @@ extern "C" [[gnu::section(".start")]] void _start(void) {
         extern uint32_t __ldm_bss_start[];
         extern uint32_t __ldm_bss_end[];
         wzerorange(__ldm_bss_start, __ldm_bss_end);
-        memcpy(&gJumpBuf, &jump_buf, sizeof(jump_buf));
+        memcpy(gJumpBuf, jump_buf, sizeof(jump_buf));
+        erisc_exit = return_to_base_fw;
         Application();
-    } else {
-        // Dump the RISCV registers to memory at address for debugging purposes
-        volatile uint32_t* const reg_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
-        __asm__ volatile(
-            "sw ra, 0 * 4(%0)\n\t"
-            "sw s0, 1 * 4(%0)\n\t"
-            "sw s1, 2 * 4(%0)\n\t"
-            "sw s2, 3 * 4(%0)\n\t"
-            "sw s3, 4 * 4(%0)\n\t"
-            "sw s4, 5 * 4(%0)\n\t"
-            "sw s5, 6 * 4(%0)\n\t"
-            "sw s6, 7 * 4(%0)\n\t"
-            "sw s7, 8 * 4(%0)\n\t"
-            "sw s8, 9 * 4(%0)\n\t"
-            "sw s9, 10 * 4(%0)\n\t"
-            "sw s10, 11 * 4(%0)\n\t"
-            "sw s11, 12 * 4(%0)\n\t"
-            : /* no output */
-            : "r"(reg_dump_addr)
-            : "memory");
     }
+
+    // Exit from return_to_base_fw
+    // Dump the RISCV registers to memory at address for debugging purposes
+    volatile uint32_t* const reg_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+    __asm__ volatile(
+        "sw ra, 0 * 4(%0)\n\t"
+        "sw s0, 1 * 4(%0)\n\t"
+        "sw s1, 2 * 4(%0)\n\t"
+        "sw s2, 3 * 4(%0)\n\t"
+        "sw s3, 4 * 4(%0)\n\t"
+        "sw s4, 5 * 4(%0)\n\t"
+        "sw s5, 6 * 4(%0)\n\t"
+        "sw s6, 7 * 4(%0)\n\t"
+        "sw s7, 8 * 4(%0)\n\t"
+        "sw s8, 9 * 4(%0)\n\t"
+        "sw s9, 10 * 4(%0)\n\t"
+        "sw s10, 11 * 4(%0)\n\t"
+        "sw s11, 12 * 4(%0)\n\t"
+        : /* no output */
+        : "r"(reg_dump_addr)
+        : "memory");
 }
