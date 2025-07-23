@@ -21,23 +21,25 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <benchmark/benchmark.h>
-#include "device_pool.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "hostdevcommon/common_values.hpp"
+#include "command_queue.hpp"
+#include "shape2d.hpp"
+#include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
-using std::chrono::duration_cast;
-using std::chrono::microseconds;
+using namespace tt::tt_metal::distributed;
 
 ////////////////////////////////////////////////////////////////////////////////
 // This test measures the bandwidth of host-to-device data transfer and
-// device-to-host data transfer. It uses EnqueueReadBuffer and
-// EnqueueWriteBuffer APIs to transfer the data. The device memory object
-// (buffer) will be in DRAM.
+// device-to-host data transfer. It uses EnqueueWriteMeshBuffer and
+// EnqueueReadMeshBuffer APIs to transfer the data. The device memory object
+// (mesh buffer) will be in DRAM.
 //
 // Benchmark Matrix:
 // Page Size: 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
@@ -47,37 +49,57 @@ using std::chrono::microseconds;
 //
 ////////////////////////////////////////////////////////////////////////////////
 
+static const BufferType TARGET_BUFFER_TYPE = tt_metal::BufferType::DRAM;
+
 static const auto PAGE_SIZE_ARGS = benchmark::CreateRange(32, 32768, 2);
 static const std::vector<int64_t> TRANSFER_SIZE_ARGS{32 * 1024, 512 * 1024 * 1024};
 
-static void BM_write(benchmark::State& state) {
+// Create a buffer of total transfer_size big that is paged with page_size
+std::shared_ptr<distributed::MeshBuffer> create_buffer(
+    int page_size, int transfer_size, std::shared_ptr<MeshDevice> device) {
+    using DataType = uint32_t;
+    auto num_data = transfer_size / sizeof(DataType);
+
+    // Effectively a tall vector.
+    Shape2D buffer_shape{num_data, 1};
+
+    // This is the config of buffer to be created, as this is sent to a single device, it's global shape is the same as
+    // it's shard shape.
+    distributed::ShardedBufferConfig mesh_buffer_config{
+        .global_size = transfer_size, .global_buffer_shape = buffer_shape, .shard_shape = buffer_shape};
+    DeviceLocalBufferConfig device_local_config{.page_size = page_size, .buffer_type = TARGET_BUFFER_TYPE};
+
+    TT_ASSERT(mesh_buffer_config.compute_datum_size_bytes() == sizeof(DataType));
+
+    return MeshBuffer::create(mesh_buffer_config, device_local_config, device.get());
+}
+
+static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
-    auto device = DevicePool::instance().get_active_device(state.range(2));
 
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
-
-    auto device_buffer = Buffer::create(device, transfer_size, page_size, BufferType::DRAM);
     auto host_buffer = create_random_vector_of_bfloat16(transfer_size, 1000, random_buffer_seed);
 
+    auto device_buffer = create_buffer(page_size, transfer_size, mesh_device);
+
     for (auto _ : state) {
-        EnqueueWriteBuffer(device->command_queue(), device_buffer, host_buffer, false);
-        Finish(device->command_queue());
+        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), device_buffer, host_buffer, true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
-static void BM_read(benchmark::State& state) {
+static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
     auto device = DevicePool::instance().get_active_device(state.range(2));
 
-    auto device_buffer = Buffer::create(device, transfer_size, page_size, BufferType::DRAM);
+    auto device_buffer = create_buffer(page_size, transfer_size, mesh_device);
     std::vector<uint32_t> host_buffer;
 
     for (auto _ : state) {
-        EnqueueReadBuffer(device->command_queue(), device_buffer, host_buffer, true);
+        EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), host_buffer, device_buffer, true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
@@ -101,16 +123,26 @@ std::vector<chip_id_t> setup_device_pool() {
 int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
 
-    auto device_args = setup_device_pool();
-    auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, {device_args.begin(), device_args.end()}};
+    // TODO: Test Across Multiple devices.
+    auto device_id = 0;
+    auto mesh_device = MeshDevice::create_unit_mesh(device_id);
+
+    if (!mesh_device->using_fast_dispatch()) {
+        log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
+        return 1;
+    }
 
     // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
     // benchmark
-    benchmark::RegisterBenchmark("EnqueueWriteBuffer", BM_write)->ArgsProduct(benchmark_args)->UseRealTime();
-    benchmark::RegisterBenchmark("EnqueueReadBuffer", BM_read)->ArgsProduct(benchmark_args)->UseRealTime();
+    benchmark::RegisterBenchmark("EnqueueWriteMeshBuffer", BM_write, mesh_device)
+        ->ArgsProduct(BENCHMARK_ARGS)
+        ->UseRealTime();
+    benchmark::RegisterBenchmark("EnqueueReadMeshBuffer", BM_read, mesh_device)
+        ->ArgsProduct(BENCHMARK_ARGS)
+        ->UseRealTime();
 
     benchmark::RunSpecifiedBenchmarks();
-    DevicePool::instance().close_devices(DevicePool::instance().get_all_active_devices());
+    mesh_device->close();
     benchmark::Shutdown();
 
     return 0;
