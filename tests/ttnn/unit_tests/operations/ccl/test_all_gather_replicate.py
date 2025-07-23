@@ -50,6 +50,7 @@ LM_HEAD_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0
 BINARY_MULT_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(
     ttnn.CoreCoord(1, 0), 30, SUB_DEVICE_CRS, row_wise=True
 )
+MAX_DST_TILES = 8
 
 
 def run_all_gather_replicate_impl(
@@ -85,6 +86,9 @@ def run_all_gather_replicate_impl(
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
+
+    if output_num_cores != len(grid):
+        pytest.skip("Output num cores does not match grid size")
 
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
@@ -122,9 +126,46 @@ def run_all_gather_replicate_impl(
     ##################################
 
     # Input shapes
-    M, N = M_in, K_in // cluster_shape[cluster_axis]
-    N_per_shard = round_up(math.ceil(N / input_num_cores), ttnn.TILE_SIZE)
-    input_shape = [*cluster_shape, M, N]
+    M, K_per_device = M_in, K_in // cluster_shape[cluster_axis]
+    K_per_device_per_shard = round_up(math.ceil(K_per_device / input_num_cores), ttnn.TILE_SIZE)
+    in0_shape = [*cluster_shape, M, K_per_device]
+    in1_shape = [*cluster_shape, K_in, N_in]
+
+    K_per_shard = round_up(math.ceil(K_in / output_num_cores), ttnn.TILE_SIZE)
+    K_padded = K_per_shard * output_num_cores
+    N_per_shard = round_up(math.ceil(N_in / output_num_cores), ttnn.TILE_SIZE)
+    N_per_shard_in_dram = N_per_shard * 2
+    N_padded = N_per_shard * output_num_cores
+
+    logger.info(f"K_per_shard {K_per_shard}")
+    logger.info(f"K_padded {K_padded}")
+    logger.info(f"N_per_shard {N_per_shard}")
+    logger.info(f"N_padded {N_padded}")
+
+    in0_block_h = M // ttnn.TILE_SIZE
+    in0_block_w = K_in // output_num_cores // ttnn.TILE_SIZE
+    while (K_in / ttnn.TILE_SIZE) % in0_block_w != 0:
+        in0_block_w -= 1
+
+    out_block_h = M // ttnn.TILE_SIZE
+    out_block_w = N_padded // output_num_cores // ttnn.TILE_SIZE
+
+    num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
+    num_blocks_x = (N_padded // ttnn.TILE_SIZE - 1) // out_block_w + 1
+    num_blocks_total = num_blocks_y * num_blocks_x
+
+    if num_blocks_total != output_num_cores:
+        pytest.skip(f"num_blocks_total {num_blocks_total} != output_num_cores {output_num_cores}")
+
+    out_subblock_h = 1
+    out_subblock_w = MAX_DST_TILES
+    while out_block_w % out_subblock_w != 0:
+        out_subblock_w -= 1
+
+    logger.debug("in0 block h w " + str(in0_block_h) + " " + str(in0_block_w))
+    logger.debug("in1 block h w " + str(in0_block_w) + " " + str(out_block_w))
+    logger.debug("out block h w " + str(out_block_h) + " " + str(out_block_w))
+    logger.debug("out subblock h w " + str(out_subblock_h) + " " + str(out_subblock_w))
 
     # Intermediate shapes
     intermediate_num_cores = cluster_shape[cluster_axis]
@@ -134,8 +175,8 @@ def run_all_gather_replicate_impl(
     aggregated_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
         ttnn.CoreCoord(1, 0), MCAST_NUM_CORES, MCAST_CRS, row_wise=True
     )
-    intermediate_shape = [*cluster_shape, M, N * cluster_shape[cluster_axis]]
-    aggregated_shape = [*cluster_shape, M, N * intermediate_num_cores * MCAST_NUM_CORES]
+    intermediate_shape = [*cluster_shape, M, K_per_device * cluster_shape[cluster_axis]]
+    aggregated_shape = [*cluster_shape, M, K_per_device * intermediate_num_cores * MCAST_NUM_CORES]
 
     interemediate_N_per_shard = round_up(math.ceil(intermediate_shape[-1] / intermediate_num_cores), ttnn.TILE_SIZE)
 
@@ -150,6 +191,16 @@ def run_all_gather_replicate_impl(
         ttnn.ShardSpec(
             input_core_range_set,
             [M, N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    in1_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            output_core_range_set,
+            [K_in, N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -181,14 +232,24 @@ def run_all_gather_replicate_impl(
         ),
     )
 
-    logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
-    input_tensor = torch.randn(input_shape)
+    logger.info(f"Input shape: {in0_shape[2:]}, Padded shape: {[M, K_per_device_per_shard * input_num_cores]}")
+    in0_tensor = torch.randn(in0_shape)
     tt_input_tensor = ttnn.from_torch(
-        input_tensor,
+        in0_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=in0_dtype,
         memory_config=input_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
+
+    in1_tensor = torch.randn(in1_shape)
+    tt_in1_tensor = ttnn.from_torch(
+        in1_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=in1_dtype,
+        memory_config=in1_sharded_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
 
@@ -222,7 +283,7 @@ def run_all_gather_replicate_impl(
         # Golden for all gather part
         golden_shape = intermediate_shape
         golden_shape[cluster_axis] = 1
-        golden = input_tensor.transpose(-2, cluster_axis).reshape(golden_shape).squeeze(cluster_axis)
+        golden = in0_tensor.transpose(-2, cluster_axis).reshape(golden_shape).squeeze(cluster_axis)
         # TODO: Add golden for replicate part
 
         output_tensor_goldens_list.append(golden)
@@ -320,76 +381,3 @@ def run_all_gather_replicate_impl(
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
-
-
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.timeout(1500)
-@pytest.mark.parametrize(
-    "input_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
-    [
-        ([1, 1, 32, 960], 1, 3, 30, BINARY_MULT_CRS, 24, RING_CRS),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "num_iters",
-    [
-        (8),
-    ],
-)
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "trace_region_size": 23887872,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (8, 4),
-    ],
-    indirect=True,
-)
-def test_all_gather_replicate(
-    mesh_device,
-    input_shape,
-    cluster_axis,
-    input_dtype,
-    num_links,
-    input_num_cores,
-    input_core_range_set,
-    output_num_cores,
-    output_core_range_set,
-    num_iters,
-    trace_mode,
-    use_program_cache,
-    function_level_defaults,
-):
-    if mesh_device.get_num_devices() != 32:
-        pytest.skip("Not TG!")
-
-    run_all_gather_replicate_impl(
-        mesh_device,
-        input_shape,
-        cluster_axis,
-        input_dtype,
-        num_links,
-        input_num_cores,
-        input_core_range_set,
-        output_num_cores,
-        output_core_range_set,
-        num_iters=num_iters,
-        trace_mode=trace_mode,
-        validate_all=False,
-    )
