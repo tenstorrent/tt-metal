@@ -10,8 +10,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "init/cpu_initializers.hpp"
 #include "ops/losses.hpp"
 
 namespace ttml::ops::tests {
@@ -79,7 +79,7 @@ TEST_F(UnaryOpsTest, Silu) {
     auto W = 5;
     auto len = static_cast<float>(N * C * H * W);
     xt::xarray<float> a = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(a, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, 42);
+    ttml::core::random::parallel_generate(a, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, 42);
     xt::xarray<float> expected_silu = {
         {{{-0.10980F, 0.38199F, 0.64114F, -0.21957F, 0.28487F},
           {0.35594F, 0.10836F, 0.10620F, -0.23011F, -0.05124F},

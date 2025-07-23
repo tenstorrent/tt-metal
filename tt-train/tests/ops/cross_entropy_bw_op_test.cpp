@@ -13,8 +13,8 @@
 #include <ttnn/tensor/shape/shape.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "init/cpu_initializers.hpp"
 #include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -103,7 +103,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     std::random_device rd;
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
@@ -154,7 +154,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
     std::random_device rd;
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
@@ -204,7 +204,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     std::random_device rd;
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
@@ -254,7 +254,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Huge_Backward) {
     std::random_device rd;
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});

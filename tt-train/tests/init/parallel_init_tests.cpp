@@ -8,10 +8,10 @@
 #include <algorithm>
 #include <chrono>
 #include <core/ttnn_all_includes.hpp>
-#include <init/cpu_initializers.hpp>
 #include <random>
 
 #include "autograd/auto_context.hpp"
+#include "core/random.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 
@@ -37,13 +37,9 @@ TEST_F(InitTests, ParallelUniformInitDeterminism) {
 
     ttml::init::UniformRange range{-1.0f, 1.0f};
 
-    // Reset seed before each initialization
-    ttml::autograd::ctx().set_seed(42);
     auto uniform_factory = [&]() { return std::uniform_real_distribution<float>(range.a, range.b); };
-    ttml::init::parallel_generate(vec1, uniform_factory);
-
-    ttml::autograd::ctx().set_seed(42);
-    ttml::init::parallel_generate(vec2, uniform_factory);
+    ttml::core::random::parallel_generate(vec1, uniform_factory, 42);
+    ttml::core::random::parallel_generate(vec2, uniform_factory, 42);
 
     // Results should be identical
     EXPECT_EQ(vec1, vec2);
@@ -58,13 +54,11 @@ TEST_F(InitTests, UniformInitsGoodMeanAndRange) {
 
     ttml::init::UniformRange range{-1.0f, 1.0f};
 
-    // Initialize with parallel method
-    ttml::autograd::ctx().set_seed(42);
     auto uniform_factory = [&]() { return std::uniform_real_distribution<float>(range.a, range.b); };
-    ttml::init::parallel_generate(parallel_vec, uniform_factory);
+    ttml::core::random::parallel_generate(parallel_vec, uniform_factory, 42);
 
     // Initialize with sequential method
-    ttml::init::sequential_generate(std::span(sequential_vec), uniform_factory, 42);
+    ttml::core::random::sequential_generate(std::span(sequential_vec), uniform_factory, 42);
 
     // Results will be different due to different generation patterns
     // But both should be valid uniform distributions
@@ -102,7 +96,6 @@ TEST_F(InitTests, ParallelGenerateRelativePerformance) {
         constexpr int num_runs = 10;
         std::vector<std::chrono::nanoseconds> parallel_times;
         std::vector<std::chrono::nanoseconds> sequential_times;
-        ttml::autograd::ctx().set_seed(42);
 
         parallel_times.reserve(num_runs);
         sequential_times.reserve(num_runs);
@@ -112,14 +105,14 @@ TEST_F(InitTests, ParallelGenerateRelativePerformance) {
         for (int run = 0; run < num_runs; ++run) {
             // Time parallel initialization
             auto start = std::chrono::high_resolution_clock::now();
-            ttml::init::parallel_generate(parallel_vec, uniform_factory);
+            ttml::core::random::parallel_generate(parallel_vec, uniform_factory, 42);
             auto end = std::chrono::high_resolution_clock::now();
 
             parallel_times.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start));
 
             // Time sequential initialization
             start = std::chrono::high_resolution_clock::now();
-            ttml::init::sequential_generate(std::span(sequential_vec), uniform_factory, 42);
+            ttml::core::random::sequential_generate(std::span(sequential_vec), uniform_factory, 42);
             end = std::chrono::high_resolution_clock::now();
 
             sequential_times.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start));

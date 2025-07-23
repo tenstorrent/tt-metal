@@ -13,8 +13,8 @@
 #include <ttnn/tensor/shape/shape.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "init/cpu_initializers.hpp"
 #include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -51,7 +51,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
@@ -84,7 +84,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
@@ -114,7 +114,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Huge_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());

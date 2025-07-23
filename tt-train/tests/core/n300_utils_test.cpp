@@ -12,8 +12,8 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/distributed_mapping.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "init/cpu_initializers.hpp"
 
 using namespace ttml;
 
@@ -124,7 +124,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_data = xt::empty<float>({32 * 32});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         xtensor_data, []() { return std::uniform_real_distribution<float>(-0.05, 0.05); }, 42);
     xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 32, 32});
 
@@ -150,7 +150,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_data = xt::empty<float>({32});
-    ttml::init::parallel_generate(xtensor_data, []() { return std::uniform_real_distribution<float>(-1.F, 1.F); }, 42);
+    ttml::core::random::parallel_generate(
+        xtensor_data, []() { return std::uniform_real_distribution<float>(-1.F, 1.F); }, 42);
     xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 4, 8});
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
@@ -192,12 +193,12 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_a_data = xt::empty<float>({128 * 64});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         xtensor_a_data, []() { return std::uniform_real_distribution<float>(-0.005, 0.005); }, 42);
     xt::xarray<float> xtensor_a = xtensor_a_data.reshape({1, 1, 128, 64});
 
     xt::xarray<float> xtensor_b_data = xt::empty<float>({256 * 64});
-    ttml::init::parallel_generate(
+    ttml::core::random::parallel_generate(
         xtensor_b_data, []() { return std::uniform_real_distribution<float>(-0.005, 0.005); }, 42);
     xt::xarray<float> xtensor_b = xtensor_b_data.reshape({1, 1, 64, 256});
 
