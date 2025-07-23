@@ -1,32 +1,35 @@
-# Llama2-70B Demo
+# Llama2-70
 
+## Platforms:
 > [!NOTE]
-> This model is no longer supported on QuietBox/LoudBox (T3000) setups.
+> This model is no longer supported on QuietBox/LoudBox setups.
+
+## Introduction
+
+Read more about llama2_70b at [llama.com/llama2](https://www.llama.com/llama2/).
 
 ## How to Run
 
-1. **Download the Llama2-70B weights from Meta (https://llama.meta.com/):**
+1. Download the Llama2-70B weights from [Meta](https://llama.meta.com/llama2/):
 
-2. **Repack the weights:**
+2. Repack the weights:
     ```bash
-    # This concatenates the sharded checkpoints and makes it easier for us to load.
     python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
     ```
     Note: Use `5` for `chunk_size`.
 
-    Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
+3. Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
 
 ### Running the Demo
 
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 
-1. **Prepare the weight cache directory:**
+1. Prepare the weight cache directory:
     ```bash
-    # Make a directory for us to cache weights into. This speeds up subsequent runs.
     mkdir <weight_cache_dir>
     ```
 
-2. **Set up environment variables:**
+2. Set up environment variables:
     ```bash
     export LLAMA2_CKPT_DIR=<repacked_output_dir>
     export LLAMA2_TOKENIZER_PATH=<path_to_checkpoint_dir> # Path needs to include the tokenizer.model file
@@ -41,11 +44,9 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     # export LLAMA2_CKPT_DIR="/home/llama-data-repacked/llama-2-70b/"
     # export LLAMA2_TOKENIZER_PATH="/home/llama-data-repacked/tokenizer.model"
     # export LLAMA2_CACHE_PATH="/home/llama-data-cache/weights-cache"
-
-
     ```
 
-3. **Run the demo:**
+3. Run the demo:
 
     NOTE: Run the following comand twice.
     1. The first run will cache the weights. This will take some time.
@@ -56,11 +57,14 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     pytest -svv models/demos/t3000/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama2]
     ```
 
-4. **Run the performance test:**
+## Testing
+
+- Performance test:
 
     The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
     For best performance, ensure that tt-metal is built in release mode (default), and ensure the host's CPU frequency governors are set to `performance` -- instructions for setting the frequency governor vary by machine.
-    This performance test runs with sequence length 128 and batch size 32.
+
+    - This performance test runs with sequence length 128 and batch size 32.
     ```bash
     pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama2]
     ```
