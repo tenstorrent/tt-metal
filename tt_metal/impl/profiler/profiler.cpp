@@ -637,7 +637,6 @@ void dumpJsonNocTraces(
         return;
     }
 
-    log_info(tt::LogMetal, "Writing profiler noc traces to '{}'", output_dir);
     for (const auto& processed_events_by_opname : noc_trace_data) {
         for (auto& [runtime_id, events] : processed_events_by_opname) {
             // dump events to a json file inside directory output_dir named after the op_name
@@ -669,7 +668,7 @@ void writeCSVHeader(std::ofstream& log_file_ofs, tt::ARCH device_architecture, i
 
 void dumpDeviceResultsToCSV(
     const std::vector<DeviceProfilerDataPoint>& device_data_points,
-    const IDevice* device,
+    tt::ARCH device_arch,
     int device_core_frequency,
     const std::filesystem::path& log_path) {
     ZoneScoped;
@@ -682,15 +681,13 @@ void dumpDeviceResultsToCSV(
         log_file_ofs.open(log_path, std::ios_base::app);
     } else {
         log_file_ofs.open(log_path);
-        writeCSVHeader(log_file_ofs, device->arch(), device_core_frequency);
+        writeCSVHeader(log_file_ofs, device_arch, device_core_frequency);
     }
 
     if (!log_file_ofs) {
         log_error(tt::LogMetal, "Could not open kernel profiler dump file '{}'", log_path);
         return;
     }
-
-    log_info(tt::LogMetal, "Writing {} device results to CSV file '{}'", device_data_points.size(), log_path);
 
     for (const DeviceProfilerDataPoint& data_point : device_data_points) {
         std::string meta_data_str = "";
@@ -780,7 +777,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
         for (uint32_t y = 0; y < dram_grid_size.y; ++y) {
             const CoreCoord dram_core = device->virtual_core_from_logical_core({x, y}, CoreType::DRAM);
             if (auto mesh_device = device->get_mesh_device()) {
-                const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
                     .enqueue_read_shard_from_core(
                         distributed::DeviceMemoryAddress{device_coord, dram_core, profiler_addr},
@@ -810,7 +807,7 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     for (int dram_channel = 0; dram_channel < num_dram_channels; ++dram_channel) {
         std::vector<uint32_t> profile_buffer_bank_data(profile_buffer_bank_size_bytes / sizeof(uint32_t), 0);
         tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-            profile_buffer_bank_data.data(), profile_buffer_bank_size_bytes, device->id(), dram_channel, profiler_addr);
+            profile_buffer_bank_data.data(), profile_buffer_bank_size_bytes, device_id, dram_channel, profiler_addr);
 
         std::copy(
             profile_buffer_bank_data.begin(),
@@ -826,7 +823,6 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
 
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
 
-    const chip_id_t device_id = device->id();
     const Hal& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
     profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
@@ -856,7 +852,6 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
     IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
-    const chip_id_t device_id = device->id();
     const Hal& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
     profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
@@ -893,14 +888,14 @@ void DeviceProfiler::readL1DataBuffers(
 void DeviceProfiler::readControlBufferForCore(
     IDevice* device, const CoreCoord& virtual_core, const ProfilerDumpState state) {
     ZoneScoped;
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
+    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, virtual_core);
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
     if (useFastDispatchForControlBuffers(device, state)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-            const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+            const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
             const distributed::DeviceMemoryAddress address = {
                 device_coord, virtual_core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
             core_control_buffers[virtual_core].resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
@@ -921,7 +916,7 @@ void DeviceProfiler::readControlBufferForCore(
         }
     } else {
         core_control_buffers[virtual_core] = tt::llrt::read_hex_vec_from_core(
-            device->id(),
+            device_id,
             virtual_core,
             reinterpret_cast<uint64_t>(profiler_msg->control_vector),
             kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
@@ -983,8 +978,6 @@ void DeviceProfiler::readRiscProfilerResults(
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
         return;
     }
-
-    chip_id_t device_id = device->id();
 
     const uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
@@ -1310,13 +1303,6 @@ void DeviceProfiler::readPacketData(
 
     firstTimestamp(timestamp);
 
-    log_info(
-        tt::LogMetal,
-        "zone details: {}, {}, {}",
-        zone_details.zone_name,
-        zone_details.source_line_num,
-        zone_details.source_file);
-
     device_data_points.emplace_back(
         device_id,
         core.x,
@@ -1343,8 +1329,10 @@ bool DeviceProfiler::isLastFDDumpDone() const { return this->is_last_fd_dump_don
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
-    this->device = device;
-    this->device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    this->device_id = device->id();
+    this->device_arch = device->arch();
+    this->device_core_frequency =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id);
     this->output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::create_directories(this->output_dir);
     std::filesystem::path log_path = this->output_dir / DEVICE_SIDE_LOG;
@@ -1366,7 +1354,6 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 DeviceProfiler::~DeviceProfiler() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    log_info(tt::LogMetal, "DeviceProfiler destructor called");
     dumpDeviceResults();
     pushTracyDeviceResults();
     for (auto& tracyCtx : device_tracy_contexts) {
@@ -1398,7 +1385,6 @@ void DeviceProfiler::readResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    const chip_id_t device_id = device->id();
     const std::string zone_name = fmt::format(
         "{}-{}-{}-{}", "readResults", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
     ZoneName(zone_name.c_str(), zone_name.size());
@@ -1431,7 +1417,6 @@ void DeviceProfiler::processResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    const chip_id_t device_id = device->id();
     const std::string zone_name = fmt::format(
         "{}-{}-{}-{}", "processResults", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
     ZoneName(zone_name.c_str(), zone_name.size());
@@ -1459,7 +1444,7 @@ void DeviceProfiler::processResults(
 #endif
 }
 
-void DeviceProfiler::dumpRoutingInfo() {
+void DeviceProfiler::dumpRoutingInfo() const {
     // if defined, used profiler_noc_events_report_path to to dump routing info. otherwise use output_dir
     std::string rpt_path = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
     if (rpt_path.empty()) {
@@ -1467,6 +1452,16 @@ void DeviceProfiler::dumpRoutingInfo() {
     }
 
     tt::tt_metal::dumpRoutingInfo(std::filesystem::path(rpt_path) / "topology.json");
+}
+
+void DeviceProfiler::dumpClusterCoordinates() const {
+    // if defined, used profiler_noc_events_report_path to to dump cluster coordinates. otherwise use output_dir
+    std::string rpt_path = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
+    if (rpt_path.empty()) {
+        rpt_path = output_dir.string();
+    }
+
+    tt::tt_metal::dumpClusterCoordinatesAsJson(std::filesystem::path(rpt_path) / "cluster_coordinates.json");
 }
 
 bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
@@ -1481,7 +1476,7 @@ void DeviceProfiler::dumpDeviceResults() {
     ZoneScoped;
 
     const std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
-    dumpDeviceResultsToCSV(device_data_points, device, device_core_frequency, log_path);
+    dumpDeviceResultsToCSV(device_data_points, device_arch, device_core_frequency, log_path);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
         // if defined, use profiler_noc_events_report_path to dump noc traces. otherwise use output_dir
@@ -1489,8 +1484,7 @@ void DeviceProfiler::dumpDeviceResults() {
         if (rpt_path.empty()) {
             rpt_path = output_dir.string();
         }
-        dumpJsonNocTraces(noc_trace_data, device->id(), std::filesystem::path(rpt_path));
-        dumpClusterCoordinatesAsJson(std::filesystem::path(rpt_path) / "cluster_coordinates.json");
+        dumpJsonNocTraces(noc_trace_data, device_id, std::filesystem::path(rpt_path));
     }
 
 #endif
