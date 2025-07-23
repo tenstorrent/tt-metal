@@ -1949,7 +1949,7 @@ def test_binary_subtile_row_bcast(a_shape, b_shape, device):
 
     torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
 
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
@@ -1989,7 +1989,7 @@ profile_a_b_shape_pairs = [
     ],
 )
 @pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
-def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
+def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input, use_legacy):
     torch.manual_seed(0)
     a_shape, b_shape = a_and_b_shape
 
@@ -2133,7 +2133,7 @@ def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device):
 
     torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
 
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape

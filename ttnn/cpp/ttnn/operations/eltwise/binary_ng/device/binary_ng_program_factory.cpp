@@ -462,18 +462,23 @@ KernelName get_reader_kernel_name_and_defines(
 }
 
 void overwrite_compute_kernel_name_and_defines(
-    bool is_sfpu_op,
     KernelName& kernel_name,
     const SubtileBroadcastType subtile_broadcast_type,
     std::map<std::string, std::string>& compute_defines) {
-    if (not is_sfpu_op) {
-        if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-            subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
-            compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
-            compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
-            kernel_name = KernelName::ComputeRowBcastLLK;
-        }
+    compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
+    compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
+    kernel_name = KernelName::ComputeRowBcastLLK;
+}
+
+bool is_llk_bcast(const SubtileBroadcastType subtile_broadcast_type, const DataType a_dtype, const DataType b_dtype) {
+    if (not(subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+            subtile_broadcast_type == SubtileBroadcastType::ROW_B)) {
+        return false;
     }
+    if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
+        return true;
+    }
+    return false;
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
@@ -657,11 +662,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
-    // READER KERNEL
-    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
-    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
-
     auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
@@ -675,7 +675,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             operation_attributes.subtile_broadcast_type, reader_defines);
         writer_kernel = KernelName::WriterNoBcastNg;
     }
-
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
@@ -722,8 +721,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
-        is_sfpu_op, compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
+    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype)) {
+        CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
+            compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
+        reader_defines["BCAST_LLK"] = "1";
+    } else {
+        reader_defines["BCAST_LLK"] = "0";
+    }
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(compute_kernel, is_sfpu_op),

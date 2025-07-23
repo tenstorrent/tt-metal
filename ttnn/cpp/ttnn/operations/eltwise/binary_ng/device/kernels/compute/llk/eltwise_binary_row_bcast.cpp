@@ -46,7 +46,6 @@ void MAIN {
 
         cb_reserve_back(tt::CBIndex::c_6, 1);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, tt::CBIndex::c_6);
-        // DPRINT_MATH(DPRINT << "wait c_1 done" << ENDL());
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);
@@ -58,8 +57,6 @@ void MAIN {
         tile_regs_release();
 
         cb_pop_front(cb_bcast, 1);
-        // DPRINT_MATH(DPRINT << "cb_post_lhs is " << (uint32_t)cb_post_lhs << ENDL());
-        // DPRINT_MATH(DPRINT << "cb_post_rhs is " << (uint32_t)cb_post_rhs << ENDL());
 
         binary_op_init_common(cb_no_bcast, tt::CBIndex::c_6, cb_out);
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_no_bcast, tt::CBIndex::c_6);

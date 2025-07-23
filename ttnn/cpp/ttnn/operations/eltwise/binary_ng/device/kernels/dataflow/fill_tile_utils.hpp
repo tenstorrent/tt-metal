@@ -57,12 +57,10 @@ FORCE_INLINE void fill_tile_with_first_element(uint32_t cb_id) {
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 16-bit elements.
 FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t cb_id) {
-#if 0
     // Here we have to account for the fact that a tile consists of 4 16x16 faces.
     // So we have to fill faces 0 and 2 with the first row of face 0, and faces 1 and 3
     // with the first row of face 1.
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
-
     uint32_t row_offset = 8;  // start at second row since first row is source
     uint32_t num_rows = 15;
 
@@ -79,13 +77,11 @@ FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t cb_id) {
         row_offset = 0;
         num_rows = 16;
     }
-#endif
 }
 
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 32-bit elements (float32/int32).
 FORCE_INLINE void fill_tile_with_first_row(uint32_t cb_id) {
-#if 0
     // Tile with 4 faces (16x16) and 32-bit elements
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
 
@@ -105,7 +101,6 @@ FORCE_INLINE void fill_tile_with_first_row(uint32_t cb_id) {
         row_offset = 0;  // Reset for the next face pair
         num_rows = 16;   // Process all rows for the next face pair
     }
-#endif
 }
 
 // Reads the very first column of the CB and fills the entire tile with the same column.
