@@ -20,8 +20,8 @@ void kernel_main() {
     const uint32_t dst_stick_offset = get_arg_val<uint32_t>(25);  // == start_src_stick_wi * elem_size
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(4) == 1;
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
+    constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 3) == 1;
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
@@ -32,7 +32,7 @@ void kernel_main() {
     //         .log_base_2_of_page_size = dst_log_base_2_of_page_size
     //     };
     // #else
-    const InterleavedAddrGen<dst_is_dram> s1 = {.bank_base_address = dst_addr, .page_size = full_padded_X_nbytes};
+    const auto s1 = TensorAccessor(tensor_args, dst_addr, full_padded_X_nbytes);
     // #endif
 
     uint32_t dst_stick_id = start_dst_stick_id;
@@ -43,7 +43,7 @@ void kernel_main() {
                 // DPRINT << "WR: " << w << ", " << z << ", " << y << ENDL();
                 cb_wait_front(cb_id, 1);
                 uint32_t l1_addr = get_read_ptr(cb_id);
-                uint64_t dst_noc_addr = get_noc_addr<dst_is_dram>(dst_stick_id, s1, dst_stick_offset);
+                uint64_t dst_noc_addr = s1.get_noc_addr(dst_stick_id) + dst_stick_offset;
                 noc_async_write(l1_addr, dst_noc_addr, padded_X_nbytes);
                 noc_async_write_barrier();
                 ++dst_stick_id;

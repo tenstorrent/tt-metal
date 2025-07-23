@@ -15,9 +15,9 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
 
-    const InterleavedAddrGen<dst0_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = stick_size};
+    const auto s0 = TensorAccessor(tensor_args, dst_addr, stick_size);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;
@@ -27,7 +27,7 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            uint64_t dst_noc_addr = get_noc_addr(i_stick, s0);
+            uint64_t dst_noc_addr = s0.get_noc_addr(i_stick);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
             l1_read_addr += stick_size_offset;
             i_stick += 1;

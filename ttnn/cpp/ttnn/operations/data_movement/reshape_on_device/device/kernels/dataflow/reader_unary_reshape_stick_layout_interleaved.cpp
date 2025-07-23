@@ -6,35 +6,28 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    // Constexpr
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t num_sticks = get_arg_val<uint32_t>(1);  // num rows or H of input tensor
+    uint32_t stick_size = get_arg_val<uint32_t>(2);
+    uint32_t num_tiles_c = get_arg_val<uint32_t>(3);
+    uint32_t start_id = get_arg_val<uint32_t>(4);
+
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(tensor_args.compile_time_args_skip()) == 1;
+
     constexpr uint32_t cb_id_in0 = 0;
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t stick_size = get_arg_val<uint32_t>(2);
+    // ublocks size defined in tiles
+    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const DataFormat data_format = get_dataformat(cb_id_in0);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    uint32_t stick_id = start_id;
 
-    // TODO(agrebenisan): This isn't good... here we are assuming
-    // that the stick size dictates tiles c, but stick size
-    // doesn't necessarily need to be divisible by tiles c...
-    // this is only the case really for tilize
-    const uint32_t num_tiles_c = stick_size / 64;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
-    uint32_t stick_id = 0;
-
-    constexpr bool stick_size_is_power_of_two = (get_compile_time_arg_val(1) == 1);
 #if (stick_size_is_power_of_two)
-    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(3);
-    const InterleavedPow2AddrGen<src0_is_dram> s = {
-        .bank_base_address = src_addr,
-
-        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
-    };
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1);
+    const auto s = TensorAccessor(tensor_args, src_addr, 1 << log_base_2_of_page_size);
 #else
-    const InterleavedAddrGen<src0_is_dram> s = {
-        .bank_base_address = src_addr,
-
-        .page_size = stick_size};
+    const auto s = TensorAccessor(tensor_args, src_addr, stick_size);
 #endif
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
@@ -43,9 +36,8 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         for (uint32_t j = 0; j < 32; j++) {
             uint64_t src_noc_addr = get_noc_addr(stick_id, s);
-
             noc_async_read(src_noc_addr, l1_write_addr, stick_size);
-            l1_write_addr += stick_size;
+            l1_write_addr += tile_bytes;
             stick_id++;
         }
         noc_async_read_barrier();

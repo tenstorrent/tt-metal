@@ -51,8 +51,8 @@ void kernel_main() {
     const uint32_t full_unpadded_X_nbytes = get_arg_val<uint32_t>(23);
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1) == 1;
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
@@ -68,7 +68,7 @@ void kernel_main() {
     //         .log_base_2_of_page_size = src_log_base_2_of_page_size
     //     };
     // #else
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = full_unpadded_X_nbytes};
+    const auto s0 = TensorAccessor(tensor_args, src_addr, full_unpadded_X_nbytes);
     // #endif
 
     const InterleavedPow2AddrGen<false> s_const = {
@@ -96,7 +96,7 @@ void kernel_main() {
                         pad_value);
                 } else {
                     // this is a data row possibly with padding at end
-                    uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0, start_src_stick_offset);
+                    uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id) + start_src_stick_offset;
                     noc_async_read(src_noc_addr, l1_addr, unpadded_X_nbytes);
                     l1_addr_partial = l1_addr + unpadded_X_nbytes;
                     fill_with_val_async(

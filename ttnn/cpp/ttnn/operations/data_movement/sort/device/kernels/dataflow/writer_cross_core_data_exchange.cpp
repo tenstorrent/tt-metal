@@ -14,20 +14,24 @@ void kernel_main() {
     const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(0);
 
     // Compile time args
-    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(0);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
-    constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(4);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t compute_with_storage_grid_size_x =
+        get_compile_time_arg_val(tensor_args.compile_time_args_skip());
+    constexpr uint32_t compute_with_storage_grid_size_y =
+        get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1);
+    constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 2);
+    constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 3);
+    constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 4);
     constexpr uint32_t physical_core_lookup_table_cb_index =
-        get_compile_time_arg_val(5);  // unused - for future improvements
-    constexpr bool value_tensor_is_dram = get_compile_time_arg_val(6) == 1;
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);
-    constexpr uint32_t Ht = get_compile_time_arg_val(8);
-    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(9);
-    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(10);          // unused - for future improvements
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(11));  // unused - for future improvements
-    constexpr bool is_32_bit_data = get_compile_time_arg_val(12) == 1;
+        get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 5);  // unused - for future improvements
+    constexpr uint32_t Wt = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 6);
+    constexpr uint32_t Ht = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 7);
+    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 8);
+    constexpr uint32_t number_of_cores_used =
+        get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 9);  // unused - for future improvements
+    const uint32_t sem_exchange_addr = get_semaphore(
+        get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 10));  // unused - for future improvements
+    constexpr bool is_32_bit_data = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 11) == 1;
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -42,10 +46,8 @@ void kernel_main() {
     // Output tensor config
     const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
     const DataFormat value_tensor_data_format = get_dataformat(value_tensor_cb_index);
-    const InterleavedAddrGenFast<value_tensor_is_dram> output_tensor_accessor = {
-        .bank_base_address = output_tensor_buffer_addr,
-        .page_size = value_tensor_tile_size_bytes,
-        .data_format = value_tensor_data_format};
+    const auto output_tensor_accessor =
+        TensorAccessor(tensor_args, output_tensor_buffer_addr, value_tensor_tile_size_bytes);
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Generate input index tiles

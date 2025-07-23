@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "untilize_program_factory.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 #include <math.h>
 
@@ -1033,11 +1033,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         // Interleaved input
-        bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
-        std::vector<uint32_t> reader_compile_time_args = {
-            (uint32_t)src0_is_dram,
-            (uint32_t)src0_cb_index,
-        };
+        std::vector<uint32_t> reader_compile_time_args = {};
+        TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+        reader_compile_time_args.push_back((uint32_t)src0_cb_index);
         unary_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"

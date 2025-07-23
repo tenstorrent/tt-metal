@@ -9,22 +9,17 @@
 void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
 
-    const uint32_t total_num_rows = get_compile_time_arg_val(2);
-    const uint32_t third_dim = get_compile_time_arg_val(3);
-    const uint32_t tile_height = get_compile_time_arg_val(4);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(tensor_args.compile_time_args_skip());
+    constexpr uint32_t total_num_rows = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1);
+    constexpr uint32_t third_dim = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 2);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 3);
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t unpadded_X_size = get_arg_val<uint32_t>(1);
 
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(0) == 1;
+    const auto s = TensorAccessor(tensor_args, dst_addr, unpadded_X_size);
 
-#if (STICK_SIZE_IS_POW2 == 1)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<dst0_is_dram> s = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<dst0_is_dram> s = {.bank_base_address = dst_addr, .page_size = unpadded_X_size};
-#endif
     auto write_block = [&](uint32_t num_rows,
                            uint32_t start_row_id,
                            uint32_t start_column_id,
@@ -37,7 +32,7 @@ void kernel_main() {
         uint32_t l1_read_addr = get_write_ptr(cb_id_out0);
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(size_2d + k, s);
+            uint64_t dst_noc_addr = s.get_noc_addr(size_2d + k);
             uint32_t total_size = start_column_id + width_size;
             uint32_t write_size = width_size;
 

@@ -43,7 +43,9 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, alignment};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+    reader_compile_time_args.push_back(alignment);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
@@ -257,17 +259,18 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool old_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(old_stick_size);
     uint32_t old_log2_stick_size = old_stick_size_is_power_of_two ? (std::uint32_t)std::log2(old_stick_size) : 0;
     bool is_new_stick_larger = new_stick_size > old_stick_size;
     uint32_t new_old_stick_size_ratio =
         new_stick_size > old_stick_size ? new_stick_size / old_stick_size : old_stick_size / new_stick_size;
-    std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)src0_is_dram,
-        (std::uint32_t)old_stick_size,
-        (std::uint32_t)old_stick_size_is_power_of_two,
-        (std::uint32_t)old_stick_size_is_power_of_two ? old_log2_stick_size : old_stick_size};
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_ct_args);
+    reader_ct_args.insert(
+        reader_ct_args.end(),
+        {(std::uint32_t)old_stick_size,
+         (std::uint32_t)old_stick_size_is_power_of_two,
+         (std::uint32_t)old_stick_size_is_power_of_two ? old_log2_stick_size : old_stick_size});
 
     // Writer compile-time args
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;

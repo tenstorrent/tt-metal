@@ -19,8 +19,8 @@ void kernel_main() {
     uint32_t HtWt = get_arg_val<uint32_t>(14);  // HtWt of input tensor
     uint32_t Wt_skip = get_arg_val<uint32_t>(15);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto tensor_args_src0 = TensorAccessorArgs<0>();
+    constexpr auto tensor_args_src1 = TensorAccessorArgs<tensor_args_src0.compile_time_args_skip()>();
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -39,11 +39,9 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t i_bcast = 0;
 
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
+    const auto s0 = TensorAccessor(tensor_args_src0, src0_addr, in0_tile_bytes);
 
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+    const auto s1 = TensorAccessor(tensor_args_src1, src1_addr, in1_tile_bytes);
 
     uint32_t i_nc = 0;
     for (uint32_t nc = 0; nc < NC; nc++) {

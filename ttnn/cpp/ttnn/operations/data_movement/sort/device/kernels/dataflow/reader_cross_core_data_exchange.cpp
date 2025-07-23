@@ -16,27 +16,40 @@ void kernel_main() {
     const uint32_t physical_core_lookup_table_buffer_addr = get_arg_val<uint32_t>(2);
 
     // Compile time args
-    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(0);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
-    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t value_tensor_intermediate_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t index_tensor_intermediate_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(8);
+    constexpr auto tensor_args_input = TensorAccessorArgs<0>();
+    constexpr auto tensor_args_index = TensorAccessorArgs<tensor_args_input.compile_time_args_skip()>();
+    constexpr auto tensor_args_lookup = TensorAccessorArgs<tensor_args_index.compile_time_args_skip()>();
+    constexpr uint32_t compute_with_storage_grid_size_x =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip());
+    constexpr uint32_t compute_with_storage_grid_size_y =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 1);
+    constexpr uint32_t input_tensor_cb_index =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 2);
+    constexpr uint32_t index_tensor_output_cb_index =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 3);
+    constexpr uint32_t value_tensor_intermediate_cb_index =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 4);
+    constexpr uint32_t index_tensor_intermediate_cb_index =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 5);
+    constexpr uint32_t value_tensor_peer_cb_index =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 6);
+    constexpr uint32_t index_tensor_peer_cb_index =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 7);
+    constexpr uint32_t physical_core_lookup_table_cb_index =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 8);
 
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(9) == 1;
-    constexpr bool index_tensor_output_is_dram = get_compile_time_arg_val(10) == 1;
-    constexpr bool physical_core_lookup_table_is_dram = get_compile_time_arg_val(11) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(12);
-    constexpr uint32_t Wt = get_compile_time_arg_val(13);
-    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(14);
-    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(15);
-    constexpr bool ascending = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t Ht = get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 9);
+    constexpr uint32_t Wt = get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 10);
+    constexpr uint32_t number_of_tiles_per_core =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 11);
+    constexpr uint32_t number_of_cores_used =
+        get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 12);
+    constexpr bool ascending = get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 13) == 1;
 
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(17));
-    const uint32_t sem_barrier_addr = get_semaphore(get_compile_time_arg_val(18));
+    const uint32_t sem_exchange_addr =
+        get_semaphore(get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 14));
+    const uint32_t sem_barrier_addr =
+        get_semaphore(get_compile_time_arg_val(tensor_args_lookup.compile_time_args_skip() + 15));
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -49,26 +62,20 @@ void kernel_main() {
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
     constexpr DataFormat input_tensor_data_format = get_dataformat(input_tensor_cb_index);
-    const InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_accessor = {
-        .bank_base_address = input_tensor_buffer_addr,
-        .page_size = input_tensor_tile_size_bytes,
-        .data_format = input_tensor_data_format};
+    const auto input_tensor_accessor =
+        TensorAccessor(tensor_args_input, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
 
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
     const DataFormat index_tensor_output_data_format = get_dataformat(index_tensor_output_cb_index);
-    const InterleavedAddrGenFast<index_tensor_output_is_dram> index_tensor_output_accessor = {
-        .bank_base_address = index_tensor_buffer_addr,
-        .page_size = index_tensor_output_tile_size_bytes,
-        .data_format = index_tensor_output_data_format};
+    const auto index_tensor_output_accessor =
+        TensorAccessor(tensor_args_index, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
 
     // Physical core lookup table config
     constexpr uint32_t physical_core_lookup_table_tile_size_bytes = get_tile_size(physical_core_lookup_table_cb_index);
     constexpr DataFormat physical_core_lookup_table_data_format = get_dataformat(physical_core_lookup_table_cb_index);
-    const InterleavedAddrGenFast<physical_core_lookup_table_is_dram> physical_core_lookup_table_accessor = {
-        .bank_base_address = physical_core_lookup_table_buffer_addr,
-        .page_size = physical_core_lookup_table_tile_size_bytes,
-        .data_format = physical_core_lookup_table_data_format};
+    const auto physical_core_lookup_table_accessor = TensorAccessor(
+        tensor_args_lookup, physical_core_lookup_table_buffer_addr, physical_core_lookup_table_tile_size_bytes);
 
     // Read lookup table for physical core IDs
     cb_reserve_back(physical_core_lookup_table_cb_index, one_tile);

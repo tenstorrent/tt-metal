@@ -22,41 +22,40 @@ void kernel_main() {
     const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(9);
 
     // Compile time args
-    constexpr uint32_t total_work_units = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(3);
-    constexpr uint32_t number_of_available_cores = get_compile_time_arg_val(4);
-    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(6);
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(7) == 1;
-    constexpr bool output_tensor_is_dram = get_compile_time_arg_val(8) == 1;
-    constexpr bool output_index_tensor_is_dram = get_compile_time_arg_val(9) == 1;
-    constexpr bool is_32_bit_data = get_compile_time_arg_val(10) == 1;
+    constexpr auto tensor_args_input = TensorAccessorArgs<0>();
+    constexpr auto tensor_args_output = TensorAccessorArgs<tensor_args_input.compile_time_args_skip()>();
+    constexpr auto tensor_args_output_index = TensorAccessorArgs<tensor_args_output.compile_time_args_skip()>();
+    constexpr uint32_t total_work_units = get_compile_time_arg_val(tensor_args_output_index.compile_time_args_skip());
+    constexpr uint32_t Wt = get_compile_time_arg_val(tensor_args_output_index.compile_time_args_skip() + 1);
+    constexpr uint32_t Ht = get_compile_time_arg_val(tensor_args_output_index.compile_time_args_skip() + 2);
+    constexpr uint32_t total_number_of_cores =
+        get_compile_time_arg_val(tensor_args_output_index.compile_time_args_skip() + 3);
+    constexpr uint32_t number_of_available_cores =
+        get_compile_time_arg_val(tensor_args_output_index.compile_time_args_skip() + 4);
+    constexpr uint32_t input_tensor_cb_index =
+        get_compile_time_arg_val(tensor_args_output_index.compile_time_args_skip() + 5);
+    constexpr uint32_t index_tensor_cb_index =
+        get_compile_time_arg_val(tensor_args_output_index.compile_time_args_skip() + 6);
+    constexpr bool is_32_bit_data =
+        get_compile_time_arg_val(tensor_args_output_index.compile_time_args_skip() + 7) == 1;
 
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
     constexpr DataFormat input_tensor_data_format = get_dataformat(input_tensor_cb_index);
-    const InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_addr_ger = {
-        .bank_base_address = input_tensor_buffer_addr,
-        .page_size = input_tensor_tile_size_bytes,
-        .data_format = input_tensor_data_format};
+    const auto input_tensor_addr_gen =
+        TensorAccessor(tensor_args_input, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
 
     // Output tensor config
-    const InterleavedAddrGenFast<output_tensor_is_dram> output_tensor_addr_gen = {
-        .bank_base_address = output_tensor_buffer_addr,
-        .page_size = input_tensor_tile_size_bytes,
-        .data_format = input_tensor_data_format};
+    const auto output_tensor_addr_gen =
+        TensorAccessor(tensor_args_output, output_tensor_buffer_addr, input_tensor_tile_size_bytes);
 
     // Output index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_cb_index);
     const DataFormat index_tensor_output_data_format = get_dataformat(index_tensor_cb_index);
-    const InterleavedAddrGenFast<output_index_tensor_is_dram> output_index_tensor_addr_gen = {
-        .bank_base_address = output_index_tensor_buffer_addr,
-        .page_size = index_tensor_output_tile_size_bytes,
-        .data_format = index_tensor_output_data_format};
+    const auto output_index_tensor_addr_gen =
+        TensorAccessor(tensor_args_output_index, output_index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
 
     // Semaphore setup
     volatile tt_l1_ptr uint32_t* semaphore_ptr =
@@ -92,7 +91,7 @@ void kernel_main() {
             // Read input value data
             cb_reserve_back(input_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr_input_tensor_cb = get_write_ptr(input_tensor_cb_index);
-            noc_async_read_tile(h * Wt + w, input_tensor_addr_ger, l1_write_addr_input_tensor_cb);
+            noc_async_read_tile(h * Wt + w, input_tensor_addr_gen, l1_write_addr_input_tensor_cb);
             noc_async_read_barrier();
             cb_push_back(input_tensor_cb_index, one_tile);
 

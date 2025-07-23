@@ -12,7 +12,11 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
+#ifndef SHARDED
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+#else
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+#endif
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -36,8 +40,7 @@ void kernel_main() {
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(3));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = src_addr, .shard_array = mapping_table};
 #else
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(tensor_args, src_addr, tile_bytes);
 #endif
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker

@@ -6,7 +6,10 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(3);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(tensor_args.compile_time_args_skip()) == 1;
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1);
+    constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 2);
 
     // Constexpr
     constexpr uint32_t cb_id_in0 = 0;
@@ -37,17 +40,7 @@ void kernel_main() {
     const uint32_t num_tiles_block_c =
         block_row_size / bytes_per_tile_row;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(1) == 1;
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-    const InterleavedPow2AddrGen<src0_is_dram> s = {
-        .bank_base_address = src_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<src0_is_dram> s = {.bank_base_address = src_addr, .page_size = unpadded_X_size};
-#endif
+    const auto s = TensorAccessor(tensor_args, src_addr, unpadded_X_size);
 
     uint32_t stick_id = 0;
 
@@ -70,7 +63,7 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t src_noc_addr = get_noc_addr(curr_stick_id + k, s) + offset;
+            uint64_t src_noc_addr = s.get_noc_addr(curr_stick_id + k) + offset;
 
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr, l1_write_addr, block_size);

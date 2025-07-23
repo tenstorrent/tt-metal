@@ -24,32 +24,30 @@ void kernel_main() {
     const uint32_t core_loop_count = get_arg_val<uint32_t>(2);
 
     // Compile time args
-    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(1);
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool index_tensor_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t Ht = get_compile_time_arg_val(5);
-    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(6);
-    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(7);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(8);
+    constexpr auto tensor_args_input = TensorAccessorArgs<0>();
+    constexpr auto tensor_args_index = TensorAccessorArgs<tensor_args_input.compile_time_args_skip()>();
+    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(tensor_args_index.compile_time_args_skip());
+    constexpr uint32_t index_tensor_output_cb_index =
+        get_compile_time_arg_val(tensor_args_index.compile_time_args_skip() + 1);
+    constexpr uint32_t Wt = get_compile_time_arg_val(tensor_args_index.compile_time_args_skip() + 2);
+    constexpr uint32_t Ht = get_compile_time_arg_val(tensor_args_index.compile_time_args_skip() + 3);
+    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(tensor_args_index.compile_time_args_skip() + 4);
+    constexpr uint32_t compute_with_storage_grid_size_x =
+        get_compile_time_arg_val(tensor_args_index.compile_time_args_skip() + 5);
+    constexpr uint32_t compute_with_storage_grid_size_y =
+        get_compile_time_arg_val(tensor_args_index.compile_time_args_skip() + 6);
 
     // Input tensor config
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t tile_size_bytes = get_tile_size(input_tensor_cb_index);
     constexpr DataFormat input_tensor_data_format = get_dataformat(input_tensor_cb_index);
-    const InterleavedAddrGenFast<input_tensor_is_dram> interleaved_accessor0 = {
-        .bank_base_address = input_tensor_buffer_addr,
-        .page_size = tile_size_bytes,
-        .data_format = input_tensor_data_format};
+    const auto interleaved_accessor0 = TensorAccessor(tensor_args_input, input_tensor_buffer_addr, tile_size_bytes);
 
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
     const DataFormat index_tensor_output_data_format = get_dataformat(index_tensor_output_cb_index);
-    const InterleavedAddrGenFast<index_tensor_is_dram> interleaved_accessor1 = {
-        .bank_base_address = index_tensor_buffer_addr,
-        .page_size = index_tensor_output_tile_size_bytes,
-        .data_format = index_tensor_output_data_format};
+    const auto interleaved_accessor1 =
+        TensorAccessor(tensor_args_index, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         // Calculate tile h coordinate
