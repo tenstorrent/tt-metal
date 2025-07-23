@@ -33,6 +33,7 @@ class Emb(torch.nn.Module):
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def run_test_perplexity(
     mesh_device,
     batch_size,
@@ -130,6 +131,7 @@ def run_test_perplexity(
 
     cache_attention(
         mesh_device,
+        tt_model.tt_ccl,
         state_dict,
         model_args,
         current_rot_mat,

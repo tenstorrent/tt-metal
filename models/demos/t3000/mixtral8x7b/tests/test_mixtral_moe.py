@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import pytest
 import torch
 from loguru import logger
 
@@ -14,6 +15,7 @@ from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds):
     pcc = 0.99
     iterations = 1
@@ -50,8 +52,10 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds):
         },
     )
 
+    tt_ccl = TT_CCL(t3k_mesh_device)
     tt_model = TtMoeLayer(
         mesh_device=t3k_mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         experts=experts,
         args=model_args,

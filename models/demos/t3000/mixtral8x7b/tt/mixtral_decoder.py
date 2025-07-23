@@ -13,6 +13,7 @@ class TtTransformerBlock(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         args,
         layer_num,
@@ -22,12 +23,14 @@ class TtTransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         self.args = args
 
         self.layer_num = layer_num
         self.attention = TtMixtralAttention(
             mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
             state_dict=state_dict,
             args=args,
             layer_num=layer_num,
@@ -36,6 +39,7 @@ class TtTransformerBlock(LightweightModule):
 
         self.feed_forward = TtMoeLayer(
             mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
             state_dict=state_dict,
             experts=TtMixtralMLP(
                 mesh_device=mesh_device,
@@ -59,6 +63,7 @@ class TtTransformerBlock(LightweightModule):
             layer_num=layer_num,
             weight_dtype=ttnn.bfloat16,
             weight_key="attention_norm",
+            tt_ccl=tt_ccl,
         )
 
         self.ffn_norm = RMSNorm(
@@ -68,6 +73,7 @@ class TtTransformerBlock(LightweightModule):
             layer_num=layer_num,
             weight_dtype=ttnn.bfloat16,
             weight_key="ffn_norm",
+            tt_ccl=tt_ccl,
         )
 
     def forward(
