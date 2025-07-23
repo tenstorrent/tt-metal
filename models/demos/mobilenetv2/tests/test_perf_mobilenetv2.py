@@ -1,22 +1,21 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-
-import os
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.mobilenetv2.load_model_utils import load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.tests.pcc.test_mobilenetv2 import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import disable_persistent_kernel_cache, profiler
-from tests.ttnn.integration_tests.mobilenetv2.test_mobilenetv2 import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 
 
 def get_expected_times(name):
@@ -24,7 +23,6 @@ def get_expected_times(name):
     return base[name]
 
 
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("device_params", [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [torch.rand((1, 224, 224, 3))], ids=["input_tensor"])
@@ -36,25 +34,15 @@ def get_expected_times(name):
         "pretrained_weight_false",
     ],
 )
-def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds):
+def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds, model_location_generator):
     # Check if weights file exists, if not, download them
     disable_persistent_kernel_cache()
     profiler.clear()
     batch_size = input_tensor.shape[0]
-    weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/demos/mobilenetv2/weights_download.sh")
-    if use_pretrained_weight:
-        state_dict = torch.load(weights_path)
-        ds_state_dict = {k: v for k, v in state_dict.items()}
 
+    if use_pretrained_weight:
         torch_model = Mobilenetv2()
-        new_state_dict = {
-            name1: parameter2
-            for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items())
-            if isinstance(parameter2, torch.FloatTensor)
-        }
-        torch_model.load_state_dict(new_state_dict)
+        torch_model = load_torch_model(torch_model, model_location_generator)
     else:
         torch_model = Mobilenetv2()
         state_dict = torch_model.state_dict()
@@ -122,12 +110,11 @@ def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds):
         [MOBILENETV2_BATCH_SIZE, 3381],
     ],
 )
-@pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_mobilenetv2(batch_size, expected_perf):
+def test_perf_device_mobilenetv2(batch_size, expected_perf):
     subdir = "ttnn_mobilenetv2"
     num_iterations = 1
     margin = 0.03
-    command = f"pytest tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py::test_mobilenetv2"
+    command = f"pytest models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: expected_perf}

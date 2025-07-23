@@ -2,36 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.mobilenetv2.load_model_utils import load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
 from models.demos.mobilenetv2.tt.ttnn_mobilenetv2 import TtMobileNetV2
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def load_torch_model():
-    weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/demos/mobilenetv2/weights_download.sh")
-
-    state_dict = torch.load(weights_path)
-    ds_state_dict = {k: v for k, v in state_dict.items()}
-
-    torch_model = Mobilenetv2()
-    new_state_dict = {
-        name1: parameter2
-        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items())
-        if isinstance(parameter2, torch.FloatTensor)
-    }
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
-    return torch_model
 
 
 def load_ttnn_model(device, torch_model, batch_size):
@@ -46,7 +27,7 @@ class MobileNetv2TestInfra:
         self,
         device,
         batch_size,
-        model_location_generator=None,
+        model_location_generator,
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -55,7 +36,8 @@ class MobileNetv2TestInfra:
         self.device = device
         self.batch_size = batch_size
         self.model_location_generator = model_location_generator
-        torch_model = load_torch_model()
+        torch_model = Mobilenetv2()
+        torch_model = load_torch_model(torch_model, model_location_generator)
         self.ttnn_mobilenetv2_model = load_ttnn_model(
             device=self.device, torch_model=torch_model, batch_size=self.batch_size
         )
@@ -129,8 +111,10 @@ class MobileNetv2TestInfra:
 def create_test_infra(
     device,
     batch_size,
+    model_location_generator,
 ):
     return MobileNetv2TestInfra(
         device,
         batch_size,
+        model_location_generator,
     )

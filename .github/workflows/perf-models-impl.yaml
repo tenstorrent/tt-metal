@@ -66,6 +66,7 @@ jobs:
               - models/demos/yolov8s_world/tests/
               - models/demos/yolov8s/tests
               - models/experimental/yolov6l/tests/
+              - models/demos/mobilenetv2/tests/
 
           - name: tt_transformers
             model-list:
