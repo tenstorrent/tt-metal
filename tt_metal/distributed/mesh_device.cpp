@@ -234,7 +234,9 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         // Initialize fabric node ids manually.
         // TODO: #22087 - Remove this code path.
         for (int i = 0; i < config.physical_device_ids().size(); i++) {
-            fabric_node_ids.push_back(tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId(0), i));
+            auto fabric_node_id = MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
+                config.physical_device_ids()[i]);
+            fabric_node_ids.push_back(fabric_node_id);
         }
         scoped_devices = std::make_shared<ScopedDevices>(
             wrap_to_maybe_remote(config.physical_device_ids()),
@@ -282,13 +284,16 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         num_command_queues,
         worker_l1_size,
         dispatch_core_config);
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    for (const auto& device_id : device_ids) {
+        auto fabric_node_id =
+            MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
+        fabric_node_ids.push_back(fabric_node_id);
+    }
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(
-            MeshShape(1, device_ids.size()),
-            scoped_devices->local_root_devices(),
-            std::vector<tt::tt_fabric::FabricNodeId>(
-                device_ids.size(), tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId(0), /*chip_id=*/0))),
+            MeshShape(1, device_ids.size()), scoped_devices->local_root_devices(), fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
