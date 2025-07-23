@@ -19,7 +19,7 @@ using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
 
 using TensorTopologyTest = GenericMeshDeviceFixture;
-using TensorTopologyT3000Test = T3000MeshDeviceFixture;
+using TensorTopology2x4Test = MeshDevice2x4Fixture;
 
 TEST_F(TensorTopologyTest, SingleDevice) {
     const auto tensor_spec =
@@ -60,7 +60,7 @@ TEST_F(TensorTopologyTest, SingleDevice) {
     EXPECT_EQ(tensor_topology.get_prev_neighbor(coord, 0), coord);
 }
 
-TEST_F(TensorTopologyT3000Test, Replicate2D) {
+TEST_F(TensorTopology2x4Test, Replicate2D) {
     const auto tensor_spec =
         TensorSpec(ttnn::Shape{1, 1, 1, 3}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(std::vector<float>{42.F, 13.F, -99.F}, tensor_spec);
@@ -125,7 +125,7 @@ TEST_F(TensorTopologyT3000Test, Replicate2D) {
     check_neighbors_2d(coord);
 }
 
-TEST_F(TensorTopologyT3000Test, Shard1DRowMajor) {
+TEST_F(TensorTopology2x4Test, Shard1DRowMajor) {
     const int num_devices = mesh_device_->num_devices();
     // Test only works on 8 devices in 2x4 mesh
     ASSERT_EQ(num_devices, 8);
