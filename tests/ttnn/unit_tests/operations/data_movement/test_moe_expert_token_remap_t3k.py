@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from math import prod
 import random
 
@@ -83,12 +87,12 @@ def gen_tensors(devices, experts, batch, seq, selected_experts_k, mesh_shape, sc
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("seq", [2])
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("seq", [1, 2])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("selected_experts_k", [8])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("scheme", ["random"])
+@pytest.mark.parametrize("scheme", ["sequential", "random"])
 def test_moe_expert_token_remaps(
     mesh_device,
     mesh_shape,

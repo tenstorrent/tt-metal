@@ -18,7 +18,24 @@
 namespace ttnn::operations::data_movement::detail {
 
 void py_bind_moe_expert_token_remap(py::module& module) {
-    auto doc = R"doc()doc";
+    auto doc = R"doc(
+
+Remap MoE CCL Metadata from global experts to local device experts
+
+Args:
+    topk_tensor (ttnn.Tensor): tensor of MoE topk scores, `[devices/devices, batch, seq, experts]`
+    expert_mapping_tensor (ttnn.Tensor): tensor that maps MoE experts to devices, `[1, 1, experts, devices]`
+    expert_metadata_tensor (ttnn.Tensor): tensor that maps tokens to global experts `[devices/devices, batch, seq, select_experts_k]``
+
+Keyword Args:
+    memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+    queue_id (int, optional): command queue id. Defaults to `0`.
+    output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+
+Returns:
+    ttnn.Tensor: Tensor that maps batch tokens to local experts, `[devices/devices, batch, seq, experts_per_device]`
+
+    )doc";
 
     using OperationType = decltype(ttnn::moe_expert_token_remap);
     ttnn::bind_registered_operation(
