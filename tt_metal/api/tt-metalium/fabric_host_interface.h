@@ -65,7 +65,7 @@ enum eth_chan_directions : std::uint8_t {
 };
 
 // 3 bit expression
-enum compressed_routing_values : std::uint8_t {
+enum class compressed_routing_values : std::uint8_t {
     COMPRESSED_EAST = 0,
     COMPRESSED_WEST = 1,
     COMPRESSED_NORTH = 2,
@@ -76,7 +76,7 @@ enum compressed_routing_values : std::uint8_t {
 
 // Compressed routing table using 3 bits
 template <std::uint32_t ArraySize>
-struct compressed_routing_table_t {
+struct __attribute__((packed)) compressed_routing_table_t {
     static constexpr std::uint32_t BITS_PER_COMPRESSED_ENTRY = 3;
     static constexpr std::uint8_t COMPRESSED_ENTRY_MASK = 0x7;                // 3-bit mask (2^3 - 1)
     static constexpr std::uint32_t BITS_PER_BYTE = sizeof(std::uint8_t) * 8;  // 8 bits in a byte
@@ -88,26 +88,8 @@ struct compressed_routing_table_t {
     // For 1024 entries: 1024 * 3 / 8 = 384 bytes
     std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];  // 384 bytes
 
-    inline std::uint8_t get_direction(std::uint16_t index) const {
-        std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
-        std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
-        std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
-
-        if (bit_offset <= 5) {
-            // All 3 bits are in the same byte
-            return (packed_directions[byte_index] >> bit_offset) & COMPRESSED_ENTRY_MASK;
-        } else {
-            // Bits span across two bytes
-            std::uint8_t low_bits =
-                (packed_directions[byte_index] >> bit_offset) & ((1 << (BITS_PER_BYTE - bit_offset)) - 1);
-            std::uint8_t high_bits = (packed_directions[byte_index + 1] &
-                                      ((1 << (BITS_PER_COMPRESSED_ENTRY - (BITS_PER_BYTE - bit_offset))) - 1))
-                                     << (BITS_PER_BYTE - bit_offset);
-            return low_bits | high_bits;
-        }
-    }
-
-    inline void set_direction(std::uint16_t index, std::uint8_t direction) {
+#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)  // SW (Host)
+    void set_direction(std::uint16_t index, std::uint8_t direction) {
         std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
         std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
         std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
@@ -131,26 +113,57 @@ struct compressed_routing_table_t {
         }
     }
 
-    inline std::uint8_t compress_value(std::uint8_t original_value) const {
+    std::uint8_t compress_value(std::uint8_t original_value) const {
         switch (original_value) {
-            case eth_chan_directions::EAST: return COMPRESSED_EAST;
-            case eth_chan_directions::WEST: return COMPRESSED_WEST;
-            case eth_chan_directions::NORTH: return COMPRESSED_NORTH;
-            case eth_chan_directions::SOUTH: return COMPRESSED_SOUTH;
-            case eth_chan_magic_values::INVALID_DIRECTION: return COMPRESSED_INVALID_DIRECTION;
-            case eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY: return COMPRESSED_INVALID_ROUTING_TABLE_ENTRY;
-            default: return COMPRESSED_INVALID_ROUTING_TABLE_ENTRY;
+            case eth_chan_directions::EAST:
+                return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_EAST);
+            case eth_chan_directions::WEST:
+                return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_WEST);
+            case eth_chan_directions::NORTH:
+                return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_NORTH);
+            case eth_chan_directions::SOUTH:
+                return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_SOUTH);
+            case eth_chan_magic_values::INVALID_DIRECTION:
+                return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_DIRECTION);
+            case eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY:
+                return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY);
+            default:
+                return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY);
         }
     }
 
+    void set_original_direction(std::uint16_t index, std::uint8_t original_direction) {
+        set_direction(index, compress_value(original_direction));
+    }
+#else   // HW (Device)
+    inline std::uint8_t get_direction(std::uint16_t index) const {
+        std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
+        std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
+        std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
+
+        if (bit_offset <= 5) {
+            // All 3 bits are in the same byte
+            return (packed_directions[byte_index] >> bit_offset) & COMPRESSED_ENTRY_MASK;
+        } else {
+            // Bits span across two bytes
+            std::uint8_t low_bits =
+                (packed_directions[byte_index] >> bit_offset) & ((1 << (BITS_PER_BYTE - bit_offset)) - 1);
+            std::uint8_t high_bits = (packed_directions[byte_index + 1] &
+                                      ((1 << (BITS_PER_COMPRESSED_ENTRY - (BITS_PER_BYTE - bit_offset))) - 1))
+                                     << (BITS_PER_BYTE - bit_offset);
+            return low_bits | high_bits;
+        }
+    }
     inline std::uint8_t decompress_value(std::uint8_t compressed_value) const {
-        switch (compressed_value) {
-            case COMPRESSED_EAST: return eth_chan_directions::EAST;
-            case COMPRESSED_WEST: return eth_chan_directions::WEST;
-            case COMPRESSED_NORTH: return eth_chan_directions::NORTH;
-            case COMPRESSED_SOUTH: return eth_chan_directions::SOUTH;
-            case COMPRESSED_INVALID_DIRECTION: return eth_chan_magic_values::INVALID_DIRECTION;
-            case COMPRESSED_INVALID_ROUTING_TABLE_ENTRY: return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+        switch (static_cast<compressed_routing_values>(compressed_value)) {
+            case compressed_routing_values::COMPRESSED_EAST: return eth_chan_directions::EAST;
+            case compressed_routing_values::COMPRESSED_WEST: return eth_chan_directions::WEST;
+            case compressed_routing_values::COMPRESSED_NORTH: return eth_chan_directions::NORTH;
+            case compressed_routing_values::COMPRESSED_SOUTH: return eth_chan_directions::SOUTH;
+            case compressed_routing_values::COMPRESSED_INVALID_DIRECTION:
+                return eth_chan_magic_values::INVALID_DIRECTION;
+            case compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY:
+                return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
             default: return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
         }
     }
@@ -158,11 +171,8 @@ struct compressed_routing_table_t {
     inline std::uint8_t get_original_direction(std::uint16_t index) const {
         return decompress_value(get_direction(index));
     }
-
-    inline void set_original_direction(std::uint16_t index, std::uint8_t original_direction) {
-        set_direction(index, compress_value(original_direction));
-    }
-} __attribute__((packed));
+#endif  // KERNEL_BUILD or FW_BUILD
+};
 
 struct routing_table_t {
     chan_id_t dest_entry[MAX_MESH_SIZE];
