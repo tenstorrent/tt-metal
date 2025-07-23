@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multidevice_scatter_device_operation.hpp"
+#include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/constants.hpp>
@@ -25,15 +25,15 @@ namespace detail {
 uint32_t get_cluster_axis_index(
     const ttnn::MeshDeviceView& mesh_view,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const MultiDeviceScatterDeviceOperation::operation_attributes_t& operation_attributes) {
+    const MeshPartitionDeviceOperation::operation_attributes_t& operation_attributes) {
     return operation_attributes.cluster_axis.has_value()
                ? ((operation_attributes.cluster_axis.value() == 0) ? mesh_coordinate[0] : mesh_coordinate[1])
                : common::get_linearized_index(mesh_coordinate, mesh_view);
 }
 }  // namespace detail
 
-MultiDeviceScatterDeviceOperation::MultiDeviceScatter::cached_mesh_workload_t
-MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_mesh_workload(
+MeshPartitionDeviceOperation::MeshPartition::cached_mesh_workload_t
+MeshPartitionDeviceOperation::MeshPartition::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
@@ -48,8 +48,8 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_mesh_workload(
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<MultiDeviceScatterDeviceOperation::MultiDeviceScatter::shared_variables_t>
-MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
+ttnn::device_operation::CachedProgram<MeshPartitionDeviceOperation::MeshPartition::shared_variables_t>
+MeshPartitionDeviceOperation::MeshPartition::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
@@ -68,13 +68,13 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     auto input_shape = input_tensor.logical_shape();
     uint32_t dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
-    auto scattered_dim_size = input_shape[dim] / cluster_size;
-    uint64_t begin_pos = static_cast<uint64_t>(cluster_index) * scattered_dim_size;
+    auto partitioned_dim_size = input_shape[dim] / cluster_size;
+    uint64_t begin_pos = static_cast<uint64_t>(cluster_index) * partitioned_dim_size;
     TT_FATAL(
-        begin_pos <= std::numeric_limits<uint32_t>::max() - scattered_dim_size,
-        "Integer overflow: cluster_index ({}) * scattered_dim_size ({}) = {} exceeds uint32_t max",
+        begin_pos <= std::numeric_limits<uint32_t>::max() - partitioned_dim_size,
+        "Integer overflow: cluster_index ({}) * partitioned_dim_size ({}) = {} exceeds uint32_t max",
         cluster_index,
-        scattered_dim_size,
+        partitioned_dim_size,
         begin_pos);
 
     auto begins = ttnn::Shape(std::vector<uint32_t>(rank, 0));
@@ -82,7 +82,7 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     auto strides = ttnn::Shape(std::vector<uint32_t>(rank, 1));
 
     begins[dim] = static_cast<uint32_t>(begin_pos);
-    ends[dim] = begins[dim] + scattered_dim_size;
+    ends[dim] = begins[dim] + partitioned_dim_size;
 
     TT_FATAL(
         ends[dim] <= input_shape[dim],
@@ -122,7 +122,7 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     // -- building the return value -----------------------------------
     shared_variables_t vars{
         // if the optional holds a callback, move it; otherwise construct an empty
-        // std::function (== “no-op”)
+        // std::function (== "no-op")
         .override_runtime_arguments_callback = cached_program.override_runtime_arguments_callback.value_or(
             OverrideRuntimeArgsCallback{}),  //   ^ empty functor
         .slice_op = slice_op};
@@ -130,7 +130,7 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     return {std::move(cached_program.program), std::move(vars)};
 }
 
-void MultiDeviceScatterDeviceOperation::MultiDeviceScatter::override_runtime_arguments(
+void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

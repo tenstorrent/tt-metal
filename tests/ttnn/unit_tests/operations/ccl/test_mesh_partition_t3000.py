@@ -104,7 +104,7 @@ def gen_tensor(dim, per_device_output_shape, mesh_axes, mesh_shape, cluster_axis
     return torch_input_tensor, torch_output_tensor
 
 
-def run_multidevice_scatter_test(
+def run_mesh_partition_test(
     mesh_device,
     per_device_output_shape,
     dim,
@@ -150,7 +150,7 @@ def run_multidevice_scatter_test(
         tt_output_list = []
         for i in range(n_iters):
             buffer_index = 0 if trace_mode else i
-            tt_out_tensor = ttnn.multidevice_scatter(
+            tt_out_tensor = ttnn.mesh_partition(
                 tt_input_tensors_list[buffer_index],
                 dim,
                 cluster_axis=cluster_axis,
@@ -262,7 +262,7 @@ def run_multidevice_scatter_test(
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-def test_multidevice_scatter(
+def test_mesh_partition(
     mesh_device,
     mesh_shape,
     trace_mode,
@@ -278,7 +278,7 @@ def test_multidevice_scatter(
     num_iters = 2
     warmup_iters = 0
 
-    run_multidevice_scatter_test(
+    run_mesh_partition_test(
         mesh_device,
         per_device_output_shape,
         dim,
@@ -317,7 +317,7 @@ def test_multidevice_scatter(
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG])
-def test_multidevice_scatter_rm(
+def test_mesh_partition_rm(
     mesh_device,
     mesh_shape,
     trace_mode,
@@ -333,7 +333,7 @@ def test_multidevice_scatter_rm(
     num_iters = 2
     warmup_iters = 0
 
-    run_multidevice_scatter_test(
+    run_mesh_partition_test(
         mesh_device,
         per_device_output_shape,
         dim,

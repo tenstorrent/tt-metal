@@ -20,7 +20,7 @@
 
 namespace ttnn::operations::ccl {
 
-struct MultiDeviceScatterDeviceOperation {
+struct MeshPartitionDeviceOperation {
     struct operation_attributes_t {
         uint32_t dim;
         std::optional<uint32_t> cluster_axis;
@@ -35,7 +35,7 @@ struct MultiDeviceScatterDeviceOperation {
 
     using tensor_return_value_t = ttnn::Tensor;
 
-    struct MultiDeviceScatter {
+    struct MeshPartition {
         using OverrideRuntimeArgsCallback = std::function<void(
             const void*,
             tt::tt_metal::Program&,  // ‼  no const, exact type
@@ -69,7 +69,7 @@ struct MultiDeviceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<MultiDeviceScatter>;
+    using program_factory_t = std::variant<MeshPartition>;
 
     // Mandatory methods
 
@@ -104,6 +104,6 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 
 namespace ttnn::prim {
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto multidevice_scatter = ttnn::
-    register_operation<"ttnn::prim::multidevice_scatter", ttnn::operations::ccl::MultiDeviceScatterDeviceOperation>();
+constexpr auto mesh_partition =
+    ttnn::register_operation<"ttnn::prim::mesh_partition", ttnn::operations::ccl::MeshPartitionDeviceOperation>();
 }  // namespace ttnn::prim

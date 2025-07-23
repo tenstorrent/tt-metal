@@ -2,25 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multidevice_scatter_pybind.hpp"
+#include "mesh_partition_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "multidevice_scatter.hpp"
+#include "mesh_partition.hpp"
 
 namespace ttnn::operations::ccl {
 
-void py_bind_multidevice_scatter(py::module& module) {
+void py_bind_mesh_partition(py::module& module) {
     auto doc =
-        R"doc(multidevice_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(mesh_partition(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
 
-            Scatters the input tensor such that each device has i has the i/num_devices-th of the input tensor. This is the inverse of all_gather
+            Partitions the input tensor across the mesh such that each device has the i/num_devices-th partition of the input tensor along the specified dimension. This is the inverse of all_gather
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
-                dim (number): the reduce dimension
+                dim (number): the dimension to partition along
                 cluster_axis (number): the cluster axis on the mesh.
 
             Keyword Args:
@@ -32,16 +32,16 @@ void py_bind_multidevice_scatter(py::module& module) {
 
             Example:
 
-                >>> tensor = ttnn.experimental.multidevice_scatter(
+                >>> tensor = ttnn.experimental.mesh_partition(
                                 tt_input_tensors_list[i],
                                 dim,
                                 cluster_axis=1,
                                 memory_config=output_mem_config))doc";
 
-    using OperationType = decltype(ttnn::multidevice_scatter);
+    using OperationType = decltype(ttnn::mesh_partition);
     ttnn::bind_registered_operation(
         module,
-        ttnn::multidevice_scatter,
+        ttnn::mesh_partition,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,

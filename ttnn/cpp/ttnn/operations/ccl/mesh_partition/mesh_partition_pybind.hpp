@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::ccl {
 
-void py_bind_multidevice_scatter(pybind11::module& module);
+void py_bind_mesh_partition(pybind11::module& module);
 
 }  // namespace ttnn::operations::ccl

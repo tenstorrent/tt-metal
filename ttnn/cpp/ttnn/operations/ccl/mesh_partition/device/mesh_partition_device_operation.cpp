@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ttnn/tensor/types.hpp"
-#include "multidevice_scatter_device_operation.hpp"
+#include "mesh_partition_device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -21,12 +21,12 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 }
 }  // namespace detail
 
-MultiDeviceScatterDeviceOperation::program_factory_t MultiDeviceScatterDeviceOperation::select_program_factory(
+MeshPartitionDeviceOperation::program_factory_t MeshPartitionDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return MultiDeviceScatter{};
+    return MeshPartition{};
 }
 
-void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
+void MeshPartitionDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     uint32_t rank = input_tensor.logical_shape().rank();
@@ -49,7 +49,7 @@ void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         cluster_axis_size > 1,
-        "Scatter has only been tested with mesh axis size > 1, but has {} devices",
+        "Partition has only been tested with mesh axis size > 1, but has {} devices",
         cluster_axis_size);
     TT_FATAL(
         input_shape[operation_attributes.dim] % cluster_axis_size == 0,
@@ -66,10 +66,10 @@ void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void MultiDeviceScatterDeviceOperation::validate_on_program_cache_hit(
+void MeshPartitionDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
 
-MultiDeviceScatterDeviceOperation::spec_return_value_t MultiDeviceScatterDeviceOperation::compute_output_specs(
+MeshPartitionDeviceOperation::spec_return_value_t MeshPartitionDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto output_shape = input_tensor.logical_shape();
@@ -85,7 +85,7 @@ MultiDeviceScatterDeviceOperation::spec_return_value_t MultiDeviceScatterDeviceO
             operation_attributes.output_mem_config))};
 }
 
-MultiDeviceScatterDeviceOperation::tensor_return_value_t MultiDeviceScatterDeviceOperation::create_output_tensors(
+MeshPartitionDeviceOperation::tensor_return_value_t MeshPartitionDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor.value();
@@ -97,8 +97,8 @@ MultiDeviceScatterDeviceOperation::tensor_return_value_t MultiDeviceScatterDevic
     return tensor;
 }
 
-std::tuple<MultiDeviceScatterDeviceOperation::operation_attributes_t, MultiDeviceScatterDeviceOperation::tensor_args_t>
-MultiDeviceScatterDeviceOperation::invoke(
+std::tuple<MeshPartitionDeviceOperation::operation_attributes_t, MeshPartitionDeviceOperation::tensor_args_t>
+MeshPartitionDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,

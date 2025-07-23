@@ -7,8 +7,8 @@ from loguru import logger
 import ttnn
 
 # Import the test function from the t3000 file
-from tests.ttnn.unit_tests.operations.ccl.test_multidevice_scatter_t3000 import (
-    run_multidevice_scatter_test,
+from tests.ttnn.unit_tests.operations.ccl.test_mesh_partition_t3000 import (
+    run_mesh_partition_test,
 )
 
 
@@ -33,7 +33,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_multidevice_scatter_t3000 import 
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-def test_multidevice_scatter_rm(
+def test_mesh_partition_rm(
     mesh_device,
     mesh_shape,
     trace_mode,
@@ -49,7 +49,7 @@ def test_multidevice_scatter_rm(
     num_iters = 2
     warmup_iters = 0
 
-    run_multidevice_scatter_test(
+    run_mesh_partition_test(
         mesh_device,
         per_device_output_shape,
         dim,

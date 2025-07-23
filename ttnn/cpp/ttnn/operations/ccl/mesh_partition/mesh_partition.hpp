@@ -12,7 +12,7 @@
 namespace ttnn {
 namespace operations::ccl {
 
-struct ExecuteMultideviceScatter {
+struct ExecuteMeshPartition {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
@@ -23,8 +23,8 @@ struct ExecuteMultideviceScatter {
 
 }  // namespace operations::ccl
 
-constexpr auto multidevice_scatter = ttnn::
-    register_operation<"ttnn::multidevice_scatter", ttnn::operations::ccl::ExecuteMultideviceScatter>();  // namespace
-                                                                                                          // ttnn
+constexpr auto mesh_partition =
+    ttnn::register_operation<"ttnn::mesh_partition", ttnn::operations::ccl::ExecuteMeshPartition>();  // namespace
+                                                                                                      // ttnn
 
 }  // namespace ttnn

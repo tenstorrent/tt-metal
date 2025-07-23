@@ -6,15 +6,15 @@
 
 #include <tt-metalium/constants.hpp>
 
-#include "multidevice_scatter.hpp"
-#include "device/multidevice_scatter_device_operation.hpp"
+#include "mesh_partition.hpp"
+#include "device/mesh_partition_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteMultideviceScatter::invoke(
+ttnn::Tensor ExecuteMeshPartition::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     int32_t dim,
@@ -24,7 +24,7 @@ ttnn::Tensor ExecuteMultideviceScatter::invoke(
         return input_tensor;
     }
 
-    return ttnn::prim::multidevice_scatter(
+    return ttnn::prim::mesh_partition(
         input_tensor, dim, cluster_axis, memory_config.value_or(input_tensor.memory_config()));
 }
 
