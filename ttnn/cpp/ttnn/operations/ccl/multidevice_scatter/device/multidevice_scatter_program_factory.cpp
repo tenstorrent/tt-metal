@@ -56,7 +56,7 @@ MultiDeviceScatterDeviceOperation::MultiDeviceScatter::create_at(
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes);
+    const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes.cluster_axis);
     uint32_t cluster_index =
         detail::get_cluster_axis_index(input_tensor.mesh_device()->get_view(), mesh_coordinate, operation_attributes);
     TT_FATAL(

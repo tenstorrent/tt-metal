@@ -20,6 +20,10 @@ ttnn::Tensor ExecuteMultideviceScatter::invoke(
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
+    if (detail::get_cluster_axis_size(input_tensor, cluster_axis) == 1) {
+        return input_tensor;
+    }
+
     return ttnn::prim::multidevice_scatter(
         input_tensor, dim, cluster_axis, memory_config.value_or(input_tensor.memory_config()));
 }

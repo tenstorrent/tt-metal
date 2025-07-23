@@ -97,9 +97,7 @@ struct MultiDeviceScatterDeviceOperation {
 };
 
 namespace detail {
-uint32_t get_cluster_axis_size(
-    const ttnn::Tensor& input_tensor,
-    const MultiDeviceScatterDeviceOperation::operation_attributes_t& operation_attributes);
+uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::optional<uint32_t>& cluster_axis);
 }
 
 }  // namespace ttnn::operations::ccl
