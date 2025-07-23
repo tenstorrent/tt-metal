@@ -57,7 +57,6 @@ def test_rms_norm_inference(
     tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
         device=mesh_device,
-        tt_ccl=tt_ccl,
         dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
@@ -67,6 +66,7 @@ def test_rms_norm_inference(
         is_distributed=model_args.is_distributed_norm,
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        tt_ccl=tt_ccl,
     )
 
     # Wrap it in DistributedNorm

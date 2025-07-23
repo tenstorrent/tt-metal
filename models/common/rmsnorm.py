@@ -40,7 +40,6 @@ class RMSNorm(LightweightModule):
         dim,
         state_dict,
         weight_key,
-        tt_ccl=None,
         layer_num=None,
         state_dict_prefix=None,
         weight_cache_path=None,
@@ -53,13 +52,14 @@ class RMSNorm(LightweightModule):
         sharded_output_config=None,
         output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
+        tt_ccl=None,
     ):
         super().__init__()
         self.device = device
-        self.tt_ccl = tt_ccl
         self.eps = eps
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
+        self.tt_ccl = tt_ccl
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
