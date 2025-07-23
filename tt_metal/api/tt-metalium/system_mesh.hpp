@@ -11,6 +11,7 @@
 
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -39,8 +40,16 @@ public:
     // Returns the local shape of the system mesh; this is the local mesh shape in distributed context
     const MeshShape& local_shape() const;
 
-    // Returns the physical device IDs mapped to a MeshDevice
-    DistributedMeshContainer<int> get_mapped_physical_device_ids(
+    struct SystemMeshDevice {
+        // Device ID is set for host-local devices only.
+        MaybeRemote<int> device_id;
+
+        // Fabric node ID is set for host-local and host-remote devices globally.
+        tt::tt_fabric::FabricNodeId fabric_node_id;
+    };
+
+    // Returns devices that should be mapped to a MeshDevice according to the shape and offset.
+    MeshContainer<SystemMeshDevice> get_mapped_devices(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 

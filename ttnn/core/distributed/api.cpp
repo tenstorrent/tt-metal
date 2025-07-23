@@ -136,7 +136,12 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     auto num_devices = instance.shape().mesh_size();
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
-    auto physical_device_ids = extract_locals(instance.get_mapped_physical_device_ids(MeshShape(1, 8)).values());
+    auto system_devices = instance.get_mapped_devices(MeshShape(1, 8));
+    std::vector<int> physical_device_ids;
+    for (const auto& device : system_devices.values()) {
+        TT_FATAL(device.device_id.is_local(), "Device is not local");
+        physical_device_ids.push_back(*device.device_id);
+    }
     return physical_device_ids;
 }
 

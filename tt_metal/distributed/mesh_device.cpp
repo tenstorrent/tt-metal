@@ -32,6 +32,7 @@
 #include "mesh_config.hpp"
 #include "mesh_trace.hpp"
 #include "profiler_types.hpp"
+#include "routing_table_generator.hpp"
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -118,23 +119,6 @@ decltype(auto) validate_and_get_reference_value(
 }
 
 }  // namespace
-
-MeshDevice::ScopedDevices::ScopedDevices(
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t num_command_queues,
-    size_t worker_l1_size,
-    const DispatchCoreConfig& dispatch_core_config,
-    const MeshDeviceConfig& config) :
-    ScopedDevices(
-        config.physical_device_ids().empty()
-            ? SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset()).values()
-            : wrap_to_maybe_remote(config.physical_device_ids()),
-        l1_small_size,
-        trace_region_size,
-        num_command_queues,
-        worker_l1_size,
-        dispatch_core_config) {}
 
 MeshDevice::ScopedDevices::ScopedDevices(
     const std::vector<MaybeRemote<int>>& device_ids,
@@ -229,14 +213,44 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    auto scoped_devices = std::make_shared<ScopedDevices>(
-        l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
+    std::shared_ptr<ScopedDevices> scoped_devices;
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    if (config.physical_device_ids().empty()) {
+        auto system_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+        std::vector<MaybeRemote<int>> device_ids;
+        std::transform(
+            system_devices.values().begin(),
+            system_devices.values().end(),
+            std::back_inserter(device_ids),
+            [](const auto& d) { return d.device_id; });
+        std::transform(
+            system_devices.values().begin(),
+            system_devices.values().end(),
+            std::back_inserter(fabric_node_ids),
+            [](const auto& d) { return d.fabric_node_id; });
+        scoped_devices = std::make_shared<ScopedDevices>(
+            device_ids, l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config);
+    } else {
+        // Initialize fabric node ids manually.
+        // TODO: #22087 - Remove this code path.
+        for (int i = 0; i < config.physical_device_ids().size(); i++) {
+            fabric_node_ids.push_back(tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId(0), i));
+        }
+        scoped_devices = std::make_shared<ScopedDevices>(
+            wrap_to_maybe_remote(config.physical_device_ids()),
+            l1_small_size,
+            trace_region_size,
+            num_command_queues,
+            worker_l1_size,
+            dispatch_core_config);
+    }
+
     auto local_root_devices = scoped_devices->local_root_devices();
 
-    DistributedMeshContainer<IDevice*> global_devices(config.mesh_shape(), scoped_devices->root_devices());
-
     auto mesh_device = std::make_shared<MeshDevice>(
-        std::move(scoped_devices), std::make_unique<MeshDeviceView>(global_devices), std::shared_ptr<MeshDevice>());
+        std::move(scoped_devices),
+        std::make_unique<MeshDeviceView>(config.mesh_shape(), scoped_devices->root_devices(), fabric_node_ids),
+        std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
@@ -268,9 +282,14 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         num_command_queues,
         worker_l1_size,
         dispatch_core_config);
-    MeshContainer<IDevice*> devices(MeshShape(1, device_ids.size()), scoped_devices->local_root_devices());
     auto mesh_device = std::make_shared<MeshDevice>(
-        std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
+        std::move(scoped_devices),
+        std::make_unique<MeshDeviceView>(
+            MeshShape(1, device_ids.size()),
+            scoped_devices->local_root_devices(),
+            std::vector<tt::tt_fabric::FabricNodeId>(
+                device_ids.size(), tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId(0), /*chip_id=*/0))),
+        std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
@@ -345,11 +364,23 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     }
     auto end_coordinate = MeshCoordinate(end_coords);
 
-    MeshContainer<IDevice*> submesh_devices_container(
-        submesh_shape, view_->get_devices(MeshCoordinateRange{offset_coord, end_coordinate}));
-
+    // Create mesh device view for the submesh.
+    std::vector<MaybeRemote<IDevice*>> submesh_devices;
+    std::vector<tt::tt_fabric::FabricNodeId> submesh_fabric_node_ids;
+    const MeshCoordinateRange submesh_range(offset_coord, end_coordinate);
+    for (const auto& coord : submesh_range) {
+        if (view_->is_local(coord)) {
+            submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->get_device(coord)));
+        } else {
+            submesh_devices.push_back(MaybeRemote<IDevice*>::remote());
+        }
+        submesh_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
+    }
     auto submesh = std::make_shared<MeshDevice>(
-        scoped_devices_, std::make_unique<MeshDeviceView>(submesh_devices_container), shared_from_this());
+        scoped_devices_,
+        std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
+        shared_from_this());
+
     const auto& allocator_config = reference_device()->allocator()->get_config();
     submesh->initialize(
         num_hw_cqs(),
@@ -455,8 +486,11 @@ const MeshShape& MeshDevice::shape() const { return view_->shape(); }
 
 bool MeshDevice::is_local(const MeshCoordinate& coord) const { return view_->is_local(coord); }
 
-std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
+void MeshDevice::reshape(const MeshShape& new_shape) {
     TT_FATAL(view_->fully_local(), "Cannot reshape a mesh that is partially distributed");
+    TT_FATAL(
+        new_shape.mesh_size() == this->num_devices(),
+        "New shape must have the same number of devices as current shape");
 
     // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
     // The physical connectivity between devices must be preserved when reshaping.
@@ -481,41 +515,37 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
+    std::vector<IDevice*> new_device_order;
+    std::vector<tt::tt_fabric::FabricNodeId> new_fabric_node_ids;
+    new_device_order.reserve(num_devices());
+    new_fabric_node_ids.reserve(num_devices());
     if (new_shape.is_line_topology()) {
-        return view_->get_line_devices();
-    }
+        auto line_coords = view_->get_line_coordinates();
+        for (const auto& coord : line_coords) {
+            new_device_order.push_back(this->get_device(coord));
+            new_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
+        }
+    } else {
+        auto new_mapped_devices = SystemMesh::instance().get_mapped_devices(new_shape);
 
-    auto new_physical_device_ids =
-        extract_locals(SystemMesh::instance().get_mapped_physical_device_ids(new_shape).values());
+        for (const auto& [_, system_device] : new_mapped_devices) {
+            if (physical_device_id_to_linearized_index.find(*system_device.device_id) ==
+                physical_device_id_to_linearized_index.end()) {
+                TT_THROW(
+                    "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "
+                    "physically connected mesh grid with the opened devices from the original shape: {}.",
+                    new_shape,
+                    view_->shape());
+            }
+        }
 
-    for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
-        if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) ==
-            physical_device_id_to_linearized_index.end()) {
-            TT_THROW(
-                "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "
-                "physically connected mesh grid with the opened devices from the original shape: {}.",
-                new_shape,
-                view_->shape());
+        for (const auto& [_, system_device] : new_mapped_devices) {
+            new_device_order.push_back(get_device(*system_device.device_id));
+            new_fabric_node_ids.push_back(system_device.fabric_node_id);
         }
     }
 
-    std::vector<IDevice*> new_device_order;
-    new_device_order.reserve(new_physical_device_ids.size());
-    for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
-        new_device_order.push_back(this->get_device(new_physical_device_ids[i]));
-    }
-    return new_device_order;
-}
-
-void MeshDevice::reshape(const MeshShape& new_shape) {
-    TT_FATAL(view_->fully_local(), "Cannot reshape a mesh that is partially distributed");
-
-    TT_FATAL(
-        new_shape.mesh_size() == this->num_devices(),
-        "New shape must have the same number of devices as current shape");
-
-    MeshContainer<IDevice*> devices(new_shape, this->get_row_major_devices(new_shape));
-    auto new_view = std::make_unique<MeshDeviceView>(devices);
+    auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
     view_ = std::move(new_view);
 }
 
