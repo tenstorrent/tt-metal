@@ -44,6 +44,15 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
+    std::string blackhole_variant = "blackhole_140_arch.yaml";
+    if (getenv("TT_METAL_BLACKHOLE_CORE_VARIANT")) {
+        auto blackhole_variant_a = getenv("TT_METAL_BLACKHOLE_CORE_VARIANT");
+        if (!std::filesystem::exists(core_desc_dir + blackhole_variant_a)) {
+            TT_THROW("Blackhole core descriptor variant {} does not exist in {}", blackhole_variant_a, core_desc_dir);
+        }
+        blackhole_variant = blackhole_variant_a;
+    }
+
     bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
     if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
@@ -72,7 +81,7 @@ inline std::string get_core_descriptor_file(
             case tt::ARCH::BLACKHOLE:
                 return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
                                             ? "blackhole_140_arch_eth_dispatch.yaml"
-                                            : "blackhole_140_arch.yaml");
+                                            : blackhole_variant);
             case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
         };
     }
@@ -169,6 +178,9 @@ const core_descriptor_t& get_core_descriptor_config(
             compute_cores.push_back(relative_coord);
         }
     }
+
+    auto version = desc_yaml["compute_with_storage_grid_range"]["version"];
+    TT_ASSERT(version.isString(), "compute_with_storage_grid_range version must be a string value");
 
     std::vector<RelativeCoreCoord> dispatch_cores;
     auto dispatch_cores_string = "dispatch_cores";
