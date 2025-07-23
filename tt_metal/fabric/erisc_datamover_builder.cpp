@@ -153,13 +153,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     next_l1_addr += eth_channel_sync_size;
 
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    // if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-    //     this->receiver_txq_id = 1;
-    // }
-    // Disabled for now
-    // TODO(Sean) to re-enable this with a follow up PR
-    this->num_riscv_cores = 1;
-    // tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        this->receiver_txq_id = 1;
+    }
+    this->num_riscv_cores = get_num_riscv_cores();
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(risc_id);
     }
@@ -191,6 +188,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
+
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;
         buffer_address += receiver_channel_counters_size_bytes;

@@ -9,9 +9,10 @@ constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(0);
 constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(1);
 
 void kernel_main() {
+    size_t rt_args_idx = 0;
+
     using ReceiverKernelConfig = tt::tt_fabric::fabric_tests::ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS>;
 
-    size_t rt_args_idx = 0;
     auto receiver_config = ReceiverKernelConfig::build_from_args(rt_args_idx);
 
     // Clear test results area and mark as started

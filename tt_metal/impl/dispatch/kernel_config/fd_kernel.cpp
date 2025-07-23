@@ -9,17 +9,13 @@
 #include <variant>
 
 #include "data_types.hpp"
-#include "demux.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "eth_router.hpp"
-#include "eth_tunneler.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
-#include "mux.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -105,16 +101,6 @@ FDKernel* FDKernel::Generate(
         case DISPATCH_D:
             return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
         case DISPATCH_S: return new DispatchSKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case MUX_D: return new MuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case DEMUX: return new DemuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case US_TUNNELER_REMOTE:
-            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
-        case US_TUNNELER_LOCAL:
-            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
-        case PACKET_ROUTER_MUX:
-            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
-        case PACKET_ROUTER_DEMUX:
-            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
         case FABRIC_MUX:
             return new tt::tt_metal::RelayMux(
                 node_id, device_id, servicing_device_id, cq_id, noc_selection, false, tunnel_index);
