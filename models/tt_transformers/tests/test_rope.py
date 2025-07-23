@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
