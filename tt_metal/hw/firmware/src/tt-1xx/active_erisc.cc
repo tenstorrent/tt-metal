@@ -80,7 +80,6 @@ inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
 }
 
 inline void service_base_fw() {
-    // Not needed yet
     // reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
     // if (is_port_up()) {
     //     // Write to MEM_AERISC_LIVE_LINK_STATUS_BASE for debug
@@ -91,10 +90,11 @@ inline void service_base_fw() {
 
 inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+    do {
         invalidate_l1_cache();
         service_base_fw();
-    }
+        __asm__ volatile("fence");
+    } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 }
 
@@ -120,15 +120,24 @@ void __attribute__((noinline)) Application() {
 
     risc_init();
 
+    // Stall for the host to set this flag to 1 otherwise we could exit
+    // to base firmware while the host is still initializing
+    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+    volatile uint32_t* const debug_run_count = reinterpret_cast<volatile uint32_t*>(0x3680);
+    volatile uint32_t* mailbox_pointer = reinterpret_cast<volatile uint32_t*>(0x7D000);
+    debug_run_count[0]++;
+
+    debug_dump_addr[0] = 0x22222222;
+    debug_dump_addr[2] = mailbox_pointer[0];
+    debug_dump_addr[3] = mailbox_pointer[1];
+    debug_dump_addr[4] = mailbox_pointer[2];
+
+    do {
+        __asm__ volatile("fence");
+    } while (gEnableFwFlag[0] != 1);
+
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
-
-    // Stall for the host to set this flag to 1 otherwise we could exit
-    // the base firmware while the host is still initializing
-    while (gEnableFwFlag[0] != 1) {
-        // Wait for sync from host
-        invalidate_l1_cache();
-    }
 
     set_deassert_addresses();
 
@@ -161,8 +170,15 @@ void __attribute__((noinline)) Application() {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+            if (gEnableFwFlag[0] != 1) {
+                mailboxes->go_message.signal = RUN_MSG_DONE;
+                // Track if we could not return back to _start
+                debug_dump_addr[0] = 0xefefefef;
+                return;
+            } else if (
+                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
                 // Set the rd_ptr on workers to specified value
+                debug_dump_addr[0] = 0xbe12be12;
                 mailboxes->launch_msg_rd_ptr = 0;
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                     uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
@@ -177,6 +193,7 @@ void __attribute__((noinline)) Application() {
             }
         }
         WAYPOINT("GD");
+        debug_dump_addr[0] = 0xcccccccc;
 
         {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
@@ -232,5 +249,6 @@ void __attribute__((noinline)) Application() {
         }
     }
 
+    // Getting here is an invalid state
     internal_::disable_erisc_app();
 }
