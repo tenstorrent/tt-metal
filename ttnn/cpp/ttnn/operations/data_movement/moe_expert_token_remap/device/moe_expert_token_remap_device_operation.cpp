@@ -18,7 +18,46 @@ MoeExpertTokenRemapDeviceOperation::program_factory_t MoeExpertTokenRemapDeviceO
 
 void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // !TODO
+    const auto& topk_tensor = tensor_args.topk_tensor;
+    const auto& metadata_tensor = tensor_args.metadata_tensor;
+    const auto& mapping_tensor = tensor_args.mapping_tensor;
+
+    TT_FATAL(topk_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "topk tensor must be in row major layout");
+    TT_FATAL(
+        metadata_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Metadata tensor must be in row major layout");
+
+    TT_FATAL(metadata_tensor.get_dtype() == tt::tt_metal::DataType::UINT16, "Metadata tensor must be uint16");
+
+    TT_FATAL(mapping_tensor.get_dtype() == tt::tt_metal::DataType::UINT16, "Mapping tensor must be uint16");
+    TT_FATAL(
+        mapping_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Mapping tensor must be in row major layout");
+
+    auto mesh_device = tensor_args.topk_tensor.mesh_device();
+    const auto& mesh_view = mesh_device->get_view();
+
+    const auto num_devices = mesh_view.num_devices();
+
+    const auto& topk_shape = topk_tensor.get_logical_shape();
+    const auto& metadata_shape = metadata_tensor.get_logical_shape();
+    const auto& mapping_shape = mapping_tensor.get_logical_shape();
+
+    TT_FATAL(
+        mapping_shape[-1] == num_devices,
+        "Last mapping_tensor dim should be num_devices {}, got {}",
+        num_devices,
+        mapping_shape[-1]);
+
+    TT_FATAL(
+        mapping_shape[-2] == topk_shape[-1],
+        "Expected mapping shape dim 2 to be equal to topk dim 3 (number of experts), got {} and {} respectively",
+        mapping_shape[-2],
+        topk_shape[-1]);
+
+    TT_FATAL(
+        metadata_shape[1] == topk_shape[1],
+        "Expected metadata dim 1 to be equal to topk dim 1 (batch size), got {} and {}, respectively",
+        metadata_shape[1],
+        topk_shape[1]);
 }
 
 MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDeviceOperation::compute_output_specs(
