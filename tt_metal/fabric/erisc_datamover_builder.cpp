@@ -255,14 +255,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
     std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots) {
-    // Define linear_buffer_slot_options based on topology
-
-    // Define linear_buffer_slot_options based on topology
-
     static const std::vector<std::vector<std::pair<size_t, size_t>>> linear_buffer_slot_options = {
         {{8, 16}}, {{8, 16}}};
-
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {{{4, 8}}};
 
     static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {{{4, 8}}};
 
@@ -613,7 +607,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_remote_receiver_buffer_slots,
         num_downstream_sender_buffer_slots);
 
-    log_info(
+    log_trace(
         tt::LogOp,
         "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}, is_dateline_upstream_adj_dev_upstream "
         "{}",
@@ -621,11 +615,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         is_dateline_upstream,
         is_dateline_upstream_adj_dev,
         is_dateline_upstream_adj_dev_upstream);
-    log_info(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
-    log_info(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
-    log_info(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
-    log_info(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
-    log_info(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
+    log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
+    log_trace(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
         num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + this->num_used_sender_channels, size_t{0});
