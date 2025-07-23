@@ -38,8 +38,8 @@ TEST_F(InitTests, ParallelUniformInitDeterminism) {
     ttml::init::UniformRange range{-1.0f, 1.0f};
 
     auto uniform_factory = [&]() { return std::uniform_real_distribution<float>(range.a, range.b); };
-    ttml::core::random::parallel_generate(vec1, uniform_factory, 42);
-    ttml::core::random::parallel_generate(vec2, uniform_factory, 42);
+    ttml::core::random::parallel_generate(std::span{vec1.data(), vec1.size()}, uniform_factory, 42);
+    ttml::core::random::parallel_generate(std::span{vec2.data(), vec2.size()}, uniform_factory, 42);
 
     // Results should be identical
     EXPECT_EQ(vec1, vec2);
@@ -55,10 +55,11 @@ TEST_F(InitTests, UniformInitsGoodMeanAndRange) {
     ttml::init::UniformRange range{-1.0f, 1.0f};
 
     auto uniform_factory = [&]() { return std::uniform_real_distribution<float>(range.a, range.b); };
-    ttml::core::random::parallel_generate(parallel_vec, uniform_factory, 42);
+    ttml::core::random::parallel_generate(std::span{parallel_vec.data(), parallel_vec.size()}, uniform_factory, 42);
 
     // Initialize with sequential method
-    ttml::core::random::sequential_generate(std::span(sequential_vec), uniform_factory, 42);
+    ttml::core::random::sequential_generate(
+        std::span{sequential_vec.data(), sequential_vec.size()}, uniform_factory, 42);
 
     // Results will be different due to different generation patterns
     // But both should be valid uniform distributions
@@ -105,14 +106,16 @@ TEST_F(InitTests, ParallelGenerateRelativePerformance) {
         for (int run = 0; run < num_runs; ++run) {
             // Time parallel initialization
             auto start = std::chrono::high_resolution_clock::now();
-            ttml::core::random::parallel_generate(parallel_vec, uniform_factory, 42);
+            ttml::core::random::parallel_generate(
+                std::span{parallel_vec.data(), parallel_vec.size()}, uniform_factory, 42);
             auto end = std::chrono::high_resolution_clock::now();
 
             parallel_times.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start));
 
             // Time sequential initialization
             start = std::chrono::high_resolution_clock::now();
-            ttml::core::random::sequential_generate(std::span(sequential_vec), uniform_factory, 42);
+            ttml::core::random::sequential_generate(
+                std::span{sequential_vec.data(), sequential_vec.size()}, uniform_factory, 42);
             end = std::chrono::high_resolution_clock::now();
 
             sequential_times.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start));

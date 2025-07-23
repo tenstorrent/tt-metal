@@ -104,7 +104,9 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     ttml::core::random::parallel_generate(
-        input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
@@ -155,7 +157,9 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     ttml::core::random::parallel_generate(
-        input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
@@ -205,7 +209,9 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     ttml::core::random::parallel_generate(
-        input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
@@ -255,7 +261,9 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Huge_Backward) {
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     ttml::core::random::parallel_generate(
-        input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        42);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 

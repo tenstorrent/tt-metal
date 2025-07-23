@@ -71,7 +71,9 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Kernel_Composite) {
         for (uint32_t iter = 0; iter < iterations; ++iter) {
             xt::xarray<float> x_data = xt::empty<float>(shape);
             ttml::core::random::parallel_generate(
-                x_data, []() { return std::uniform_real_distribution<float>(0.F, 1.F); }, 42);
+                std::span{x_data.data(), x_data.size()},
+                []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
+                42);
             auto x = ttml::autograd::create_tensor(ttml::core::from_xtensor(x_data, device));
             auto gamma =
                 ttml::autograd::create_tensor(ttml::core::ones(ttml::core::create_shape({1, 1, 1, shape[3]}), device));

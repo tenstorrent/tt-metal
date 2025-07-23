@@ -36,7 +36,9 @@ TEST_F(DropoutTest, TestSeed) {
         fmt::println("Testing shape: {}", shape);
         xt::xarray<float> xtensor_a = xt::empty<float>(shape);
         ttml::core::random::parallel_generate(
-            xtensor_a, []() { return std::uniform_real_distribution<float>(-0.5f, 0.5f); }, 42);
+            std::span{xtensor_a.data(), xtensor_a.size()},
+            []() { return std::uniform_real_distribution<float>(-0.5f, 0.5f); },
+            42);
 
         auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
         auto num_cache_before = device->num_program_cache_entries();
@@ -88,7 +90,9 @@ xt::xarray<float> golden_dropout(
 
     auto rand_vals = xt::empty<float>(input.shape());
     ttml::core::random::parallel_generate(
-        rand_vals, []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); }, seed);
+        std::span{rand_vals.data(), rand_vals.size()},
+        []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
+        seed);
     auto mask = xt::cast<float>(rand_vals >= p);
 
     float scale_factor = (scale && (1.0f - p) > 1e-7f) ? (1.0f / (1.0f - p)) : 1.0f;
