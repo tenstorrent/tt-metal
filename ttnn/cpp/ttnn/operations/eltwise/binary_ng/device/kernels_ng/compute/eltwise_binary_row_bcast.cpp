@@ -8,8 +8,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/bcast.h"
 
-#include "../eltwise_utils_common.hpp"
-#include "../eltwise_utils.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 
 namespace NAMESPACE {
 void MAIN {

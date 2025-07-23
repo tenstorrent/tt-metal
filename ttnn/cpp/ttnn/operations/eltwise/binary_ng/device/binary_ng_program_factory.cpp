@@ -467,7 +467,7 @@ void overwrite_compute_kernel_name_and_defines(
     std::map<std::string, std::string>& compute_defines) {
     compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
     compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
-    kernel_name = KernelName::ComputeRowBcastLLK;
+    kernel_name = KernelName::ComputeRowBcastNg;
 }
 
 bool is_llk_bcast(const SubtileBroadcastType subtile_broadcast_type, const DataType a_dtype, const DataType b_dtype) {
