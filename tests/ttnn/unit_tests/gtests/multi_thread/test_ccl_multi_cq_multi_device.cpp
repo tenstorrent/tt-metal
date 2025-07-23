@@ -51,18 +51,16 @@ using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshShape;
 
 // Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice
-class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
+class MultiCQFabricMeshDevice2x4Fixture : public MultiCQMeshDevice2x4Fixture {
 protected:
-    T3000MultiCQFabricMeshDeviceFixture() {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    }
+    MultiCQFabricMeshDevice2x4Fixture() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D); }
     void TearDown() override {
-        T3000MultiCQMeshDeviceFixture::TearDown();
+        MultiCQMeshDevice2x4Fixture::TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 };
 
-TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
     const size_t dim = 0;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -211,7 +209,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     log_info(tt::LogTest, "Finished");
 }
 
-TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
     const size_t dim = 0;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;

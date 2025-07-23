@@ -41,7 +41,7 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshBufferTestT3000 = T3000MeshDeviceFixture;
+using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
 
 struct DeviceLocalShardedBufferTestConfig {
@@ -79,8 +79,7 @@ struct DeviceLocalShardedBufferTestConfig {
     }
 };
 
-// MeshBuffer tests on T3000
-TEST_F(MeshBufferTestT3000, ShardedBufferInitialization) {
+TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
 
@@ -94,7 +93,7 @@ TEST_F(MeshBufferTestT3000, ShardedBufferInitialization) {
     EXPECT_EQ(sharded_buffer->device_local_size(), 2 << 10);
 }
 
-TEST_F(MeshBufferTestT3000, ReplicatedBufferInitialization) {
+TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
 
@@ -106,7 +105,7 @@ TEST_F(MeshBufferTestT3000, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
 }
 
-TEST_F(MeshBufferTestT3000, Deallocation) {
+TEST_F(MeshBufferTest2x4, Deallocation) {
     // Verify that a buffer is deallocated on the MeshDevice when it goes
     // out of scope on host. Create a buffer with a certain config in limited
     // scope. Record its address. Create another buffer with the same config
@@ -186,7 +185,7 @@ TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
     }
 }
 
-TEST_F(MeshBufferTestT3000, GetDeviceBuffer) {
+TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
 
@@ -200,7 +199,7 @@ TEST_F(MeshBufferTestT3000, GetDeviceBuffer) {
 }
 
 class DeviceLocalMeshBufferShardingTest
-    : public MeshBufferTestT3000,
+    : public MeshBufferTest2x4,
       public testing::WithParamInterface<
           std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>, TensorMemoryLayout>> {};
 
@@ -265,7 +264,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(
             TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::BLOCK_SHARDED)));
 
-TEST_F(MeshBufferTestT3000, SweepShardAndConcat) {
+TEST_F(MeshBufferTest2x4, SweepShardAndConcat) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
@@ -300,7 +299,6 @@ TEST_F(MeshBufferTestT3000, SweepShardAndConcat) {
     }
 }
 
-// MeshBuffer tests on N300 and T3000
 TEST_F(MeshBufferTestSuite, ConfigValidation) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
