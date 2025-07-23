@@ -34,6 +34,10 @@ jobs:
       #   timeout-minutes: 10
       #   with:
       #     name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Print environment variables in shell
+        shell: bash
+        run: |
+          env|sort
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
