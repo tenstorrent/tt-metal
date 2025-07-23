@@ -197,6 +197,8 @@ class RMSNormPostAllGatherConfig(OpConfigBase):
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
     compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
     dtype: ttnn.DataType | None = None
+
+
 @dataclass
 class BinaryOpConfig(OpConfigBase):
     """Common parameters for a ttnn.add/sub/mul/div op, weights are in input_tensor_b"""
