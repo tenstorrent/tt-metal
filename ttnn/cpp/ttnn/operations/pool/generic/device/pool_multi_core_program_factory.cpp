@@ -453,12 +453,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     printf("out_cb_pagesize: %d, out_cb_npages: %d\n", out_cb_pagesize, out_cb_npages);
 
     auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, raw_in_cb_pagesize, raw_in_cb_npages, out_df, output.buffer());
+        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, out_df, output.buffer());
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
     // modified 1: create tmp_out_cb
     auto tmp_out_cb_id = next_cb_index++;
-    tt::tt_metal::create_cb(tmp_out_cb_id, program, all_cores, raw_in_cb_pagesize, raw_in_cb_npages, out_df);
+    tt::tt_metal::create_cb(tmp_out_cb_id, program, all_cores, in_cb_pagesize, in_cb_npages, out_df);
+    // tt::tt_metal::create_cb(tmp_out_cb_id, program, all_cores, out_cb_pagesize, out_cb_npages, out_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tmp_out_cb_id, out_cb_pagesize, out_cb_npages);
 
     // Invalid index for circular buffer, will report error if not assigned with valid value before creation
