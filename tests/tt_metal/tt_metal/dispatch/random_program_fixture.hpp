@@ -323,7 +323,8 @@ private:
         } else {
             TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
             std::set<CoreRange> core_ranges;
-            const std::unordered_set<CoreCoord> active_eth_cores = this->device_->get_active_ethernet_cores(true);
+            const std::unordered_set<CoreCoord> active_eth_cores =
+                this->device_->get_devices()[0]->get_active_ethernet_cores(true);
             TT_FATAL(!active_eth_cores.empty(), "No active ethernet cores detected");
             for (CoreCoord eth_core : active_eth_cores) {
                 core_ranges.emplace(eth_core);
