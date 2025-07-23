@@ -286,11 +286,12 @@ protected:
     }
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+    distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
+    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
 
 class UnitMeshMultiCQMultiDeviceBufferFixture : public UnitMeshMultiCQMultiDeviceFixture {};
-
-class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
+class UnitMeshMultiCQMultDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 
 class DISABLED_MultiCQMultiDeviceOnFabricFixture : public UnitMeshMultiCQMultiDeviceFixture,
                                                    public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
