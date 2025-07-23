@@ -27,12 +27,13 @@ struct MultiDeviceScatterDeviceOperation {
         const MemoryConfig output_mem_config;
     };
     struct tensor_args_t {
-        const Tensor input_tensor;
+        const ttnn::Tensor input_tensor;
+        const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
 
-    using tensor_return_value_t = Tensor;
+    using tensor_return_value_t = ttnn::Tensor;
 
     struct MultiDeviceScatter {
         using OverrideRuntimeArgsCallback = std::function<void(
@@ -91,7 +92,8 @@ struct MultiDeviceScatterDeviceOperation {
         const ttnn::Tensor& input_tensor,
         int32_t dim,
         std::optional<uint32_t> cluster_axis,
-        const ttnn::MemoryConfig& memory_config);
+        const ttnn::MemoryConfig& memory_config,
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 };
 
 namespace detail {

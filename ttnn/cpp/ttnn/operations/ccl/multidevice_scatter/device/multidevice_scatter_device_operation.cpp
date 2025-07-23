@@ -34,6 +34,11 @@ void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
     auto input_tensor = tensor_args.input_tensor;
     uint32_t rank = input_tensor.logical_shape().rank();
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    if (tensor_args.optional_output_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_output_tensor.value().tensor_spec() == output_spec,
+            "Output tensor spec must match computed output spec");
+    }
     const auto& output_shape = output_spec.logical_shape();
     const auto& input_shape = input_tensor.logical_shape();
 
@@ -85,6 +90,10 @@ MultiDeviceScatterDeviceOperation::spec_return_value_t MultiDeviceScatterDeviceO
 
 MultiDeviceScatterDeviceOperation::tensor_return_value_t MultiDeviceScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor.value();
+    }
+
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
     auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
@@ -96,14 +105,15 @@ MultiDeviceScatterDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
-    const ttnn::MemoryConfig& memory_config) {
+    const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
             .cluster_axis = cluster_axis,
             .output_mem_config = memory_config,
         },
-        tensor_args_t{.input_tensor = input_tensor}};
+        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor}};
 }
 
 }  // namespace ttnn::operations::ccl
