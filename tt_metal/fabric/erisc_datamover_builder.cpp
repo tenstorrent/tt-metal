@@ -258,7 +258,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     static const std::vector<std::vector<std::pair<size_t, size_t>>> linear_buffer_slot_options = {
         {{8, 16}}, {{8, 16}}};
 
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {{{4, 8}}};
+    static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {{{4, 8}}, {{4, 8}}};
 
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
@@ -477,7 +477,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            (topology == Topology::Mesh ? mesh_buffer_slot_options[0] : linear_buffer_slot_options[arch_index]),
+            (topology == Topology::Mesh ? mesh_buffer_slot_options[arch_index]
+                                        : linear_buffer_slot_options[arch_index]),
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
