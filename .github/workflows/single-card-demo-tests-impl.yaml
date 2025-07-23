@@ -153,6 +153,7 @@ jobs:
             --ulimit nproc=65536:65536
             --ulimit nofile=65536:65536
           install_wheel: true
+          forward_civ2_proxy_env_vars: ${{ matrix.test-group.civ2-compatible }}
           run_args: |
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
             ${{ matrix.test-group.cmd }}
