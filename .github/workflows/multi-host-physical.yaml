@@ -55,7 +55,7 @@ jobs:
             -v ${{ github.workspace }}/docker-job:/work
             -v /dev/hugepages-1G:/dev/hugepages-1G
             -v /etc/rankfile:/etc/rankfile:ro
-            -v "${{ env.CONTAINER_NAME }}/.ssh:${{ env.CONTAINER_NAME }}/.ssh:ro"
+            -v ${{ env.CONTAINER_NAME }}/.ssh:${{ env.CONTAINER_NAME }}/.ssh:ro
             --device /dev/tenstorrent
             --privileged
           install_wheel: true
